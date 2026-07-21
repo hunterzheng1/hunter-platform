@@ -1,6 +1,8 @@
 {
   "files": [],
   "references": [
-    { "path": "./packages/testkit" }
+    { "path": "./packages/testkit" },
+    { "path": "./spikes/testkit" },
+    { "path": "./spikes/doctor" }
   ]
 }

@@ -1,0 +1,12 @@
+{
+  "name": "@hunter/spike-doctor",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@hunter/spike-testkit": "0.0.0"
+  }
+}

@@ -13,6 +13,7 @@
   "scripts": {
     "build": "tsc -b",
     "lint": "eslint .",
+    "spike:doctor": "npm run build --workspace @hunter/spike-doctor && node --enable-source-maps spikes/doctor/dist/main.js --output docs/validation/environment-inventory.json",
     "test": "vitest run",
     "typecheck": "tsc -b --pretty false"
   },
