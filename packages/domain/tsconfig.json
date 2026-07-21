@@ -5,9 +5,5 @@
     "outDir": "dist",
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
-  "references": [
-    { "path": "../domain" },
-    { "path": "../runtime-contracts" }
-  ],
   "include": ["src/**/*.ts"]
 }

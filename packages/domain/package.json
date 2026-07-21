@@ -1,5 +1,5 @@
 {
-  "name": "@hunter/testkit",
+  "name": "@hunter/domain",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -10,7 +10,6 @@
     }
   },
   "dependencies": {
-    "@hunter/domain": "0.0.0",
-    "@hunter/runtime-contracts": "0.0.0"
+    "zod": "^4.0.0"
   }
 }

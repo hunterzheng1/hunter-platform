@@ -4,6 +4,15 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   resolve: {
     alias: {
+      "@hunter/domain": fileURLToPath(
+        new URL("./packages/domain/src/index.ts", import.meta.url),
+      ),
+      "@hunter/runtime-contracts": fileURLToPath(
+        new URL("./packages/runtime-contracts/src/index.ts", import.meta.url),
+      ),
+      "@hunter/testkit": fileURLToPath(
+        new URL("./packages/testkit/src/index.ts", import.meta.url),
+      ),
       "@hunter/spike-testkit": fileURLToPath(
         new URL("./spikes/testkit/src/index.ts", import.meta.url),
       ),
