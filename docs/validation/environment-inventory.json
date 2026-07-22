@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "evidenceType": "phase0_environment_inventory",
-  "generatedAt": "2026-07-22T05:46:11.547Z",
+  "generatedAt": "2026-07-22T12:42:18.575Z",
   "generator": {
     "name": "hunter-phase0-doctor",
     "version": "0.1.0"
@@ -62,8 +62,8 @@
           "stderr": "",
           "timedOut": false,
           "spawnError": null,
-          "startedAt": "2026-07-22T05:46:11.473Z",
-          "finishedAt": "2026-07-22T05:46:11.534Z"
+          "startedAt": "2026-07-22T12:42:17.003Z",
+          "finishedAt": "2026-07-22T12:42:17.112Z"
         }
       ]
     },
@@ -98,8 +98,8 @@
           "stderr": "",
           "timedOut": false,
           "spawnError": null,
-          "startedAt": "2026-07-22T05:46:11.484Z",
-          "finishedAt": "2026-07-22T05:46:11.547Z"
+          "startedAt": "2026-07-22T12:42:17.064Z",
+          "finishedAt": "2026-07-22T12:42:17.109Z"
         }
       ]
     },
@@ -134,8 +134,8 @@
           "stderr": "",
           "timedOut": false,
           "spawnError": "EPERM",
-          "startedAt": "2026-07-22T05:46:11.493Z",
-          "finishedAt": "2026-07-22T05:46:11.501Z"
+          "startedAt": "2026-07-22T12:42:17.069Z",
+          "finishedAt": "2026-07-22T12:42:17.077Z"
         }
       ]
     },
@@ -170,8 +170,8 @@
           "stderr": "",
           "timedOut": false,
           "spawnError": "ENOENT",
-          "startedAt": "2026-07-22T05:46:11.501Z",
-          "finishedAt": "2026-07-22T05:46:11.514Z"
+          "startedAt": "2026-07-22T12:42:17.077Z",
+          "finishedAt": "2026-07-22T12:42:17.091Z"
         }
       ]
     },
@@ -206,8 +206,8 @@
           "stderr": "",
           "timedOut": false,
           "spawnError": "ENOENT",
-          "startedAt": "2026-07-22T05:46:11.505Z",
-          "finishedAt": "2026-07-22T05:46:11.514Z"
+          "startedAt": "2026-07-22T12:42:17.079Z",
+          "finishedAt": "2026-07-22T12:42:17.091Z"
         }
       ]
     },
@@ -215,35 +215,68 @@
       "id": "orca",
       "displayName": "Orca",
       "category": "runtime",
-      "status": "BLOCKED",
+      "status": "NOT_PROVEN",
       "version": null,
-      "helpHash": null,
+      "helpHash": "6eb858c68b4062692ddd276c43168e18841d348f2cadace39563019b8c1ff300",
       "availability": {
-        "status": "BLOCKED",
-        "reason": "executable_missing_or_unusable"
+        "status": "DETECTED",
+        "reason": "executable_detected"
       },
       "authentication": {
         "required": true,
-        "status": "BLOCKED",
+        "status": "NOT_PROVEN",
         "method": "orca status --json",
-        "reason": "executable_not_available"
+        "reason": "runtime_status_available_login_not_proven"
       },
       "commands": [
         {
           "command": {
-            "executable": "orca",
+            "executable": "[PRIVATE_PATH]",
             "args": [
               "--version"
             ]
           },
           "cwdScope": "repository",
-          "exitCode": null,
-          "stdout": "",
+          "exitCode": 0,
+          "stdout": "orca\n\nUsage: orca <command> [options]\n\nStartup:\n  open                      Launch Orca and wait for the runtime to be reachable\n  serve                     Start a headless Orca runtime server\n  status                    Show app/runtime/graph readiness\n\nDiagnostics:\n  diagnostics memory        Collect a memory snapshot for Orca and managed terminals\n\nAgent Discovery:\n  agent-context             Print the machine-readable command schema for agents\n\nSkills:\n  skills list               List version-matched skill guides bundled with this Orca CLI\n  skills get                Print a version-matched skill guide as Markdown\n\nEnvironments:\n  environment add           Save a remote Orca runtime from a pairing code\n  environment list          List saved remote Orca runtimes\n  environment show          Show one saved remote Orca runtime\n  environment rm            Remove a saved remote Orca runtime\n\nEnvironment Recipes:\n  vm recipe doctor          Validate a per-workspace environment recipe\n\nAutomations:\n  automations list          List scheduled Orca automations\n  automations show          Show one Orca automation\n  automations create        Create a scheduled Orca automation\n  automations edit          Edit an Orca automation\n  automations remove        Remove an Orca automation and its run history\n  automations run           Run an Orca automation now\n  automations runs          List automation run history\n\nProjects:\n  project list              List durable projects known to Orca\n  project setups            List project host setups",
           "stderr": "",
           "timedOut": false,
-          "spawnError": "ENOENT",
-          "startedAt": "2026-07-22T05:46:11.508Z",
-          "finishedAt": "2026-07-22T05:46:11.514Z"
+          "spawnError": null,
+          "startedAt": "2026-07-22T12:42:17.081Z",
+          "finishedAt": "2026-07-22T12:42:17.479Z"
+        },
+        {
+          "command": {
+            "executable": "[PRIVATE_PATH]",
+            "args": [
+              "status",
+              "--json"
+            ]
+          },
+          "cwdScope": "repository",
+          "exitCode": 0,
+          "stdout": "{\n  \"id\": \"local-status\",\n  \"ok\": true,\n  \"result\": {\n    \"app\": {\n      \"running\": true,\n      \"pid\": \"[VOLATILE]\",\n      \"desktopWindowStatus\": \"available\"\n    },\n    \"runtime\": {\n      \"state\": \"ready\",\n      \"reachable\": true,\n      \"runtimeId\": \"[VOLATILE]\"\n    },\n    \"graph\": {\n      \"state\": \"ready\"\n    }\n  },\n  \"_meta\": {\n    \"runtimeId\": \"[VOLATILE]\"\n  }\n}",
+          "stderr": "",
+          "timedOut": false,
+          "spawnError": null,
+          "startedAt": "2026-07-22T12:42:17.480Z",
+          "finishedAt": "2026-07-22T12:42:18.214Z"
+        },
+        {
+          "command": {
+            "executable": "[PRIVATE_PATH]",
+            "args": [
+              "--help"
+            ]
+          },
+          "cwdScope": "repository",
+          "exitCode": 0,
+          "stdout": "orca\n\nUsage: orca <command> [options]\n\nStartup:\n  open                      Launch Orca and wait for the runtime to be reachable\n  serve                     Start a headless Orca runtime server\n  status                    Show app/runtime/graph readiness\n\nDiagnostics:\n  diagnostics memory        Collect a memory snapshot for Orca and managed terminals\n\nAgent Discovery:\n  agent-context             Print the machine-readable command schema for agents\n\nSkills:\n  skills list               List version-matched skill guides bundled with this Orca CLI\n  skills get                Print a version-matched skill guide as Markdown\n\nEnvironments:\n  environment add           Save a remote Orca runtime from a pairing code\n  environment list          List saved remote Orca runtimes\n  environment show          Show one saved remote Orca runtime\n  environment rm            Remove a saved remote Orca runtime\n\nEnvironment Recipes:\n  vm recipe doctor          Validate a per-workspace environment recipe\n\nAutomations:\n  automations list          List scheduled Orca automations\n  automations show          Show one Orca automation\n  automations create        Create a scheduled Orca automation\n  automations edit          Edit an Orca automation\n  automations remove        Remove an Orca automation and its run history\n  automations run           Run an Orca automation now\n  automations runs          List automation run history\n\nProjects:\n  project list              List durable projects known to Orca\n  project setups            List project host setups",
+          "stderr": "",
+          "timedOut": false,
+          "spawnError": null,
+          "startedAt": "2026-07-22T12:42:18.214Z",
+          "finishedAt": "2026-07-22T12:42:18.573Z"
         }
       ]
     },
@@ -278,20 +311,20 @@
           "stderr": "",
           "timedOut": false,
           "spawnError": "ENOENT",
-          "startedAt": "2026-07-22T05:46:11.510Z",
-          "finishedAt": "2026-07-22T05:46:11.514Z"
+          "startedAt": "2026-07-22T12:42:17.087Z",
+          "finishedAt": "2026-07-22T12:42:17.091Z"
         }
       ]
     }
   ],
   "summary": {
     "detected": 3,
-    "blocked": 5,
-    "notProven": 0
+    "blocked": 4,
+    "notProven": 1
   },
   "redaction": {
     "applied": true,
     "schemaVersion": 1
   },
-  "contentFingerprint": "6d40c83ac3aa56bdc5df38d581ffbf3711413f7f7dcd6a46f5b39f51991377e9"
+  "contentFingerprint": "3859a82a543e03013e254cd614758e16031dd7620c224f74cf7f63b79138f47d"
 }

@@ -12,6 +12,7 @@
     { "path": "./packages/storage" },
     { "path": "./packages/testkit" },
     { "path": "./spikes/testkit" },
-    { "path": "./spikes/doctor" }
+    { "path": "./spikes/doctor" },
+    { "path": "./spikes/orca" }
   ]
 }

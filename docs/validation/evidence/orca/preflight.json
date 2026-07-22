@@ -1,0 +1,133 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "phase0_orca_windows_provider_preflight",
+  "generatedAt": "2026-07-22T12:42:43.426Z",
+  "generator": {
+    "name": "hunter-phase0-orca-preflight",
+    "version": "0.1.0"
+  },
+  "host": {
+    "platform": "win32",
+    "architecture": "x64",
+    "release": "10.0.26200"
+  },
+  "provider": "orca",
+  "candidateVersion": null,
+  "providerVerdict": "NOT_PROVEN",
+  "proofScope": "local_preflight_only",
+  "mutationAttempted": false,
+  "commands": [
+    {
+      "operation": "status",
+      "args": [
+        "status",
+        "--json"
+      ],
+      "cwdScope": "repository",
+      "exitCode": 0,
+      "timedOut": false,
+      "spawnError": null,
+      "outputSha256": "5f7f4bf2424c3d9809884d19ca47687d3bcbc2e703aab46e91499fb4b0e7126f"
+    },
+    {
+      "operation": "repo_help",
+      "args": [
+        "repo",
+        "--help"
+      ],
+      "cwdScope": "repository",
+      "exitCode": 0,
+      "timedOut": false,
+      "spawnError": null,
+      "outputSha256": "58e8536a32df60026a4aec35a985633c9daf372e4b527f0cc5e4bce092b66bbe"
+    },
+    {
+      "operation": "worktree_create_help",
+      "args": [
+        "worktree",
+        "create",
+        "--help"
+      ],
+      "cwdScope": "repository",
+      "exitCode": 0,
+      "timedOut": false,
+      "spawnError": null,
+      "outputSha256": "f464cff94743c8bdafcaa55abf07bf339f76ba534999e486344c408ce5e3780b"
+    },
+    {
+      "operation": "terminal_create_help",
+      "args": [
+        "terminal",
+        "create",
+        "--help"
+      ],
+      "cwdScope": "repository",
+      "exitCode": 0,
+      "timedOut": false,
+      "spawnError": null,
+      "outputSha256": "c2ada738842cf1fc6b1c94730dec4a5689841da13f3063d91e69b1ab9a4804da"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "discover_runtime",
+      "outcome": "PASS",
+      "reason": "status_json_reports_running_reachable_runtime"
+    },
+    {
+      "id": "fixed_version",
+      "outcome": "NOT_PROVEN",
+      "reason": "public_cli_did_not_return_a_numeric_version"
+    },
+    {
+      "id": "workspace_create",
+      "outcome": "NOT_PROVEN",
+      "reason": "public_cli_has_no_fixture_destination_flag"
+    },
+    {
+      "id": "resource_cleanup",
+      "outcome": "NOT_PROVEN",
+      "reason": "public_cli_has_no_repo_remove_command"
+    },
+    {
+      "id": "terminal_launch",
+      "outcome": "NOT_PROVEN",
+      "reason": "workspace_fixture_confinement_not_proven"
+    },
+    {
+      "id": "terminal_observe",
+      "outcome": "NOT_PROVEN",
+      "reason": "terminal_not_launched"
+    },
+    {
+      "id": "terminal_interrupt",
+      "outcome": "NOT_PROVEN",
+      "reason": "terminal_not_launched"
+    },
+    {
+      "id": "restart_reconcile",
+      "outcome": "NOT_PROVEN",
+      "reason": "native_session_not_created"
+    },
+    {
+      "id": "workspace_session_identity",
+      "outcome": "NOT_PROVEN",
+      "reason": "native_session_not_created"
+    },
+    {
+      "id": "security_defaults",
+      "outcome": "NOT_PROVEN",
+      "reason": "settings_not_available_as_versioned_noninteractive_receipt"
+    },
+    {
+      "id": "mobile_pairing",
+      "outcome": "NOT_PROVEN",
+      "reason": "remote_pairing_not_enabled_or_tested"
+    }
+  ],
+  "redaction": {
+    "applied": true,
+    "schemaVersion": 1
+  },
+  "contentFingerprint": "98c55e25e03250cc47e5911275ae4c16920ddbe63c658211029247892940100c"
+}

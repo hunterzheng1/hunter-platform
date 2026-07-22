@@ -78,4 +78,87 @@ describe("phase 0 doctor", () => {
     expect(finalizeTimeboxedStatus("NOT_PROVEN")).toBe("NOT_PROVEN");
     expect(finalizeTimeboxedStatus("DETECTED")).toBe("DETECTED");
   });
+
+  it("uses a configured Orca executable without leaking its private path or inventing a version", async () => {
+    const orcaExecutable = "C:\\Users\\hunter\\Programs\\orca\\orca.exe";
+    const runner = new FixtureRunner({
+      "node --version": { exitCode: 0, stdout: "v24.14.0" },
+      "git --version": { exitCode: 0, stdout: "git version 2.49.0" },
+      [`${orcaExecutable} --version`]: { exitCode: 0, stdout: "orca" },
+      [`${orcaExecutable} --help`]: { exitCode: 0, stdout: "safe help" },
+      [`${orcaExecutable} status --json`]: {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          id: "request-1",
+          ok: true,
+          result: {
+            app: { running: true },
+            runtime: { state: "ready", reachable: true },
+          },
+        }),
+      },
+    });
+
+    const inventory = await createDoctorInventory({
+      runner,
+      cwd: "C:\\Users\\hunter\\hunter-platform",
+      now: () => new Date("2026-07-22T00:00:00.000Z"),
+      host: { platform: "win32", architecture: "x64", release: "10.0" },
+      executableOverrides: { orca: orcaExecutable },
+    });
+    const orca = inventory.probes.find((probe) => probe.id === "orca");
+
+    expect(orca?.status).toBe("NOT_PROVEN");
+    expect(orca?.authentication).toEqual({
+      required: true,
+      status: "NOT_PROVEN",
+      method: "orca status --json",
+      reason: "runtime_status_available_login_not_proven",
+    });
+    expect(orca?.version).toBeNull();
+    expect(orca?.commands[0]?.command.executable).toBe("[PRIVATE_PATH]");
+    expect(JSON.stringify(inventory)).not.toContain(orcaExecutable);
+  });
+
+  it("detects Orca from status when its version command does not terminate", async () => {
+    const orcaExecutable = "C:\\Users\\hunter\\Programs\\orca\\orca.exe";
+    const runner = new FixtureRunner({
+      "node --version": { exitCode: 0, stdout: "v24.14.0" },
+      "git --version": { exitCode: 0, stdout: "git version 2.49.0" },
+      [`${orcaExecutable} --version`]: {
+        exitCode: null,
+        timedOut: true,
+      },
+      [`${orcaExecutable} --help`]: { exitCode: 0, stdout: "safe help" },
+      [`${orcaExecutable} status --json`]: {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          id: "request-1",
+          ok: true,
+          result: {
+            app: { running: true },
+            runtime: { state: "ready", reachable: true },
+          },
+        }),
+      },
+    });
+
+    const inventory = await createDoctorInventory({
+      runner,
+      cwd: "C:\\Users\\hunter\\hunter-platform",
+      now: () => new Date("2026-07-22T00:00:00.000Z"),
+      host: { platform: "win32", architecture: "x64", release: "10.0" },
+      executableOverrides: { orca: orcaExecutable },
+    });
+    const orca = inventory.probes.find((probe) => probe.id === "orca");
+
+    expect(orca?.availability).toEqual({
+      status: "DETECTED",
+      reason: "executable_detected",
+    });
+    expect(orca?.authentication.status).toBe("NOT_PROVEN");
+    expect(orca?.version).toBeNull();
+    expect(orca?.status).toBe("NOT_PROVEN");
+    expect(orca?.commands.some((command) => command.timedOut)).toBe(true);
+  });
 });
