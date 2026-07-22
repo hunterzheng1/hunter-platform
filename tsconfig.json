@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "./apps/daemon" },
+    { "path": "./packages/api-contracts" },
     { "path": "./packages/application" },
     { "path": "./packages/domain" },
     { "path": "./packages/flow-engine" },
