@@ -19,6 +19,8 @@ record should retain a hash and a safe summary.
 
 Current records:
 
+- [`codex-direct-runtime.md`](codex-direct-runtime.md) — bounded Windows Direct Codex CLI verdict, real JSONL/resume evidence, and explicit unproven interrupt boundary.
+- [`evidence/codex/direct-runtime.json`](evidence/codex/direct-runtime.json) — versioned, redacted Direct Codex local receipt envelope.
 - [`runtime-reliability.md`](runtime-reliability.md) — bounded path, permission, session-loss, idempotency, and process-tree validation.
 - [`evidence/reliability/runtime-reliability.json`](evidence/reliability/runtime-reliability.json) — versioned contract-fixture reliability envelope.
 - [`agent-orchestrator-upstream-research.md`](agent-orchestrator-upstream-research.md) — dated first-party research for the Agent Orchestrator fallback candidate; not local capability proof.

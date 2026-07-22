@@ -24,7 +24,7 @@
 
 **Files:** create `spikes/codex/package.json`, `spikes/codex/tsconfig.json`, `spikes/codex/src/exec-client.test.ts`, and `spikes/codex/src/exec-client.ts`; modify `tsconfig.json`.
 
-- [ ] **Step 1: Write the failing public-seam tests**
+- [x] **Step 1: Write the failing public-seam tests**
 
 The first literal verifies this exact plan:
 
@@ -37,11 +37,11 @@ expect(createCodexExecPlan({ mode: "new", prompt: "Read README.md and return its
 
 The second fixture contains `thread.started`, `turn.started`, an `agent_message`, and `turn.completed`; assert `sessionIdentityPresent: true`, `terminalOutcome: "returned"`, and no Step-success fact. Add independent tests for approval/waiting, tool failure, interrupted/failed turn, malformed JSON, unknown future event retained as raw, resume argv, and every forbidden flag family.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run `npm test -- --run spikes/codex/src/exec-client.test.ts`. Expected: FAIL because `exec-client.js` does not exist.
 
-- [ ] **Step 3: Add minimal implementation**
+- [x] **Step 3: Add minimal implementation**
 
 Implement these public seams:
 
@@ -56,7 +56,7 @@ export function parseCodexJsonLines(stdout: string): CodexEventStream;
 
 Recognize public event discriminators with a raw fallback. Never emit Step success. Reject empty inputs and argv containing `dangerously`, `--yolo`, `--full-auto`, `danger-full-access`, or approval-disable overrides.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run `npm test -- --run spikes/codex/src/exec-client.test.ts`, then `npm run typecheck`. Expected: all cases pass and typecheck exits `0`.
 
@@ -64,7 +64,7 @@ Run `npm test -- --run spikes/codex/src/exec-client.test.ts`, then `npm run type
 
 **Files:** create `spikes/codex/src/scenario.test.ts` and `spikes/codex/src/scenario.ts`.
 
-- [ ] **Step 1: Write the failing evidence tests**
+- [x] **Step 1: Write the failing evidence tests**
 
 Use an injected boundary runner and assert:
 
@@ -75,7 +75,8 @@ expect(evidence).toMatchObject({
   connector: "direct_codex_cli",
   installedVersion: "0.144.6",
   proofScope: "local_typed_scenario",
-  remoteAccessAttempted: false,
+  modelServiceCallAttempted: true,
+  remoteRepositoryWriteAttempted: false,
 });
 expect(JSON.stringify(evidence)).not.toContain("thread-1");
 expect(JSON.stringify(evidence)).not.toMatch(/[A-Z]:\\Users\\/u);
@@ -83,15 +84,15 @@ expect(JSON.stringify(evidence)).not.toMatch(/[A-Z]:\\Users\\/u);
 
 Add cases for unavailable login, malformed JSONL, mismatched resume identity, unproven interrupt cleanup, and exit `0` without a terminal JSON event. Each must produce `BLOCKED`, `FAIL`, or `NOT_PROVEN`, never a false PASS.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run `npm test -- --run spikes/codex/src/scenario.test.ts`. Expected: FAIL because `scenario.js` does not exist.
 
-- [ ] **Step 3: Implement schema and collector**
+- [x] **Step 3: Implement schema and collector**
 
 Expose `collectDirectCodexEvidence(options): Promise<DirectCodexEvidence>` and `executeDirectCodexScenario(options): Promise<DirectCodexEvidence>`. Receipts keep only operation, redacted/fixed args, exit/timeout/spawn status and SHA-256 hashes. Hash session IDs for create/resume comparison and never serialize them raw. Canonical fingerprints omit `generatedAt` and volatile identities. Require an active temporary Git fixture and empty `git remote` output.
 
-- [ ] **Step 4: Verify GREEN and cleanup**
+- [x] **Step 4: Verify GREEN and cleanup**
 
 Run `npm test -- --run spikes/codex/src/scenario.test.ts`, then both exact Codex test files. Expected: schema, fail-closed, redaction, stable fingerprint and fixture-removal tests pass.
 
@@ -99,17 +100,17 @@ Run `npm test -- --run spikes/codex/src/scenario.test.ts`, then both exact Codex
 
 **Files:** modify `package.json` and `package-lock.json`; create `docs/validation/evidence/codex/direct-runtime.json`.
 
-- [ ] **Step 1: Install and freeze the public surface**
+- [x] **Step 1: Install and freeze the public surface**
 
 Run `npm install`. Expected: lockfile includes `spikes/codex`. The scenario records `codex --version`, help hashes, and only the exit status of `codex login status`; account output is discarded.
 
-- [ ] **Step 2: Execute at most three read-only calls**
+- [x] **Step 2: Execute at most three read-only calls**
 
 Run `$env:HUNTER_PHASE0_CODEX='allowed'; npm run spike:codex; Remove-Item Env:HUNTER_PHASE0_CODEX`. New/resume calls use only JSON, read-only sandbox and fixed harmless prompts. The interrupt call uses the same plan plus exact-process-tree timeout. No MCP, plugin, search, remote Git, bypass, auto-approve or broader sandbox is allowed.
 
 Expected: evidence is written only after fixture cleanup. Missing or ambiguous capabilities remain `BLOCKED`/`NOT_PROVEN`.
 
-- [ ] **Step 3: Audit evidence**
+- [x] **Step 3: Audit evidence**
 
 Scan `spikes/codex` and `docs/validation/evidence/codex` for secret/private-path patterns and forbidden executed argv. Expected: no unredacted material and no forbidden command receipt.
 
@@ -117,14 +118,14 @@ Scan `spikes/codex` and `docs/validation/evidence/codex` for secret/private-path
 
 **Files:** create `docs/validation/codex-direct-runtime.md`; modify `docs/validation/README.md` and `docs/validation/phase-0-decision.md`.
 
-- [ ] **Step 1: Write the verdict and dated addendum**
+- [x] **Step 1: Write the verdict and dated addendum**
 
 Record version, host, help hashes, call count, create/resume/interrupt outcomes, cleanup and every atomic capability. State that `turn.completed`, agent return and exit `0` are observations only. Append after the frozen decision; do not rewrite it. If Gate A might change, stop before ADR-0005 and request an owner decision.
 
-- [ ] **Step 2: Run complete verification**
+- [x] **Step 2: Run complete verification**
 
 Run `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`, the exact spike/testkit/runtime-contract/Fake tests, `git diff --check`, and `git status --short`. Expected: every local gate exits `0`; status contains only planned files.
 
-- [ ] **Step 3: Commit and update the existing Draft PR**
+- [x] **Step 3: Commit and update the existing Draft PR**
 
 Stage only root manifests, `spikes/codex`, and directly related validation files. Commit as `验证：评估 Direct Codex Runtime 结构化链路`, push `codex/phase0-runtime-reliability`, then inspect actual Windows/Ubuntu checks. Report pending until GitHub completes.

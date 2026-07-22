@@ -122,3 +122,21 @@ project/session 计数。临时 Git fixture 已删除。
 
 这些新证据不会把 AO 选为 Provider，也不会改变 Outcome 5。Phase 0 Gate A、First Vertical
 Slice、真实 Provider/Connector 集成和发布继续阻断；Capability 等级仍不得计算或宣传。
+
+## P0-RUNTIME-01 Direct Codex fallback 后续证据（2026-07-23）
+
+用户授权有界真实 Codex 调用后，Hunter 通过稳定非交互 JSON 面评估了本机 Codex CLI
+`0.144.6`。详见 [`codex-direct-runtime.md`](codex-direct-runtime.md) 与
+[`evidence/codex/direct-runtime.json`](evidence/codex/direct-runtime.json)。
+
+最终 Windows 场景只在自动创建的无 remote 临时 Git fixture 与显式 read-only sandbox 中
+运行。本机收据证明固定版本 discovery、workspace targeting、结构化 session launch、Prompt
+提交、JSONL observation、同一 session resume、结构化 turn terminal event 和 headless
+execution。fixture 在调用后仍为 Git clean，并在 evidence 写入前删除；Prompt、账户输出、
+原始 session identity、私有路径与 raw JSONL 均未提交。
+
+结构化 session interrupt 仍为 `NOT_PROVEN`：timeout 只证明精确进程树终止，不能升级为
+session interrupt receipt。permission events 与 artifact export 也保持 `NOT_PROVEN`。
+turn terminal event、agent return 或 exit `0` 都不能完成 Hunter Step。Direct Codex 因此只是
+已测量的 Connector 候选，不是完整 Runtime Provider 或已采用生产集成。Outcome 5、Phase 0
+Gate A 与真实 Provider 发布阻断保持不变；不按产品名称计算 L0-L3。

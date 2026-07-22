@@ -1,0 +1,13 @@
+{
+  "name": "@hunter/spike-codex",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@hunter/spike-testkit": "0.0.0",
+    "zod": "^4.0.0"
+  }
+}

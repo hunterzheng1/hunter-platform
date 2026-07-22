@@ -41,7 +41,7 @@
 1. 无配额 preflight 读取 `--version`、`exec --help`、`exec resume --help`、`app-server --help` 和 `login status` 的退出结果。
 2. 真实场景在临时无 remote Git fixture 中执行最多三次只读调用：创建、按返回的 session identity 恢复、受控中断。
 3. JSONL 行通过严格 envelope + 宽容 raw event 解析器归一化；畸形行成为协议错误事实，未知事件原样保留。
-4. evidence 只保存固定 argv 占位、hash、状态和能力收据；不保存 Prompt 正文、session ID、绝对用户路径或原始账户输出。
+4. evidence 只保存固定 argv 占位、hash、状态和能力收据；明确区分真实模型服务调用与“没有远端仓库写入”，不保存 Prompt 正文、session ID、绝对用户路径或原始账户输出。
 5. Connector/Agent return、`turn.completed`、进程 exit 0 和 cleanup PASS 都只是 Runtime 事实，不能完成 Hunter Step。
 
 ## 安全、错误与停止条件
