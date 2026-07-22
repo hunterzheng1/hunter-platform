@@ -51,6 +51,7 @@
 | 权限绕过扫描 | PASS | 未出现 `dangerously-bypass`、`yolo`、`auto approve` |
 | Fake 证明范围扫描 | PASS | Fake Runtime 与 contract suite 均显式保留 `contract_only` |
 | CI matrix 静态检查 | PASS | workflow 同时定义 `windows-latest` 与 `ubuntu-latest` |
+| GitHub Actions 远端 CI | PASS | run [`29896476871`](https://github.com/hunterzheng1/hunter-platform/actions/runs/29896476871)：Ubuntu 24 秒、Windows 1 分 56 秒，两个 job 的全部门禁步骤通过 |
 | `git diff --check` | PASS | 无 whitespace error；仅 Git 的 LF→CRLF 工作副本提示 |
 | 允许路径审计 | PASS | 从 Foundation 基线累计 101 个变更文件（含本证据文件），边界外 0 个 |
 | 基线祖先检查 | PASS | `66709c49` 是当前 HEAD 祖先；仓库根基线 `8a78a63a` 存在于历史中 |
@@ -89,15 +90,15 @@ Doctor 没有读取 token、cookie、API key、完整环境变量或私有 Promp
 
 最终独立代码审查结论为 **Ready**，没有未关闭的 Critical 或 Important 发现。
 
-## 已知风险、PENDING 与未验证项
+## 已知风险与未验证项
 
 - `npm audit --json` 返回退出码 1：Fastify 直接依赖存在 1 个 high 严重度审计项，`fixAvailable=false`。没有运行盲目或破坏性的 audit fix；进入后续交付前应跟踪上游可用修复并重新评估受影响接口。
-- GitHub Actions 的 Windows 和 Ubuntu job 仅完成静态定义，远端 CI **PENDING**，本轮没有 push，因此没有真实远端运行结果。
+- 分支 `codex/foundation-tasks-2-13` 已推送；GitHub Actions run [`29896476871`](https://github.com/hunterzheng1/hunter-platform/actions/runs/29896476871) 在 `78b1d1c` 上完成，Windows/Ubuntu 均 PASS。没有创建 PR、合并 main 或发布包。
 - 真实 Codex、CodeBuddy、Cursor、Orca/备选 Runtime 的 executable、登录、会话恢复、取消和 GUI/终端行为均未验证；其状态保持 BLOCKED 或未进入证明范围。
-- Windows 本机 Foundation 门禁已运行；Ubuntu 只由 CI matrix 覆盖，真实 Ubuntu 执行 **PENDING**。
+- Windows 已有本机和 GitHub-hosted runner 结果；Ubuntu 已有 GitHub-hosted runner 结果，但没有专用实机/自托管环境验证。
 - 没有实现产品 UI、Workbench、Electron、移动 PWA、真实 Provider/Connector、生产发布或远程访问。
 - Fake Runtime 只证明 Hunter 公共契约和确定性；不能解释为真实 Provider 已通过验证。
 
 ## 建议的下一步
 
-保持 Foundation 边界不变，先让本分支在远端 Windows/Ubuntu CI 上获得真实结果，并单独处理 Fastify 无现成修复的审计风险。完成这些外部验证后，再依据批准计划评审下一阶段；未经新的明确授权，不进入 First Vertical Slice、不选择/Fork Orca，也不接入真实 Provider。
+保持 Foundation 边界不变，单独处理 Fastify 无现成修复的审计风险，并在需要时补充专用 Windows/Ubuntu 实机验证。之后再依据批准计划评审下一阶段；未经新的明确授权，不进入 First Vertical Slice、不选择/Fork Orca，也不接入真实 Provider。
