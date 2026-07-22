@@ -103,6 +103,45 @@ const ExecutionPlanInputSchema = z
   })
   .strict();
 
+export const ExecutionPlanSchema = z
+  .object({
+    executionPlanId: ExecutionPlanIdSchema,
+    projectId: ProjectIdSchema,
+    changeRevisionId: ChangeRevisionIdSchema,
+    requirementRevisionIds: z.array(RequirementRevisionIdSchema).min(1),
+    tasks: z.array(TaskDefinitionSchema).min(1),
+    taskGraphFingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
+    planFingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
+    publishedAt: z.string().datetime({ offset: true }),
+  })
+  .strict()
+  .superRefine((plan, context) => {
+    try {
+      const graph = validateTaskGraph(plan.tasks);
+      if (graph.taskGraphFingerprint !== plan.taskGraphFingerprint) {
+        context.addIssue({ code: "custom", message: "TASK_GRAPH_FINGERPRINT_MISMATCH" });
+        return;
+      }
+      const expectedPlanFingerprint = canonicalSha256({
+        executionPlanId: plan.executionPlanId,
+        projectId: plan.projectId,
+        changeRevisionId: plan.changeRevisionId,
+        requirementRevisionIds: [...plan.requirementRevisionIds].sort(),
+        tasks: graph.tasks,
+        taskGraphFingerprint: graph.taskGraphFingerprint,
+        publishedAt: plan.publishedAt,
+      });
+      if (expectedPlanFingerprint !== plan.planFingerprint) {
+        context.addIssue({ code: "custom", message: "PLAN_FINGERPRINT_MISMATCH" });
+      }
+    } catch (error) {
+      context.addIssue({
+        code: "custom",
+        message: error instanceof Error ? error.message : "EXECUTION_PLAN_INVALID",
+      });
+    }
+  });
+
 function canonicalTask(task: TaskDefinition): TaskDefinition {
   return {
     ...task,
@@ -179,5 +218,7 @@ export function createExecutionPlan(input: unknown): Readonly<ExecutionPlan> {
     taskGraphFingerprint: graph.taskGraphFingerprint,
   };
   const planFingerprint = canonicalSha256({ ...common, publishedAt: parsed.publishedAt });
-  return deepFreeze({ ...common, planFingerprint, publishedAt: parsed.publishedAt });
+  return deepFreeze(
+    ExecutionPlanSchema.parse({ ...common, planFingerprint, publishedAt: parsed.publishedAt }),
+  );
 }
