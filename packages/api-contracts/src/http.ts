@@ -27,6 +27,21 @@ const RequirementTitleSchema = z.string().trim().min(1).max(200);
 const RequirementBodySchema = z.string().trim().min(1).max(20_000);
 const RequirementListItemSchema = z.string().trim().min(1).max(1_000);
 
+function requirementListSchema(minimumItems: number) {
+  return z.array(RequirementListItemSchema).min(minimumItems).max(50).superRefine((items, context) => {
+    const seen = new Set<string>();
+    items.forEach((item, index) => {
+      if (seen.has(item)) {
+        context.addIssue({ code: "custom", path: [index], message: "requirement list items must be unique" });
+      }
+      seen.add(item);
+    });
+  });
+}
+
+const AcceptanceCriteriaSchema = requirementListSchema(1);
+const RequirementConstraintsSchema = requirementListSchema(0);
+
 export const ProjectIdParamsSchema = z.strictObject({ projectId: ProjectIdSchema });
 export const RequirementRevisionParamsSchema = z.strictObject({
   projectId: ProjectIdSchema,
@@ -46,8 +61,8 @@ export const CreateRequirementHttpRequestSchema = z.strictObject({
   revisionId: RequirementRevisionIdSchema,
   title: RequirementTitleSchema,
   body: RequirementBodySchema,
-  acceptanceCriteria: z.array(RequirementListItemSchema).min(1).max(50),
-  constraints: z.array(RequirementListItemSchema).max(50),
+  acceptanceCriteria: AcceptanceCriteriaSchema,
+  constraints: RequirementConstraintsSchema,
   expectedVersion: CommandMetadataSchema.shape.expectedVersion,
   idempotencyKey: CommandMetadataSchema.shape.idempotencyKey,
 });
@@ -60,8 +75,8 @@ export const ReplaceRequirementHttpRequestSchema = z
   .strictObject({
     title: RequirementTitleSchema.optional(),
     body: RequirementBodySchema.optional(),
-    acceptanceCriteria: z.array(RequirementListItemSchema).min(1).max(50).optional(),
-    constraints: z.array(RequirementListItemSchema).max(50).optional(),
+    acceptanceCriteria: AcceptanceCriteriaSchema.optional(),
+    constraints: RequirementConstraintsSchema.optional(),
   })
   .refine((input) => Object.values(input).some((value) => value !== undefined), {
     message: "replacement content is required",
@@ -85,8 +100,8 @@ export const RequirementRevisionHttpResponseSchema = z.strictObject({
   aggregateVersion: z.number().int().nonnegative(),
   title: RequirementTitleSchema,
   body: RequirementBodySchema,
-  acceptanceCriteria: z.array(RequirementListItemSchema).min(1).max(50),
-  constraints: z.array(RequirementListItemSchema).max(50),
+  acceptanceCriteria: AcceptanceCriteriaSchema,
+  constraints: RequirementConstraintsSchema,
   status: z.enum(["draft", "in_review", "approved", "superseded", "withdrawn"]),
   approvedAt: z.string().datetime({ offset: true }).optional(),
 }).superRefine((revision, context) => {

@@ -58,6 +58,31 @@ describe("Workbench HTTP schemas", () => {
     expect(() => RequirementRevisionParamsSchema.parse({ projectId, revisionId: "rrv_short" })).toThrow();
   });
 
+  it("rejects duplicate requirement list items after normalization", () => {
+    expect(() => CreateRequirementHttpRequestSchema.parse({
+      requirementId,
+      revisionId,
+      title: "移动审批",
+      body: "正文",
+      acceptanceCriteria: ["审批后恢复运行", " 审批后恢复运行 "],
+      constraints: [],
+      expectedVersion: 0,
+      idempotencyKey: "create-requirement-task2",
+    })).toThrow();
+
+    expect(() => RequirementRevisionHttpResponseSchema.parse({
+      projectId,
+      requirementId,
+      revisionId,
+      aggregateVersion: 0,
+      title: "移动审批",
+      body: "正文",
+      acceptanceCriteria: ["验收"],
+      constraints: ["仅限本地", " 仅限本地 "],
+      status: "draft",
+    })).toThrow();
+  });
+
   it("strictly validates Workbench responses", () => {
     const revision = { projectId, requirementId, revisionId, aggregateVersion: 0, title: "移动审批", body: "正文", acceptanceCriteria: ["验收"], constraints: [], status: "draft" };
     expect(RequirementRevisionHttpResponseSchema.parse(revision)).toEqual(revision);

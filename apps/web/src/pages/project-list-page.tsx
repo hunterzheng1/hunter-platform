@@ -3,6 +3,8 @@ import { useEffect, useState, type FormEvent } from "react";
 import type { HunterApi } from "../api/client.js";
 
 type ProjectsApi = Pick<HunterApi, "listProjects" | "createProject">;
+type ListedProject = Awaited<ReturnType<ProjectsApi["listProjects"]>>["projects"][number];
+type ListedProjectId = ListedProject["projectId"];
 
 export function ProjectListPage({
   api,
@@ -11,13 +13,14 @@ export function ProjectListPage({
   readonly api: ProjectsApi;
   readonly onOpen: (projectId: string) => void;
 }) {
-  const [projects, setProjects] = useState<Awaited<ReturnType<ProjectsApi["listProjects"]>>["projects"]>([]);
+  const [projects, setProjects] = useState<readonly ListedProject[]>([]);
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [checkingAuthorization, setCheckingAuthorization] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
-  const [pendingAuthorization, setPendingAuthorization] = useState<ReadonlySet<string>>(() => new Set());
+  const [pendingAuthorization, setPendingAuthorization] = useState<ReadonlySet<ListedProjectId>>(() => new Set());
 
   useEffect(() => {
     let current = true;
@@ -51,8 +54,29 @@ export function ProjectListPage({
     }
   };
 
+  const refreshAuthorization = async () => {
+    setCheckingAuthorization(true);
+    setError(undefined);
+    setNotice(undefined);
+    const pendingAtStart = pendingAuthorization;
+    try {
+      const response = await api.listProjects();
+      const authorizedIds = new Set(response.projects.map((project) => project.projectId));
+      setProjects((current) => [
+        ...response.projects,
+        ...current.filter((project) => pendingAtStart.has(project.projectId) && !authorizedIds.has(project.projectId)),
+      ]);
+      setPendingAuthorization((current) => new Set([...current].filter((projectId) => !authorizedIds.has(projectId))));
+      setNotice("授权状态已重新检查。");
+    } catch {
+      setError("无法检查授权，请重试");
+    } finally {
+      setCheckingAuthorization(false);
+    }
+  };
+
   return (
-    <main className="page-shell" aria-busy={loading || busy}>
+    <main className="page-shell" aria-busy={loading || busy || checkingAuthorization}>
       <header className="page-header">
         <div>
           <p className="eyebrow">Workbench</p>
@@ -84,6 +108,11 @@ export function ProjectListPage({
         <div className="section-heading">
           <h2 id="project-list-title">全部项目</h2>
           {loading ? <span role="status">正在加载项目…</span> : null}
+          {pendingAuthorization.size > 0 ? (
+            <button className="button button-secondary" type="button" disabled={checkingAuthorization} onClick={() => void refreshAuthorization()}>
+              {checkingAuthorization ? "正在检查授权…" : "重新检查授权"}
+            </button>
+          ) : null}
         </div>
         {!loading && projects.length === 0 && error === undefined ? (
           <div className="empty-state">

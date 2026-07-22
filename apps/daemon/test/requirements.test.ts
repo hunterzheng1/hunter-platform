@@ -2,6 +2,7 @@ import { RequirementIdSchema, RequirementRevisionIdSchema } from "@hunter/domain
 import type { CreateProjectHttpResponse } from "@hunter/api-contracts";
 import { describe, expect, it, vi } from "vitest";
 
+import { assertRequirementRoutesServices } from "../src/app.js";
 import { buildTestApp, projectA, projectB } from "./support/build-test-app.js";
 
 const requirementId = RequirementIdSchema.parse("req_task2000001");
@@ -31,6 +32,12 @@ const createPayload = {
 };
 
 describe("project and requirement routes", () => {
+  it("rejects an incomplete optional requirement service group", () => {
+    expect(() => assertRequirementRoutesServices({
+      createRequirement: vi.fn(),
+    })).toThrowError("REQUIREMENTS_SERVICE_GROUP_INCOMPLETE");
+  });
+
   it("creates a project and returns only strict project response data", async () => {
     const createProject = vi.fn(async (): Promise<CreateProjectHttpResponse> => ({
       projectId: projectB,
@@ -74,9 +81,7 @@ describe("project and requirement routes", () => {
       approvedAt: "2026-07-23T01:00:00.000Z",
     }));
     const { app, headers } = buildTestApp({
-      createRequirement,
-      getRequirementRevision,
-      approveRequirement,
+      requirements: { createRequirement, getRequirementRevision, approveRequirement },
     });
 
     const created = await app.inject({
@@ -112,7 +117,7 @@ describe("project and requirement routes", () => {
       status: "draft" as const,
     }));
     const approveRequirement = vi.fn();
-    const { app, headers } = buildTestApp({ getRequirementRevision, approveRequirement });
+    const { app, headers } = buildTestApp({ requirements: { getRequirementRevision, approveRequirement } });
 
     const response = await app.inject({
       method: "POST",
@@ -129,7 +134,7 @@ describe("project and requirement routes", () => {
   it("never replaces a revision and distinguishes approved immutability", async () => {
     const status = { current: "approved" as "approved" | "draft" };
     const getRequirementRevision = vi.fn(() => ({ projectId: projectA, revisionId, status: status.current }));
-    const { app, headers } = buildTestApp({ getRequirementRevision });
+    const { app, headers } = buildTestApp({ requirements: { getRequirementRevision } });
 
     const approved = await app.inject({
       method: "PUT",
@@ -157,15 +162,14 @@ describe("project and requirement routes", () => {
     const getRequirementRevision = vi.fn();
     const approveRequirement = vi.fn();
     const { app, headers } = buildTestApp({
-      createRequirement,
-      getRequirementRevision,
-      approveRequirement,
+      requirements: { createRequirement, getRequirementRevision, approveRequirement },
     });
 
     const invalidRequests = [
       app.inject({ method: "POST", url: "/api/v1/projects/not-a-project/requirements", headers, payload: createPayload }),
       app.inject({ method: "POST", url: `/api/v1/projects/${projectA}/requirements`, headers, payload: { ...createPayload, absolutePath: "C:/private" } }),
       app.inject({ method: "POST", url: `/api/v1/projects/${projectA}/requirements`, headers, payload: { ...createPayload, revisionId: "rrv_short" } }),
+      app.inject({ method: "POST", url: `/api/v1/projects/${projectA}/requirements`, headers, payload: { ...createPayload, acceptanceCriteria: ["same", " same "] } }),
       app.inject({ method: "POST", url: `/api/v1/projects/${projectA}/requirement-revisions/${revisionId}/approve`, headers, payload: { expectedVersion: 0, idempotencyKey: "too-short", extra: true } }),
       app.inject({ method: "POST", url: `/api/v1/projects/${projectA}/requirement-revisions/not-a-revision/approve`, headers, payload: { expectedVersion: 0, idempotencyKey: "approve-invalid-id" } }),
     ];
