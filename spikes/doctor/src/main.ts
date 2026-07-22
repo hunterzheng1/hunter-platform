@@ -36,6 +36,7 @@ async function main(): Promise<void> {
   const repositoryRoot = process.cwd();
   const output = parseOutputArgument(process.argv.slice(2));
   const outputPath = assertValidationOutput(repositoryRoot, output);
+  const orcaExecutable = process.env.ORCA_CLI_COMMAND?.trim();
   const inventory = await createDoctorInventory({
     runner: new NodeCommandRunner(),
     cwd: repositoryRoot,
@@ -45,6 +46,10 @@ async function main(): Promise<void> {
       architecture: arch(),
       release: release(),
     },
+    executableOverrides:
+      orcaExecutable === undefined || orcaExecutable === ""
+        ? {}
+        : { orca: orcaExecutable },
   });
   const serialized = `${JSON.stringify(inventory, null, 2)}\n`;
   assertSafeEvidence(serialized);

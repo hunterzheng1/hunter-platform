@@ -90,6 +90,10 @@ export function redact(value: string): string {
       "$1=[REDACTED]",
     )
     .replace(/([?&](?:token|access_token|auth|key)=)[^&\s]+/giu, "$1[REDACTED]")
+    .replace(
+      /("(?:pid|runtimeId)"\s*:\s*)(?:"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?)/giu,
+      '$1"[VOLATILE]"',
+    )
     .replace(/\\\\[^\\\s]+\\[^\s\r\n]+/gu, "[PRIVATE_PATH]")
     .replace(/\b[A-Za-z]:\\(?:[^\\\s\r\n]+\\?)+/gu, "[PRIVATE_PATH]")
     .replace(/\/(?:home|Users)\/[^/\s]+(?:\/[^\s\r\n]*)?/gu, "[PRIVATE_PATH]");
@@ -171,7 +175,10 @@ export function assertSafeEvidence(serialized: string): void {
     /\b[A-Za-z]:\\(?:Users\\)?[^\s"']+/u,
     /\/(?:home|Users)\/[^/\s"']+/u,
   ];
-  if (forbidden.some((pattern) => pattern.test(serialized))) {
+  const normalizedQuotes = serialized.replace(/\\"/gu, '"');
+  const hasUnredactedRuntimeIdentifier =
+    /"(?:pid|runtimeId)"\s*:\s*(?:"(?!\[VOLATILE\]")|[^"\s])/iu.test(normalizedQuotes);
+  if (forbidden.some((pattern) => pattern.test(serialized)) || hasUnredactedRuntimeIdentifier) {
     throw new Error("EVIDENCE_CONTAINS_SENSITIVE_MATERIAL");
   }
 }

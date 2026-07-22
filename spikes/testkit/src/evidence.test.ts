@@ -2,6 +2,7 @@ import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  assertSafeEvidence,
   assertProbeWorkspace,
   createEvidenceEnvelope,
   redact,
@@ -27,6 +28,54 @@ describe("phase 0 evidence", () => {
     expect(output).not.toContain("/home/hunter");
     expect(output).toContain("[REDACTED]");
     expect(output).toContain("[PRIVATE_PATH]");
+  });
+
+  it("redacts volatile runtime identifiers from structured command output", () => {
+    const output = redact(
+      JSON.stringify({
+        id: "local-status",
+        result: {
+          app: { pid: 52312 },
+          runtime: { runtimeId: "31947815-53c8-46c4-8dc1-41070cdf3d72" },
+        },
+      }),
+    );
+
+    expect(output).toContain('"id":"local-status"');
+    expect(output).toContain('"pid":"[VOLATILE]"');
+    expect(output).toContain('"runtimeId":"[VOLATILE]"');
+    expect(output).not.toContain("52312");
+    expect(output).not.toContain("31947815-53c8-46c4-8dc1-41070cdf3d72");
+  });
+
+  it("rejects serialized evidence with unredacted runtime identifiers", () => {
+    const serialized = JSON.stringify({
+      stdout: JSON.stringify({
+        pid: 52312,
+        runtimeId: "31947815-53c8-46c4-8dc1-41070cdf3d72",
+      }),
+    });
+
+    expect(() => assertSafeEvidence(serialized)).toThrow(
+      "EVIDENCE_CONTAINS_SENSITIVE_MATERIAL",
+    );
+    const safeSerialized = JSON.stringify(
+      {
+        stdout: redact(
+          JSON.stringify(
+            {
+              pid: 52312,
+              runtimeId: "31947815-53c8-46c4-8dc1-41070cdf3d72",
+            },
+            null,
+            2,
+          ),
+        ),
+      },
+      null,
+      2,
+    );
+    expect(() => assertSafeEvidence(safeSerialized)).not.toThrow();
   });
 
   it("creates a strict versioned envelope with a stable content fingerprint", () => {
