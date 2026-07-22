@@ -34,7 +34,12 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["apps/**/*.test.ts", "packages/**/*.test.ts", "spikes/**/*.test.ts"],
+    include: [
+      "apps/**/*.test.ts",
+      "packages/**/*.test.ts",
+      "spikes/**/*.test.ts",
+      "workflow-packs/**/*.test.ts",
+    ],
     passWithNoTests: false,
   },
 });

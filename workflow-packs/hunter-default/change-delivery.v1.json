@@ -1,0 +1,244 @@
+{
+  "workflowId": "hunter.change-delivery",
+  "revision": {
+    "workflowRevisionId": "wfr_hunter_change_delivery_v1",
+    "title": "Hunter Change delivery",
+    "status": "published",
+    "entryStepId": "stp_change_plan_v1",
+    "steps": [
+      {
+        "stepId": "stp_change_plan_v1",
+        "kind": "agent",
+        "inputContract": { "schemaId": "hunter.change-context", "version": 1 },
+        "outputContract": { "schemaId": "hunter.execution-plan", "version": 1 },
+        "executor": { "kind": "runtime_agent", "selector": "planning-agent" },
+        "agentProfileSelector": {
+          "strategy": "first_available",
+          "agentProfileIds": ["apr_default_planner"]
+        },
+        "requiredCapabilities": ["launch", "completion_receipt"],
+        "permissionPolicy": { "decision": "allow", "permissions": ["workflow.plan"] },
+        "verifier": {
+          "kind": "automated",
+          "verifierId": "execution-plan-contract",
+          "outputContract": { "schemaId": "hunter.execution-plan", "version": 1 }
+        },
+        "retryPolicy": {
+          "maxAttempts": 1,
+          "retryableErrorClasses": [],
+          "backoff": { "kind": "fixed", "initialDelayMs": 1000, "maxDelayMs": 1000 },
+          "jitter": "none",
+          "waitingBudgetCost": 1
+        },
+        "timeoutPolicy": { "timeoutMs": 3600000, "onTimeout": "needs_attention" },
+        "budgetCost": { "units": 1, "elapsedMs": 3600000, "cost": 0 },
+        "sessionPolicy": "new",
+        "workspacePolicy": { "mode": "read", "isolation": "shared_snapshot", "reuse": true }
+      },
+      {
+        "stepId": "stp_change_approve_plan_v1",
+        "kind": "human_gate",
+        "inputContract": { "schemaId": "hunter.execution-plan", "version": 1 },
+        "outputContract": { "schemaId": "hunter.approval-receipt", "version": 1 },
+        "executor": { "kind": "human", "selector": "change-owner" },
+        "requiredCapabilities": [],
+        "permissionPolicy": {
+          "decision": "require_approval",
+          "permissions": ["workflow.approve-plan"]
+        },
+        "verifier": { "kind": "human_receipt", "requiredRole": "change-owner" },
+        "retryPolicy": {
+          "maxAttempts": 1,
+          "retryableErrorClasses": [],
+          "backoff": { "kind": "fixed", "initialDelayMs": 1000, "maxDelayMs": 1000 },
+          "jitter": "none",
+          "waitingBudgetCost": 1
+        },
+        "timeoutPolicy": { "timeoutMs": 7200000, "onTimeout": "needs_attention" },
+        "budgetCost": { "units": 1, "elapsedMs": 7200000, "cost": 0 },
+        "sessionPolicy": "manual",
+        "workspacePolicy": { "mode": "read", "isolation": "shared_snapshot", "reuse": true }
+      },
+      {
+        "stepId": "stp_change_dispatch_tasks_v1",
+        "kind": "subflow",
+        "inputContract": { "schemaId": "hunter.approved-execution-plan", "version": 1 },
+        "outputContract": { "schemaId": "hunter.task-run-summary", "version": 1 },
+        "executor": { "kind": "subflow", "selector": "wfr_hunter_task_delivery_v1" },
+        "requiredCapabilities": ["workspace_isolation"],
+        "permissionPolicy": { "decision": "allow", "permissions": ["workflow.dispatch-task"] },
+        "verifier": {
+          "kind": "automated",
+          "verifierId": "task-run-verdicts",
+          "outputContract": { "schemaId": "hunter.task-run-summary", "version": 1 }
+        },
+        "retryPolicy": {
+          "maxAttempts": 1,
+          "retryableErrorClasses": [],
+          "backoff": { "kind": "fixed", "initialDelayMs": 1000, "maxDelayMs": 1000 },
+          "jitter": "none",
+          "waitingBudgetCost": 1
+        },
+        "timeoutPolicy": { "timeoutMs": 7200000, "onTimeout": "needs_attention" },
+        "budgetCost": { "units": 1, "elapsedMs": 7200000, "cost": 0 },
+        "sessionPolicy": "new",
+        "workspacePolicy": { "mode": "write", "isolation": "worktree", "reuse": true }
+      },
+      {
+        "stepId": "stp_change_integrate_v1",
+        "kind": "verify",
+        "inputContract": { "schemaId": "hunter.task-run-summary", "version": 1 },
+        "outputContract": { "schemaId": "hunter.integration-verdict", "version": 1 },
+        "executor": { "kind": "verifier", "selector": "change-integration" },
+        "requiredCapabilities": ["artifact_export"],
+        "permissionPolicy": { "decision": "allow", "permissions": ["workflow.integrate"] },
+        "verifier": {
+          "kind": "automated",
+          "verifierId": "change-integration",
+          "outputContract": { "schemaId": "hunter.integration-verdict", "version": 1 }
+        },
+        "retryPolicy": {
+          "maxAttempts": 1,
+          "retryableErrorClasses": [],
+          "backoff": { "kind": "fixed", "initialDelayMs": 1000, "maxDelayMs": 1000 },
+          "jitter": "none",
+          "waitingBudgetCost": 1
+        },
+        "timeoutPolicy": { "timeoutMs": 3600000, "onTimeout": "needs_attention" },
+        "budgetCost": { "units": 1, "elapsedMs": 3600000, "cost": 0 },
+        "sessionPolicy": "resume_if_supported",
+        "workspacePolicy": { "mode": "write", "isolation": "worktree", "reuse": true }
+      },
+      {
+        "stepId": "stp_change_archive_v1",
+        "kind": "command",
+        "inputContract": { "schemaId": "hunter.change-run-result", "version": 1 },
+        "outputContract": { "schemaId": "hunter.archive-manifest", "version": 1 },
+        "executor": { "kind": "command", "selector": "archive-change-run" },
+        "requiredCapabilities": ["artifact_export"],
+        "permissionPolicy": { "decision": "allow", "permissions": ["archive.write"] },
+        "verifier": {
+          "kind": "automated",
+          "verifierId": "archive-manifest-contract",
+          "outputContract": { "schemaId": "hunter.archive-manifest", "version": 1 }
+        },
+        "retryPolicy": {
+          "maxAttempts": 1,
+          "retryableErrorClasses": [],
+          "backoff": { "kind": "fixed", "initialDelayMs": 1000, "maxDelayMs": 1000 },
+          "jitter": "none",
+          "waitingBudgetCost": 1
+        },
+        "timeoutPolicy": { "timeoutMs": 600000, "onTimeout": "needs_attention" },
+        "budgetCost": { "units": 1, "elapsedMs": 600000, "cost": 0 },
+        "sessionPolicy": "new",
+        "workspacePolicy": { "mode": "write", "isolation": "single_writer", "reuse": false }
+      },
+      {
+        "stepId": "stp_change_ingest_knowledge_v1",
+        "kind": "context",
+        "inputContract": { "schemaId": "hunter.archive-manifest", "version": 1 },
+        "outputContract": { "schemaId": "hunter.knowledge-ingest-receipt", "version": 1 },
+        "executor": { "kind": "context", "selector": "ingest-archive-knowledge" },
+        "requiredCapabilities": [],
+        "permissionPolicy": { "decision": "allow", "permissions": ["knowledge.ingest"] },
+        "verifier": {
+          "kind": "automated",
+          "verifierId": "knowledge-ingest-receipt",
+          "outputContract": { "schemaId": "hunter.knowledge-ingest-receipt", "version": 1 }
+        },
+        "retryPolicy": {
+          "maxAttempts": 1,
+          "retryableErrorClasses": [],
+          "backoff": { "kind": "fixed", "initialDelayMs": 1000, "maxDelayMs": 1000 },
+          "jitter": "none",
+          "waitingBudgetCost": 1
+        },
+        "timeoutPolicy": { "timeoutMs": 600000, "onTimeout": "needs_attention" },
+        "budgetCost": { "units": 1, "elapsedMs": 600000, "cost": 0 },
+        "sessionPolicy": "new",
+        "workspacePolicy": { "mode": "read", "isolation": "shared_snapshot", "reuse": true }
+      }
+    ],
+    "routes": [
+      {
+        "routeId": "rte_change_plan_passed_v1",
+        "fromStepId": "stp_change_plan_v1",
+        "outcome": "passed",
+        "priority": 0,
+        "toStepId": "stp_change_approve_plan_v1"
+      },
+      {
+        "routeId": "rte_change_approve_passed_v1",
+        "fromStepId": "stp_change_approve_plan_v1",
+        "outcome": "passed",
+        "priority": 0,
+        "toStepId": "stp_change_dispatch_tasks_v1"
+      },
+      {
+        "routeId": "rte_change_approve_canceled_v1",
+        "fromStepId": "stp_change_approve_plan_v1",
+        "outcome": "canceled",
+        "priority": 0,
+        "toStepId": "stp_change_archive_v1"
+      },
+      {
+        "routeId": "rte_change_dispatch_passed_v1",
+        "fromStepId": "stp_change_dispatch_tasks_v1",
+        "outcome": "passed",
+        "priority": 0,
+        "toStepId": "stp_change_integrate_v1"
+      },
+      {
+        "routeId": "rte_change_dispatch_failed_v1",
+        "fromStepId": "stp_change_dispatch_tasks_v1",
+        "outcome": "failed",
+        "priority": 0,
+        "toStepId": "stp_change_archive_v1"
+      },
+      {
+        "routeId": "rte_change_integrate_passed_v1",
+        "fromStepId": "stp_change_integrate_v1",
+        "outcome": "passed",
+        "priority": 0,
+        "toStepId": "stp_change_archive_v1"
+      },
+      {
+        "routeId": "rte_change_integrate_failed_v1",
+        "fromStepId": "stp_change_integrate_v1",
+        "outcome": "failed",
+        "priority": 0,
+        "toStepId": "stp_change_dispatch_tasks_v1"
+      },
+      {
+        "routeId": "rte_change_archive_passed_v1",
+        "fromStepId": "stp_change_archive_v1",
+        "outcome": "passed",
+        "priority": 0,
+        "toStepId": "stp_change_ingest_knowledge_v1"
+      }
+    ],
+    "loops": [
+      {
+        "loopId": "lop_change_integrate_feedback_v1",
+        "routeId": "rte_change_integrate_failed_v1",
+        "fromStepId": "stp_change_integrate_v1",
+        "toStepId": "stp_change_dispatch_tasks_v1",
+        "maxIterations": 2,
+        "maxElapsedMs": 7200000,
+        "progressPredicate": {
+          "kind": "verifier_improved",
+          "source": "integration.verdictFingerprint"
+        },
+        "stagnation": {
+          "maxSameFailureFingerprint": 2,
+          "maxNoDiffIterations": 1,
+          "maxVerifierErrors": 2
+        },
+        "reuse": { "profile": true, "session": false, "workspace": true },
+        "exhaustion": { "target": "needs_attention", "notify": true }
+      }
+    ],
+    "publishedAt": "2026-07-23T00:00:00.000Z"
+  }
+}

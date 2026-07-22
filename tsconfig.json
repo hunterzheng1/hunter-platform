@@ -11,6 +11,7 @@
     { "path": "./packages/runtime-manager" },
     { "path": "./packages/storage" },
     { "path": "./packages/testkit" },
+    { "path": "./workflow-packs/hunter-default" },
     { "path": "./spikes/testkit" },
     { "path": "./spikes/doctor" },
     { "path": "./spikes/codex" },

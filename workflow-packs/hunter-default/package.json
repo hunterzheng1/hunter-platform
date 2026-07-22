@@ -1,0 +1,20 @@
+{
+  "name": "@hunter/workflow-pack-default",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b && node scripts/copy-assets.mjs",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@hunter/domain": "0.0.0",
+    "zod": "^4.0.0"
+  }
+}

@@ -6,7 +6,8 @@
   "workspaces": [
     "apps/*",
     "packages/*",
-    "spikes/*"
+    "spikes/*",
+    "workflow-packs/*"
   ],
   "engines": {
     "node": ">=24 <25"
