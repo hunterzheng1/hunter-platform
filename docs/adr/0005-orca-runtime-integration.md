@@ -9,7 +9,9 @@
 
 本修订不改变 Outcome 5，也不追溯改写任何真实 Provider 的 `PASS`、`FAIL`、`BLOCKED` 或 `NOT_PROVEN` 证据。它仅澄清 First Vertical Slice 的门禁范围：允许确定性 Fake 驱动的开发和自动验收继续；该 Fake-only 路径只证明 Hunter 契约与产品链路，证据范围始终为 `contract_only`，不证明或采用任何真实 Provider。
 
-Phase 0 Gate A、First Vertical Slice 的真实 Provider 集成与验收、真实 Provider 能力宣传及生产发布继续阻断。不选择或 Fork Orca，也不把 Fake 当作真实 Provider。
+Phase 0 Gate A、First Vertical Slice 的真实 Provider 集成与验收及真实 Provider 能力宣传继续阻断；生产签名、分发和发布继续阻断。不选择或 Fork Orca，也不把 Fake 当作真实 Provider。
+
+允许在本地或 CI 运行 `pack:win`，生成未签名、仅用于自动验收的 Windows NSIS 测试产物。该产物只证明 Fake-only 产品链路与打包验证，不证明任何真实 Provider，也不得签名、分发或作为生产发布。
 
 ## Context
 
@@ -36,7 +38,7 @@ Options 1–4 都缺少本机固定版本与原子能力证据。Option 2 还未
 - Orca 仍只是下一次有界测量的首个候选，不是产品依赖。
 - Agent Orchestrator 和 Direct Runtime 只是相同契约下的 fallback spike 选项，不是已采用方案。
 - Codex、CodeBuddy 和 Cursor 不获得推定的 L0–L3；等级只能由未来版本化的原子能力收据生成 `CapabilityManifest` 后计算。
-- Foundation 维护、Fake contract 验证，以及确定性 Fake 驱动的 First Vertical Slice 开发和自动验收可以继续；Phase 0 Gate A、First Vertical Slice 的真实 Provider 集成与验收、真实 Provider 能力宣传及生产发布保持阻断。
+- Foundation 维护、Fake contract 验证、确定性 Fake 驱动的 First Vertical Slice 开发和自动验收，以及本地或 CI 的未签名 Windows NSIS 测试打包可以继续；Phase 0 Gate A、First Vertical Slice 的真实 Provider 集成与验收及真实 Provider 能力宣传保持阻断；生产签名、分发和发布继续阻断。
 
 完整矩阵和 Gate A 判定见 [`phase-0-decision.md`](../validation/phase-0-decision.md)。
 
@@ -48,7 +50,7 @@ Options 1–4 都缺少本机固定版本与原子能力证据。Option 2 还未
 - Candidate versions: unavailable; adoption status `NOT_PROVEN`
 - Fake proof scope: `contract_only`
 
-本 ADR 不批准安装、登录、产生费用、读取凭据、远端写入、真实 Provider 集成或验收、真实 Provider 能力宣传及生产发布；它不阻断证据标记为 `contract_only` 的 Fake-only First Vertical Slice 开发和自动验收。
+本 ADR 不批准安装、登录、产生费用、读取凭据、远端写入、真实 Provider 集成或验收及真实 Provider 能力宣传；生产签名、分发和发布继续阻断。它不阻断证据标记为 `contract_only` 的 Fake-only First Vertical Slice 开发和自动验收，也不阻断本地或 CI 生成未签名、仅用于自动验收的 Windows NSIS 测试产物。
 
 ## Consequences
 
@@ -57,13 +59,13 @@ Options 1–4 都缺少本机固定版本与原子能力证据。Option 2 还未
 - 不会把上游宣传、缺失 executable 或 Fake 结果伪装成真实 Provider 通过。
 - Hunter 领域、Flow、Storage 和 API 继续保持 provider-neutral。
 - 避免在 sidecar 证据出现前承担 Orca Fork 和上游同步成本。
-- Foundation 与 Fake-only First Vertical Slice 可以继续保持可验证基线，同时真实 Provider 风险仍被显式阻断。
+- Foundation、Fake-only First Vertical Slice 与未签名 Windows NSIS 测试打包可以继续保持可验证基线，同时真实 Provider 风险仍被显式阻断。
 
 ### Negative
 
 - 当前不能运行、恢复或控制真实 Agent session。
 - Connector capability level、兼容矩阵和真实 Windows PTY 行为仍未知。
-- 任何真实 Provider 的演示、发布或产品承诺都必须等待下一轮证据。
+- 任何真实 Provider 的演示、能力宣传或产品承诺都必须等待下一轮证据；生产签名、分发和发布继续阻断。
 
 ## Residual risks and compensating controls
 
