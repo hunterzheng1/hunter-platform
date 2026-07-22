@@ -1,0 +1,325 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "phase0_agent_orchestrator_fallback",
+  "generatedAt": "2026-07-22T16:05:05.546Z",
+  "generator": {
+    "name": "hunter-phase0-agent-orchestrator",
+    "version": "0.1.0"
+  },
+  "host": {
+    "platform": "win32",
+    "architecture": "x64",
+    "release": "10.0.26200",
+    "nodeVersion": "v24.14.0"
+  },
+  "provider": "agent_orchestrator",
+  "candidateRelease": "v0.10.3",
+  "sourceLicense": "Apache-2.0",
+  "cliReportedVersion": "dev",
+  "providerVerdict": "NOT_PROVEN",
+  "proofScope": "local_typed_scenario",
+  "mutationAttempted": true,
+  "spawnAttempted": false,
+  "remoteAccessAttempted": false,
+  "fixture": {
+    "cwdScope": "temporary_git_fixture",
+    "remotePresent": false
+  },
+  "commands": [
+    {
+      "operation": "version",
+      "args": [
+        "--version"
+      ],
+      "cwdScope": "temporary_git_fixture",
+      "exitCode": 0,
+      "timedOut": false,
+      "spawnError": null,
+      "stdinMode": "none",
+      "stdoutSha256": "4cf5a3b7b836d201b955be8dad172f5a7501e47ebc9ee1084c74f06ad1b52564",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "operation": "status",
+      "args": [
+        "status",
+        "--json"
+      ],
+      "cwdScope": "temporary_git_fixture",
+      "exitCode": 0,
+      "timedOut": false,
+      "spawnError": null,
+      "stdinMode": "none",
+      "stdoutSha256": "a2c987f1a92e4322f5ef18a2c05b839e514dce9c332b08ecca81332e7da08b54",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "operation": "doctor",
+      "args": [
+        "doctor",
+        "--json"
+      ],
+      "cwdScope": "temporary_git_fixture",
+      "exitCode": 0,
+      "timedOut": false,
+      "spawnError": null,
+      "stdinMode": "none",
+      "stdoutSha256": "1ea577bf9c5dd7879f486cf7ea247983665a95ce5f91bb873c9e51ff8ffe0ecc",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "operation": "agent_catalog",
+      "args": [
+        "agent",
+        "ls",
+        "--json"
+      ],
+      "cwdScope": "temporary_git_fixture",
+      "exitCode": 0,
+      "timedOut": false,
+      "spawnError": null,
+      "stdinMode": "none",
+      "stdoutSha256": "da94e0d856c5da7c3ebe8c79cf13b0c797e980b2714a4005be3ca8a84f9baf98",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "operation": "project_add",
+      "args": [
+        "project",
+        "add",
+        "--id",
+        "<PROJECT_ID>",
+        "--name",
+        "Hunter Phase0 Fixture",
+        "--path",
+        "<FIXTURE_PATH>",
+        "--worker-agent",
+        "codex",
+        "--orchestrator-agent",
+        "codex"
+      ],
+      "cwdScope": "temporary_git_fixture",
+      "exitCode": 0,
+      "timedOut": false,
+      "spawnError": null,
+      "stdinMode": "none",
+      "stdoutSha256": "8693aea2423828d55bcf24481eba3d0208ee7afae5fcfa2d194a1439d5094bcc",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "operation": "project_get",
+      "args": [
+        "project",
+        "get",
+        "<PROJECT_ID>",
+        "--json"
+      ],
+      "cwdScope": "temporary_git_fixture",
+      "exitCode": 0,
+      "timedOut": false,
+      "spawnError": null,
+      "stdinMode": "none",
+      "stdoutSha256": "c2cee31a175ec82b4b5de6c490ab582f846466d4f87285348db825d20c21d092",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "operation": "agent_refresh",
+      "args": [
+        "agent",
+        "ls",
+        "--refresh",
+        "--json"
+      ],
+      "cwdScope": "temporary_git_fixture",
+      "exitCode": 0,
+      "timedOut": false,
+      "spawnError": null,
+      "stdinMode": "none",
+      "stdoutSha256": "da94e0d856c5da7c3ebe8c79cf13b0c797e980b2714a4005be3ca8a84f9baf98",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "operation": "status_after_refresh",
+      "args": [
+        "status",
+        "--json"
+      ],
+      "cwdScope": "temporary_git_fixture",
+      "exitCode": 0,
+      "timedOut": false,
+      "spawnError": null,
+      "stdinMode": "none",
+      "stdoutSha256": "2e78a809481ea6dc57cc4d907e01f0bc7f478adc16e4066838ac662e8680ed44",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "operation": "session_list",
+      "args": [
+        "session",
+        "ls",
+        "--json"
+      ],
+      "cwdScope": "temporary_git_fixture",
+      "exitCode": 0,
+      "timedOut": false,
+      "spawnError": null,
+      "stdinMode": "none",
+      "stdoutSha256": "02e797f6cb5753fd8b9ab22690adaa702482910c465c6690c94f994912cac0bc",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "operation": "stale_session_get",
+      "args": [
+        "session",
+        "get",
+        "hunter-phase0-missing",
+        "--project",
+        "<PROJECT_ID>",
+        "--json"
+      ],
+      "cwdScope": "temporary_git_fixture",
+      "exitCode": 1,
+      "timedOut": false,
+      "spawnError": null,
+      "stdinMode": "none",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "7bb948ba5ef903c94f9a043a8657b6203e54f26c052d5ecbb2d4f5fb9eb70e9a"
+    },
+    {
+      "operation": "root_help",
+      "args": [
+        "--help"
+      ],
+      "cwdScope": "temporary_git_fixture",
+      "exitCode": 0,
+      "timedOut": false,
+      "spawnError": null,
+      "stdinMode": "none",
+      "stdoutSha256": "ab4e958ba9de514b94fd8a1b9a8ac91ad06fdde998c4a8a546be0f9eabf16bcc",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "operation": "session_help",
+      "args": [
+        "session",
+        "--help"
+      ],
+      "cwdScope": "temporary_git_fixture",
+      "exitCode": 0,
+      "timedOut": false,
+      "spawnError": null,
+      "stdinMode": "none",
+      "stdoutSha256": "4ca5a13a45d48a1bbe2fe019103ff21dc718df601a3c5f2c56414707cfd2df39",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "operation": "project_remove",
+      "args": [
+        "project",
+        "rm",
+        "<PROJECT_ID>",
+        "--json"
+      ],
+      "cwdScope": "temporary_git_fixture",
+      "exitCode": 0,
+      "timedOut": false,
+      "spawnError": null,
+      "stdinMode": "exact_project_id",
+      "stdoutSha256": "059a2108d26ab1fca72c31260c5f3de46cd2dc76ffc94df0b4ad614f1ac3f47a",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "operation": "project_get_after_remove",
+      "args": [
+        "project",
+        "get",
+        "<PROJECT_ID>",
+        "--json"
+      ],
+      "cwdScope": "temporary_git_fixture",
+      "exitCode": 1,
+      "timedOut": false,
+      "spawnError": null,
+      "stdinMode": "none",
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "26b16ecfa6152402e8c4bbd8f851f967833ea28db84a9bd52d73d2577845b589"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "discover_runtime",
+      "outcome": "PASS",
+      "reason": "status_ready_and_doctor_ok"
+    },
+    {
+      "id": "fixed_version",
+      "outcome": "FAIL",
+      "reason": "release_cli_reports_dev"
+    },
+    {
+      "id": "project_registration",
+      "outcome": "PASS",
+      "reason": "temporary_git_project_registered_and_read_back"
+    },
+    {
+      "id": "resource_cleanup",
+      "outcome": "PASS",
+      "reason": "project_removed_by_exact_id_and_target_lookup_returns_not_found"
+    },
+    {
+      "id": "agent_readiness",
+      "outcome": "NOT_PROVEN",
+      "reason": "agent_inventory_not_authoritative"
+    },
+    {
+      "id": "workspace_create_find",
+      "outcome": "BLOCKED",
+      "reason": "no_session_worktree_created_without_proven_agent_readiness"
+    },
+    {
+      "id": "process_terminal_launch",
+      "outcome": "BLOCKED",
+      "reason": "spawn_not_attempted_without_proven_agent_readiness"
+    },
+    {
+      "id": "observe",
+      "outcome": "BLOCKED",
+      "reason": "no_live_session_to_observe_without_proven_agent_readiness"
+    },
+    {
+      "id": "interrupt",
+      "outcome": "FAIL",
+      "reason": "public_cli_has_no_raw_terminal_interrupt"
+    },
+    {
+      "id": "restart_reconcile",
+      "outcome": "NOT_PROVEN",
+      "reason": "no_native_session_identity_to_reconcile"
+    },
+    {
+      "id": "workspace_session_identity",
+      "outcome": "NOT_PROVEN",
+      "reason": "no_native_session_identity_receipt_available"
+    },
+    {
+      "id": "daemon_external_contract",
+      "outcome": "PASS",
+      "reason": "supported_cli_json_surface_returned_structured_receipts"
+    },
+    {
+      "id": "security_defaults",
+      "outcome": "NOT_PROVEN",
+      "reason": "listener_and_telemetry_defaults_not_exposed_as_versioned_receipt"
+    },
+    {
+      "id": "mobile_pairing",
+      "outcome": "NOT_PROVEN",
+      "reason": "mobile_and_lan_listener_not_enabled_or_tested"
+    }
+  ],
+  "redaction": {
+    "applied": true,
+    "schemaVersion": 1
+  },
+  "contentFingerprint": "e943bc041ce906bb10f1dea9d3479eb364b514c50bd90edf589a0dea50469a6f"
+}
