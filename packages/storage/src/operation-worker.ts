@@ -30,6 +30,14 @@ export interface OperationWorkerOptions {
   readonly faultInjector?: FaultSink;
 }
 
+export interface InspectableExternalOperationHandler extends ExternalOperationHandler {
+  inspect(operation: ExternalOperation): Promise<ExternalOperationReceipt | null>;
+}
+
+function canInspect(handler: ExternalOperationHandler): handler is InspectableExternalOperationHandler {
+  return "inspect" in handler && typeof handler.inspect === "function";
+}
+
 interface OutboxRow {
   readonly operation_id: string;
   readonly request_fingerprint: string;
@@ -97,9 +105,29 @@ export class OperationWorker {
     }
 
     const uncertainPriorDelivery = claimed.delivery_count > 0;
-    if (uncertainPriorDelivery && this.#replayPolicy(operation) === "unsafe") {
-      this.finalizeIndeterminate(claimed, operation, "prior_delivery_outcome_unprovable");
-      return "indeterminate";
+    if (uncertainPriorDelivery) {
+      const replayPolicy = this.#replayPolicy(operation);
+      if (replayPolicy === "unsafe") {
+        this.finalizeIndeterminate(claimed, operation, "prior_delivery_outcome_unprovable");
+        return "indeterminate";
+      }
+      if (replayPolicy === "inspectable") {
+        if (!canInspect(this.handler)) {
+          this.finalizeIndeterminate(claimed, operation, "inspection_not_available");
+          return "indeterminate";
+        }
+        const inspected = await this.handler.inspect(operation);
+        if (inspected === null) {
+          this.finalizeIndeterminate(claimed, operation, "inspection_outcome_unprovable");
+          return "indeterminate";
+        }
+        const receipt = ExternalOperationReceiptSchema.parse(inspected);
+        if (receipt.operationId !== operation.operationId || receipt.fingerprint !== operation.fingerprint) {
+          this.finalizeIndeterminate(claimed, operation, "inspection_receipt_identity_mismatch");
+          return "indeterminate";
+        }
+        return this.finalizeReceipt(claimed, operation, receipt);
+      }
     }
 
     const receipt = ExternalOperationReceiptSchema.parse(await this.handler.execute(operation));

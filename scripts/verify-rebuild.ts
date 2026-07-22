@@ -26,14 +26,14 @@ try {
       commandId: `cmd_rebuild_${index}`,
       requestFingerprint: (index + 1).toString(16).padStart(64, "0"),
       projectId,
-      aggregateId: `rebuild:${index}`,
+      aggregateId: eventType === "RunStarted" ? "run:run_rebuild001" : `rebuild:${index}`,
       expectedVersion: 0,
       actor: { actorId: "verify-rebuild", correlationId: "verify-rebuild" },
       events: [
         {
           eventId: `evt_rebuild_${index}`,
-          eventType,
-          eventData,
+          eventType: eventType === "RunStarted" ? "FlowEvent" : eventType,
+          eventData: eventType === "RunStarted" ? { flowEvent: { type: "RunStarted", binding: { runId: "run_rebuild001" } } } : eventData,
           schemaVersion: 1,
           occurredAt: `2026-07-22T00:00:0${index}.000Z`,
         },

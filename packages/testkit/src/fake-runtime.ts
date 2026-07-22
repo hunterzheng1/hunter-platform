@@ -96,6 +96,15 @@ export class FakeRuntime implements ExternalOperationHandler {
     return receipt;
   }
 
+  async inspect(input: ExternalOperation): Promise<ExternalOperationReceipt | null> {
+    const operation = ExternalOperationSchema.parse(input);
+    if (fingerprintExternalOperation(operation) !== operation.fingerprint) throw new Error("OPERATION_FINGERPRINT_MISMATCH");
+    const existing = this.#executions.get(operation.operationId);
+    if (existing === undefined) return null;
+    if (existing.canonicalOperation !== JSON.stringify(operation)) throw new Error("OPERATION_ID_REUSED_WITH_DIFFERENT_PAYLOAD");
+    return existing.receipt;
+  }
+
   get executeCount(): number {
     return this.#executeCount;
   }

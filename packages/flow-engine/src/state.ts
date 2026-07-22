@@ -33,6 +33,7 @@ export interface WorkflowRunState {
   readonly status: RunStatus;
   readonly budgetUsage: RunBudgetUsage;
   readonly steps: readonly StepRunState[];
+  readonly recoveryFacts: readonly { readonly kind: string; readonly status: "indeterminate" | "needs_attention"; readonly reason: string }[];
 }
 
 function updateStep(
@@ -57,6 +58,7 @@ function applyEvent(current: WorkflowRunState | null, event: FlowEvent): Workflo
       status: "running",
       budgetUsage: { ...EMPTY_RUN_BUDGET_USAGE },
       steps: [],
+      recoveryFacts: [],
     };
   }
   if (current === null) throw new Error("RUN_NOT_STARTED");
@@ -149,6 +151,11 @@ function applyEvent(current: WorkflowRunState | null, event: FlowEvent): Workflo
       break;
     case "RouteSelected":
     case "LoopActivated":
+      break;
+    case "RecoveryFactsRecorded":
+      state = { ...state, recoveryFacts: [...state.recoveryFacts, ...event.facts] };
+      break;
+    case "AttemptAssigned":
       break;
   }
   return { ...state, version: state.version + 1 };

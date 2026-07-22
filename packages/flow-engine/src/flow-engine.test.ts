@@ -309,7 +309,7 @@ function engineHarness(workflow = singleStepWorkflow()) {
     getWorkflowRevision: () => workflow,
     getExecutionPlan: () => plan,
   });
-  const actor = { actorId: "flow-test", correlationId: "flow-test" };
+  const actor = { actorId: "flow-test", correlationId: "flow-test", roles: ["project-approver"] };
   const { bindingFingerprint: ignoredFingerprint, ...root } = rootBinding();
   void ignoredFingerprint;
   engine.handle({
@@ -505,7 +505,7 @@ describe("authoritative FlowEngine", () => {
       evidenceFingerprint: "d".repeat(64),
       humanReceipt: {
         contentHash: current(store).steps[0]!.fixedContentHash,
-        actorId: "reviewer-1",
+        actorId: actor.actorId,
       },
       expectedVersion: current(store).version,
       idempotencyKey: "gate-approved",
@@ -553,6 +553,7 @@ describe("authoritative FlowEngine", () => {
         outcome: "failed",
         evidenceFingerprint: "f".repeat(64),
         failureFingerprint: "same-failure",
+        diffFingerprint: `diff-${index}`,
         expectedVersion: current(store).version,
         idempotencyKey: `exhaust-verify-${index}`,
         actor,

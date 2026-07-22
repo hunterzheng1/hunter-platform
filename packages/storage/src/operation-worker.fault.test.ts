@@ -134,7 +134,7 @@ describe("OperationWorker crash convergence", () => {
       replayPolicy: () => "inspectable",
     });
     await expect(resumed.runOnce()).resolves.toBe("completed");
-    expect(runtime.executeCount).toBe(2);
+    expect(runtime.executeCount).toBe(1);
     expect(runtime.nativeEffectCount).toBe(1);
     expect(database!.prepare("SELECT COUNT(*) AS count FROM side_effect_receipts").get()).toEqual({ count: 1 });
   });

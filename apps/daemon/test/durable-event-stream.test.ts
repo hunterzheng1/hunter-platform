@@ -64,4 +64,20 @@ describe("DurableEventStream", () => {
     }
     database.close();
   });
+
+  it("enforces per-principal and global connection limits with idempotent release", () => {
+    const database = new DatabaseSync(":memory:");
+    new SqliteOperationJournal(database);
+    const stream = new DurableEventStream(new EventLedgerReader(database), { global: 2, perPrincipal: 1 });
+    const releaseA = stream.acquire("principal-a");
+    expect(() => stream.acquire("principal-a")).toThrow(/SSE_CONNECTION_LIMIT/u);
+    const releaseB = stream.acquire("principal-b");
+    expect(() => stream.acquire("principal-c")).toThrow(/SSE_CONNECTION_LIMIT/u);
+    releaseA();
+    releaseA();
+    const releaseC = stream.acquire("principal-c");
+    releaseB();
+    releaseC();
+    database.close();
+  });
 });

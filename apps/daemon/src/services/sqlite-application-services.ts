@@ -37,15 +37,18 @@ export class SqliteFlowStore implements FlowStore {
   }
 
   public activeTaskIds(parentRunId: string): readonly TaskId[] {
+    return this.allRuns()
+      .filter((state) => state.binding.subjectKind === "task" && state.binding.parentRunId === parentRunId && !["succeeded", "failed", "canceled"].includes(state.status))
+      .flatMap((state) => state.binding.subjectKind === "task" ? [state.binding.taskId] : []);
+  }
+
+  public allRuns(): readonly WorkflowRunState[] {
     const rows = this.database.prepare(
       "SELECT aggregate_id, event_data FROM events WHERE event_type = 'FlowEvent' ORDER BY aggregate_id, aggregate_version",
     ).all() as unknown as FlowEventRow[];
     const grouped: Record<string, FlowEvent[]> = {};
     for (const row of rows) (grouped[row.aggregate_id] ??= []).push((JSON.parse(row.event_data) as { flowEvent: FlowEvent }).flowEvent);
-    return Object.values(grouped)
-      .map((events) => reduceFlowEvents(null, events))
-      .filter((state) => state.binding.subjectKind === "task" && state.binding.parentRunId === parentRunId && !["succeeded", "failed", "canceled"].includes(state.status))
-      .flatMap((state) => state.binding.subjectKind === "task" ? [state.binding.taskId] : []);
+    return Object.values(grouped).map((events) => reduceFlowEvents(null, events));
   }
 
   public getReceipt(commandId: string, requestFingerprint: string): FlowCommandReceipt | null {
@@ -73,7 +76,7 @@ export class SqliteFlowStore implements FlowStore {
         schemaVersion: 1,
         occurredAt: recordedAt,
       })),
-      operations: [],
+      operations: input.operations ?? [],
       response: { commandId: input.commandId, response: input.response },
     });
     return receipt.response as FlowCommandReceipt;
@@ -106,7 +109,7 @@ export function createSqliteApplicationServices(input: {
   const flowEngine = new FlowEngine(flowStore, input.repositories);
   const eventReader = new EventLedgerReader(input.database);
   const leaseService = new LeaseService(input.database);
-  const runtimeManager = new RuntimeManager(input.database, journal);
+  const runtimeManager = new RuntimeManager(input.database, flowEngine);
   const operationHandler = new RuntimeOperationHandler(input.externalHandler);
   const operationWorker = new OperationWorker(input.database, operationHandler, { ownerId: "hunterd", replayPolicy: () => "inspectable" });
   const authenticator = new LocalAuthenticator(input.installSecret);
@@ -116,15 +119,59 @@ export function createSqliteApplicationServices(input: {
     validateStorage: async () => {
       const integrity = input.database.prepare("PRAGMA integrity_check").get() as { integrity_check?: string };
       if (integrity.integrity_check !== "ok") throw new Error("STORAGE_INTEGRITY_FAILED");
+      const foreignKeys = input.database.prepare("PRAGMA foreign_keys").get() as { foreign_keys?: number };
+      if (foreignKeys.foreign_keys !== 1) throw new Error("STORAGE_FOREIGN_KEYS_DISABLED");
       return [];
     },
     reconcileMigration: async () => [],
-    reconcileOutbox: async () => [],
-    enumerateActiveAttempts: async () => [],
-    probeExternalState: async () => [],
-    reconcileLeasesAndWorkspace: async () => [],
-    validateProjections: async () => [],
-    submitRecoveryConclusions: async (facts) => ({ commandId: `recovery:${canonicalSha256(facts)}`, facts: facts.length }),
+    reconcileOutbox: async () => {
+      const now = new Date().toISOString();
+      const rows = input.database.prepare(
+        "SELECT operation_id, run_id FROM outbox WHERE status = 'in_flight' AND dispatch_expires_at <= ?",
+      ).all(now) as unknown as Array<{ operation_id: string; run_id: string | null }>;
+      for (const row of rows) input.database.prepare(
+        "UPDATE outbox SET status = 'indeterminate', dispatch_owner = NULL, dispatch_expires_at = NULL, updated_at = ? WHERE operation_id = ?",
+      ).run(now, row.operation_id);
+      return rows.map((row) => ({ kind: "operation", status: "indeterminate", reason: "expired_dispatch_outcome_unproven", operationId: row.operation_id, runId: row.run_id }));
+    },
+    enumerateActiveAttempts: async () => flowStore.allRuns()
+      .filter((state) => !["succeeded", "failed", "canceled"].includes(state.status))
+      .map((state) => ({ kind: "run", runId: state.binding.runId, status: state.status, version: state.version })),
+    probeExternalState: async (attempts) => attempts.map((attempt) => ({
+      kind: "session",
+      runId: attempt.runId,
+      status: "needs_attention",
+      reason: "external_state_not_proven",
+    })),
+    reconcileLeasesAndWorkspace: async () => {
+      const rows = input.database.prepare(
+        "SELECT lease_id, lease_kind FROM lease_records WHERE expires_at <= ?",
+      ).all(new Date().toISOString()) as unknown as Array<{ lease_id: string; lease_kind: string }>;
+      return rows.map((row) => ({ kind: "lease", leaseId: row.lease_id, leaseKind: row.lease_kind, status: "needs_attention", reason: "lease_expired" }));
+    },
+    validateProjections: async () => {
+      const checkpoint = input.database.prepare("SELECT COALESCE(MAX(last_position), 0) AS position FROM projection_checkpoints").get() as { position: number };
+      if (checkpoint.position > eventReader.highWaterPosition()) throw new Error("PROJECTION_CHECKPOINT_AHEAD_OF_LEDGER");
+      return [];
+    },
+    submitRecoveryConclusions: async (facts) => {
+      const receipts: unknown[] = [];
+      for (const state of flowStore.allRuns()) {
+        const runFacts = facts.filter((fact) => fact.runId === state.binding.runId && (fact.status === "indeterminate" || fact.status === "needs_attention"));
+        if (runFacts.length === 0) continue;
+        const normalized = runFacts.map((fact) => ({ kind: fact.kind, status: fact.status as "indeterminate" | "needs_attention", reason: typeof fact.reason === "string" ? fact.reason : "recovery_attention" }));
+        if (normalized.every((fact) => state.recoveryFacts.some((stored) => canonicalSha256(stored) === canonicalSha256(fact)))) continue;
+        receipts.push(flowEngine.handle({
+          type: "RecordRecoveryFacts",
+          runId: state.binding.runId,
+          facts: normalized,
+          expectedVersion: state.version,
+          idempotencyKey: `recovery-${canonicalSha256(normalized).slice(0, 32)}`,
+          actor: { actorId: "startup-recovery", correlationId: `recovery:${state.binding.runId}` },
+        }));
+      }
+      return receipts;
+    },
   });
   return {
     journal,

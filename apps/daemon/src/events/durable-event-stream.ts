@@ -17,7 +17,13 @@ function parseCursor(value: string | undefined): number {
 }
 
 export class DurableEventStream {
-  public constructor(private readonly reader: EventLedgerReader) {}
+  private activeConnections = 0;
+  private readonly activeByPrincipal: Record<string, number> = {};
+
+  public constructor(
+    private readonly reader: EventLedgerReader,
+    private readonly limits: { readonly global: number; readonly perPrincipal: number } = { global: 32, perPrincipal: 4 },
+  ) {}
 
   public replay(input: { readonly headerCursor?: string | undefined; readonly queryCursor?: string | undefined; readonly authorizedProjectIds: readonly ProjectId[]; readonly limit?: number | undefined }): ReplayResult {
     if (input.headerCursor !== undefined && input.queryCursor !== undefined && input.headerCursor !== input.queryCursor) {
@@ -37,15 +43,37 @@ export class DurableEventStream {
     return events.map((event) => `id: ${event.position}\nevent: ${event.eventType}\ndata: ${JSON.stringify(event)}\n\n`).join("");
   }
 
+  public readerTail(input: { readonly position: number; readonly authorizedProjectIds: readonly ProjectId[]; readonly signal: AbortSignal }) {
+    return this.reader.tail({ ...input, pollIntervalMs: 100 });
+  }
+
   public snapshot(authorizedProjectIds: readonly ProjectId[]) {
     return { projectionVersion: 1, cursor: this.reader.highWaterPosition(), authorizedProjectIds };
+  }
+
+  public acquire(principalId: string): () => void {
+    const principalCount = this.activeByPrincipal[principalId] ?? 0;
+    if (this.activeConnections >= this.limits.global || principalCount >= this.limits.perPrincipal) {
+      throw new Error("SSE_CONNECTION_LIMIT");
+    }
+    this.activeConnections += 1;
+    this.activeByPrincipal[principalId] = principalCount + 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.activeConnections -= 1;
+      const next = (this.activeByPrincipal[principalId] ?? 1) - 1;
+      if (next === 0) delete this.activeByPrincipal[principalId];
+      else this.activeByPrincipal[principalId] = next;
+    };
   }
 }
 
 export function registerDurableEventRoutes(app: FastifyInstance, stream: DurableEventStream): void {
   app.get("/events", async (request, reply) => {
     const principal = requirePrincipal(request);
-    const query = request.query as { cursor?: string | undefined };
+    const query = request.query as { cursor?: string | undefined; once?: string | undefined };
     try {
       const result = stream.replay({
         headerCursor: typeof request.headers["last-event-id"] === "string" ? request.headers["last-event-id"] : undefined,
@@ -53,9 +81,37 @@ export function registerDurableEventRoutes(app: FastifyInstance, stream: Durable
         authorizedProjectIds: principal.authorizedProjectIds,
       });
       if (result.status === "resync_required") return await reply.code(409).send(result);
-      reply.header("content-type", "text/event-stream; charset=utf-8");
-      reply.header("connection", "close");
-      return stream.format(result.events);
+      if (query.once === "1") {
+        reply.header("content-type", "text/event-stream; charset=utf-8");
+        return stream.format(result.events);
+      }
+      const release = stream.acquire(principal.principalId);
+      const abort = new AbortController();
+      request.raw.once("close", () => abort.abort());
+      reply.hijack();
+      reply.raw.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-store",
+        connection: "keep-alive",
+        "x-content-type-options": "nosniff",
+      });
+      reply.raw.write(stream.format(result.events));
+      const lastPosition = result.events.at(-1)?.position ?? parseCursor(
+        typeof request.headers["last-event-id"] === "string" ? request.headers["last-event-id"] : query.cursor,
+      );
+      try {
+        for await (const event of stream.readerTail({
+          position: lastPosition,
+          authorizedProjectIds: principal.authorizedProjectIds,
+          signal: abort.signal,
+        })) {
+          reply.raw.write(stream.format([event]));
+        }
+      } finally {
+        release();
+        if (!reply.raw.writableEnded) reply.raw.end();
+      }
+      return;
     } catch (error) {
       const code = error instanceof Error ? error.message : "EVENT_CURSOR_INVALID";
       return await reply.code(400).send({ code });

@@ -73,5 +73,7 @@ export type FlowEvent =
       readonly outcome: string;
     }
   | { readonly type: "LoopActivated"; readonly loopId: string; readonly iteration: number }
+  | { readonly type: "RecoveryFactsRecorded"; readonly facts: readonly { readonly kind: string; readonly status: "indeterminate" | "needs_attention"; readonly reason: string }[] }
+  | { readonly type: "AttemptAssigned"; readonly attemptId: AttemptId; readonly operationId: string; readonly capabilityProbeReceiptId: string; readonly leaseIds: readonly string[] }
   | { readonly type: "RunStatusChanged"; readonly status: RunStatus }
   | { readonly type: "RunConcluded"; readonly status: "succeeded" | "failed" | "canceled" | "needs_attention" };

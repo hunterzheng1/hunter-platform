@@ -21,7 +21,11 @@ const RULES: Readonly<Record<string, ProjectionRule>> = {
   TaskGraphPublished: { entityType: "TaskGraph", idField: "executionPlanId" },
   RunStarted: { entityType: "WorkflowRun", idField: "runId" },
   RunStatusChanged: { entityType: "WorkflowRun", idField: "runId" },
+  RunConcluded: { entityType: "WorkflowRun", idField: "runId" },
   StepActivated: { entityType: "StepRun", idField: "stepRunId" },
+  StepConcluded: { entityType: "StepRun", idField: "stepRunId" },
+  ExternalObservationRecorded: { entityType: "StepAttempt", idField: "attemptId" },
+  VerificationChanged: { entityType: "StepAttempt", idField: "attemptId" },
   StepStatusChanged: { entityType: "StepRun", idField: "stepRunId" },
   AttemptAssigned: { entityType: "StepAttempt", idField: "attemptId" },
   AttemptStatusChanged: { entityType: "StepAttempt", idField: "attemptId" },
@@ -46,12 +50,19 @@ export class HunterProjection implements EventProjector {
   }
 
   public apply(database: DatabaseSync, event: LedgerEvent): void {
-    const rule = RULES[event.eventType];
+    const outer = eventObject(event);
+    const wrapped = event.eventType === "FlowEvent" && outer.flowEvent !== null && typeof outer.flowEvent === "object" && !Array.isArray(outer.flowEvent)
+      ? outer.flowEvent as Record<string, unknown>
+      : null;
+    const eventType = wrapped !== null && typeof wrapped.type === "string" ? wrapped.type : event.eventType;
+    const rule = RULES[eventType];
     if (rule === undefined) return;
-    const data = eventObject(event);
-    const entityId = data[rule.idField];
+    const data = wrapped ?? outer;
+    const binding = data.binding !== null && typeof data.binding === "object" && !Array.isArray(data.binding) ? data.binding as Record<string, unknown> : null;
+    const aggregateRunId = event.aggregateId.startsWith("run:") ? event.aggregateId.slice(4) : undefined;
+    const entityId = data[rule.idField] ?? binding?.[rule.idField] ?? (rule.entityType === "WorkflowRun" ? aggregateRunId : undefined);
     if (typeof entityId !== "string" || entityId.length === 0) {
-      throw new Error(`PROJECTION_ENTITY_ID_MISSING:${event.eventType}:${rule.idField}`);
+      throw new Error(`PROJECTION_ENTITY_ID_MISSING:${eventType}:${rule.idField}`);
     }
     database
       .prepare(

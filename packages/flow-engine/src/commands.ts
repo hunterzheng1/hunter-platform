@@ -1,4 +1,5 @@
 import type { RunId } from "@hunter/domain";
+import type { ExternalOperation } from "@hunter/runtime-contracts";
 
 import type { WorkflowRunBinding } from "./run-binding.js";
 
@@ -6,6 +7,7 @@ export interface FlowActorContext {
   readonly actorId: string;
   readonly correlationId: string;
   readonly causationId?: string | undefined;
+  readonly roles?: readonly string[] | undefined;
 }
 
 export interface StartRunCommand {
@@ -56,12 +58,30 @@ export interface CancelRunCommand extends ExistingRunCommand {
   readonly type: "CancelRun";
 }
 
+export interface RecordRecoveryFactsCommand extends ExistingRunCommand {
+  readonly type: "RecordRecoveryFacts";
+  readonly facts: readonly {
+    readonly kind: string;
+    readonly status: "indeterminate" | "needs_attention";
+    readonly reason: string;
+  }[];
+}
+
+export interface AssignAttemptCommand extends ExistingRunCommand {
+  readonly type: "AssignAttempt";
+  readonly operation: ExternalOperation;
+  readonly capabilityProbeReceiptId: string;
+  readonly leaseIds: readonly string[];
+}
+
 export type FlowCommand =
   | StartRunCommand
   | RecordExternalObservationCommand
   | RecordVerifierResultCommand
   | RecordTimeoutCommand
-  | CancelRunCommand;
+  | CancelRunCommand
+  | RecordRecoveryFactsCommand
+  | AssignAttemptCommand;
 
 export interface FlowCommandReceipt {
   readonly commandId: string;

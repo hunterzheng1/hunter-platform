@@ -9,6 +9,7 @@ import {
   type TaskId,
   type WorkflowRevision,
 } from "@hunter/domain";
+import type { ExternalOperation } from "@hunter/runtime-contracts";
 
 import type {
   FlowCommand,
@@ -31,6 +32,7 @@ export interface FlowCommit {
   readonly expectedVersion: number;
   readonly events: readonly FlowEvent[];
   readonly response: unknown;
+  readonly operations?: readonly ExternalOperation[] | undefined;
 }
 
 export interface FlowStore {
@@ -79,6 +81,10 @@ export class FlowEngine {
         return this.recordTimeout(command, commandId, requestFingerprint);
       case "CancelRun":
         return this.cancelRun(command, commandId, requestFingerprint);
+      case "RecordRecoveryFacts":
+        return this.recordRecoveryFacts(command, commandId, requestFingerprint);
+      case "AssignAttempt":
+        return this.assignAttempt(command, commandId, requestFingerprint);
     }
   }
 
@@ -120,6 +126,24 @@ export class FlowEngine {
       { type: "RunConcluded", status: "canceled" },
     ];
     return this.commitExisting(command, commandId, requestFingerprint, events, { status: "canceled" });
+  }
+
+  private recordRecoveryFacts(command: Extract<FlowCommand, { type: "RecordRecoveryFacts" }>, commandId: string, requestFingerprint: string) {
+    this.requireActiveRun(command.runId);
+    if (command.facts.length === 0) throw new Error("RECOVERY_FACTS_REQUIRED");
+    const events: FlowEvent[] = [
+      { type: "RecoveryFactsRecorded", facts: command.facts },
+      { type: "RunStatusChanged", status: "needs_attention" },
+    ];
+    return this.commitExisting(command, commandId, requestFingerprint, events, { status: "needs_attention" });
+  }
+
+  private assignAttempt(command: Extract<FlowCommand, { type: "AssignAttempt" }>, commandId: string, requestFingerprint: string) {
+    const state = this.requireActiveRun(command.runId);
+    const { attempt } = activeStep(state);
+    if (command.operation.runId !== command.runId || command.operation.attemptId !== attempt.attemptId) throw new Error("ASSIGNMENT_OPERATION_SCOPE_MISMATCH");
+    const events: FlowEvent[] = [{ type: "AttemptAssigned", attemptId: attempt.attemptId, operationId: command.operation.operationId, capabilityProbeReceiptId: command.capabilityProbeReceiptId, leaseIds: command.leaseIds }];
+    return this.commitExisting(command, commandId, requestFingerprint, events, { operationId: command.operation.operationId, status: "scheduled" }, [command.operation]);
   }
 
   private startRun(command: StartRunCommand, commandId: string, requestFingerprint: string) {
@@ -227,6 +251,8 @@ export class FlowEngine {
       if (command.humanReceipt?.contentHash !== step.fixedContentHash) {
         throw new Error("HUMAN_RECEIPT_CONTENT_HASH_MISMATCH");
       }
+      if (command.humanReceipt.actorId !== command.actor.actorId) throw new Error("HUMAN_RECEIPT_ACTOR_MISMATCH");
+      if (!command.actor.roles?.includes(definition.verifier.requiredRole)) throw new Error("HUMAN_RECEIPT_ROLE_REQUIRED");
     }
     const events: FlowEvent[] = [
       {
@@ -271,9 +297,21 @@ export class FlowEngine {
       const target = workflow.steps.find(({ stepId }) => stepId === selected.loop?.toStepId);
       if (target === undefined) throw new Error("LOOP_TARGET_STEP_MISSING");
       const nextIteration = state.budgetUsage.loopIterations + 1;
+      const repeatedFailureCount = command.failureFingerprint === undefined
+        ? state.budgetUsage.repeatedFailureFingerprintCount
+        : command.failureFingerprint === state.budgetUsage.lastFailureFingerprint
+          ? state.budgetUsage.repeatedFailureFingerprintCount + 1
+          : 1;
+      const noDiffCount = command.diffFingerprint === undefined ? state.budgetUsage.noDiffCount + 1 : 0;
+      const verifierErrorCount = command.outcome === "error" ? state.budgetUsage.verifierErrorCount + 1 : 0;
       const exhausted =
         nextIteration > selected.loop.maxIterations ||
         nextIteration > state.binding.initialBudget.maxLoopIterations ||
+        state.budgetUsage.elapsedMs + target.budgetCost.elapsedMs > selected.loop.maxElapsedMs ||
+        (selected.loop.maxCost !== undefined && state.budgetUsage.cost + target.budgetCost.cost > selected.loop.maxCost) ||
+        repeatedFailureCount > selected.loop.stagnation.maxSameFailureFingerprint ||
+        noDiffCount > selected.loop.stagnation.maxNoDiffIterations ||
+        verifierErrorCount > selected.loop.stagnation.maxVerifierErrors ||
         !this.budgetAvailable(state, target);
       if (exhausted) {
         events.push({ type: "StepConcluded", stepRunId: step.stepRunId, conclusion: "failed" });
@@ -368,6 +406,7 @@ export class FlowEngine {
     requestFingerprint: string,
     events: readonly FlowEvent[],
     response: unknown,
+    operations: readonly ExternalOperation[] = [],
   ) {
     return this.store.commit({
       commandId,
@@ -376,6 +415,7 @@ export class FlowEngine {
       expectedVersion: command.expectedVersion,
       events,
       response,
+      operations,
     });
   }
 
@@ -408,6 +448,7 @@ export class FlowEngine {
       state.budgetUsage.attempts + 1 <= state.binding.initialBudget.maxAttempts &&
       state.budgetUsage.elapsedMs + step.budgetCost.elapsedMs <= state.binding.initialBudget.maxElapsedMs &&
       state.budgetUsage.cost + step.budgetCost.cost <= state.binding.initialBudget.maxCost
+      && state.budgetUsage.tokens <= state.binding.initialBudget.maxTokens
     );
   }
 
