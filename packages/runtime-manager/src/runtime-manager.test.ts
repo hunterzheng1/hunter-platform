@@ -20,7 +20,7 @@ import {
   WriterLeaseIdSchema,
   canonicalSha256,
 } from "@hunter/domain";
-import { CapabilityProbeReceiptSchema, ControllerLeaseSchema, WorkspaceLeaseSchema, WriterLeaseSchema, createExternalOperation } from "@hunter/runtime-contracts";
+import { CapabilityProbeReceiptSchema, ControllerLeaseSchema, WorkspaceLeaseSchema, WriterLeaseSchema, createExternalOperation, type Lease } from "@hunter/runtime-contracts";
 import { SqliteOperationJournal, OperationWorker } from "@hunter/storage";
 import { FakeRuntime } from "@hunter/testkit";
 import { describe, expect, it } from "vitest";
@@ -35,7 +35,7 @@ const runId = RunIdSchema.parse("run_runtime001");
 const attemptId = AttemptIdSchema.parse("att_runtime001");
 const workspaceId = WorkspaceIdSchema.parse("wsp_runtime001");
 
-function manager(database: DatabaseSync, journal: SqliteOperationJournal) {
+function manager(database: DatabaseSync, journal: SqliteOperationJournal, options: { readonly leaseIds?: readonly Lease["leaseId"][]; readonly capabilityReceipt?: ReturnType<typeof capability>; readonly policyDecision?: "allow" | "deny" | "require_approval" } = {}) {
   return new RuntimeManager(database, {
     handle: (command) => {
       if (command.type !== "AssignAttempt") throw new Error("UNEXPECTED_FLOW_COMMAND");
@@ -53,7 +53,7 @@ function manager(database: DatabaseSync, journal: SqliteOperationJournal) {
       });
       return receipt.response as { commandId: string; response: unknown };
     },
-  });
+  }, { resolve: () => ({ policyDecision: options.policyDecision ?? "allow", capabilityReceipt: options.capabilityReceipt ?? capability(), requiredLeaseIds: options.leaseIds ?? [], now: new Date(now) }) });
 }
 
 function capability() {
@@ -83,9 +83,9 @@ async function harness() {
 describe("RuntimeManager", () => {
   it("persists assignment authority and survives manager restart", async () => {
     const { database, journal, operation, leaseIds } = await harness();
-    const input = { commandId: "assign:1", expectedVersion: 0, operation, policyDecision: "allow" as const, capabilityReceipt: capability(), requiredLeaseIds: leaseIds, now: new Date(now) };
-    const first = manager(database, journal).requestAssignment(input);
-    expect(manager(database, journal).requestAssignment(input)).toEqual(first);
+    const input = { commandId: "assign:1", expectedVersion: 0, operation };
+    const first = manager(database, journal, { leaseIds }).requestAssignment(input);
+    expect(manager(database, journal, { leaseIds }).requestAssignment(input)).toEqual(first);
     const fake = new FakeRuntime({ providerId: RuntimeProviderIdSchema.parse("rtp_runtime001"), implementationVersion: "fake", observedAt: now });
     expect(await new OperationWorker(database, fake, { ownerId: "worker-1", replayPolicy: () => "replay_safe" }).runOnce()).toBe("completed");
     expect(fake.nativeEffectCount).toBe(1);
@@ -94,7 +94,7 @@ describe("RuntimeManager", () => {
 
   it.each(["deny", "require_approval"] as const)("creates no launch operation for %s", async (policyDecision) => {
     const { database, journal, operation, leaseIds } = await harness();
-    expect(() => manager(database, journal).requestAssignment({ commandId: `assign:${policyDecision}`, expectedVersion: 0, operation, policyDecision, capabilityReceipt: capability(), requiredLeaseIds: leaseIds, now: new Date(now) })).toThrow(/POLICY_NOT_ALLOWED/u);
+    expect(() => manager(database, journal, { policyDecision, leaseIds }).requestAssignment({ commandId: `assign:${policyDecision}`, expectedVersion: 0, operation })).toThrow(/POLICY_NOT_ALLOWED/u);
     expect((database.prepare("SELECT COUNT(*) AS count FROM outbox").get() as { count: number }).count).toBe(0);
     database.close();
   });
@@ -106,8 +106,8 @@ describe("RuntimeManager", () => {
       ...receipt,
       results: receipt.results.map((result) => ({ ...result, status: "NOT_PROVEN" as const })),
     });
-    expect(() => manager(database, journal).requestAssignment({ commandId: "assign:no-cap", expectedVersion: 0, operation, policyDecision: "allow", capabilityReceipt: unsupported, requiredLeaseIds: [], now: new Date(now) })).toThrow(/CAPABILITY_NOT_PROVEN/u);
-    expect(() => manager(database, journal).requestAssignment({ commandId: "assign:no-lease", expectedVersion: 0, operation, policyDecision: "allow", capabilityReceipt: receipt, requiredLeaseIds: [], now: new Date(now) })).toThrow(/LEASE_RECEIPT_REQUIRED/u);
+    expect(() => manager(database, journal, { capabilityReceipt: unsupported }).requestAssignment({ commandId: "assign:no-cap", expectedVersion: 0, operation })).toThrow(/CAPABILITY_NOT_PROVEN/u);
+    expect(() => manager(database, journal, { capabilityReceipt: receipt }).requestAssignment({ commandId: "assign:no-lease", expectedVersion: 0, operation })).toThrow(/LEASE_RECEIPT_REQUIRED/u);
     database.close();
   });
 });

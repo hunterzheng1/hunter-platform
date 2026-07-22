@@ -1,16 +1,18 @@
 import type { DatabaseSync } from "node:sqlite";
 
-import { StartRunService, type StartRunRepositories } from "@hunter/application";
+import { PublishChangeService, StartRunService, type PublishChangeRepositories, type StartRunRepositories } from "@hunter/application";
 import type { ExecutionPlan, ProjectId, TaskId, WorkflowRevision } from "@hunter/domain";
 import { canonicalSha256 } from "@hunter/domain";
 import { FlowEngine, reduceFlowEvents, type FlowCommandReceipt, type FlowCommit, type FlowDefinitions, type FlowEvent, type FlowStore, type WorkflowRunState } from "@hunter/flow-engine";
-import type { ExternalOperationHandler } from "@hunter/runtime-contracts";
+import { LeaseSchema, type CapabilityProbeReceipt, type ExternalOperation, type ExternalOperationHandler, type Lease } from "@hunter/runtime-contracts";
+import { deriveStepPolicy } from "@hunter/policy";
 import { LeaseService, RuntimeManager, RuntimeOperationHandler } from "@hunter/runtime-manager";
-import { EventLedgerReader, OperationWorker, SqliteOperationJournal } from "@hunter/storage";
+import { EventLedgerReader, HunterProjection, OperationWorker, ProjectionRunner, SqliteOperationJournal } from "@hunter/storage";
 
 import { LocalAuthenticator } from "../auth/local-authenticator.js";
 import { DurableEventStream } from "../events/durable-event-stream.js";
 import { StartupRecoveryCoordinator } from "../startup/startup-recovery-coordinator.js";
+import { SqliteDefinitionRepository } from "./sqlite-definition-repository.js";
 
 interface ReceiptRow {
   readonly request_fingerprint: string;
@@ -26,6 +28,7 @@ export class SqliteFlowStore implements FlowStore {
   public constructor(
     private readonly database: DatabaseSync,
     private readonly journal: SqliteOperationJournal,
+    private readonly now: () => Date = () => new Date(),
   ) {}
 
   public loadRun(runId: string): WorkflowRunState | null {
@@ -40,6 +43,10 @@ export class SqliteFlowStore implements FlowStore {
     return this.allRuns()
       .filter((state) => state.binding.subjectKind === "task" && state.binding.parentRunId === parentRunId && !["succeeded", "failed", "canceled"].includes(state.status))
       .flatMap((state) => state.binding.subjectKind === "task" ? [state.binding.taskId] : []);
+  }
+
+  public childRuns(parentRunId: string): readonly WorkflowRunState[] {
+    return this.allRuns().filter((state) => state.binding.parentRunId === parentRunId);
   }
 
   public allRuns(): readonly WorkflowRunState[] {
@@ -61,7 +68,7 @@ export class SqliteFlowStore implements FlowStore {
   }
 
   public commit(input: FlowCommit): FlowCommandReceipt {
-    const recordedAt = new Date().toISOString();
+    const recordedAt = this.now().toISOString();
     const receipt = this.journal.commitCommand({
       commandId: input.commandId,
       requestFingerprint: input.requestFingerprint,
@@ -91,30 +98,56 @@ export class SqliteFlowStore implements FlowStore {
   }
 }
 
-export interface SqliteServiceRepositories extends StartRunRepositories, FlowDefinitions {
+export interface SqliteServiceRepositories extends StartRunRepositories, PublishChangeRepositories, FlowDefinitions {
   getExecutionPlan(executionPlanId: string): Readonly<ExecutionPlan> | null;
   getWorkflowRevision(workflowRevisionId: string): Readonly<WorkflowRevision> | null;
 }
 
 export function createSqliteApplicationServices(input: {
   readonly database: DatabaseSync;
-  readonly repositories: SqliteServiceRepositories;
+  readonly repositories?: SqliteServiceRepositories | undefined;
   readonly externalHandler: ExternalOperationHandler;
   readonly installSecret: string;
   readonly allowedHosts: readonly string[];
   readonly allowedOrigins: readonly string[];
+  readonly capabilityReceiptFor?: ((operation: ExternalOperation) => CapabilityProbeReceipt | null) | undefined;
+  readonly now?: (() => Date) | undefined;
 }) {
+  const now = input.now ?? (() => new Date());
   const journal = new SqliteOperationJournal(input.database);
-  const flowStore = new SqliteFlowStore(input.database, journal);
-  const flowEngine = new FlowEngine(flowStore, input.repositories);
+  const repositories: SqliteServiceRepositories = input.repositories ?? new SqliteDefinitionRepository(input.database);
+  const flowStore = new SqliteFlowStore(input.database, journal, now);
+  const flowEngine = new FlowEngine(flowStore, repositories);
   const eventReader = new EventLedgerReader(input.database);
+  const projectionRunner = new ProjectionRunner(input.database, [new HunterProjection()]);
   const leaseService = new LeaseService(input.database);
-  const runtimeManager = new RuntimeManager(input.database, flowEngine);
+  const runtimeManager = new RuntimeManager(input.database, flowEngine, {
+    resolve: (operation) => {
+      if (operation.runId === null) throw new Error("ASSIGNMENT_RUN_SCOPE_REQUIRED");
+      const run = flowStore.loadRun(operation.runId);
+      if (run === null) throw new Error("ASSIGNMENT_RUN_NOT_FOUND");
+      const workflow = repositories.getWorkflowRevision(run.binding.workflowRevisionId);
+      const active = [...run.steps].reverse().find(({ conclusion }) => conclusion === "active");
+      const step = workflow?.steps.find(({ stepId }) => stepId === active?.stepId);
+      if (step === undefined) throw new Error("ASSIGNMENT_STEP_NOT_FOUND");
+      const policy = deriveStepPolicy(step, { policyVersion: run.binding.policySnapshot.policyVersion, deniedPermissions: [] });
+      const capabilityReceipt = input.capabilityReceiptFor?.(operation);
+      if (capabilityReceipt === undefined || capabilityReceipt === null) throw new Error("CAPABILITY_RECEIPT_NOT_CONFIGURED");
+      const rows = input.database.prepare("SELECT receipt_json FROM lease_records WHERE expires_at > ?").all(now().toISOString()) as unknown as Array<{ receipt_json: string }>;
+      const leases = rows.map((row) => LeaseSchema.parse(JSON.parse(row.receipt_json))) as Lease[];
+      const workspaceId = operation.operationType === "session.launch" ? operation.payload.workspaceId : null;
+      const scoped = workspaceId === null ? leases : leases.filter((lease) => lease.kind === "controller" || lease.scope.workspaceId === workspaceId);
+      const workspaceOwner = scoped.find((lease) => lease.kind === "workspace")?.ownerId;
+      const requiredLeaseIds = scoped.filter((lease) => workspaceOwner === undefined || lease.ownerId === workspaceOwner).map(({ leaseId }) => leaseId);
+      return { policyDecision: policy.decision, capabilityReceipt, requiredLeaseIds, now: now() };
+    },
+  });
   const operationHandler = new RuntimeOperationHandler(input.externalHandler);
   const operationWorker = new OperationWorker(input.database, operationHandler, { ownerId: "hunterd", replayPolicy: () => "inspectable" });
   const authenticator = new LocalAuthenticator(input.installSecret);
   const eventStream = new DurableEventStream(eventReader);
-  const startRun = new StartRunService(input.repositories, flowEngine);
+  const startRun = new StartRunService(repositories, flowEngine);
+  const publishChange = new PublishChangeService(repositories, journal, now);
   const recovery = new StartupRecoveryCoordinator({
     validateStorage: async () => {
       const integrity = input.database.prepare("PRAGMA integrity_check").get() as { integrity_check?: string };
@@ -125,13 +158,13 @@ export function createSqliteApplicationServices(input: {
     },
     reconcileMigration: async () => [],
     reconcileOutbox: async () => {
-      const now = new Date().toISOString();
+      const timestamp = now().toISOString();
       const rows = input.database.prepare(
         "SELECT operation_id, run_id FROM outbox WHERE status = 'in_flight' AND dispatch_expires_at <= ?",
-      ).all(now) as unknown as Array<{ operation_id: string; run_id: string | null }>;
+      ).all(timestamp) as unknown as Array<{ operation_id: string; run_id: string | null }>;
       for (const row of rows) input.database.prepare(
         "UPDATE outbox SET status = 'indeterminate', dispatch_owner = NULL, dispatch_expires_at = NULL, updated_at = ? WHERE operation_id = ?",
-      ).run(now, row.operation_id);
+      ).run(timestamp, row.operation_id);
       return rows.map((row) => ({ kind: "operation", status: "indeterminate", reason: "expired_dispatch_outcome_unproven", operationId: row.operation_id, runId: row.run_id }));
     },
     enumerateActiveAttempts: async () => flowStore.allRuns()
@@ -146,12 +179,13 @@ export function createSqliteApplicationServices(input: {
     reconcileLeasesAndWorkspace: async () => {
       const rows = input.database.prepare(
         "SELECT lease_id, lease_kind FROM lease_records WHERE expires_at <= ?",
-      ).all(new Date().toISOString()) as unknown as Array<{ lease_id: string; lease_kind: string }>;
+      ).all(now().toISOString()) as unknown as Array<{ lease_id: string; lease_kind: string }>;
       return rows.map((row) => ({ kind: "lease", leaseId: row.lease_id, leaseKind: row.lease_kind, status: "needs_attention", reason: "lease_expired" }));
     },
     validateProjections: async () => {
       const checkpoint = input.database.prepare("SELECT COALESCE(MAX(last_position), 0) AS position FROM projection_checkpoints").get() as { position: number };
       if (checkpoint.position > eventReader.highWaterPosition()) throw new Error("PROJECTION_CHECKPOINT_AHEAD_OF_LEDGER");
+      projectionRunner.rebuild("hunter");
       return [];
     },
     submitRecoveryConclusions: async (facts) => {
@@ -166,7 +200,7 @@ export function createSqliteApplicationServices(input: {
           runId: state.binding.runId,
           facts: normalized,
           expectedVersion: state.version,
-          idempotencyKey: `recovery-${canonicalSha256(normalized).slice(0, 32)}`,
+          idempotencyKey: `recovery-${canonicalSha256({ runId: state.binding.runId, facts: normalized }).slice(0, 32)}`,
           actor: { actorId: "startup-recovery", correlationId: `recovery:${state.binding.runId}` },
         }));
       }
@@ -178,6 +212,7 @@ export function createSqliteApplicationServices(input: {
     flowStore,
     flowEngine,
     eventReader,
+    projectionRunner,
     eventStream,
     leaseService,
     runtimeManager,
@@ -185,6 +220,8 @@ export function createSqliteApplicationServices(input: {
     authenticator,
     recovery,
     startRun,
+    publishChange,
+    repositories,
     allowedHosts: input.allowedHosts,
     allowedOrigins: input.allowedOrigins,
   };

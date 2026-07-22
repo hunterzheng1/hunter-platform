@@ -1,4 +1,4 @@
-import type { AttemptId, StepId, StepRunId } from "@hunter/domain";
+import type { AttemptId, RunId, StepId, StepRunId, TaskId } from "@hunter/domain";
 
 import type {
   ExecutionStatus,
@@ -34,6 +34,10 @@ export interface WorkflowRunState {
   readonly budgetUsage: RunBudgetUsage;
   readonly steps: readonly StepRunState[];
   readonly recoveryFacts: readonly { readonly kind: string; readonly status: "indeterminate" | "needs_attention"; readonly reason: string }[];
+  readonly scheduledChildren: readonly { readonly taskId: TaskId; readonly childRunId: RunId }[];
+  readonly acceptedChildRunIds: readonly RunId[];
+  readonly supersedingDecisions: readonly { readonly newerRevisionId: string; readonly decision: "continue_old_input" | "terminate" | "create_new_plan" }[];
+  readonly dependencyFailureDecisions: readonly { readonly taskId: TaskId; readonly failedDependencyIds: readonly TaskId[]; readonly action: "blocked" | "skipped" | "compensate" | "waived" | "terminate"; readonly compensationTaskId: TaskId | null; readonly waiverReceiptHash: string | null }[];
 }
 
 function updateStep(
@@ -59,6 +63,10 @@ function applyEvent(current: WorkflowRunState | null, event: FlowEvent): Workflo
       budgetUsage: { ...EMPTY_RUN_BUDGET_USAGE },
       steps: [],
       recoveryFacts: [],
+      scheduledChildren: [],
+      acceptedChildRunIds: [],
+      supersedingDecisions: [],
+      dependencyFailureDecisions: [],
     };
   }
   if (current === null) throw new Error("RUN_NOT_STARTED");
@@ -156,6 +164,28 @@ function applyEvent(current: WorkflowRunState | null, event: FlowEvent): Workflo
       state = { ...state, recoveryFacts: [...state.recoveryFacts, ...event.facts] };
       break;
     case "AttemptAssigned":
+      break;
+    case "TaskFanOutDecided":
+      state = { ...state, scheduledChildren: [...state.scheduledChildren, ...event.children] };
+      break;
+    case "ChildConclusionAccepted":
+      state = { ...state, acceptedChildRunIds: [...state.acceptedChildRunIds, event.childRunId] };
+      break;
+    case "SubflowConclusionAccepted":
+      state = { ...state, acceptedChildRunIds: [...state.acceptedChildRunIds, event.childRunId] };
+      break;
+    case "SupersedingRequirementDecided":
+      state = { ...state, supersedingDecisions: [...state.supersedingDecisions, { newerRevisionId: event.newerRevisionId, decision: event.decision }] };
+      break;
+    case "ChildCancellationRequested":
+    case "SessionHandoffRequested":
+    case "RetryScheduled":
+      break;
+    case "ExecutionFailed":
+      state = updateStep(state, event.stepRunId, (step) => ({ ...step, executionStatus: "failed", attempts: step.attempts.map((attempt) => attempt.attemptId === event.attemptId ? { ...attempt, executionStatus: "failed" } : attempt) }));
+      break;
+    case "DependencyFailureDecided":
+      state = { ...state, dependencyFailureDecisions: [...state.dependencyFailureDecisions, { taskId: event.taskId, failedDependencyIds: event.failedDependencyIds, action: event.action, compensationTaskId: event.compensationTaskId, waiverReceiptHash: event.waiverReceiptHash }] };
       break;
   }
   return { ...state, version: state.version + 1 };

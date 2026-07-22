@@ -14,10 +14,15 @@ export interface AssignmentRequest {
   readonly commandId: string;
   readonly expectedVersion: number;
   readonly operation: ExternalOperation;
-  readonly policyDecision: "allow" | "deny" | "require_approval";
-  readonly capabilityReceipt: CapabilityProbeReceipt;
-  readonly requiredLeaseIds: readonly Lease["leaseId"][];
-  readonly now: Date;
+}
+
+export interface RuntimeAssignmentAuthority {
+  resolve(operation: ExternalOperation): {
+    readonly policyDecision: "allow" | "deny" | "require_approval";
+    readonly capabilityReceipt: CapabilityProbeReceipt;
+    readonly requiredLeaseIds: readonly Lease["leaseId"][];
+    readonly now: Date;
+  };
 }
 
 interface LeaseRow {
@@ -31,16 +36,18 @@ export class RuntimeManager {
   public constructor(
     private readonly database: DatabaseSync,
     private readonly flowEngine: FlowCommandHandler,
+    private readonly authority: RuntimeAssignmentAuthority,
   ) {}
 
   public requestAssignment(input: AssignmentRequest): FlowCommandReceipt {
-    if (input.policyDecision !== "allow") throw new Error("POLICY_NOT_ALLOWED");
     const operation = ExternalOperationSchema.parse(input.operation);
     if (fingerprintExternalOperation(operation) !== operation.fingerprint) {
       throw new Error("OPERATION_FINGERPRINT_MISMATCH");
     }
-    const probe = CapabilityProbeReceiptSchema.parse(input.capabilityReceipt);
-    const at = input.now.getTime();
+    const authority = this.authority.resolve(operation);
+    if (authority.policyDecision !== "allow") throw new Error("POLICY_NOT_ALLOWED");
+    const probe = CapabilityProbeReceiptSchema.parse(authority.capabilityReceipt);
+    const at = authority.now.getTime();
     if (at < Date.parse(probe.observedAt) || at > Date.parse(probe.validUntil)) {
       throw new Error("CAPABILITY_RECEIPT_EXPIRED");
     }
@@ -52,7 +59,7 @@ export class RuntimeManager {
     }
     const leaseKinds = new Set<string>();
     const leases: Lease[] = [];
-    for (const leaseId of input.requiredLeaseIds) {
+    for (const leaseId of authority.requiredLeaseIds) {
       const row = this.database.prepare(
         "SELECT lease_kind, expires_at, owner_id, receipt_json FROM lease_records WHERE lease_id = ?",
       ).get(leaseId) as unknown as LeaseRow | undefined;
@@ -76,7 +83,7 @@ export class RuntimeManager {
       idempotencyKey: input.commandId,
       operation,
       capabilityProbeReceiptId: probe.probeReceiptId,
-      leaseIds: [...input.requiredLeaseIds],
+      leaseIds: [...authority.requiredLeaseIds],
       actor: { actorId: "runtime-manager", correlationId: input.commandId },
     });
   }

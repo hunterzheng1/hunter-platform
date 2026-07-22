@@ -21,6 +21,8 @@ export function externalObservationCanSucceed(fact: ExternalObservation): false 
   return false;
 }
 
-export function isTerminalRun(status: RunStatus): boolean {
+export type TerminalRunStatus = Extract<RunStatus, "succeeded" | "failed" | "canceled">;
+
+export function isTerminalRun(status: RunStatus): status is TerminalRunStatus {
   return status === "succeeded" || status === "failed" || status === "canceled";
 }

@@ -1,4 +1,4 @@
-import type { RunId } from "@hunter/domain";
+import type { RunId, TaskId } from "@hunter/domain";
 import type { ExternalOperation } from "@hunter/runtime-contracts";
 
 import type { WorkflowRunBinding } from "./run-binding.js";
@@ -74,6 +74,22 @@ export interface AssignAttemptCommand extends ExistingRunCommand {
   readonly leaseIds: readonly string[];
 }
 
+export interface ScheduleTaskFanOutCommand extends ExistingRunCommand { readonly type: "ScheduleTaskFanOut"; }
+export interface ReconcileTaskChildrenCommand extends ExistingRunCommand { readonly type: "ReconcileTaskChildren"; }
+export interface ReconcileSubflowChildCommand extends ExistingRunCommand { readonly type: "ReconcileSubflowChild"; readonly childRunId: RunId; }
+export interface RecordSupersedingRequirementCommand extends ExistingRunCommand {
+  readonly type: "RecordSupersedingRequirement";
+  readonly newerRevisionId: string;
+  readonly decision: "continue_old_input" | "terminate" | "create_new_plan";
+}
+export interface RecordResumeFailureCommand extends ExistingRunCommand { readonly type: "RecordResumeFailure"; }
+export interface RecordExecutionFailureCommand extends ExistingRunCommand { readonly type: "RecordExecutionFailure"; readonly errorClass: string; }
+export interface ResolveTaskDependencyFailureCommand extends ExistingRunCommand {
+  readonly type: "ResolveTaskDependencyFailure";
+  readonly taskId: TaskId;
+  readonly humanWaiver?: { readonly actorId: string; readonly contentHash: string } | undefined;
+}
+
 export type FlowCommand =
   | StartRunCommand
   | RecordExternalObservationCommand
@@ -81,7 +97,14 @@ export type FlowCommand =
   | RecordTimeoutCommand
   | CancelRunCommand
   | RecordRecoveryFactsCommand
-  | AssignAttemptCommand;
+  | AssignAttemptCommand
+  | ScheduleTaskFanOutCommand
+  | ReconcileTaskChildrenCommand
+  | ReconcileSubflowChildCommand
+  | RecordSupersedingRequirementCommand
+  | RecordResumeFailureCommand
+  | RecordExecutionFailureCommand
+  | ResolveTaskDependencyFailureCommand;
 
 export interface FlowCommandReceipt {
   readonly commandId: string;

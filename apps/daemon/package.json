@@ -8,6 +8,7 @@
     "@hunter/application": "0.0.0",
     "@hunter/domain": "0.0.0",
     "@hunter/flow-engine": "0.0.0",
+    "@hunter/policy": "0.0.0",
     "@hunter/runtime-contracts": "0.0.0",
     "@hunter/runtime-manager": "0.0.0",
     "@hunter/storage": "0.0.0",
