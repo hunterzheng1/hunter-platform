@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProjectIdSchema, RequirementIdSchema, RequirementRevisionIdSchema } from "@hunter/domain";
 
 import { ProjectPage } from "./project-page.js";
@@ -15,12 +15,34 @@ const draft = {
   projectId,
   requirementId,
   revisionId,
+  aggregateVersion: 0,
   title: "移动审批",
   body: "允许所有者审批需求。",
   acceptanceCriteria: ["审批后恢复同一个运行"],
   constraints: ["保持本地认证边界"],
   status: "draft" as const,
 };
+
+afterEach(cleanup);
+
+function deferred<T>() {
+  const handlers: { resolve?: (value: T) => void; reject?: (reason: unknown) => void } = {};
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    handlers.resolve = promiseResolve;
+    handlers.reject = promiseReject;
+  });
+  return {
+    promise,
+    resolve: (value: T) => {
+      if (handlers.resolve === undefined) throw new Error("DEFERRED_NOT_READY");
+      handlers.resolve(value);
+    },
+    reject: (reason: unknown) => {
+      if (handlers.reject === undefined) throw new Error("DEFERRED_NOT_READY");
+      handlers.reject(reason);
+    },
+  };
+}
 
 describe("ProjectPage", () => {
   it("creates and approves the exact requirement revision without replacing it", async () => {
@@ -29,6 +51,7 @@ describe("ProjectPage", () => {
       createRequirement: vi.fn(async () => draft),
       approveRequirement: vi.fn(async () => ({
         ...draft,
+        aggregateVersion: 1,
         status: "approved" as const,
         approvedAt: "2026-07-23T01:00:00.000Z",
       })),
@@ -50,7 +73,7 @@ describe("ProjectPage", () => {
       constraints: draft.constraints,
     });
     fireEvent.click(screen.getByRole("button", { name: "批准此版本" }));
-    expect(api.approveRequirement).toHaveBeenCalledWith(projectId, revisionId);
+    expect(api.approveRequirement).toHaveBeenCalledWith(projectId, revisionId, draft.aggregateVersion);
     expect(await screen.findByText("此版本已批准且不可修改")).not.toBeNull();
     expect(screen.queryByRole("button", { name: "批准此版本" })).toBeNull();
   });
@@ -97,5 +120,72 @@ describe("ProjectPage", () => {
     expect(within(withdrawnCard).queryByRole("button", { name: "批准此版本" })).toBeNull();
     expect(within(supersededCard).getByText("此版本已被取代，不能再批准或修改")).not.toBeNull();
     expect(within(withdrawnCard).getByText("此版本已撤回，不能再批准或修改")).not.toBeNull();
+  });
+
+  it("clears project A immediately and ignores its late load after switching to project B", async () => {
+    const projectB = ProjectIdSchema.parse("prj_task2000002");
+    const loadB = deferred<{ projectId: typeof projectB; name: string; requirements: never[] }>();
+    const api = {
+      getProject: vi.fn(async (id: string) => id === projectId
+        ? { projectId, name: "Project A", requirements: [] }
+        : loadB.promise),
+      createRequirement: vi.fn(),
+      approveRequirement: vi.fn(),
+    };
+    const view = render(<ProjectPage projectId={projectId} api={api} onBack={vi.fn()} />);
+    await screen.findByRole("heading", { name: "Project A" });
+
+    view.rerender(<ProjectPage projectId={projectB} api={api} onBack={vi.fn()} />);
+    expect(screen.queryByRole("heading", { name: "Project A" })).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain("正在加载项目");
+    loadB.resolve({ projectId: projectB, name: "Project B", requirements: [] });
+    expect(await screen.findByRole("heading", { name: "Project B" })).not.toBeNull();
+  });
+
+  it("does not append a late project A draft after switching to project B", async () => {
+    const projectB = ProjectIdSchema.parse("prj_task2000002");
+    const createdA = deferred<typeof draft>();
+    const api = {
+      getProject: vi.fn(async (id: string) => id === projectId
+        ? { projectId, name: "Project A", requirements: [] }
+        : { projectId: projectB, name: "Project B", requirements: [] }),
+      createRequirement: vi.fn(async () => createdA.promise),
+      approveRequirement: vi.fn(),
+    };
+    const view = render(<ProjectPage projectId={projectId} api={api} onBack={vi.fn()} />);
+    await screen.findByRole("heading", { name: "Project A" });
+    fireEvent.change(screen.getByLabelText("需求标题"), { target: { value: draft.title } });
+    fireEvent.change(screen.getByLabelText("需求正文"), { target: { value: draft.body } });
+    fireEvent.change(screen.getByLabelText("验收标准"), { target: { value: draft.acceptanceCriteria[0] } });
+    fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+
+    view.rerender(<ProjectPage projectId={projectB} api={api} onBack={vi.fn()} />);
+    await screen.findByRole("heading", { name: "Project B" });
+    createdA.resolve(draft);
+    await Promise.resolve();
+    expect(screen.queryByText(revisionId)).toBeNull();
+    expect(screen.getByRole("heading", { name: "Project B" })).not.toBeNull();
+  });
+
+  it("clears approval busy state and ignores a late project A failure after switching to B", async () => {
+    const projectB = ProjectIdSchema.parse("prj_task2000002");
+    const approvalA = deferred<never>();
+    const api = {
+      getProject: vi.fn(async (id: string) => id === projectId
+        ? { projectId, name: "Project A", requirements: [draft] }
+        : { projectId: projectB, name: "Project B", requirements: [] }),
+      createRequirement: vi.fn(),
+      approveRequirement: vi.fn(async () => approvalA.promise),
+    };
+    const view = render(<ProjectPage projectId={projectId} api={api} onBack={vi.fn()} />);
+    await screen.findByRole("heading", { name: "Project A" });
+    fireEvent.click(screen.getByRole("button", { name: "批准此版本" }));
+
+    view.rerender(<ProjectPage projectId={projectB} api={api} onBack={vi.fn()} />);
+    await screen.findByRole("heading", { name: "Project B" });
+    expect(screen.getByRole("main").getAttribute("aria-busy")).toBe("false");
+    approvalA.reject(new Error("late failure"));
+    await Promise.resolve();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

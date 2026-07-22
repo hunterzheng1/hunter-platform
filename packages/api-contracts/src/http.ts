@@ -82,6 +82,7 @@ export const RequirementRevisionHttpResponseSchema = z.strictObject({
   projectId: ProjectIdSchema,
   requirementId: RequirementIdSchema,
   revisionId: RequirementRevisionIdSchema,
+  aggregateVersion: z.number().int().nonnegative(),
   title: RequirementTitleSchema,
   body: RequirementBodySchema,
   acceptanceCriteria: z.array(RequirementListItemSchema).min(1).max(50),

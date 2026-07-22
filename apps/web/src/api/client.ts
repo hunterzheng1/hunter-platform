@@ -36,6 +36,11 @@ interface HunterIdFactory {
   idempotencyKey(action: string): string;
 }
 
+interface PendingCommandEnvelope {
+  readonly path: string;
+  readonly init: RequestInit;
+}
+
 const defaultIds: HunterIdFactory = {
   projectId: () => `prj_${crypto.randomUUID()}`,
   requirementId: () => `req_${crypto.randomUUID()}`,
@@ -51,6 +56,9 @@ export interface CreateRequirementDraftInput {
 }
 
 export class HunterApi {
+  private readonly pendingCommands = new Map<string, PendingCommandEnvelope>();
+  private static readonly pendingCommandLimit = 32;
+
   public constructor(
     private readonly transport: AuthenticatedHunterTransport,
     private readonly ids: HunterIdFactory = defaultIds,
@@ -61,18 +69,21 @@ export class HunterApi {
   }
 
   public async createProject(name: string): Promise<CreateProjectHttpResponse> {
-    const command = CreateProjectHttpRequestSchema.parse({
-      projectId: ProjectIdSchema.parse(this.ids.projectId()),
-      name,
-      expectedVersion: 0,
-      idempotencyKey: this.ids.idempotencyKey("create-project"),
-    });
-    const response = await this.transport.request("/api/v1/projects", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(command),
-    });
-    return CreateProjectHttpResponseSchema.parse(response);
+    const normalizedName = name.trim();
+    const logicalKey = `create-project:${JSON.stringify([normalizedName])}`;
+    return this.sendPending(
+      logicalKey,
+      () => {
+        const command = CreateProjectHttpRequestSchema.parse({
+          projectId: ProjectIdSchema.parse(this.ids.projectId()),
+          name: normalizedName,
+          expectedVersion: 0,
+          idempotencyKey: this.ids.idempotencyKey("create-project"),
+        });
+        return this.jsonCommand("/api/v1/projects", command);
+      },
+      (response) => CreateProjectHttpResponseSchema.parse(response),
+    );
   }
 
   public async getProject(projectId: string): Promise<ProjectDetailHttpResponse> {
@@ -87,41 +98,84 @@ export class HunterApi {
     input: CreateRequirementDraftInput,
   ): Promise<RequirementRevisionHttpResponse> {
     const params = ProjectIdParamsSchema.parse({ projectId });
-    const command = CreateRequirementHttpRequestSchema.parse({
-      ...input,
-      requirementId: RequirementIdSchema.parse(this.ids.requirementId()),
-      revisionId: RequirementRevisionIdSchema.parse(this.ids.requirementRevisionId()),
-      expectedVersion: 0,
-      idempotencyKey: this.ids.idempotencyKey("create-requirement"),
-    });
-    const response = await this.transport.request(
-      `/api/v1/projects/${params.projectId}/requirements`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(command),
+    const normalized = {
+      title: input.title.trim(),
+      body: input.body.trim(),
+      acceptanceCriteria: input.acceptanceCriteria.map((item) => item.trim()),
+      constraints: input.constraints.map((item) => item.trim()),
+    };
+    const logicalKey = `create-requirement:${JSON.stringify([params.projectId, normalized.title, normalized.body, normalized.acceptanceCriteria, normalized.constraints])}`;
+    return this.sendPending(
+      logicalKey,
+      () => {
+        const command = CreateRequirementHttpRequestSchema.parse({
+          ...normalized,
+          requirementId: RequirementIdSchema.parse(this.ids.requirementId()),
+          revisionId: RequirementRevisionIdSchema.parse(this.ids.requirementRevisionId()),
+          expectedVersion: 0,
+          idempotencyKey: this.ids.idempotencyKey("create-requirement"),
+        });
+        return this.jsonCommand(`/api/v1/projects/${params.projectId}/requirements`, command);
       },
+      (response) => RequirementRevisionHttpResponseSchema.parse(response),
     );
-    return RequirementRevisionHttpResponseSchema.parse(response);
   }
 
   public async approveRequirement(
     projectId: string,
     revisionId: string,
+    expectedVersion: number,
   ): Promise<RequirementRevisionHttpResponse> {
     const params = RequirementRevisionParamsSchema.parse({ projectId, revisionId });
-    const command = ApproveRequirementHttpRequestSchema.parse({
-      expectedVersion: 0,
-      idempotencyKey: this.ids.idempotencyKey("approve-requirement"),
-    });
-    const response = await this.transport.request(
-      `/api/v1/projects/${params.projectId}/requirement-revisions/${params.revisionId}/approve`,
-      {
+    const logicalKey = `approve-requirement:${JSON.stringify([params.projectId, params.revisionId, expectedVersion])}`;
+    return this.sendPending(
+      logicalKey,
+      () => {
+        const command = ApproveRequirementHttpRequestSchema.parse({
+          expectedVersion,
+          idempotencyKey: this.ids.idempotencyKey("approve-requirement"),
+        });
+        return this.jsonCommand(
+          `/api/v1/projects/${params.projectId}/requirement-revisions/${params.revisionId}/approve`,
+          command,
+        );
+      },
+      (response) => RequirementRevisionHttpResponseSchema.parse(response),
+    );
+  }
+
+  private jsonCommand(path: string, command: unknown): PendingCommandEnvelope {
+    return {
+      path,
+      init: {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(command),
       },
-    );
-    return RequirementRevisionHttpResponseSchema.parse(response);
+    };
+  }
+
+  private async sendPending<T>(
+    logicalKey: string,
+    createEnvelope: () => PendingCommandEnvelope,
+    parseResponse: (response: unknown) => T,
+  ): Promise<T> {
+    let envelope = this.pendingCommands.get(logicalKey);
+    if (envelope === undefined) {
+      envelope = createEnvelope();
+      this.rememberPending(logicalKey, envelope);
+    }
+    const response = await this.transport.request(envelope.path, envelope.init);
+    const parsed = parseResponse(response);
+    this.pendingCommands.delete(logicalKey);
+    return parsed;
+  }
+
+  private rememberPending(logicalKey: string, envelope: PendingCommandEnvelope): void {
+    if (this.pendingCommands.size >= HunterApi.pendingCommandLimit) {
+      const oldestKey = this.pendingCommands.keys().next().value;
+      if (oldestKey !== undefined) this.pendingCommands.delete(oldestKey);
+    }
+    this.pendingCommands.set(logicalKey, envelope);
   }
 }

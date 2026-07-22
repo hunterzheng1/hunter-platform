@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { HunterApi } from "../api/client.js";
 import { RequirementEditor } from "../components/requirement-editor.js";
@@ -33,33 +33,44 @@ export function ProjectPage({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
   const [busyRevisionId, setBusyRevisionId] = useState<string>();
+  const projectEpoch = useRef(0);
 
   useEffect(() => {
-    let current = true;
+    const epoch = projectEpoch.current + 1;
+    projectEpoch.current = epoch;
+    setProject(undefined);
+    setLoading(true);
+    setError(undefined);
+    setBusyRevisionId(undefined);
     void api.getProject(projectId)
-      .then((response) => { if (current) setProject(response); })
-      .catch(() => { if (current) setError("无法加载项目，请返回后重试"); })
-      .finally(() => { if (current) setLoading(false); });
-    return () => { current = false; };
+      .then((response) => { if (projectEpoch.current === epoch) setProject(response); })
+      .catch(() => { if (projectEpoch.current === epoch) setError("无法加载项目，请返回后重试"); })
+      .finally(() => { if (projectEpoch.current === epoch) setLoading(false); });
+    return () => {
+      if (projectEpoch.current === epoch) projectEpoch.current = epoch + 1;
+    };
   }, [api, projectId]);
 
   const approve = async (revision: RequirementView) => {
+    const epoch = projectEpoch.current;
+    const targetProjectId = projectId;
     setBusyRevisionId(revision.revisionId);
     setError(undefined);
     try {
-      const approved = await api.approveRequirement(projectId, revision.revisionId);
-      setProject((current) => current === undefined ? current : {
+      const approved = await api.approveRequirement(projectId, revision.revisionId, revision.aggregateVersion);
+      if (projectEpoch.current !== epoch) return;
+      setProject((current) => current === undefined || current.projectId !== targetProjectId ? current : {
         ...current,
         requirements: current.requirements.map((item) => item.revisionId === approved.revisionId ? approved : item),
       });
     } catch {
-      setError("无法批准此需求版本，请确认它仍是草稿");
+      if (projectEpoch.current === epoch) setError("无法批准此需求版本，请确认它仍是草稿");
     } finally {
-      setBusyRevisionId(undefined);
+      if (projectEpoch.current === epoch) setBusyRevisionId(undefined);
     }
   };
 
-  if (loading) return <main className="page-shell"><p role="status">正在加载项目…</p></main>;
+  if (loading || (project !== undefined && project.projectId !== projectId)) return <main className="page-shell"><p role="status">正在加载项目…</p></main>;
   if (project === undefined) return <main className="page-shell"><p role="alert" className="message error-message">{error ?? "项目不存在"}</p></main>;
 
   return (
@@ -79,9 +90,12 @@ export function ProjectPage({
 
       <div className="detail-grid">
         <section className="panel editor-panel" aria-label="需求编辑器">
-          <RequirementEditor onSave={async (input) => {
+          <RequirementEditor key={projectId} onSave={async (input) => {
+            const epoch = projectEpoch.current;
+            const targetProjectId = projectId;
             const created = await api.createRequirement(projectId, input);
-            setProject((current) => current === undefined ? current : {
+            if (projectEpoch.current !== epoch) return;
+            setProject((current) => current === undefined || current.projectId !== targetProjectId ? current : {
               ...current,
               requirements: [...current.requirements, created],
             });

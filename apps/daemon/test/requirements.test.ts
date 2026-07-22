@@ -11,6 +11,7 @@ const draft = {
   projectId: projectA,
   requirementId,
   revisionId,
+  aggregateVersion: 0,
   title: "移动审批",
   body: "允许所有者从受信任设备审批需求版本。",
   acceptanceCriteria: ["审批后仍恢复同一个运行"],
@@ -68,6 +69,7 @@ describe("project and requirement routes", () => {
     }));
     const approveRequirement = vi.fn(async () => ({
       ...draft,
+      aggregateVersion: 1,
       status: "approved" as const,
       approvedAt: "2026-07-23T01:00:00.000Z",
     }));
