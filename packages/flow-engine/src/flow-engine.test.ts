@@ -586,6 +586,71 @@ describe("authoritative FlowEngine", () => {
     });
   });
 
+  it("keeps exactly one active Step across a multi-step Loop back-edge", () => {
+    const input = validWorkflowInput();
+    const implement = input.steps[0]!;
+    const test = input.steps[1]!;
+    input.steps = [implement, test];
+    input.entryStepId = implement.stepId;
+    input.routes = [
+      {
+        routeId: RouteIdSchema.parse("rte_multi_impl_pass"),
+        fromStepId: implement.stepId,
+        outcome: "passed",
+        priority: 0,
+        toStepId: test.stepId,
+      },
+      {
+        routeId: RouteIdSchema.parse("rte_multi_test_pass"),
+        fromStepId: test.stepId,
+        outcome: "passed",
+        priority: 0,
+        toStepId: null,
+      },
+      {
+        routeId: RouteIdSchema.parse("rte_multi_test_loop"),
+        fromStepId: test.stepId,
+        outcome: "failed",
+        priority: 0,
+        toStepId: implement.stepId,
+      },
+    ];
+    input.loops = [
+      {
+        ...input.loops[0]!,
+        routeId: RouteIdSchema.parse("rte_multi_test_loop"),
+        fromStepId: test.stepId,
+        toStepId: implement.stepId,
+        maxIterations: 3,
+        maxElapsedMs: 30_000,
+        progressPredicate: { kind: "diff_present", source: "workspace.diff" },
+      },
+    ];
+    const workflow = createWorkflowRevision(input);
+    const { store, engine, actor, runId } = engineHarness(workflow);
+
+    engine.handle({ type: "RecordExternalObservation", runId, fact: "agent_returned", expectedVersion: current(store).version, idempotencyKey: "multi-implement-return-1", actor });
+    engine.handle({ type: "RecordVerifierResult", runId, outcome: "passed", evidenceFingerprint: "1".repeat(64), expectedVersion: current(store).version, idempotencyKey: "multi-implement-pass-1", actor });
+    engine.handle({ type: "RecordExternalObservation", runId, fact: "agent_returned", expectedVersion: current(store).version, idempotencyKey: "multi-test-return-1", actor });
+    engine.handle({ type: "RecordVerifierResult", runId, outcome: "failed", evidenceFingerprint: "2".repeat(64), failureFingerprint: "multi-failure-1", diffFingerprint: "multi-diff-1", expectedVersion: current(store).version, idempotencyKey: "multi-test-fail-1", actor });
+
+    expect(current(store).steps.filter(({ conclusion }) => conclusion === "active")).toHaveLength(1);
+    expect(current(store).steps.find(({ stepId }) => stepId === test.stepId)?.conclusion).toBe("failed");
+    expect(current(store).steps.find(({ stepId }) => stepId === implement.stepId)).toMatchObject({
+      conclusion: "active",
+      attempts: [{ attemptNumber: 1 }, { attemptNumber: 2 }],
+    });
+
+    engine.handle({ type: "RecordExternalObservation", runId, fact: "agent_returned", expectedVersion: current(store).version, idempotencyKey: "multi-implement-return-2", actor });
+    engine.handle({ type: "RecordVerifierResult", runId, outcome: "passed", evidenceFingerprint: "3".repeat(64), expectedVersion: current(store).version, idempotencyKey: "multi-implement-pass-2", actor });
+    engine.handle({ type: "RecordExternalObservation", runId, fact: "agent_returned", expectedVersion: current(store).version, idempotencyKey: "multi-test-return-2", actor });
+    engine.handle({ type: "RecordVerifierResult", runId, outcome: "failed", evidenceFingerprint: "4".repeat(64), failureFingerprint: "multi-failure-2", diffFingerprint: "multi-diff-2", expectedVersion: current(store).version, idempotencyKey: "multi-test-fail-2", actor });
+
+    expect(current(store).loopUsage[workflow.loops[0]!.loopId]?.iterations).toBe(2);
+    expect(current(store).steps.filter(({ conclusion }) => conclusion === "active")).toHaveLength(1);
+    expect(current(store).steps.find(({ stepId }) => stepId === implement.stepId)?.attempts).toHaveLength(3);
+  });
+
   it("derives retry/backoff from the frozen Step and creates a new bounded Attempt", () => {
     let clock = new Date("2026-07-22T10:00:00.000Z");
     const { store, engine, actor, runId } = engineHarness(singleStepWorkflow(), () => clock);

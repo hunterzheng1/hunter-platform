@@ -662,6 +662,7 @@ export class FlowEngine {
         if (selected.loop.exhaustion.target === "paused") events.push({ type: "RunStatusChanged", status: "paused" });
         else events.push({ type: "RunConcluded", status: selected.loop.exhaustion.target });
       } else {
+        events.push({ type: "StepConcluded", stepRunId: step.stepRunId, conclusion: "failed" });
         const targetState = state.steps.find(({ stepId }) => stepId === target.stepId);
         const attemptNumber = (targetState?.attempts.length ?? 0) + 1;
         const stepRunId = StepRunIdSchema.parse(
