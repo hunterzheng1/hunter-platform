@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { access, mkdir, writeFile } from "node:fs/promises";
 import { arch, release } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import {
@@ -191,7 +191,7 @@ export async function resolveCodexExecutable(
         ? { packageName: "codex-win32-arm64", triple: "aarch64-pc-windows-msvc" }
         : null;
   if (target === null) throw new Error("CODEX_WINDOWS_ARCHITECTURE_UNSUPPORTED");
-  const candidate = join(
+  const candidate = win32.join(
     options.appData,
     "npm",
     "node_modules",
