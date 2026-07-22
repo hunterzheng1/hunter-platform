@@ -261,6 +261,18 @@ describe("hunter-default workflow pack", () => {
     expect(() => createHunterDefaultPack([task!])).toThrow(
       /WORKFLOW_PACK_IDENTITIES_INVALID/u,
     );
+    expect(() => createHunterDefaultPack([root!, task!, root!])).toThrow(
+      /WORKFLOW_PACK_IDENTITIES_INVALID/u,
+    );
+  });
+
+  it("normalizes accepted workflow permutations to root then task", () => {
+    const [root, task] = loadHunterDefaultPack().workflows;
+
+    expect(createHunterDefaultPack([task!, root!]).workflows.map(({ workflowId }) => workflowId)).toEqual([
+      "hunter.change-delivery",
+      "hunter.task-delivery",
+    ]);
   });
 
   it("rejects legacy revision and inline step contracts through the domain parser", () => {

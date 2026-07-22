@@ -59,13 +59,17 @@ export function createHunterDefaultPack(
   workflows: readonly HunterDefaultWorkflow[],
 ): Readonly<HunterDefaultPack> {
   const identities = new Set(workflows.map(({ workflowId }) => workflowId));
-  if (identities.size !== 2 || Object.keys(WORKFLOW_REVISION_BY_ID).some((id) => !identities.has(id as HunterDefaultWorkflowId))) {
+  if (workflows.length !== 2 || identities.size !== 2 || Object.keys(WORKFLOW_REVISION_BY_ID).some((id) => !identities.has(id as HunterDefaultWorkflowId))) {
     throw new Error("WORKFLOW_PACK_IDENTITIES_INVALID");
   }
+  const orderedWorkflows = [
+    workflows.find(({ workflowId }) => workflowId === "hunter.change-delivery")!,
+    workflows.find(({ workflowId }) => workflowId === "hunter.task-delivery")!,
+  ];
   return deepFreeze({
     packId: "hunter-default",
     version: "1.0.0",
-    workflows,
+    workflows: orderedWorkflows,
   });
 }
 

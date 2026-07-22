@@ -337,6 +337,44 @@ describe("default pack as a FlowEngine consumer", () => {
     expect(state(harness.store).status).toBe("succeeded");
   });
 
+  it("routes a canceled plan approval to archive without canceling the root Run", () => {
+    const harness = startRoot(workflow("hunter.change-delivery"));
+    verifyActive(harness, ids.rootRun, "plan", "passed");
+    harness.engine.handle({
+      type: "RecordExternalObservation",
+      runId: ids.rootRun,
+      fact: "agent_returned",
+      expectedVersion: state(harness.store).version,
+      idempotencyKey: "approve-cancel-returned",
+      actor,
+    });
+    const returned = state(harness.store);
+    const gate = returned.steps.find(({ conclusion }) => conclusion === "active")!;
+    harness.engine.handle({
+      type: "RecordVerifierResult",
+      runId: ids.rootRun,
+      outcome: "canceled",
+      evidenceFingerprint: canonicalSha256("approve-canceled"),
+      humanReceipt: { contentHash: gate.fixedContentHash, actorId: actor.actorId },
+      expectedVersion: returned.version,
+      idempotencyKey: "approve-canceled",
+      actor,
+    });
+
+    const routed = state(harness.store);
+    expect(routed.status).toBe("running");
+    expect(routed.steps.find(({ stepId }) => stepId === "stp_change_approve_plan_v1")?.conclusion).toBe("canceled");
+    expect(routed.steps.find(({ stepId }) => stepId === "stp_change_archive_v1")?.conclusion).toBe("active");
+    expect(harness.store.commits.at(-1)!.events).toContainEqual(expect.objectContaining({
+      type: "RouteSelected",
+      outcome: "canceled",
+    }));
+    expect(harness.store.commits.at(-1)!.events).not.toContainEqual(expect.objectContaining({
+      type: "RunConcluded",
+      status: "canceled",
+    }));
+  });
+
   it("uses FlowEngine's verifier progress source for the root integration loop", () => {
     const harness = startRoot(workflow("hunter.change-delivery"));
     for (const key of ["plan", "approve", "dispatch"]) verifyActive(harness, ids.rootRun, key, "passed");
