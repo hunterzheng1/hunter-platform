@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from "fastify";
 
 import type { LocalAuthenticator } from "./auth/local-authenticator.js";
+import { registerDurableEventRoutes, type DurableEventStream } from "./events/durable-event-stream.js";
 import { installSecurityHooks } from "./http/security-hooks.js";
 import { registerProjectRoutes } from "./routes/projects.js";
 import { registerRunRoutes, type RunRoutesServices } from "./routes/runs.js";
@@ -11,6 +12,7 @@ export interface BuildAppOptions {
   readonly allowedOrigins: readonly string[];
   readonly services: RunRoutesServices;
   readonly bodyLimit?: number;
+  readonly eventStream?: DurableEventStream | undefined;
 }
 
 export function buildApp(options: BuildAppOptions): FastifyInstance {
@@ -19,6 +21,7 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
   app.get("/health", async () => ({ status: "ok" }));
   registerProjectRoutes(app);
   registerRunRoutes(app, options.services);
+  if (options.eventStream !== undefined) registerDurableEventRoutes(app, options.eventStream);
   return app;
 }
 
