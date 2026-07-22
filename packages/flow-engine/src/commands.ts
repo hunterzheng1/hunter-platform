@@ -41,7 +41,7 @@ export interface RecordExternalObservationCommand extends ExistingRunCommand {
 
 export interface RecordVerifierResultCommand extends ExistingRunCommand {
   readonly type: "RecordVerifierResult";
-  readonly outcome: "passed" | "failed" | "error" | "needs_human";
+  readonly outcome: "passed" | "failed" | "error" | "needs_human" | "canceled";
   readonly evidenceFingerprint: string;
   readonly failureFingerprint?: string | undefined;
   readonly diffFingerprint?: string | undefined;

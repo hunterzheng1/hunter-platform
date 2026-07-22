@@ -13,7 +13,7 @@ export type ExecutionStatus =
   | "canceled"
   | "stale"
   | "needs_attention";
-export type VerificationStatus = "pending" | "verifying" | "passed" | "failed" | "error" | "needs_human";
+export type VerificationStatus = "pending" | "verifying" | "passed" | "failed" | "error" | "needs_human" | "canceled";
 export type StepConclusion = "active" | "succeeded" | "failed" | "blocked" | "canceled";
 export type RunStatus =
   | "created"

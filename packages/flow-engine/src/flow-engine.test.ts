@@ -359,6 +359,22 @@ function humanGateWorkflow(): WorkflowRevision {
   return createWorkflowRevision(input);
 }
 
+function humanGateCanceledWorkflow(): WorkflowRevision {
+  const input = validWorkflowInput();
+  const archive = input.steps[1]!;
+  const gate = input.steps[3]!;
+  input.steps = [gate, archive];
+  input.entryStepId = gate.stepId;
+  input.routes = [
+    { routeId: RouteIdSchema.parse("rte_gate_cancel"), fromStepId: gate.stepId, outcome: "canceled", priority: 0, toStepId: archive.stepId },
+    { routeId: RouteIdSchema.parse("rte_gate_pass"), fromStepId: gate.stepId, outcome: "passed", priority: 0, toStepId: null },
+    { routeId: RouteIdSchema.parse("rte_archive_pass"), fromStepId: archive.stepId, outcome: "passed", priority: 0, toStepId: null },
+    { routeId: RouteIdSchema.parse("rte_archive_fail"), fromStepId: archive.stepId, outcome: "failed", priority: 0, toStepId: null },
+  ];
+  input.loops = [];
+  return createWorkflowRevision(input);
+}
+
 function subflowOnlyWorkflow(): WorkflowRevision {
   const input = validWorkflowInput();
   const subflow = input.steps[2]!;
@@ -728,6 +744,96 @@ describe("authoritative FlowEngine", () => {
       actor,
     });
     expect(current(store).status).toBe("paused");
+  });
+
+  it("routes an authenticated Human Gate cancellation without canceling the Run", () => {
+    const workflow = humanGateCanceledWorkflow();
+    const { store, engine, actor, runId } = engineHarness(workflow);
+    engine.handle({
+      type: "RecordExternalObservation",
+      runId,
+      fact: "agent_returned",
+      expectedVersion: current(store).version,
+      idempotencyKey: "gate-cancel-returned",
+      actor,
+    });
+    engine.handle({
+      type: "RecordVerifierResult",
+      runId,
+      outcome: "canceled",
+      evidenceFingerprint: "c".repeat(64),
+      humanReceipt: {
+        contentHash: current(store).steps[0]!.fixedContentHash,
+        actorId: actor.actorId,
+      },
+      expectedVersion: current(store).version,
+      idempotencyKey: "gate-canceled",
+      actor,
+    });
+
+    const state = current(store);
+    expect(state.status).toBe("running");
+    expect(state.steps.find(({ stepId }) => stepId === workflow.entryStepId)).toMatchObject({
+      verificationStatus: "canceled",
+      conclusion: "canceled",
+    });
+    expect(state.steps.find(({ stepId }) => stepId !== workflow.entryStepId)?.conclusion).toBe("active");
+    expect(store.commits.at(-1)!.events).toContainEqual(expect.objectContaining({
+      type: "RouteSelected",
+      outcome: "canceled",
+    }));
+    expect(store.commits.at(-1)!.events).not.toContainEqual(expect.objectContaining({
+      type: "RunConcluded",
+      status: "canceled",
+    }));
+  });
+
+  it("rejects a canceled verifier outcome for an automated verifier", () => {
+    const { store, engine, actor, runId } = engineHarness();
+    engine.handle({
+      type: "RecordExternalObservation",
+      runId,
+      fact: "agent_returned",
+      expectedVersion: current(store).version,
+      idempotencyKey: "automated-cancel-returned",
+      actor,
+    });
+
+    expect(() => engine.handle({
+      type: "RecordVerifierResult",
+      runId,
+      outcome: "canceled",
+      evidenceFingerprint: "c".repeat(64),
+      expectedVersion: current(store).version,
+      idempotencyKey: "automated-canceled",
+      actor,
+    })).toThrow(/CANCELED_OUTCOME_REQUIRES_HUMAN_RECEIPT_VERIFIER/u);
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["wrong", { contentHash: "0".repeat(64), actorId: "flow-test" }],
+  ] as const)("rejects a Human Gate cancellation with a %s receipt", (_label, humanReceipt) => {
+    const { store, engine, actor, runId } = engineHarness(humanGateCanceledWorkflow());
+    engine.handle({
+      type: "RecordExternalObservation",
+      runId,
+      fact: "agent_returned",
+      expectedVersion: current(store).version,
+      idempotencyKey: `gate-cancel-${_label}-returned`,
+      actor,
+    });
+
+    expect(() => engine.handle({
+      type: "RecordVerifierResult",
+      runId,
+      outcome: "canceled",
+      evidenceFingerprint: "c".repeat(64),
+      humanReceipt,
+      expectedVersion: current(store).version,
+      idempotencyKey: `gate-cancel-${_label}`,
+      actor,
+    })).toThrow(/HUMAN_RECEIPT_CONTENT_HASH_MISMATCH/u);
   });
 
   it("uses declared terminal transitions for timeout and cancel", () => {

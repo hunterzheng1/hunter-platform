@@ -574,7 +574,10 @@ export class FlowEngine {
     if (step.executionStatus !== "returned") throw new Error("EXECUTION_NOT_RETURNED");
     const definition = workflow.steps.find(({ stepId }) => stepId === step.stepId);
     if (definition === undefined) throw new Error("WORKFLOW_STEP_NOT_FOUND");
-    if (definition.verifier.kind === "human_receipt" && command.outcome === "passed") {
+    if (command.outcome === "canceled" && definition.verifier.kind !== "human_receipt") {
+      throw new Error("CANCELED_OUTCOME_REQUIRES_HUMAN_RECEIPT_VERIFIER");
+    }
+    if (definition.verifier.kind === "human_receipt" && (command.outcome === "passed" || command.outcome === "canceled")) {
       if (command.humanReceipt?.contentHash !== step.fixedContentHash) {
         throw new Error("HUMAN_RECEIPT_CONTENT_HASH_MISMATCH");
       }
@@ -603,7 +606,11 @@ export class FlowEngine {
         verificationStatus: "needs_human",
       });
     }
-    const routeOutcome = command.outcome === "passed" ? "passed" : "failed";
+    const routeOutcome = command.outcome === "canceled"
+      ? "canceled"
+      : command.outcome === "passed"
+        ? "passed"
+        : "failed";
     const selected = selectRoute(workflow, step.stepId, routeOutcome, {
       failureClass: command.outcome === "error" ? "verifier_infrastructure" : "product_verification",
     });
@@ -704,7 +711,11 @@ export class FlowEngine {
     events.push({
       type: "StepConcluded",
       stepRunId: step.stepRunId,
-      conclusion: command.outcome === "passed" ? "succeeded" : "failed",
+      conclusion: command.outcome === "canceled"
+        ? "canceled"
+        : command.outcome === "passed"
+          ? "succeeded"
+          : "failed",
     });
     if (selected.route.toStepId === null) {
       if (state.binding.subjectKind === "change" && command.outcome === "passed") {
@@ -716,7 +727,14 @@ export class FlowEngine {
           ? { type: "RunConcluded", status: "succeeded" }
           : { type: "RunStatusChanged", status: hasFailedChild ? "needs_attention" : "paused" });
       } else {
-        events.push({ type: "RunConcluded", status: command.outcome === "passed" ? "succeeded" : "failed" });
+        events.push({
+          type: "RunConcluded",
+          status: command.outcome === "canceled"
+            ? "canceled"
+            : command.outcome === "passed"
+              ? "succeeded"
+              : "failed",
+        });
       }
     } else {
       const target = workflow.steps.find(({ stepId }) => stepId === selected.route.toStepId);
