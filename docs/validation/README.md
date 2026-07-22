@@ -21,7 +21,7 @@ Current records:
 
 - [`runtime-reliability.md`](runtime-reliability.md) — bounded path, permission, session-loss, idempotency, and process-tree validation.
 - [`evidence/reliability/runtime-reliability.json`](evidence/reliability/runtime-reliability.json) — versioned contract-fixture reliability envelope.
-
+- [`agent-orchestrator-upstream-research.md`](agent-orchestrator-upstream-research.md) — dated first-party research for the Agent Orchestrator fallback candidate; not local capability proof.
 - [`environment-inventory.json`](environment-inventory.json) — redacted Phase 0 Doctor envelope.
 - [`phase-0-decision.md`](phase-0-decision.md) — frozen Runtime Provider decision and later evidence addenda.
 - [`orca-windows-provider.md`](orca-windows-provider.md) — bounded Windows Orca preflight verdict.
