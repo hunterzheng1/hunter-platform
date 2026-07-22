@@ -1,0 +1,13 @@
+{
+  "name": "@hunter/runtime-manager",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "dependencies": {
+    "@hunter/domain": "0.0.0",
+    "@hunter/runtime-contracts": "0.0.0",
+    "@hunter/storage": "0.0.0"
+  }
+}
