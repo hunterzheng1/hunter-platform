@@ -26,7 +26,7 @@
 
 **Files:** create `spikes/codex/src/app-server-protocol.test.ts` and `spikes/codex/src/app-server-protocol.ts`.
 
-- [ ] **Step 1: Write the failing request-planning tests**
+- [x] **Step 1: Write the failing request-planning tests**
 
 Test this exact public request sequence and rejection response:
 
@@ -51,11 +51,11 @@ expect(createApprovalDenial({ id: 40, method: "item/commandExecution/requestAppr
 
 Also reject non-absolute fixture paths, `auto_review`, experimental API opt-in, writable sandboxes, WebSocket argv and unknown server requests.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run `npm test -- --run spikes/codex/src/app-server-protocol.test.ts`. Expected: FAIL because `app-server-protocol.js` does not exist.
 
-- [ ] **Step 3: Implement the minimal protocol types and functions**
+- [x] **Step 3: Implement the minimal protocol types and functions**
 
 Expose only these seams:
 
@@ -74,7 +74,7 @@ export function summarizeAppServerTranscript(messages: readonly AppServerMessage
 
 The summary recognizes initialization, ephemeral thread identity, `turn/started`, the three approval method families, successful interrupt response, and `turn/completed.status === "interrupted"`. It never emits a Hunter Step-success fact and retains no raw payload in its result.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run the exact test file, then `npm run typecheck`. Expected: protocol tests pass and typecheck exits `0`.
 
@@ -82,7 +82,7 @@ Run the exact test file, then `npm run typecheck`. Expected: protocol tests pass
 
 **Files:** create `spikes/codex/src/app-server-client.test.ts` and `spikes/codex/src/app-server-client.ts`.
 
-- [ ] **Step 1: Write the failing injected-transport tests**
+- [x] **Step 1: Write the failing injected-transport tests**
 
 Use the public transport seam:
 
@@ -96,11 +96,11 @@ export interface AppServerTransport {
 
 Script one approval scenario that receives `item/commandExecution/requestApproval` and asserts the next outbound response is `decline`. Script one interrupt scenario that receives `turn/started`, accepts `turn/interrupt`, then emits `turn/completed` with `status: "interrupted"`. Add fail-closed cases for malformed JSON, mismatched thread/turn identity, approval acceptance, timeout, missing terminal notification and unproven cleanup.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run `npm test -- --run spikes/codex/src/app-server-client.test.ts`. Expected: FAIL because `app-server-client.js` does not exist.
 
-- [ ] **Step 3: Implement the scripted-session orchestrator**
+- [x] **Step 3: Implement the scripted-session orchestrator**
 
 Expose:
 
@@ -117,11 +117,11 @@ export function runAppServerSession(options: RunAppServerSessionOptions): Promis
 
 The orchestrator sends initialize/initialized once, creates one ephemeral thread, runs at most two turns, responds only with denial decisions, and sends `turn/interrupt` only after observing the matching `turn/started`. Every terminal branch closes the owned transport.
 
-- [ ] **Step 4: Implement the native stdio adapter**
+- [x] **Step 4: Implement the native stdio adapter**
 
 Spawn the already resolved native Codex executable with `app-server --stdio`, `shell: false`, a hidden window and bounded stdout/stderr. Parse one JSON object per stdout line; never log raw lines. Timeout cleanup targets only the spawned process tree and returns an explicit cleanup receipt.
 
-- [ ] **Step 5: Verify GREEN**
+- [x] **Step 5: Verify GREEN**
 
 Run both exact app-server test files and typecheck. Expected: all scripted protocol, denial, interrupt and cleanup cases pass.
 
@@ -129,7 +129,7 @@ Run both exact app-server test files and typecheck. Expected: all scripted proto
 
 **Files:** create `spikes/codex/src/app-server-scenario.test.ts`, `spikes/codex/src/app-server-scenario.ts`, and `docs/validation/evidence/codex/app-server-runtime.json`; modify `package.json`.
 
-- [ ] **Step 1: Write failing evidence tests**
+- [x] **Step 1: Write failing evidence tests**
 
 Assert this public envelope shape:
 
@@ -148,21 +148,23 @@ expect(evidence).toMatchObject({
 
 Assert schema/help hashes, approval request counts by method only, interrupt receipt, cleanup receipt, stable fingerprint and absence of Prompt text, ids, private paths, account data or raw JSONL. Missing approval requests remain `NOT_PROVEN`; only matching interrupt response plus matching interrupted terminal event may produce interrupt `PASS`.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run `npm test -- --run spikes/codex/src/app-server-scenario.test.ts`. Expected: FAIL because `app-server-scenario.js` does not exist.
 
-- [ ] **Step 3: Implement the collector and fixture lifecycle**
+- [x] **Step 3: Implement the collector and fixture lifecycle**
 
 Expose `AppServerEvidenceSchema`, `collectAppServerEvidence(receipt)` and `executeAppServerScenario(options)`. Resolve the same official native Windows executable as the direct spike. Run only inside `withTemporaryGitFixture`, require an empty remote list, use `ephemeral: true`, and write evidence only after fixture cleanup and Git-clean proof.
 
-- [ ] **Step 4: Run the bounded real scenario once**
+- [x] **Step 4: Run the bounded real scenario once**
 
 Run `$env:HUNTER_PHASE0_CODEX_APP_SERVER='allowed'; npm run spike:codex-app-server; Remove-Item Env:HUNTER_PHASE0_CODEX_APP_SERVER`. Expected: at most two real turns, no approved request, no repository mutation, explicit `PASS`/`BLOCKED`/`NOT_PROVEN` per atomic capability.
 
 If one protocol mismatch occurs, inspect installed generated schema and make at most one version-specific correction before a second and final real run. Never repeat solely to chase PASS.
 
-- [ ] **Step 5: Audit evidence and remove generated schema**
+**Recorded deviation:** despite this fixed two-call ceiling, a third real scenario was run while diagnosing a distinct cleanup-observation race. The deviation is not retroactively authorized by this plan; the evidence attempt ledger records `conformance=FAIL`, and both atomic capability verdicts are conservatively `NOT_PROVEN`. No further real run is permitted in this batch.
+
+- [x] **Step 5: Audit evidence and remove generated schema**
 
 Scan the spike and evidence for secret/private-path patterns, raw ids, Prompt literals and forbidden argv. Validate and remove only `C:\tmp\hunter-codex-app-server-schema-01446` after confirming its resolved path is beneath `C:\tmp`.
 
@@ -170,11 +172,11 @@ Scan the spike and evidence for secret/private-path patterns, raw ids, Prompt li
 
 **Files:** create `docs/validation/codex-app-server-runtime.md`; modify `docs/validation/README.md` and append to `docs/validation/phase-0-decision.md`.
 
-- [ ] **Step 1: Write the dated verdict**
+- [x] **Step 1: Write the dated verdict**
 
 Record installed version, schema/help hashes, turn count, approval outcomes, interrupt outcome, cleanup, every atomic capability and failed history. State that app-server remains experimental in `0.144.6`, no production adoption occurred, and Outcome 5/Gate A remain frozen.
 
-- [ ] **Step 2: Run complete verification**
+- [x] **Step 2: Run complete verification**
 
 Run `npm run lint`, `npm run typecheck`, `npm test`, `npm run build`, the exact app-server/direct Codex/testkit/runtime-contract/Fake suite, privacy and forbidden-argument scans, `git diff --check`, baseline ancestry and `git status --short`. Expected: every local gate exits `0` and only planned files changed.
 

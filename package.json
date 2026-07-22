@@ -16,6 +16,7 @@
     "lint": "eslint .",
     "spike:doctor": "npm run build --workspace @hunter/spike-doctor && node --enable-source-maps spikes/doctor/dist/main.js --output docs/validation/environment-inventory.json",
     "spike:codex": "npm run build --workspace @hunter/spike-codex && node --enable-source-maps spikes/codex/dist/scenario.js --output docs/validation/evidence/codex/direct-runtime.json",
+    "spike:codex-app-server": "npm run build --workspace @hunter/spike-codex && node --enable-source-maps spikes/codex/dist/app-server-scenario.js --output docs/validation/evidence/codex/app-server-runtime.json",
     "spike:orca": "npm run build --workspace @hunter/spike-orca && node --enable-source-maps spikes/orca/dist/scenario.js --output docs/validation/evidence/orca/preflight.json",
     "test": "vitest run",
     "typecheck": "tsc -b --pretty false",

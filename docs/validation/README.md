@@ -19,6 +19,8 @@ record should retain a hash and a safe summary.
 
 Current records:
 
+- [`codex-app-server-runtime.md`](codex-app-server-runtime.md) — bounded Windows Codex app-server approval/interrupt verdict; experimental surface, not production adoption.
+- [`evidence/codex/app-server-runtime.json`](evidence/codex/app-server-runtime.json) — versioned, redacted ephemeral stdio protocol receipts.
 - [`codex-direct-runtime.md`](codex-direct-runtime.md) — bounded Windows Direct Codex CLI verdict, real JSONL/resume evidence, and explicit unproven interrupt boundary.
 - [`evidence/codex/direct-runtime.json`](evidence/codex/direct-runtime.json) — versioned, redacted Direct Codex local receipt envelope.
 - [`runtime-reliability.md`](runtime-reliability.md) — bounded path, permission, session-loss, idempotency, and process-tree validation.

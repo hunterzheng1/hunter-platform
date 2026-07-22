@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "phase0_codex_app_server_runtime",
+  "generatedAt": "2026-07-22T17:48:58.054Z",
+  "generator": {
+    "name": "hunter-phase0-codex-app-server",
+    "version": "0.1.0"
+  },
+  "host": {
+    "platform": "win32",
+    "architecture": "x64",
+    "release": "10.0.26200",
+    "nodeVersion": "v24.14.0"
+  },
+  "installedVersion": "0.144.6",
+  "helpHash": "ebddcbae81d5d6520609ad5605d069ddaf1d4c02cc97cc99d2585757aa4364ff",
+  "schemaBundleHash": "c27aeb7608997f6ab15a0f5e0d56408e372714671e1cd734f25b488987a54f0d",
+  "schemaCanonicalHash": "6c749ec730859c8afc78d60af29c4e76e29d2e1aaecb5cfb8a74309b19be39c9",
+  "schemaValidated": true,
+  "transport": "stdio",
+  "proofScope": "local_ephemeral_typed_scenario",
+  "providerVerdict": "NOT_PROVEN",
+  "realTurnCount": 2,
+  "attempts": {
+    "plannedRealCallLimit": 2,
+    "actualRealScenarioRuns": 3,
+    "actualRealTurnCount": 6,
+    "conformance": "FAIL",
+    "reason": "real_call_limit_exceeded"
+  },
+  "fixture": {
+    "cwdScope": "temporary_git_fixture",
+    "remotePresent": false,
+    "repositoryCleanAfterScenario": true,
+    "cleanup": "verified_by_fixture_return"
+  },
+  "protocol": {
+    "initialized": true,
+    "ephemeralThread": true,
+    "approvalRequestMethods": [
+      "item/commandExecution/requestApproval"
+    ],
+    "approvalDenialMethods": [
+      "item/commandExecution/requestApproval"
+    ],
+    "approvalContextMatched": false,
+    "interruptAccepted": true,
+    "interruptTerminalStatus": "interrupted",
+    "protocolErrors": 0,
+    "transportCleanup": "direct_process_exit",
+    "stepSuccess": false
+  },
+  "capabilities": [
+    {
+      "id": "permission_events",
+      "outcome": "NOT_PROVEN",
+      "reason": "scenario_safety_prerequisites_not_proven"
+    },
+    {
+      "id": "interrupt",
+      "outcome": "NOT_PROVEN",
+      "reason": "scenario_safety_prerequisites_not_proven"
+    }
+  ],
+  "redaction": {
+    "applied": true,
+    "schemaVersion": 1
+  },
+  "contentFingerprint": "d809375529adb1e984301987d137002083a14a72d5cbea2460fe00201cce5a71"
+}

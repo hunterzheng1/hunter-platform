@@ -140,3 +140,11 @@ session interrupt receipt。permission events 与 artifact export 也保持 `NOT
 turn terminal event、agent return 或 exit `0` 都不能完成 Hunter Step。Direct Codex 因此只是
 已测量的 Connector 候选，不是完整 Runtime Provider 或已采用生产集成。Outcome 5、Phase 0
 Gate A 与真实 Provider 发布阻断保持不变；不按产品名称计算 L0-L3。
+
+## P0-RUNTIME-01 Codex app-server 后续证据（2026-07-23）
+
+在 Direct Codex CLI 场景之后，Hunter 对本机 Codex CLI `0.144.6` 的 app-server stdio 协议执行了一次额外的有界验证。详见 [`codex-app-server-runtime.md`](codex-app-server-runtime.md) 与 [`evidence/codex/app-server-runtime.json`](evidence/codex/app-server-runtime.json)。
+
+自动临时无 remote Git fixture 中的 ephemeral、read-only thread 观察到带 request id 的 `item/commandExecution/requestApproval`，客户端发送匹配 id 的拒绝；旧收据没有保留足以证明该审批请求属于预期 thread/turn 的脱敏关联字段。另一个 turn 的 `turn/interrupt` response 成功，且匹配 thread/turn 最终报告 `status: interrupted`。Prompt、账号响应、raw JSONL、thread/turn id 和绝对用户路径均未写入 evidence，fixture 保持 Git clean 并被删除。
+
+但该 spike 实际运行三次，超过设计规定的两次真实调用上限；旧 cleanup 还只证明直接子进程退出，不能证明进程树已回收。attempt ledger 因此为 `conformance=FAIL`，`permission_events` 与结构化 `interrupt` 最终均为 `NOT_PROVEN`，不得用最后一次观察追溯补写 PASS。本机帮助仍将 app-server 标为 experimental，且该 Connector 不提供完整 WorkspaceProvider、restart/reconcile、移动访问或生产支持证据。Outcome 5、Gate A、真实 Provider 发布阻断与 First Vertical Slice 阻断继续保持 `NOT_PROVEN`；不计算 L0-L3，不采用生产 Connector，不选择或 Fork Orca。
