@@ -3,6 +3,7 @@
 .hunter/cache/
 .hunter/tmp/
 .hunter-e2e/
+.worktrees/
 
 # Dependencies and build output
 node_modules/
