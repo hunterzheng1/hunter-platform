@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { ZodError } from "zod";
 
-import { loadHunterDefaultPack } from "./load-pack.js";
+import { loadHunterDefaultPack, parseWorkflowAsset } from "./load-pack.js";
+
+function validWorkflowAsset() {
+  const workflow = loadHunterDefaultPack().workflows[0]!;
+  const { workflowId, workflowFingerprint, ...revision } = workflow;
+  void workflowFingerprint;
+  return { workflowId, revision };
+}
 
 describe("hunter-default workflow pack", () => {
   it("publishes stable root Change and Task workflow revisions", () => {
@@ -104,6 +112,7 @@ describe("hunter-default workflow pack", () => {
         toStepId: "stp_change_dispatch_tasks_v1",
         maxIterations: 2,
         maxElapsedMs: 7_200_000,
+        maxCost: 10,
         progressPredicate: {
           kind: "verifier_improved",
           source: "integration.verdictFingerprint",
@@ -170,6 +179,7 @@ describe("hunter-default workflow pack", () => {
     expect(loopsBySource.stp_task_test_v1).toMatchObject({
       maxIterations: 3,
       maxElapsedMs: 7_200_000,
+      maxCost: 10,
       progressPredicate: { kind: "fingerprint_changed", source: "test.failureFingerprint" },
       stagnation: {
         maxSameFailureFingerprint: 2,
@@ -182,6 +192,7 @@ describe("hunter-default workflow pack", () => {
     expect(loopsBySource.stp_task_review_v1).toMatchObject({
       maxIterations: 3,
       maxElapsedMs: 7_200_000,
+      maxCost: 10,
       progressPredicate: { kind: "diff_present", source: "workspace.diffFingerprint" },
       stagnation: {
         maxSameFailureFingerprint: 2,
@@ -206,5 +217,50 @@ describe("hunter-default workflow pack", () => {
     expect(Object.isFrozen(root)).toBe(true);
     expect(Object.isFrozen(root.steps)).toBe(true);
     expect(Object.isFrozen(root.steps[0]!.inputContract)).toBe(true);
+  });
+
+  it("rejects unknown fields in the workflow asset wrapper", () => {
+    expect(() =>
+      parseWorkflowAsset({
+        ...validWorkflowAsset(),
+        unexpected: true,
+      }),
+    ).toThrow(/unrecognized key/iu);
+  });
+
+  it("rejects legacy revision and inline step contracts through the domain parser", () => {
+    const asset = validWorkflowAsset();
+    const { workflowRevisionId, ...revisionWithoutId } = asset.revision;
+    void workflowRevisionId;
+
+    const parseLegacyRevision = () =>
+      parseWorkflowAsset({
+        ...asset,
+        revision: {
+          ...revisionWithoutId,
+          revisionId: "wfr_hunter_change_delivery_v1",
+        },
+      });
+    expect(parseLegacyRevision).toThrow(ZodError);
+    expect(parseLegacyRevision).toThrow(/workflowRevisionId|revisionId/u);
+
+    const [firstStep, ...remainingSteps] = asset.revision.steps;
+    const parseLegacyStep = () =>
+      parseWorkflowAsset({
+        ...asset,
+        revision: {
+          ...asset.revision,
+          steps: [
+            {
+              ...firstStep!,
+              next: { onPassed: null },
+              outputContract: "hunter.legacy-output.v1",
+            },
+            ...remainingSteps,
+          ],
+        },
+      });
+    expect(parseLegacyStep).toThrow(ZodError);
+    expect(parseLegacyStep).toThrow(/next|outputContract/u);
   });
 });

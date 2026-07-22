@@ -226,6 +226,7 @@
         "toStepId": "stp_change_dispatch_tasks_v1",
         "maxIterations": 2,
         "maxElapsedMs": 7200000,
+        "maxCost": 10,
         "progressPredicate": {
           "kind": "verifier_improved",
           "source": "integration.verdictFingerprint"

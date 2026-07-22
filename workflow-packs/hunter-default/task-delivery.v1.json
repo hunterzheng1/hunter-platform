@@ -192,6 +192,7 @@
         "toStepId": "stp_task_implement_v1",
         "maxIterations": 3,
         "maxElapsedMs": 7200000,
+        "maxCost": 10,
         "progressPredicate": {
           "kind": "fingerprint_changed",
           "source": "test.failureFingerprint"
@@ -211,6 +212,7 @@
         "toStepId": "stp_task_implement_v1",
         "maxIterations": 3,
         "maxElapsedMs": 7200000,
+        "maxCost": 10,
         "progressPredicate": { "kind": "diff_present", "source": "workspace.diffFingerprint" },
         "stagnation": {
           "maxSameFailureFingerprint": 2,

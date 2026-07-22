@@ -34,10 +34,14 @@ function assetUrl(name: string): URL {
   return match;
 }
 
-function readWorkflow(name: string): HunterDefaultWorkflow {
-  const asset = WorkflowAssetSchema.parse(JSON.parse(readFileSync(assetUrl(name), "utf8")));
+export function parseWorkflowAsset(input: unknown): HunterDefaultWorkflow {
+  const asset = WorkflowAssetSchema.parse(input);
   const revision = createWorkflowRevision(asset.revision);
   return deepFreeze({ workflowId: asset.workflowId, ...revision });
+}
+
+function readWorkflow(name: string): HunterDefaultWorkflow {
+  return parseWorkflowAsset(JSON.parse(readFileSync(assetUrl(name), "utf8")));
 }
 
 export function loadHunterDefaultPack(): Readonly<HunterDefaultPack> {
