@@ -161,7 +161,7 @@ Hunter-Harness 仍可独立发布 Pack/Skill；Platform 通过显式版本和内
 
 Phase 0 结束必须形成书面决定：
 
-- Orca：Sidecar / 薄 Fork / 放弃。
+- Runtime Provider：Orca Sidecar / 薄 Fork / Agent Orchestrator / Direct Runtime，或 Outcome 5“尚无生产 Provider 得到证明”。
 - Codex、CodeBuddy、Cursor 的实测 CapabilityManifest。
 - 桌面壳：以 Electron 作为当前默认方案，验证 Windows Sidecar、安装、升级与进程生命周期；只有出现阻断证据时才用 ADR 重新比较 Tauri 等替代方案。
 - Storage Schema 和崩溃恢复是否满足 Phase 1。
@@ -174,6 +174,12 @@ Phase 0 结束必须形成书面决定：
 - 三个首批 Agent 都有真实等级和降级路径。
 - 如果 Orca 不通过，替代路径已在同一 Contract 下跑通最小 Spike。
 - Fable5 评审的 Blocker 已关闭或由明确 ADR 接受。
+
+### 5.5 当前决策状态（2026-07-22）
+
+ADR-0005 采用 Outcome 5：尚无生产 Runtime Provider 得到证明。Orca、Agent Orchestrator、Codex、CodeBuddy 和 Cursor 的 executable/login 本机探针均为 BLOCKED，时间盒结束后的采用判定为 NOT_PROVEN；不指定 primary/fallback，不选择 Sidecar 或 Fork。
+
+Foundation、Fake contract suite 和 Windows/Ubuntu CI 已通过；Outcome 5 只允许继续 Foundation 维护和 Fake contract 验证。Agent Orchestrator fallback typed scenario 与上面的真实 Provider 退出标准仍未满足，因此 Phase 0 Gate A 和 Phase 1/First Vertical Slice 保持阻断。任何后续阶段、真实 Provider 演示、集成承诺或发布都必须等待 `P0-RUNTIME-01` 产生固定版本、脱敏的原子能力收据并重新评审 Gate A。
 
 ## 6. Phase 1：首个完整纵向版本
 
@@ -224,9 +230,11 @@ Phase 0 结束必须形成书面决定：
 
 团队协作、云端执行和原生手机 App 不因进入 Phase 3 就自动立项，仍需独立用户证据和安全评审。
 
-## 9. Orca 决策矩阵
+## 9. Orca 决策门槛矩阵
 
-| 维度 | Sidecar | 薄 Fork | 放弃/替换 |
+下表是未来有本机证据后选择集成形态的门槛，不是当前测量结果。Outcome 5 下所有 Orca 能力仍为 NOT_PROVEN。
+
+| 维度 | Sidecar 采用门槛 | 薄 Fork 采用门槛 | 放弃/替换触发条件 |
 |---|---|---|---|
 | 公开接口覆盖核心能力 | 充分 | 有少量关键缺口 | 明显不足 |
 | Windows 稳定性 | 通过 | 通过 | 不通过 |
@@ -236,7 +244,7 @@ Phase 0 结束必须形成书面决定：
 | 上游同步成本 | 低 | 可预算 | 高且持续 |
 | Hunter 数据独立 | 是 | 是 | 若否则禁止采用 |
 
-默认选择 Sidecar。薄 Fork 必须有 ADR、维护责任人、上游同步策略和退出计划；“想统一品牌”不是 Fork 理由。
+Sidecar 是 Orca 获得本机证据后的首个评估形态，不是默认采用结果。当前 Outcome 5 不选择任何生产 Provider。薄 Fork 必须有 sidecar 通过证据、独立 ADR、维护责任人、上游同步策略和退出计划；“想统一品牌”不是 Fork 理由。
 
 ## 10. 实施顺序与依赖
 

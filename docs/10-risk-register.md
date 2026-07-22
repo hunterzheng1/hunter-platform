@@ -33,7 +33,7 @@ Owner 表示负责关闭证据的人，不意味着单人承担全部实施。
 | R-13 | Secret 经日志、Prompt、命令行或导出泄露 | 3 | 5 | 15 | Token 出现在 Event/诊断包、argv 可见 | 系统凭据库、句柄注入、脱敏扫描、导出排除、安全测试 | Security / P0-P1 |
 | R-14 | 自动知识入库造成过期信息或错误经验污染后续 Agent | 4 | 5 | 20 | superseded 需求仍被注入、失败结论成为规则 | 历史/权威/经验分级；active 过滤；来源/置信度/失效条件；冲突降级 | Knowledge / P1 |
 | R-15 | Handoff Pack 过大、噪音多或含 Prompt Injection | 4 | 4 | 16 | Token 膨胀、Agent忽略当前要求、外部文档改变行为 | 作用域检索、预算、引用隔离、来源标记、可解释选取、注入测试 | Knowledge+Security / P1 |
-| R-16 | 单客户端目标诱发深 Fork Orca，形成不可维护产品 | 3 | 5 | 15 | 为 UI 统一改写上游核心、领域逻辑进入 Fork | Sidecar 默认；五项薄 Fork 门槛；Fork 预算与退出 ADR | Architecture / P0 |
+| R-16 | 单客户端目标诱发深 Fork Orca，形成不可维护产品 | 3 | 5 | 15 | 为 UI 统一改写上游核心、领域逻辑进入 Fork | 证据通过后才按 Sidecar-first 评估；五项薄 Fork 门槛；Fork 预算与退出 ADR | Architecture / P0 |
 | R-17 | Provider 可替换只存在于图上，实际 Flow 依赖 Orca 特性 | 4 | 4 | 16 | 领域对象出现 Orca ID、测试只跑真实 Orca | Fake Provider 契约；规范事件；Provider Swap E2E；禁止泄漏类型 | Architecture / P0-P1 |
 | R-18 | 移动 PWA 范围膨胀成完整 IDE/终端 | 3 | 3 | 9 | 开始实现完整终端、Diff 编辑和工作流画布 | 冻结驾驶舱范围；高危操作回桌面；独立立项原生 App | Product / P1 |
 | R-19 | 本地优先导致多设备状态冲突或用户误解离线摘要 | 3 | 4 | 12 | 离线审批重放、旧状态看似实时、路径同步失败 | Host 事实源；Event Cursor；幂等命令；缓存时间标记；路径仅 DeviceBinding | Device / P1 |
@@ -61,6 +61,14 @@ Owner 表示负责关闭证据的人，不意味着单人承担全部实施。
 - Sidecar、薄 Fork 或放弃的 ADR。
 
 如果证据不足，默认不是“暂时通过”，而是限制为实验 Provider 或放弃。
+
+#### 2026-07-22 Outcome 5 处置
+
+ADR-0005 冻结“尚无生产 Runtime Provider 得到证明”。R-01、R-02、R-04、R-05 和 R-27 没有关闭或降级：候选 executable/login 不可用，因而不存在固定版本、Windows 生命周期、API/schema、安全默认值、许可证/条款或维护证据。Phase 0 Gate A、First Vertical Slice、真实 Provider 集成与发布保持阻断。
+
+R-16 通过“本轮不 Fork、sidecar 未证明前禁止评估 Fork”获得补偿控制，但风险分暂不降低。R-17 已由 provider-neutral contracts、Fake contract suite 和双平台 CI 证明 Hunter 架构边界，真实 Provider swap 仍为 NOT_PROVEN，风险分同样保持不变。
+
+下一关闭动作是 `P0-RUNTIME-01 Windows candidate enablement and atomic receipt`，最多 1 个工作日、单候选最多 4 小时；只有用户明确授权并自行完成安装/login 后才能启动。任何未在时间盒内获得原子能力收据的候选继续为 NOT_PROVEN。
 
 ### R-03：完成语义不统一
 
