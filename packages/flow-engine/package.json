@@ -1,5 +1,5 @@
 {
-  "name": "@hunter/application",
+  "name": "@hunter/flow-engine",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -11,8 +11,6 @@
   },
   "dependencies": {
     "@hunter/domain": "0.0.0",
-    "@hunter/flow-engine": "0.0.0",
-    "@hunter/storage": "0.0.0",
     "zod": "^4.0.0"
   }
 }

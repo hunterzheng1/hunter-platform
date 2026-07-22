@@ -42,6 +42,9 @@ export type WorkflowRevisionId = z.infer<typeof WorkflowRevisionIdSchema>;
 export const StepIdSchema = canonicalId("stp", "StepId").brand<"StepId">();
 export type StepId = z.infer<typeof StepIdSchema>;
 
+export const StepRunIdSchema = canonicalId("spr", "StepRunId").brand<"StepRunId">();
+export type StepRunId = z.infer<typeof StepRunIdSchema>;
+
 export const RouteIdSchema = canonicalId("rte", "RouteId").brand<"RouteId">();
 export type RouteId = z.infer<typeof RouteIdSchema>;
 

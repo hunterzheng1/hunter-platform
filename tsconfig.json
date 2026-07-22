@@ -3,6 +3,7 @@
   "references": [
     { "path": "./packages/application" },
     { "path": "./packages/domain" },
+    { "path": "./packages/flow-engine" },
     { "path": "./packages/runtime-contracts" },
     { "path": "./packages/storage" },
     { "path": "./packages/testkit" },

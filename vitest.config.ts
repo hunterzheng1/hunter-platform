@@ -7,6 +7,9 @@ export default defineConfig({
       "@hunter/domain": fileURLToPath(
         new URL("./packages/domain/src/index.ts", import.meta.url),
       ),
+      "@hunter/flow-engine": fileURLToPath(
+        new URL("./packages/flow-engine/src/index.ts", import.meta.url),
+      ),
       "@hunter/runtime-contracts": fileURLToPath(
         new URL("./packages/runtime-contracts/src/index.ts", import.meta.url),
       ),
