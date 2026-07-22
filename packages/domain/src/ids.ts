@@ -12,6 +12,39 @@ function canonicalId(prefix: string, label: string) {
 export const ProjectIdSchema = canonicalId("prj", "ProjectId").brand<"ProjectId">();
 export type ProjectId = z.infer<typeof ProjectIdSchema>;
 
+export const DeviceIdSchema = canonicalId("dvc", "DeviceId").brand<"DeviceId">();
+export type DeviceId = z.infer<typeof DeviceIdSchema>;
+
+export const RequirementIdSchema = canonicalId("req", "RequirementId").brand<"RequirementId">();
+export type RequirementId = z.infer<typeof RequirementIdSchema>;
+
+export const RequirementRevisionIdSchema = canonicalId(
+  "rrv",
+  "RequirementRevisionId",
+).brand<"RequirementRevisionId">();
+export type RequirementRevisionId = z.infer<typeof RequirementRevisionIdSchema>;
+
+export const ChangeIdSchema = canonicalId("chg", "ChangeId").brand<"ChangeId">();
+export type ChangeId = z.infer<typeof ChangeIdSchema>;
+
+export const ChangeRevisionIdSchema = canonicalId("crv", "ChangeRevisionId").brand<"ChangeRevisionId">();
+export type ChangeRevisionId = z.infer<typeof ChangeRevisionIdSchema>;
+
+export const TaskIdSchema = canonicalId("tsk", "TaskId").brand<"TaskId">();
+export type TaskId = z.infer<typeof TaskIdSchema>;
+
+export const WorkflowRevisionIdSchema = canonicalId(
+  "wfr",
+  "WorkflowRevisionId",
+).brand<"WorkflowRevisionId">();
+export type WorkflowRevisionId = z.infer<typeof WorkflowRevisionIdSchema>;
+
+export const ExecutionPlanIdSchema = canonicalId(
+  "epl",
+  "ExecutionPlanId",
+).brand<"ExecutionPlanId">();
+export type ExecutionPlanId = z.infer<typeof ExecutionPlanIdSchema>;
+
 export const RunIdSchema = canonicalId("run", "RunId").brand<"RunId">();
 export type RunId = z.infer<typeof RunIdSchema>;
 
