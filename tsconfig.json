@@ -3,6 +3,7 @@
   "references": [
     { "path": "./packages/domain" },
     { "path": "./packages/runtime-contracts" },
+    { "path": "./packages/storage" },
     { "path": "./packages/testkit" },
     { "path": "./spikes/testkit" },
     { "path": "./spikes/doctor" }

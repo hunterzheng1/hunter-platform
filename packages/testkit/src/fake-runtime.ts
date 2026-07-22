@@ -45,12 +45,14 @@ function factsFor(operation: ExternalOperation): readonly RuntimeFact[] {
 export class FakeRuntime implements ExternalOperationHandler {
   readonly #options: FakeRuntimeOptions;
   readonly #executions = new Map<string, StoredExecution>();
+  #executeCount = 0;
 
   constructor(options: FakeRuntimeOptions) {
     this.#options = options;
   }
 
   async execute(input: ExternalOperation): Promise<ExternalOperationReceipt> {
+    this.#executeCount += 1;
     const operation = ExternalOperationSchema.parse(input);
     if (fingerprintExternalOperation(operation) !== operation.fingerprint) {
       throw new Error("OPERATION_FINGERPRINT_MISMATCH");
@@ -92,5 +94,13 @@ export class FakeRuntime implements ExternalOperationHandler {
     });
     this.#executions.set(operation.operationId, { canonicalOperation, receipt });
     return receipt;
+  }
+
+  get executeCount(): number {
+    return this.#executeCount;
+  }
+
+  get nativeEffectCount(): number {
+    return this.#executions.size;
   }
 }
