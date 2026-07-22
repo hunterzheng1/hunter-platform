@@ -25,7 +25,7 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["packages/**/*.test.ts", "spikes/**/*.test.ts"],
+    include: ["apps/**/*.test.ts", "packages/**/*.test.ts", "spikes/**/*.test.ts"],
     passWithNoTests: false,
   },
 });

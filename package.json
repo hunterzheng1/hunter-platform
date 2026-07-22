@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "workspaces": [
+    "apps/*",
     "packages/*",
     "spikes/*"
   ],
@@ -16,7 +17,8 @@
     "spike:doctor": "npm run build --workspace @hunter/spike-doctor && node --enable-source-maps spikes/doctor/dist/main.js --output docs/validation/environment-inventory.json",
     "test": "vitest run",
     "typecheck": "tsc -b --pretty false",
-    "verify:rebuild": "tsx scripts/verify-rebuild.ts"
+    "verify:rebuild": "tsx scripts/verify-rebuild.ts",
+    "verify:recovery": "tsx scripts/verify-recovery.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",

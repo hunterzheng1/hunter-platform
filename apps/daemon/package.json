@@ -1,0 +1,7 @@
+{
+  "name": "@hunter/daemon",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": { "@hunter/domain": "0.0.0" }
+}
