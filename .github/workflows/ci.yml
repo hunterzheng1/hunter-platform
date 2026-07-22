@@ -27,4 +27,6 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
+      - run: npm run verify:rebuild
+      - run: npm run verify:recovery
       - run: npm run build

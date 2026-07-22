@@ -2,5 +2,14 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": { "rootDir": ".", "outDir": "dist", "tsBuildInfoFile": "dist/.tsbuildinfo" },
   "include": ["src/**/*.ts", "test/**/*.ts"],
-  "references": [{ "path": "../../packages/api-contracts" }, { "path": "../../packages/domain" }, { "path": "../../packages/storage" }]
+  "references": [
+    { "path": "../../packages/api-contracts" },
+    { "path": "../../packages/application" },
+    { "path": "../../packages/domain" },
+    { "path": "../../packages/flow-engine" },
+    { "path": "../../packages/runtime-contracts" },
+    { "path": "../../packages/runtime-manager" },
+    { "path": "../../packages/storage" },
+    { "path": "../../packages/testkit" }
+  ]
 }

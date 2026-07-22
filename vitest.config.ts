@@ -7,6 +7,9 @@ export default defineConfig({
       "@hunter/api-contracts": fileURLToPath(
         new URL("./packages/api-contracts/src/index.ts", import.meta.url),
       ),
+      "@hunter/application": fileURLToPath(
+        new URL("./packages/application/src/index.ts", import.meta.url),
+      ),
       "@hunter/domain": fileURLToPath(
         new URL("./packages/domain/src/index.ts", import.meta.url),
       ),
