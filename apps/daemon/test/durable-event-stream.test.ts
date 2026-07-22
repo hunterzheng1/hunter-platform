@@ -80,4 +80,13 @@ describe("DurableEventStream", () => {
     releaseC();
     database.close();
   });
+
+  it("formats keepalives without consuming a durable Event Ledger position", () => {
+    const database = new DatabaseSync(":memory:");
+    new SqliteOperationJournal(database);
+    const stream = new DurableEventStream(new EventLedgerReader(database));
+    expect(stream.formatKeepalive()).toBe(": keepalive\n\n");
+    expect(stream.formatKeepalive()).not.toMatch(/^id:/mu);
+    database.close();
+  });
 });

@@ -3,7 +3,7 @@ import { z } from "zod";
 
 export const CommandMetadataSchema = z.strictObject({
   expectedVersion: z.number().int().nonnegative(),
-  idempotencyKey: z.string().trim().min(1).max(200),
+  idempotencyKey: z.string().trim().min(8).max(128),
 });
 
 export const StartRunHttpRequestSchema = z.strictObject({

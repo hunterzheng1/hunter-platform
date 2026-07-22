@@ -3,6 +3,7 @@ import type { EventLedgerReader, LedgerEvent } from "@hunter/storage";
 import type { FastifyInstance } from "fastify";
 
 import { requirePrincipal } from "../http/security-hooks.js";
+import type { LocalAuthenticator } from "../auth/local-authenticator.js";
 
 export type ReplayResult =
   | { readonly status: "ok"; readonly retentionFloor: number; readonly highWaterPosition: number; readonly events: readonly LedgerEvent[] }
@@ -23,6 +24,7 @@ export class DurableEventStream {
   public constructor(
     private readonly reader: EventLedgerReader,
     private readonly limits: { readonly global: number; readonly perPrincipal: number } = { global: 32, perPrincipal: 4 },
+    public readonly keepaliveIntervalMs = 15_000,
   ) {}
 
   public replay(input: { readonly headerCursor?: string | undefined; readonly queryCursor?: string | undefined; readonly authorizedProjectIds: readonly ProjectId[]; readonly limit?: number | undefined }): ReplayResult {
@@ -41,6 +43,10 @@ export class DurableEventStream {
 
   public format(events: readonly LedgerEvent[]): string {
     return events.map((event) => `id: ${event.position}\nevent: ${event.eventType}\ndata: ${JSON.stringify(event)}\n\n`).join("");
+  }
+
+  public formatKeepalive(): string {
+    return ": keepalive\n\n";
   }
 
   public readerTail(input: { readonly position: number; readonly authorizedProjectIds: readonly ProjectId[]; readonly signal: AbortSignal }) {
@@ -70,7 +76,7 @@ export class DurableEventStream {
   }
 }
 
-export function registerDurableEventRoutes(app: FastifyInstance, stream: DurableEventStream): void {
+export function registerDurableEventRoutes(app: FastifyInstance, stream: DurableEventStream, authenticator: LocalAuthenticator): void {
   app.get("/events", async (request, reply) => {
     const principal = requirePrincipal(request);
     const query = request.query as { cursor?: string | undefined; once?: string | undefined };
@@ -96,6 +102,16 @@ export function registerDurableEventRoutes(app: FastifyInstance, stream: Durable
         "x-content-type-options": "nosniff",
       });
       reply.raw.write(stream.format(result.events));
+      const bearerToken = (request.headers.authorization ?? "").slice(7);
+      const keepalive = setInterval(() => {
+        try {
+          authenticator.authenticate(bearerToken);
+          if (!reply.raw.writableEnded) reply.raw.write(stream.formatKeepalive());
+        } catch {
+          abort.abort();
+        }
+      }, stream.keepaliveIntervalMs);
+      keepalive.unref();
       const lastPosition = result.events.at(-1)?.position ?? parseCursor(
         typeof request.headers["last-event-id"] === "string" ? request.headers["last-event-id"] : query.cursor,
       );
@@ -105,9 +121,16 @@ export function registerDurableEventRoutes(app: FastifyInstance, stream: Durable
           authorizedProjectIds: principal.authorizedProjectIds,
           signal: abort.signal,
         })) {
+          try {
+            authenticator.authenticate(bearerToken);
+          } catch {
+            abort.abort();
+            break;
+          }
           reply.raw.write(stream.format([event]));
         }
       } finally {
+        clearInterval(keepalive);
         release();
         if (!reply.raw.writableEnded) reply.raw.end();
       }

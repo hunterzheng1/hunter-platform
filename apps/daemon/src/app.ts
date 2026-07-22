@@ -12,16 +12,18 @@ export interface BuildAppOptions {
   readonly allowedOrigins: readonly string[];
   readonly services: RunRoutesServices;
   readonly bodyLimit?: number;
+  readonly requestTimeoutMs?: number | undefined;
+  readonly limits?: { readonly maxConcurrentRequests?: number; readonly maxRequestsPerWindow?: number; readonly rateWindowMs?: number } | undefined;
   readonly eventStream?: DurableEventStream | undefined;
 }
 
 export function buildApp(options: BuildAppOptions): FastifyInstance {
-  const app = Fastify({ bodyLimit: options.bodyLimit ?? 64 * 1024, logger: false });
+  const app = Fastify({ bodyLimit: options.bodyLimit ?? 64 * 1024, requestTimeout: options.requestTimeoutMs ?? 30_000, connectionTimeout: options.requestTimeoutMs ?? 30_000, logger: false });
   installSecurityHooks(app, options);
   app.get("/health", async () => ({ status: "ok" }));
   registerProjectRoutes(app);
   registerRunRoutes(app, options.services);
-  if (options.eventStream !== undefined) registerDurableEventRoutes(app, options.eventStream);
+  if (options.eventStream !== undefined) registerDurableEventRoutes(app, options.eventStream, options.authenticator);
   return app;
 }
 

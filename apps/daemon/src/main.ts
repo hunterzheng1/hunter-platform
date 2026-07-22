@@ -9,8 +9,9 @@ import { createSqliteApplicationServices, type SqliteServiceRepositories } from 
 
 export interface DaemonStartOptions {
   readonly dataDirectory: string;
-  readonly installSecret: string;
-  readonly repositories: SqliteServiceRepositories;
+  readonly secretRef: string;
+  readonly secretStore: { resolveSecret(secretRef: string): Promise<string> };
+  readonly repositories?: SqliteServiceRepositories | undefined;
   readonly externalHandler: ExternalOperationHandler;
   readonly allowedHost: string;
   readonly allowedOrigin: string;
@@ -19,26 +20,49 @@ export interface DaemonStartOptions {
 
 export async function startDaemon(options: DaemonStartOptions) {
   mkdirSync(options.dataDirectory, { recursive: true });
+  if (options.secretRef.trim() === "") throw new Error("SECRET_REF_REQUIRED");
+  const installSecret = await options.secretStore.resolveSecret(options.secretRef);
   const database = new DatabaseSync(join(options.dataDirectory, "hunter.sqlite"));
-  const services = createSqliteApplicationServices({
-    database,
-    repositories: options.repositories,
-    externalHandler: options.externalHandler,
-    installSecret: options.installSecret,
-    allowedHosts: [options.allowedHost],
-    allowedOrigins: [options.allowedOrigin],
-  });
+  let app: ReturnType<typeof buildApp> | undefined;
+  let workerTimer: ReturnType<typeof setInterval> | undefined;
+  let workerDrain: Promise<void> = Promise.resolve();
   try {
+    const services = createSqliteApplicationServices({
+      database,
+      repositories: options.repositories,
+      externalHandler: options.externalHandler,
+      installSecret,
+      allowedHosts: [options.allowedHost],
+      allowedOrigins: [options.allowedOrigin],
+    });
+    database.prepare(
+      `INSERT INTO storage_metadata(metadata_key, metadata_value, updated_at)
+       VALUES ('local_secret_ref', ?, ?)
+       ON CONFLICT(metadata_key) DO UPDATE SET metadata_value = excluded.metadata_value, updated_at = excluded.updated_at`,
+    ).run(options.secretRef, new Date().toISOString());
     await services.recovery.run();
     await services.operationWorker.runOnce();
-    const app = buildApp({
+    let workerFailure: unknown;
+    const superviseWorker = () => {
+      workerDrain = workerDrain.then(async () => {
+        if (workerFailure !== undefined) return;
+        try {
+          await services.operationWorker.runOnce();
+        } catch (error) {
+          workerFailure = error;
+        }
+      });
+    };
+    workerTimer = setInterval(superviseWorker, 100);
+    workerTimer.unref();
+    app = buildApp({
       authenticator: services.authenticator,
       allowedHosts: services.allowedHosts,
       allowedOrigins: services.allowedOrigins,
       eventStream: services.eventStream,
       services: {
         projectForExecutionPlan: (executionPlanId) => {
-          const plan = options.repositories.getExecutionPlan(executionPlanId);
+          const plan = services.repositories.getExecutionPlan(executionPlanId);
           return plan === null ? null : { projectId: plan.projectId, executionPlanId: plan.executionPlanId };
         },
         startRun: async (command, actor) => services.startRun.execute(command, actor),
@@ -50,15 +74,25 @@ export async function startDaemon(options: DaemonStartOptions) {
     const address = app.server.address();
     if (address === null || typeof address === "string") throw new Error("DAEMON_LISTEN_ADDRESS_INVALID");
     await options.publishPort(address.port);
+    const runningApp = app;
+    let closed = false;
     return {
       port: address.port,
       services,
       shutdown: async () => {
-        await app.close();
+        if (closed) return;
+        closed = true;
+        await runningApp.close();
+        if (workerTimer !== undefined) clearInterval(workerTimer);
+        await workerDrain;
+        services.projectionRunner.runIncremental();
         database.close();
       },
     };
   } catch (error) {
+    if (workerTimer !== undefined) clearInterval(workerTimer);
+    if (app !== undefined) await app.close().catch(() => undefined);
+    await workerDrain.catch(() => undefined);
     database.close();
     throw error;
   }
