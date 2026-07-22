@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "evidenceType": "phase0_environment_inventory",
-  "generatedAt": "2026-07-21T17:43:44.147Z",
+  "generatedAt": "2026-07-22T02:30:15.790Z",
   "generator": {
     "name": "hunter-phase0-doctor",
     "version": "0.1.0"
@@ -62,8 +62,8 @@
           "stderr": "",
           "timedOut": false,
           "spawnError": null,
-          "startedAt": "2026-07-21T17:43:44.081Z",
-          "finishedAt": "2026-07-21T17:43:44.147Z"
+          "startedAt": "2026-07-22T02:30:15.732Z",
+          "finishedAt": "2026-07-22T02:30:15.782Z"
         }
       ]
     },
@@ -98,8 +98,8 @@
           "stderr": "",
           "timedOut": false,
           "spawnError": null,
-          "startedAt": "2026-07-21T17:43:44.094Z",
-          "finishedAt": "2026-07-21T17:43:44.142Z"
+          "startedAt": "2026-07-22T02:30:15.742Z",
+          "finishedAt": "2026-07-22T02:30:15.790Z"
         }
       ]
     },
@@ -134,8 +134,8 @@
           "stderr": "",
           "timedOut": false,
           "spawnError": "EPERM",
-          "startedAt": "2026-07-21T17:43:44.101Z",
-          "finishedAt": "2026-07-21T17:43:44.109Z"
+          "startedAt": "2026-07-22T02:30:15.749Z",
+          "finishedAt": "2026-07-22T02:30:15.757Z"
         }
       ]
     },
@@ -170,8 +170,8 @@
           "stderr": "",
           "timedOut": false,
           "spawnError": "ENOENT",
-          "startedAt": "2026-07-21T17:43:44.109Z",
-          "finishedAt": "2026-07-21T17:43:44.121Z"
+          "startedAt": "2026-07-22T02:30:15.757Z",
+          "finishedAt": "2026-07-22T02:30:15.772Z"
         }
       ]
     },
@@ -206,8 +206,8 @@
           "stderr": "",
           "timedOut": false,
           "spawnError": "ENOENT",
-          "startedAt": "2026-07-21T17:43:44.112Z",
-          "finishedAt": "2026-07-21T17:43:44.121Z"
+          "startedAt": "2026-07-22T02:30:15.760Z",
+          "finishedAt": "2026-07-22T02:30:15.772Z"
         }
       ]
     },
@@ -242,8 +242,8 @@
           "stderr": "",
           "timedOut": false,
           "spawnError": "ENOENT",
-          "startedAt": "2026-07-21T17:43:44.115Z",
-          "finishedAt": "2026-07-21T17:43:44.122Z"
+          "startedAt": "2026-07-22T02:30:15.764Z",
+          "finishedAt": "2026-07-22T02:30:15.772Z"
         }
       ]
     },
@@ -278,8 +278,8 @@
           "stderr": "",
           "timedOut": false,
           "spawnError": "ENOENT",
-          "startedAt": "2026-07-21T17:43:44.117Z",
-          "finishedAt": "2026-07-21T17:43:44.122Z"
+          "startedAt": "2026-07-22T02:30:15.767Z",
+          "finishedAt": "2026-07-22T02:30:15.772Z"
         }
       ]
     }
