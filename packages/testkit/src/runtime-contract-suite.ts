@@ -1,6 +1,8 @@
 import {
   AgentProfileIdSchema,
   AttemptIdSchema,
+  ControllerLeaseIdSchema,
+  LeaseOwnerIdSchema,
   NativeSessionIdSchema,
   OperationIdSchema,
   ProjectIdSchema,
@@ -66,10 +68,15 @@ export async function verifyExternalOperationHandlerContract(
     projectId: ProjectIdSchema.parse("prj_00000001"),
     runId: RunIdSchema.parse("run_00000001"),
     attemptId: AttemptIdSchema.parse("att_00000001"),
-    operationVersion: 1,
+    operationVersion: 2,
     operationType: "session.observe",
     requestedCapabilities: ["observe"],
-    payload: { nativeSessionId: NativeSessionIdSchema.parse("ses_00000001") },
+    payload: {
+      nativeSessionId: NativeSessionIdSchema.parse("ses_00000001"),
+      controllerLeaseId: ControllerLeaseIdSchema.parse("ctl_00000001"),
+      controllerLeaseOwnerId: LeaseOwnerIdSchema.parse("own_00000001"),
+      controllerLeaseGeneration: 1,
+    },
   });
   const observationReceipt = await handler.execute(observationOperation);
 

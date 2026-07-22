@@ -16,7 +16,7 @@ function harness(options: { readonly expiresAt?: Date; readonly limits?: { reado
     void actor;
     return { runId: body.runId };
   }));
-  const app = buildApp({ authenticator, allowedHosts: [host], allowedOrigins: [origin], ...(options.limits === undefined ? {} : { limits: options.limits }), ...(options.bodyLimit === undefined ? {} : { bodyLimit: options.bodyLimit }), ...(options.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: options.requestTimeoutMs }), services: { projectForExecutionPlan: () => ({ projectId: options.planProjectId ?? ProjectIdSchema.parse("prj_http000001"), executionPlanId: ExecutionPlanIdSchema.parse(body.executionPlanId) }), startRun } });
+  const app = buildApp({ authenticator, allowedHosts: [host], allowedOrigins: [origin], ...(options.limits === undefined ? {} : { limits: options.limits }), ...(options.bodyLimit === undefined ? {} : { bodyLimit: options.bodyLimit }), ...(options.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: options.requestTimeoutMs }), services: { listProjects: async (projectIds) => projectIds.map((projectId) => ({ projectId })), projectForExecutionPlan: () => ({ projectId: options.planProjectId ?? ProjectIdSchema.parse("prj_http000001"), executionPlanId: ExecutionPlanIdSchema.parse(body.executionPlanId) }), startRun } });
   const headers = { host, origin, authorization: `Bearer ${credential}`, "x-csrf-token": "csrf-proof", "content-type": "application/json" };
   return { app, startRun, headers };
 }

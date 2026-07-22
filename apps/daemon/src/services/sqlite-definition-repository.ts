@@ -134,11 +134,14 @@ export class SqliteDefinitionRepository {
     return budget;
   }
 
-  public getDependencyFailureRule(executionPlanId: string, taskId: TaskId): Readonly<FrozenDependencyFailureRule> | null {
+  public getDependencyFailureRule(executionPlanId: string, taskId: TaskId, policySnapshot: PolicySnapshot): Readonly<FrozenDependencyFailureRule> | null {
     const plan = this.getExecutionPlan(executionPlanId);
     if (plan === null || !plan.tasks.some((task) => task.taskId === taskId)) return null;
     return this.latest(["ProjectRunPolicyDefined"], (data) => {
-      const rules = object(data, "PROJECT_POLICY_EVENT_INVALID").dependencyFailureRules;
+      const stored = object(data, "PROJECT_POLICY_EVENT_INVALID");
+      const storedSnapshot = PolicySnapshotSchema.parse(stored.policySnapshot);
+      if (storedSnapshot.snapshotHash !== policySnapshot.snapshotHash || storedSnapshot.policyVersion !== policySnapshot.policyVersion) return null;
+      const rules = stored.dependencyFailureRules;
       if (rules === undefined) return null;
       const rule = object(rules, "DEPENDENCY_FAILURE_RULES_INVALID")[taskId];
       if (rule === undefined) return null;

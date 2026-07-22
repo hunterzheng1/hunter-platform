@@ -1,4 +1,4 @@
-import type { RunId, TaskId } from "@hunter/domain";
+import type { RequirementRevisionId, RunId, TaskId } from "@hunter/domain";
 import type { ExternalOperation } from "@hunter/runtime-contracts";
 
 import type { WorkflowRunBinding } from "./run-binding.js";
@@ -29,7 +29,10 @@ export type ExternalObservation =
   | "agent_returned"
   | "process_exited"
   | "terminal_idle"
-  | "native_surface_opened";
+  | "native_surface_opened"
+  | "session_running"
+  | "session_missing"
+  | "structured_process_exit";
 
 export interface RecordExternalObservationCommand extends ExistingRunCommand {
   readonly type: "RecordExternalObservation";
@@ -58,11 +61,21 @@ export interface CancelRunCommand extends ExistingRunCommand {
   readonly type: "CancelRun";
 }
 
+export interface ReconcileChildCancellationsCommand extends ExistingRunCommand {
+  readonly type: "ReconcileChildCancellations";
+}
+
+export interface AcknowledgeAttemptCancellationCommand extends ExistingRunCommand {
+  readonly type: "AcknowledgeAttemptCancellation";
+  readonly interruptOperationId: string;
+  readonly evidenceFingerprint: string;
+}
+
 export interface RecordRecoveryFactsCommand extends ExistingRunCommand {
   readonly type: "RecordRecoveryFacts";
   readonly facts: readonly {
     readonly kind: string;
-    readonly status: "indeterminate" | "needs_attention";
+    readonly status: "observed" | "indeterminate" | "needs_attention";
     readonly reason: string;
   }[];
 }
@@ -79,11 +92,12 @@ export interface ReconcileTaskChildrenCommand extends ExistingRunCommand { reado
 export interface ReconcileSubflowChildCommand extends ExistingRunCommand { readonly type: "ReconcileSubflowChild"; readonly childRunId: RunId; }
 export interface RecordSupersedingRequirementCommand extends ExistingRunCommand {
   readonly type: "RecordSupersedingRequirement";
-  readonly newerRevisionId: string;
+  readonly newerRevisionId: RequirementRevisionId;
   readonly decision: "continue_old_input" | "terminate" | "create_new_plan";
 }
 export interface RecordResumeFailureCommand extends ExistingRunCommand { readonly type: "RecordResumeFailure"; }
 export interface RecordExecutionFailureCommand extends ExistingRunCommand { readonly type: "RecordExecutionFailure"; readonly errorClass: string; }
+export interface ActivateScheduledRetryCommand extends ExistingRunCommand { readonly type: "ActivateScheduledRetry"; }
 export interface ResolveTaskDependencyFailureCommand extends ExistingRunCommand {
   readonly type: "ResolveTaskDependencyFailure";
   readonly taskId: TaskId;
@@ -96,6 +110,8 @@ export type FlowCommand =
   | RecordVerifierResultCommand
   | RecordTimeoutCommand
   | CancelRunCommand
+  | ReconcileChildCancellationsCommand
+  | AcknowledgeAttemptCancellationCommand
   | RecordRecoveryFactsCommand
   | AssignAttemptCommand
   | ScheduleTaskFanOutCommand
@@ -104,6 +120,7 @@ export type FlowCommand =
   | RecordSupersedingRequirementCommand
   | RecordResumeFailureCommand
   | RecordExecutionFailureCommand
+  | ActivateScheduledRetryCommand
   | ResolveTaskDependencyFailureCommand;
 
 export interface FlowCommandReceipt {

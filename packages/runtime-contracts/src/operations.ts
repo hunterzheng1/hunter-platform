@@ -2,8 +2,10 @@ import { createHash } from "node:crypto";
 import {
   AgentProfileIdSchema,
   AttemptIdSchema,
+  ControllerLeaseIdSchema,
   DeviceBindingIdSchema,
   EvidenceIdSchema,
+  LeaseOwnerIdSchema,
   NativeSessionIdSchema,
   OperationIdSchema,
   ProjectIdSchema,
@@ -20,9 +22,10 @@ const operationFields = {
   projectId: ProjectIdSchema,
   runId: RunIdSchema.nullable(),
   attemptId: AttemptIdSchema.nullable(),
-  operationVersion: z.literal(1),
   requestedCapabilities: z.array(AtomicCapabilitySchema).min(1),
 };
+const versionOneFields = { ...operationFields, operationVersion: z.literal(1) };
+const versionTwoFields = { ...operationFields, operationVersion: z.literal(2) };
 
 const fingerprintField = { fingerprint: z.string().regex(/^[a-f0-9]{64}$/u) };
 
@@ -38,50 +41,75 @@ const sessionLaunchPayload = z.strictObject({
   agentProfileId: AgentProfileIdSchema,
   workspaceId: WorkspaceIdSchema,
 });
-const sessionObservePayload = z.strictObject({ nativeSessionId: NativeSessionIdSchema });
+const controllerAuthorityFields = {
+  controllerLeaseId: ControllerLeaseIdSchema,
+  controllerLeaseOwnerId: LeaseOwnerIdSchema,
+  controllerLeaseGeneration: z.number().int().positive(),
+};
+const sessionObserveV1Payload = z.strictObject({ nativeSessionId: NativeSessionIdSchema });
+const sessionObservePayload = z.strictObject({ nativeSessionId: NativeSessionIdSchema, ...controllerAuthorityFields });
+const sessionSendV1Payload = z.strictObject({ nativeSessionId: NativeSessionIdSchema, inputEvidenceId: EvidenceIdSchema });
 const sessionSendPayload = z.strictObject({
   nativeSessionId: NativeSessionIdSchema,
   inputEvidenceId: EvidenceIdSchema,
+  ...controllerAuthorityFields,
 });
+const sessionInterruptV1Payload = z.strictObject({ nativeSessionId: NativeSessionIdSchema, reason: z.string().min(1).max(512) });
 const sessionInterruptPayload = z.strictObject({
   nativeSessionId: NativeSessionIdSchema,
   reason: z.string().min(1).max(512),
+  ...controllerAuthorityFields,
 });
 const nativeSurfacePayload = z.strictObject({ workspaceId: WorkspaceIdSchema });
 
 const unsignedVariants = [
   z.strictObject({
-    ...operationFields,
+    ...versionOneFields,
     operationType: z.literal("workspace.prepare"),
     payload: workspacePreparePayload,
   }),
   z.strictObject({
-    ...operationFields,
+    ...versionOneFields,
     operationType: z.literal("workspace.release"),
     payload: workspaceReleasePayload,
   }),
   z.strictObject({
-    ...operationFields,
+    ...versionOneFields,
     operationType: z.literal("session.launch"),
     payload: sessionLaunchPayload,
   }),
   z.strictObject({
-    ...operationFields,
+    ...versionOneFields,
+    operationType: z.literal("session.observe"),
+    payload: sessionObserveV1Payload,
+  }),
+  z.strictObject({
+    ...versionTwoFields,
     operationType: z.literal("session.observe"),
     payload: sessionObservePayload,
   }),
   z.strictObject({
-    ...operationFields,
+    ...versionOneFields,
+    operationType: z.literal("session.send"),
+    payload: sessionSendV1Payload,
+  }),
+  z.strictObject({
+    ...versionTwoFields,
     operationType: z.literal("session.send"),
     payload: sessionSendPayload,
   }),
   z.strictObject({
-    ...operationFields,
+    ...versionOneFields,
+    operationType: z.literal("session.interrupt"),
+    payload: sessionInterruptV1Payload,
+  }),
+  z.strictObject({
+    ...versionTwoFields,
     operationType: z.literal("session.interrupt"),
     payload: sessionInterruptPayload,
   }),
   z.strictObject({
-    ...operationFields,
+    ...versionOneFields,
     operationType: z.literal("native_surface.open"),
     payload: nativeSurfacePayload,
   }),
@@ -89,43 +117,61 @@ const unsignedVariants = [
 
 const signedVariants = [
   z.strictObject({
-    ...operationFields,
+    ...versionOneFields,
     ...fingerprintField,
     operationType: z.literal("workspace.prepare"),
     payload: workspacePreparePayload,
   }),
   z.strictObject({
-    ...operationFields,
+    ...versionOneFields,
     ...fingerprintField,
     operationType: z.literal("workspace.release"),
     payload: workspaceReleasePayload,
   }),
   z.strictObject({
-    ...operationFields,
+    ...versionOneFields,
     ...fingerprintField,
     operationType: z.literal("session.launch"),
     payload: sessionLaunchPayload,
   }),
   z.strictObject({
-    ...operationFields,
+    ...versionOneFields,
+    ...fingerprintField,
+    operationType: z.literal("session.observe"),
+    payload: sessionObserveV1Payload,
+  }),
+  z.strictObject({
+    ...versionTwoFields,
     ...fingerprintField,
     operationType: z.literal("session.observe"),
     payload: sessionObservePayload,
   }),
   z.strictObject({
-    ...operationFields,
+    ...versionOneFields,
+    ...fingerprintField,
+    operationType: z.literal("session.send"),
+    payload: sessionSendV1Payload,
+  }),
+  z.strictObject({
+    ...versionTwoFields,
     ...fingerprintField,
     operationType: z.literal("session.send"),
     payload: sessionSendPayload,
   }),
   z.strictObject({
-    ...operationFields,
+    ...versionOneFields,
+    ...fingerprintField,
+    operationType: z.literal("session.interrupt"),
+    payload: sessionInterruptV1Payload,
+  }),
+  z.strictObject({
+    ...versionTwoFields,
     ...fingerprintField,
     operationType: z.literal("session.interrupt"),
     payload: sessionInterruptPayload,
   }),
   z.strictObject({
-    ...operationFields,
+    ...versionOneFields,
     ...fingerprintField,
     operationType: z.literal("native_surface.open"),
     payload: nativeSurfacePayload,
@@ -142,10 +188,10 @@ function rejectDuplicateCapabilities(
 }
 
 export const ExternalOperationUnsignedSchema = z
-  .discriminatedUnion("operationType", unsignedVariants)
+  .union(unsignedVariants)
   .superRefine(rejectDuplicateCapabilities);
 export const ExternalOperationSchema = z
-  .discriminatedUnion("operationType", signedVariants)
+  .union(signedVariants)
   .superRefine(rejectDuplicateCapabilities);
 export type ExternalOperation = z.infer<typeof ExternalOperationSchema>;
 

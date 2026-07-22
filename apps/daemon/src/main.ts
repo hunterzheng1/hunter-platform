@@ -19,8 +19,8 @@ export interface DaemonStartOptions {
 }
 
 export async function startDaemon(options: DaemonStartOptions) {
+  if (!/^os-credential:\/\/[A-Za-z0-9._/-]+$/u.test(options.secretRef)) throw new Error("SECRET_REF_SCHEME_INVALID");
   mkdirSync(options.dataDirectory, { recursive: true });
-  if (options.secretRef.trim() === "") throw new Error("SECRET_REF_REQUIRED");
   const installSecret = await options.secretStore.resolveSecret(options.secretRef);
   const database = new DatabaseSync(join(options.dataDirectory, "hunter.sqlite"));
   let app: ReturnType<typeof buildApp> | undefined;
@@ -34,6 +34,7 @@ export async function startDaemon(options: DaemonStartOptions) {
       installSecret,
       allowedHosts: [options.allowedHost],
       allowedOrigins: [options.allowedOrigin],
+      contentDirectory: options.dataDirectory,
     });
     database.prepare(
       `INSERT INTO storage_metadata(metadata_key, metadata_value, updated_at)
@@ -61,6 +62,11 @@ export async function startDaemon(options: DaemonStartOptions) {
       allowedOrigins: services.allowedOrigins,
       eventStream: services.eventStream,
       services: {
+        listProjects: async (authorizedProjectIds) => {
+          services.projectionRunner.runIncremental();
+          const allowed = new Set<string>(authorizedProjectIds);
+          return services.projectionRunner.snapshot("hunter").filter(({ entityType, projectId }) => entityType === "Project" && allowed.has(projectId));
+        },
         projectForExecutionPlan: (executionPlanId) => {
           const plan = services.repositories.getExecutionPlan(executionPlanId);
           return plan === null ? null : { projectId: plan.projectId, executionPlanId: plan.executionPlanId };

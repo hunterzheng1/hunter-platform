@@ -1,7 +1,8 @@
-import type { AttemptId, RunId, StepId, StepRunId, TaskId } from "@hunter/domain";
+import type { AttemptId, RequirementRevisionId, RunId, StepId, StepRunId, TaskId } from "@hunter/domain";
 
 import type { ExternalObservation } from "./commands.js";
 import type { WorkflowRunBinding } from "./run-binding.js";
+import type { RunBudgetLimit } from "./run-budget.js";
 
 export type ExecutionStatus =
   | "assigned"
@@ -72,17 +73,19 @@ export type FlowEvent =
       readonly toStepId: StepId | null;
       readonly outcome: string;
     }
-  | { readonly type: "LoopActivated"; readonly loopId: string; readonly iteration: number }
-  | { readonly type: "RecoveryFactsRecorded"; readonly facts: readonly { readonly kind: string; readonly status: "indeterminate" | "needs_attention"; readonly reason: string }[] }
+  | { readonly type: "LoopActivated"; readonly loopId: string; readonly iteration: number; readonly elapsedMs: number; readonly cost: number; readonly progressFingerprint: string | null; readonly progressSatisfied: boolean; readonly failureFingerprint: string | null; readonly verifierError: boolean }
+  | { readonly type: "RecoveryFactsRecorded"; readonly facts: readonly { readonly kind: string; readonly status: "observed" | "indeterminate" | "needs_attention"; readonly reason: string }[] }
   | { readonly type: "AttemptAssigned"; readonly attemptId: AttemptId; readonly operationId: string; readonly capabilityProbeReceiptId: string; readonly leaseIds: readonly string[] }
-  | { readonly type: "TaskFanOutDecided"; readonly children: readonly { readonly taskId: TaskId; readonly childRunId: RunId }[] }
+  | { readonly type: "TaskFanOutDecided"; readonly children: readonly { readonly taskId: TaskId; readonly childRunId: RunId; readonly budget: RunBudgetLimit }[] }
   | { readonly type: "ChildConclusionAccepted"; readonly taskId: TaskId; readonly childRunId: RunId; readonly status: "succeeded" | "failed" | "canceled" }
   | { readonly type: "SubflowConclusionAccepted"; readonly parentStepRunId: StepRunId; readonly childRunId: RunId; readonly status: "succeeded" | "failed" | "canceled" }
   | { readonly type: "ChildCancellationRequested"; readonly childRunIds: readonly RunId[] }
-  | { readonly type: "SupersedingRequirementDecided"; readonly newerRevisionId: string; readonly decision: "continue_old_input" | "terminate" | "create_new_plan" }
+  | { readonly type: "AttemptCancellationRequested"; readonly attemptId: AttemptId; readonly assignmentOperationId: string }
+  | { readonly type: "AttemptCancellationAcknowledged"; readonly attemptId: AttemptId; readonly interruptOperationId: string; readonly evidenceFingerprint: string }
+  | { readonly type: "SupersedingRequirementDecided"; readonly newerRevisionId: RequirementRevisionId; readonly decision: "continue_old_input" | "terminate" | "create_new_plan" }
   | { readonly type: "SessionHandoffRequested"; readonly action: "new_session_handoff" | "needs_attention" }
   | { readonly type: "ExecutionFailed"; readonly stepRunId: StepRunId; readonly attemptId: AttemptId; readonly errorClass: string }
-  | { readonly type: "RetryScheduled"; readonly stepRunId: StepRunId; readonly priorAttemptId: AttemptId; readonly nextAttemptId: AttemptId; readonly delayMs: number }
+  | { readonly type: "RetryScheduled"; readonly stepRunId: StepRunId; readonly priorAttemptId: AttemptId; readonly nextAttemptId: AttemptId; readonly nextAttemptNumber: number; readonly delayMs: number; readonly notBefore: string }
   | { readonly type: "DependencyFailureDecided"; readonly taskId: TaskId; readonly failedDependencyIds: readonly TaskId[]; readonly action: "blocked" | "skipped" | "compensate" | "waived" | "terminate"; readonly compensationTaskId: TaskId | null; readonly waiverReceiptHash: string | null }
   | { readonly type: "RunStatusChanged"; readonly status: RunStatus }
   | { readonly type: "RunConcluded"; readonly status: "succeeded" | "failed" | "canceled" | "needs_attention" };

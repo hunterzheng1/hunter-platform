@@ -96,6 +96,63 @@ describe("ProjectionRunner", () => {
     expect(runner.snapshot("hunter")).toEqual(first);
   });
 
+  it("reduces wrapped Flow fragments into complete Run, Step, and Attempt views", () => {
+    database = new DatabaseSync(":memory:");
+    const journal = new SqliteOperationJournal(database);
+    const events = [
+      { type: "RunStarted", binding: { runId: "run_complete01", projectId, bindingFingerprint: "a".repeat(64) } },
+      { type: "StepActivated", stepRunId: "spr_complete01", stepId: "stp_complete01", attemptId: "att_complete01", attemptNumber: 1, fixedContentHash: "b".repeat(64) },
+      { type: "AttemptAssigned", attemptId: "att_complete01", operationId: "opn_complete01", capabilityProbeReceiptId: "cpr_complete01", leaseIds: ["wsl_complete01"] },
+      { type: "ExternalObservationRecorded", stepRunId: "spr_complete01", attemptId: "att_complete01", fact: "agent_returned", executionStatus: "returned" },
+      { type: "VerificationChanged", stepRunId: "spr_complete01", attemptId: "att_complete01", status: "passed", evidenceFingerprint: "c".repeat(64) },
+      { type: "StepConcluded", stepRunId: "spr_complete01", conclusion: "succeeded" },
+      { type: "RunConcluded", status: "succeeded" },
+    ];
+    events.forEach((flowEvent, index) => journal.commitCommand({
+      commandId: `cmd_complete_${index}`,
+      requestFingerprint: String(index).padStart(64, "0"),
+      projectId,
+      aggregateId: "run:run_complete01",
+      expectedVersion: index,
+      actor: { actorId: "test", correlationId: "complete-projection" },
+      events: [{ eventId: `evt_complete_${index}`, eventType: "FlowEvent", eventData: { flowEvent }, schemaVersion: 1, occurredAt: `2026-07-22T01:00:0${index}.000Z` }],
+      operations: [],
+      response: { accepted: true },
+    }));
+    const runner = new ProjectionRunner(database, [new HunterProjection()]);
+    runner.rebuild("hunter");
+    const byType = new Map(runner.snapshot("hunter").map((view) => [view.entityType, view.view]));
+    expect(byType.get("WorkflowRun")).toMatchObject({ runId: "run_complete01", status: "succeeded", binding: { bindingFingerprint: "a".repeat(64) } });
+    expect(byType.get("StepRun")).toMatchObject({ stepRunId: "spr_complete01", attemptId: "att_complete01", fixedContentHash: "b".repeat(64), executionStatus: "returned", verificationStatus: "passed", conclusion: "succeeded" });
+    expect(byType.get("StepAttempt")).toMatchObject({ attemptId: "att_complete01", operationId: "opn_complete01", executionStatus: "returned", verificationStatus: "passed" });
+  });
+
+  it("projects execution failure onto both the Step and its current Attempt", () => {
+    database = new DatabaseSync(":memory:");
+    const journal = new SqliteOperationJournal(database);
+    const events = [
+      { type: "RunStarted", binding: { runId: "run_failure001", projectId, bindingFingerprint: "d".repeat(64) } },
+      { type: "StepActivated", stepRunId: "spr_failure001", stepId: "stp_failure001", attemptId: "att_failure001", attemptNumber: 1, fixedContentHash: "e".repeat(64) },
+      { type: "ExecutionFailed", stepRunId: "spr_failure001", attemptId: "att_failure001", errorClass: "runtime_failed" },
+    ];
+    events.forEach((flowEvent, index) => journal.commitCommand({
+      commandId: `cmd_failure_${index}`,
+      requestFingerprint: String(index + 20).padStart(64, "0"),
+      projectId,
+      aggregateId: "run:run_failure001",
+      expectedVersion: index,
+      actor: { actorId: "test", correlationId: "failure-projection" },
+      events: [{ eventId: `evt_failure_${index}`, eventType: "FlowEvent", eventData: { flowEvent }, schemaVersion: 1, occurredAt: `2026-07-22T01:01:0${index}.000Z` }],
+      operations: [],
+      response: { accepted: true },
+    }));
+    const runner = new ProjectionRunner(database, [new HunterProjection()]);
+    runner.rebuild("hunter");
+    const views = runner.snapshot("hunter");
+    expect(views.find(({ entityType }) => entityType === "StepRun")?.view).toMatchObject({ stepRunId: "spr_failure001", executionStatus: "failed" });
+    expect(views.find(({ entityType }) => entityType === "StepAttempt")?.view).toMatchObject({ attemptId: "att_failure001", executionStatus: "failed", errorClass: "runtime_failed" });
+  });
+
   it("resets stale views and checkpoint when projector code version changes", () => {
     const { database: db, runner } = setup(1);
     runner.runIncremental();

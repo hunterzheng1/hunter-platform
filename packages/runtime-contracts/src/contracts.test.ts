@@ -117,6 +117,28 @@ describe("provider-neutral runtime contracts", () => {
     ).toThrow();
   });
 
+  it("binds every session control operation to an exact ControllerLease generation", () => {
+    const common = {
+      schemaVersion: 1 as const,
+      projectId: ids.projectId,
+      runId: ids.runId,
+      attemptId: ids.attemptId,
+      operationVersion: 2 as const,
+      requestedCapabilities: ["interrupt"] as const,
+      operationType: "session.interrupt" as const,
+    };
+    const payload = {
+      nativeSessionId: NativeSessionIdSchema.parse("ses_00000001"),
+      reason: "cancel requested",
+      controllerLeaseId: ControllerLeaseIdSchema.parse("ctl_00000001"),
+      controllerLeaseOwnerId: LeaseOwnerIdSchema.parse("own_00000001"),
+      controllerLeaseGeneration: 3,
+    };
+    expect(createExternalOperation({ ...common, operationId: OperationIdSchema.parse("opn_control001"), payload }).payload).toEqual(payload);
+    expect(() => createExternalOperation({ ...common, operationId: OperationIdSchema.parse("opn_control002"), payload: { nativeSessionId: payload.nativeSessionId, reason: payload.reason } })).toThrow();
+    expect(createExternalOperation({ ...common, operationVersion: 1, operationId: OperationIdSchema.parse("opn_control003"), payload: { nativeSessionId: payload.nativeSessionId, reason: payload.reason } }).operationVersion).toBe(1);
+  });
+
   it("freezes workspace, writer, and controller lease scopes", () => {
     const common = {
       schemaVersion: 1,

@@ -1,4 +1,4 @@
-import type { AttemptId, RunId, StepId, StepRunId, TaskId } from "@hunter/domain";
+import type { AttemptId, RequirementRevisionId, RunId, StepId, StepRunId, TaskId } from "@hunter/domain";
 
 import type {
   ExecutionStatus,
@@ -15,6 +15,11 @@ export interface StepAttemptState {
   readonly attemptNumber: number;
   readonly executionStatus: ExecutionStatus;
   readonly verificationStatus: VerificationStatus;
+  readonly assignment?: {
+    readonly operationId: string;
+    readonly capabilityProbeReceiptId: string;
+    readonly leaseIds: readonly string[];
+  } | undefined;
 }
 
 export interface StepRunState {
@@ -33,10 +38,29 @@ export interface WorkflowRunState {
   readonly status: RunStatus;
   readonly budgetUsage: RunBudgetUsage;
   readonly steps: readonly StepRunState[];
-  readonly recoveryFacts: readonly { readonly kind: string; readonly status: "indeterminate" | "needs_attention"; readonly reason: string }[];
-  readonly scheduledChildren: readonly { readonly taskId: TaskId; readonly childRunId: RunId }[];
+  readonly recoveryFacts: readonly { readonly kind: string; readonly status: "observed" | "indeterminate" | "needs_attention"; readonly reason: string }[];
+  readonly scheduledChildren: readonly { readonly taskId: TaskId; readonly childRunId: RunId; readonly budget: import("./run-budget.js").RunBudgetLimit }[];
+  readonly cancellationRequestedChildRunIds: readonly RunId[];
+  readonly attemptCancellation: { readonly attemptId: AttemptId; readonly assignmentOperationId: string } | null;
+  readonly scheduledRetry: {
+    readonly stepRunId: StepRunId;
+    readonly priorAttemptId: AttemptId;
+    readonly nextAttemptId: AttemptId;
+    readonly nextAttemptNumber: number;
+    readonly notBefore: string;
+  } | null;
+  readonly loopUsage: Readonly<Record<string, {
+    readonly iterations: number;
+    readonly elapsedMs: number;
+    readonly cost: number;
+    readonly lastProgressFingerprint: string | null;
+    readonly repeatedFailureFingerprintCount: number;
+    readonly lastFailureFingerprint: string | null;
+    readonly noProgressCount: number;
+    readonly verifierErrorCount: number;
+  }>>;
   readonly acceptedChildRunIds: readonly RunId[];
-  readonly supersedingDecisions: readonly { readonly newerRevisionId: string; readonly decision: "continue_old_input" | "terminate" | "create_new_plan" }[];
+  readonly supersedingDecisions: readonly { readonly newerRevisionId: RequirementRevisionId; readonly decision: "continue_old_input" | "terminate" | "create_new_plan" }[];
   readonly dependencyFailureDecisions: readonly { readonly taskId: TaskId; readonly failedDependencyIds: readonly TaskId[]; readonly action: "blocked" | "skipped" | "compensate" | "waived" | "terminate"; readonly compensationTaskId: TaskId | null; readonly waiverReceiptHash: string | null }[];
 }
 
@@ -64,6 +88,10 @@ function applyEvent(current: WorkflowRunState | null, event: FlowEvent): Workflo
       steps: [],
       recoveryFacts: [],
       scheduledChildren: [],
+      cancellationRequestedChildRunIds: [],
+      attemptCancellation: null,
+      scheduledRetry: null,
+      loopUsage: {},
       acceptedChildRunIds: [],
       supersedingDecisions: [],
       dependencyFailureDecisions: [],
@@ -126,6 +154,7 @@ function applyEvent(current: WorkflowRunState | null, event: FlowEvent): Workflo
               conclusion: "active",
               attempts: [...step.attempts, attempt],
             }));
+      if (state.scheduledRetry?.nextAttemptId === event.attemptId) state = { ...state, scheduledRetry: null };
       break;
     }
     case "ExternalObservationRecorded":
@@ -158,12 +187,38 @@ function applyEvent(current: WorkflowRunState | null, event: FlowEvent): Workflo
       state = { ...state, status: event.status };
       break;
     case "RouteSelected":
-    case "LoopActivated":
       break;
+    case "LoopActivated": {
+      const previous = state.loopUsage[event.loopId];
+      state = { ...state, loopUsage: { ...state.loopUsage, [event.loopId]: {
+        iterations: event.iteration,
+        elapsedMs: event.elapsedMs,
+        cost: event.cost,
+        lastProgressFingerprint: event.progressFingerprint ?? previous?.lastProgressFingerprint ?? null,
+        repeatedFailureFingerprintCount: event.failureFingerprint === null
+          ? previous?.repeatedFailureFingerprintCount ?? 0
+          : event.failureFingerprint === previous?.lastFailureFingerprint
+            ? (previous.repeatedFailureFingerprintCount + 1)
+            : 1,
+        lastFailureFingerprint: event.failureFingerprint ?? previous?.lastFailureFingerprint ?? null,
+        noProgressCount: event.progressSatisfied ? 0 : (previous?.noProgressCount ?? 0) + 1,
+        verifierErrorCount: event.verifierError ? (previous?.verifierErrorCount ?? 0) + 1 : 0,
+      } } };
+      break;
+    }
     case "RecoveryFactsRecorded":
       state = { ...state, recoveryFacts: [...state.recoveryFacts, ...event.facts] };
       break;
     case "AttemptAssigned":
+      state = {
+        ...state,
+        steps: state.steps.map((step) => ({
+          ...step,
+          attempts: step.attempts.map((attempt) => attempt.attemptId === event.attemptId
+            ? { ...attempt, assignment: { operationId: event.operationId, capabilityProbeReceiptId: event.capabilityProbeReceiptId, leaseIds: [...event.leaseIds] } }
+            : attempt),
+        })),
+      };
       break;
     case "TaskFanOutDecided":
       state = { ...state, scheduledChildren: [...state.scheduledChildren, ...event.children] };
@@ -178,8 +233,18 @@ function applyEvent(current: WorkflowRunState | null, event: FlowEvent): Workflo
       state = { ...state, supersedingDecisions: [...state.supersedingDecisions, { newerRevisionId: event.newerRevisionId, decision: event.decision }] };
       break;
     case "ChildCancellationRequested":
+      state = { ...state, cancellationRequestedChildRunIds: [...new Set([...state.cancellationRequestedChildRunIds, ...event.childRunIds])] };
+      break;
+    case "AttemptCancellationRequested":
+      state = { ...state, attemptCancellation: { attemptId: event.attemptId, assignmentOperationId: event.assignmentOperationId } };
+      break;
+    case "AttemptCancellationAcknowledged":
+      state = { ...state, attemptCancellation: null };
+      break;
     case "SessionHandoffRequested":
+      break;
     case "RetryScheduled":
+      state = { ...state, scheduledRetry: { stepRunId: event.stepRunId, priorAttemptId: event.priorAttemptId, nextAttemptId: event.nextAttemptId, nextAttemptNumber: event.nextAttemptNumber, notBefore: event.notBefore } };
       break;
     case "ExecutionFailed":
       state = updateStep(state, event.stepRunId, (step) => ({ ...step, executionStatus: "failed", attempts: step.attempts.map((attempt) => attempt.attemptId === event.attemptId ? { ...attempt, executionStatus: "failed" } : attempt) }));

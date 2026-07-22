@@ -20,7 +20,11 @@ export interface LocalPrincipal {
 }
 
 export class LocalAuthenticator {
-  public constructor(private readonly installSecret: string, private readonly isRevoked: (sessionId: string) => boolean = () => false) {
+  public constructor(
+    private readonly installSecret: string,
+    private readonly isRevoked: (sessionId: string) => boolean = () => false,
+    private readonly resolveAuthorizedProjectIds?: ((principalId: string) => readonly ProjectId[] | undefined) | undefined,
+  ) {
     if (installSecret.length < 16) throw new Error("LOCAL_INSTALL_SECRET_TOO_SHORT");
   }
 
@@ -39,7 +43,11 @@ export class LocalAuthenticator {
     const principal = PayloadSchema.parse(JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")));
     if (Date.parse(principal.expiresAt) <= now.getTime()) throw new Error("LOCAL_CREDENTIAL_EXPIRED");
     if (this.isRevoked(principal.sessionId)) throw new Error("LOCAL_CREDENTIAL_REVOKED");
-    return principal;
+    if (this.resolveAuthorizedProjectIds === undefined) return principal;
+    const resolved = this.resolveAuthorizedProjectIds(principal.principalId);
+    if (resolved === undefined) return principal;
+    const currentlyAuthorized = new Set(z.array(ProjectIdSchema).parse(resolved));
+    return { ...principal, authorizedProjectIds: principal.authorizedProjectIds.filter((projectId) => currentlyAuthorized.has(projectId)) };
   }
 
   private sign(value: string): string {

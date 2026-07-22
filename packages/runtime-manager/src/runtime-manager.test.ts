@@ -53,7 +53,22 @@ function manager(database: DatabaseSync, journal: SqliteOperationJournal, option
       });
       return receipt.response as { commandId: string; response: unknown };
     },
-  }, { resolve: () => ({ policyDecision: options.policyDecision ?? "allow", capabilityReceipt: options.capabilityReceipt ?? capability(), requiredLeaseIds: options.leaseIds ?? [], now: new Date(now) }) });
+  }, { resolve: () => ({
+    policyDecision: options.policyDecision ?? "allow",
+    capabilityReceipt: options.capabilityReceipt ?? capability(),
+    requiredLeaseIds: options.leaseIds ?? [],
+    now: new Date(now),
+    expected: {
+      projectId,
+      runId,
+      attemptId,
+      operationType: "session.launch" as const,
+      requestedCapabilities: ["launch"] as const,
+      agentProfileId: AgentProfileIdSchema.parse("apr_runtime001"),
+      workspaceId,
+      repositoryIds: [RepositoryIdSchema.parse("rep_runtime001")],
+    },
+  }) });
 }
 
 function capability() {
@@ -108,6 +123,26 @@ describe("RuntimeManager", () => {
     });
     expect(() => manager(database, journal, { capabilityReceipt: unsupported }).requestAssignment({ commandId: "assign:no-cap", expectedVersion: 0, operation })).toThrow(/CAPABILITY_NOT_PROVEN/u);
     expect(() => manager(database, journal, { capabilityReceipt: receipt }).requestAssignment({ commandId: "assign:no-lease", expectedVersion: 0, operation })).toThrow(/LEASE_RECEIPT_REQUIRED/u);
+    database.close();
+  });
+
+  it("rejects caller-authored capability, profile, and workspace drift from server authority", async () => {
+    const { database, journal, operation, leaseIds } = await harness();
+    const changed = (overrides: Record<string, unknown>) => createExternalOperation({
+      schemaVersion: 1,
+      operationId: operation.operationId,
+      projectId,
+      runId,
+      attemptId,
+      operationVersion: 1,
+      operationType: "session.launch",
+      requestedCapabilities: ["launch"],
+      payload: operation.payload,
+      ...overrides,
+    });
+    expect(() => manager(database, journal, { leaseIds }).requestAssignment({ commandId: "assign:cap-drift", expectedVersion: 0, operation: changed({ requestedCapabilities: ["launch", "observe"] }) })).toThrow(/ASSIGNMENT_AUTHORITY_SCOPE_MISMATCH/u);
+    expect(() => manager(database, journal, { leaseIds }).requestAssignment({ commandId: "assign:profile-drift", expectedVersion: 0, operation: changed({ payload: { ...operation.payload, agentProfileId: "apr_runtime002" } }) })).toThrow(/ASSIGNMENT_AGENT_PROFILE_MISMATCH/u);
+    expect(() => manager(database, journal, { leaseIds }).requestAssignment({ commandId: "assign:workspace-drift", expectedVersion: 0, operation: changed({ payload: { ...operation.payload, workspaceId: "wsp_runtime002" } }) })).toThrow(/ASSIGNMENT_WORKSPACE_MISMATCH/u);
     database.close();
   });
 });

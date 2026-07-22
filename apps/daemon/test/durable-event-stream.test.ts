@@ -7,7 +7,9 @@ import { ProjectIdSchema } from "@hunter/domain";
 import { EventLedgerReader, SqliteOperationJournal } from "@hunter/storage";
 import { describe, expect, it } from "vitest";
 
-import { DurableEventStream } from "../src/events/durable-event-stream.js";
+import { DurableEventStream, refreshEventAuthorization } from "../src/events/durable-event-stream.js";
+import { LocalAuthenticator } from "../src/auth/local-authenticator.js";
+import { buildApp } from "../src/app.js";
 
 const projectA = ProjectIdSchema.parse("prj_stream0001");
 const projectB = ProjectIdSchema.parse("prj_stream0002");
@@ -88,5 +90,54 @@ describe("DurableEventStream", () => {
     expect(stream.formatKeepalive()).toBe(": keepalive\n\n");
     expect(stream.formatKeepalive()).not.toMatch(/^id:/mu);
     database.close();
+  });
+
+  it("returns a real projection snapshot filtered to authorized Projects", () => {
+    const database = new DatabaseSync(":memory:");
+    const journal = new SqliteOperationJournal(database);
+    commit(journal, projectA, 1);
+    commit(journal, projectB, 2);
+    const stream = new DurableEventStream(new EventLedgerReader(database), undefined, undefined, (authorizedProjectIds) => ({
+      projectionVersion: 7,
+      cursor: 2,
+      entities: [
+        { projectId: projectA, entityId: "visible" },
+        { projectId: projectB, entityId: "hidden" },
+      ].filter(({ projectId }) => authorizedProjectIds.includes(projectId)),
+    }));
+    expect(stream.snapshot([projectA])).toEqual({ projectionVersion: 7, cursor: 2, entities: [{ projectId: projectA, entityId: "visible" }] });
+    database.close();
+  });
+
+  it("serves authenticated replay and scope-filtered snapshot through Fastify routes", async () => {
+    const database = new DatabaseSync(":memory:");
+    const journal = new SqliteOperationJournal(database);
+    commit(journal, projectA, 1);
+    commit(journal, projectB, 2);
+    const reader = new EventLedgerReader(database);
+    const stream = new DurableEventStream(reader, undefined, undefined, (authorizedProjectIds) => ({ projectionVersion: 3, cursor: 2, entities: authorizedProjectIds.map((projectId) => ({ projectId })) }));
+    const authenticator = new LocalAuthenticator("stream-endpoint-secret");
+    const token = authenticator.issueSession({ principalId: "stream-user", authorizedProjectIds: [projectA], expiresAt: new Date(Date.now() + 60_000), csrf: "stream-csrf" });
+    const app = buildApp({ authenticator, allowedHosts: ["hunter-test.localhost"], allowedOrigins: ["app://hunter"], eventStream: stream, services: { listProjects: async () => [], projectForExecutionPlan: () => null, startRun: async () => ({}) } });
+    const headers = { host: "hunter-test.localhost", origin: "app://hunter", authorization: `Bearer ${token}` };
+    const replay = await app.inject({ method: "GET", url: "/events?once=1", headers });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.body).toContain("id: 1");
+    expect(replay.body).not.toContain("id: 2");
+    const snapshot = await app.inject({ method: "GET", url: "/events/snapshot", headers });
+    expect(snapshot.json()).toEqual({ projectionVersion: 3, cursor: 2, entities: [{ projectId: projectA }] });
+    await app.close();
+    database.close();
+  });
+
+  it("re-evaluates current Project authorization for every live Event without widening the session capability", () => {
+    let currentProjectIds = [projectA, projectB];
+    const authenticator = new LocalAuthenticator("stream-dynamic-auth-secret", () => false, () => currentProjectIds);
+    const token = authenticator.issueSession({ principalId: "stream-user", authorizedProjectIds: [projectA], expiresAt: new Date(Date.now() + 60_000), csrf: "stream-csrf" });
+    expect(refreshEventAuthorization(authenticator, token, projectA)).toBe(true);
+    expect(refreshEventAuthorization(authenticator, token, projectB)).toBe(false);
+    currentProjectIds = [projectB];
+    expect(refreshEventAuthorization(authenticator, token, projectA)).toBe(false);
+    expect(refreshEventAuthorization(authenticator, token, projectB)).toBe(false);
   });
 });

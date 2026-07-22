@@ -83,10 +83,10 @@ export function resolveDependencyFailure(input: {
   }
 }
 
-export function resolveSupersedingRequirement<T>(
+export function resolveSupersedingRequirement<T, R extends string>(
   binding: T,
-  input: { readonly newerRevisionId: string; readonly decision: "continue_old_input" | "terminate" | "create_new_plan" },
-): { readonly binding: T; readonly newerRevisionId: string; readonly action: typeof input.decision } {
+  input: { readonly newerRevisionId: R; readonly decision: "continue_old_input" | "terminate" | "create_new_plan" },
+): { readonly binding: T; readonly newerRevisionId: R; readonly action: typeof input.decision } {
   if (!['continue_old_input', 'terminate', 'create_new_plan'].includes(input.decision)) throw new Error("SUPERSEDING_REQUIREMENT_DECISION_REQUIRED");
   return { binding, newerRevisionId: input.newerRevisionId, action: input.decision };
 }

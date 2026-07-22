@@ -165,6 +165,20 @@ describe("OperationWorker crash convergence", () => {
     ).toMatchObject({ event_type: "ExternalOperationObserved" });
   });
 
+  it("refuses an external effect when dispatch-time authority is no longer valid", async () => {
+    const runtime = fake();
+    commit(open());
+    const worker = new OperationWorker(database!, runtime, {
+      ownerId: "worker-authority",
+      replayPolicy: () => "inspectable",
+      dispatchAuthority: () => ({ allowed: false, reason: "controller_lease_expired" }),
+    });
+    await expect(worker.runOnce()).resolves.toBe("needs_attention");
+    expect(runtime.executeCount).toBe(0);
+    expect(runtime.nativeEffectCount).toBe(0);
+    expect(database!.prepare("SELECT status FROM outbox").get()).toEqual({ status: "needs_attention" });
+  });
+
   it("sees the atomically completed receipt after a crash before the worker returns", async () => {
     const runtime = fake();
     commit(open());

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   EvidenceIdSchema,
   ExternalReferenceIdSchema,
+  NativeSessionIdSchema,
   type RuntimeProviderId,
 } from "@hunter/domain";
 import {
@@ -18,6 +19,7 @@ export interface FakeRuntimeOptions {
   readonly providerId: RuntimeProviderId;
   readonly implementationVersion: string;
   readonly observedAt: string;
+  readonly sessionObservationFacts?: readonly RuntimeFact[] | undefined;
 }
 
 interface StoredExecution {
@@ -25,14 +27,14 @@ interface StoredExecution {
   readonly receipt: ExternalOperationReceipt;
 }
 
-function derivedId(prefix: "evd" | "xrf", value: string): string {
+function derivedId(prefix: "evd" | "xrf" | "ses", value: string): string {
   const suffix = createHash("sha256").update(value).digest("hex").slice(0, 24);
   return `${prefix}_${suffix}`;
 }
 
-function factsFor(operation: ExternalOperation): readonly RuntimeFact[] {
+function factsFor(operation: ExternalOperation, sessionObservationFacts: readonly RuntimeFact[] | undefined): readonly RuntimeFact[] {
   if (operation.operationType === "session.observe") {
-    return [
+    return sessionObservationFacts ?? [
       { kind: "agent_returned" },
       { kind: "process_exited", exitCode: 0 },
       { kind: "terminal_idle" },
@@ -79,12 +81,12 @@ export class FakeRuntime implements ExternalOperationHandler {
       nativeReferences: [
         {
           kind: operation.operationType.startsWith("workspace.") ? "workspace" : "session",
-          referenceId: ExternalReferenceIdSchema.parse(
-            derivedId("xrf", operation.operationId),
-          ),
+          referenceId: operation.operationType.startsWith("session.")
+            ? NativeSessionIdSchema.parse(derivedId("ses", operation.operationId))
+            : ExternalReferenceIdSchema.parse(derivedId("xrf", operation.operationId)),
         },
       ],
-      facts: factsFor(operation),
+      facts: factsFor(operation, this.#options.sessionObservationFacts),
       evidence: {
         evidenceId: EvidenceIdSchema.parse(derivedId("evd", operation.operationId)),
         evidenceHash: createHash("sha256").update(canonicalOperation).digest("hex"),

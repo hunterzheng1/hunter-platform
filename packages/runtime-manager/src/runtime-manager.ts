@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 
+import type { AgentProfileId, AtomicCapability, AttemptId, ProjectId, RepositoryId, RunId, WorkspaceId } from "@hunter/domain";
 import type { FlowCommandHandler, FlowCommandReceipt } from "@hunter/flow-engine";
 import {
   CapabilityProbeReceiptSchema,
@@ -22,6 +23,16 @@ export interface RuntimeAssignmentAuthority {
     readonly capabilityReceipt: CapabilityProbeReceipt;
     readonly requiredLeaseIds: readonly Lease["leaseId"][];
     readonly now: Date;
+    readonly expected: {
+      readonly projectId: ProjectId;
+      readonly runId: RunId;
+      readonly attemptId: AttemptId;
+      readonly operationType: ExternalOperation["operationType"];
+      readonly requestedCapabilities: readonly AtomicCapability[];
+      readonly agentProfileId?: AgentProfileId | undefined;
+      readonly workspaceId?: WorkspaceId | undefined;
+      readonly repositoryIds: readonly RepositoryId[];
+    };
   };
 }
 
@@ -45,6 +56,19 @@ export class RuntimeManager {
       throw new Error("OPERATION_FINGERPRINT_MISMATCH");
     }
     const authority = this.authority.resolve(operation);
+    const expected = authority.expected;
+    const canonicalCapabilities = (items: readonly string[]) => [...items].sort().join("\u0000");
+    if (
+      operation.projectId !== expected.projectId ||
+      operation.runId !== expected.runId ||
+      operation.attemptId !== expected.attemptId ||
+      operation.operationType !== expected.operationType ||
+      canonicalCapabilities(operation.requestedCapabilities) !== canonicalCapabilities(expected.requestedCapabilities)
+    ) throw new Error("ASSIGNMENT_AUTHORITY_SCOPE_MISMATCH");
+    if (operation.operationType === "session.launch") {
+      if (expected.agentProfileId === undefined || operation.payload.agentProfileId !== expected.agentProfileId) throw new Error("ASSIGNMENT_AGENT_PROFILE_MISMATCH");
+      if (expected.workspaceId !== undefined && operation.payload.workspaceId !== expected.workspaceId) throw new Error("ASSIGNMENT_WORKSPACE_MISMATCH");
+    }
     if (authority.policyDecision !== "allow") throw new Error("POLICY_NOT_ALLOWED");
     const probe = CapabilityProbeReceiptSchema.parse(authority.capabilityReceipt);
     const at = authority.now.getTime();
@@ -68,12 +92,25 @@ export class RuntimeManager {
       leases.push(JSON.parse(row.receipt_json) as Lease);
     }
     if (operation.operationType === "session.launch") {
-      if (!["workspace", "writer", "controller"].every((kind) => leaseKinds.has(kind))) {
+      if (!["workspace", "writer"].every((kind) => leaseKinds.has(kind))) {
         throw new Error("LEASE_RECEIPT_REQUIRED");
       }
       const workspaceId = operation.payload.workspaceId;
       if (leases.some((lease) => (lease.kind === "workspace" || lease.kind === "writer") && lease.scope.workspaceId !== workspaceId)) throw new Error("LEASE_SCOPE_MISMATCH");
       if (new Set(leases.map(({ ownerId }) => ownerId)).size !== 1) throw new Error("LEASE_OWNER_MISMATCH");
+      const workspaceLease = leases.find((lease) => lease.kind === "workspace");
+      if (workspaceLease === undefined || !expected.repositoryIds.includes(workspaceLease.scope.repositoryId)) throw new Error("LEASE_REPOSITORY_SCOPE_MISMATCH");
+    }
+    if (operation.operationType === "session.observe" || operation.operationType === "session.send" || operation.operationType === "session.interrupt") {
+      if (operation.operationVersion !== 2) throw new Error("CONTROLLER_LEASE_AUTHORITY_VERSION_REQUIRED");
+      const controller = leases.find((lease) => lease.kind === "controller");
+      if (
+        controller === undefined ||
+        controller.scope.nativeSessionId !== operation.payload.nativeSessionId ||
+        controller.leaseId !== operation.payload.controllerLeaseId ||
+        controller.ownerId !== operation.payload.controllerLeaseOwnerId ||
+        controller.generation !== operation.payload.controllerLeaseGeneration
+      ) throw new Error("CONTROLLER_LEASE_SCOPE_MISMATCH");
     }
     if (operation.runId === null || operation.attemptId === null) throw new Error("ASSIGNMENT_RUN_SCOPE_REQUIRED");
     return this.flowEngine.handle({

@@ -2,6 +2,7 @@ import {
   ConnectorIdSchema,
   EvidenceIdSchema,
   ExternalReferenceIdSchema,
+  NativeSessionIdSchema,
   OperationIdSchema,
   RuntimeProviderIdSchema,
   type ConnectorId,
@@ -48,12 +49,10 @@ export const ExternalOperationReceiptSchema = z.strictObject({
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
   operationStatus: z.enum(["completed", "indeterminate", "needs_attention", "rejected"]),
   subject: ReceiptSubjectSchema,
-  nativeReferences: z.array(
-    z.strictObject({
-      kind: z.enum(["workspace", "session", "process", "artifact"]),
-      referenceId: ExternalReferenceIdSchema,
-    }),
-  ),
+  nativeReferences: z.array(z.discriminatedUnion("kind", [
+    z.strictObject({ kind: z.literal("session"), referenceId: NativeSessionIdSchema }),
+    z.strictObject({ kind: z.enum(["workspace", "process", "artifact"]), referenceId: ExternalReferenceIdSchema }),
+  ])),
   facts: z.array(RuntimeFactSchema),
   evidence: z.strictObject({
     evidenceId: EvidenceIdSchema,

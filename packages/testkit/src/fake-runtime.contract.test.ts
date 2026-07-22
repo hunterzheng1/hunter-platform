@@ -40,10 +40,10 @@ describe("deterministic fake runtime", () => {
       projectId: "prj_00000001",
       runId: "run_00000001",
       attemptId: "att_00000001",
-      operationVersion: 1,
+      operationVersion: 2,
       operationType: "session.observe",
       requestedCapabilities: ["observe"],
-      payload: { nativeSessionId: "ses_00000001" },
+      payload: { nativeSessionId: "ses_00000001", controllerLeaseId: "ctl_00000001", controllerLeaseOwnerId: "own_00000001", controllerLeaseGeneration: 1 },
     });
 
     await expect(

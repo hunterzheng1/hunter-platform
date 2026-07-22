@@ -112,6 +112,7 @@ export interface RunBindingContext {
   readonly executionPlan: Readonly<ExecutionPlan>;
   readonly activeTaskIds: readonly TaskId[];
   readonly parentTerminal: boolean;
+  readonly childBudgetAllocation?: RunBudgetLimit | undefined;
 }
 
 function sameFrozenContext(child: WorkflowRunBinding, parent: WorkflowRunBinding): boolean {
@@ -122,8 +123,7 @@ function sameFrozenContext(child: WorkflowRunBinding, parent: WorkflowRunBinding
     child.executionPlanId === parent.executionPlanId &&
     canonicalSha256([...child.requirementRevisionIds].sort()) ===
       canonicalSha256([...parent.requirementRevisionIds].sort()) &&
-    canonicalSha256(child.policySnapshot) === canonicalSha256(parent.policySnapshot) &&
-    canonicalSha256(child.initialBudget) === canonicalSha256(parent.initialBudget)
+    canonicalSha256(child.policySnapshot) === canonicalSha256(parent.policySnapshot)
   );
 }
 
@@ -152,6 +152,9 @@ export function createWorkflowRunBinding(
     if (context?.parent === undefined) throw new Error("ORPHAN_CHILD_RUN");
     if (context.parentTerminal) throw new Error("PARENT_RUN_TERMINAL");
     if (!sameFrozenContext(binding, context.parent)) throw new Error("CHILD_RUN_CONTEXT_MISMATCH");
+    if (context.childBudgetAllocation === undefined || canonicalSha256(binding.initialBudget) !== canonicalSha256(context.childBudgetAllocation)) {
+      throw new Error("CHILD_RUN_BUDGET_ALLOCATION_MISMATCH");
+    }
     if (context.executionPlan.executionPlanId !== binding.executionPlanId) {
       throw new Error("CHILD_EXECUTION_PLAN_MISMATCH");
     }

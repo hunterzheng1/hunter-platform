@@ -36,3 +36,15 @@ export const EMPTY_RUN_BUDGET_USAGE: RunBudgetUsage = Object.freeze({
   noDiffCount: 0,
   verifierErrorCount: 0,
 });
+
+export function remainingRunBudget(limit: RunBudgetLimit, usage: RunBudgetUsage): RunBudgetLimit {
+  const remaining = RunBudgetLimitSchema.safeParse({
+    maxAttempts: limit.maxAttempts - usage.attempts,
+    maxElapsedMs: limit.maxElapsedMs - usage.elapsedMs,
+    maxCost: limit.maxCost - usage.cost,
+    maxTokens: limit.maxTokens - usage.tokens,
+    maxLoopIterations: limit.maxLoopIterations - usage.loopIterations,
+  });
+  if (!remaining.success) throw new Error("CHILD_BUDGET_EXHAUSTED");
+  return remaining.data;
+}

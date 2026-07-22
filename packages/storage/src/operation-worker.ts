@@ -27,6 +27,9 @@ export interface OperationWorkerOptions {
   readonly dispatchLeaseMs?: number;
   readonly now?: () => Date;
   readonly replayPolicy?: (operation: ExternalOperation) => ReplayPolicy;
+  readonly dispatchAuthority?: (operation: ExternalOperation) =>
+    | { readonly allowed: true }
+    | { readonly allowed: false; readonly reason: string };
   readonly faultInjector?: FaultSink;
 }
 
@@ -130,6 +133,21 @@ export class OperationWorker {
       }
     }
 
+    let authority: { readonly allowed: true } | { readonly allowed: false; readonly reason: string } = { allowed: true };
+    if (this.options.dispatchAuthority !== undefined) {
+      this.database.exec("BEGIN IMMEDIATE");
+      try {
+        authority = this.options.dispatchAuthority(operation);
+        this.database.exec("COMMIT");
+      } catch (error) {
+        this.database.exec("ROLLBACK");
+        throw error;
+      }
+    }
+    if (!authority.allowed) {
+      this.finalizeIndeterminate(claimed, operation, authority.reason, "needs_attention");
+      return "needs_attention";
+    }
     const receipt = ExternalOperationReceiptSchema.parse(await this.handler.execute(operation));
     if (receipt.operationId !== operation.operationId || receipt.fingerprint !== operation.fingerprint) {
       this.finalizeIndeterminate(claimed, operation, "provider_receipt_identity_mismatch");
@@ -277,24 +295,26 @@ export class OperationWorker {
     claimed: OutboxRow,
     operation: ExternalOperation,
     reason: string,
+    status: "indeterminate" | "needs_attention" = "indeterminate",
   ): void {
     const recordedAt = this.#now().toISOString();
     this.database.exec("BEGIN IMMEDIATE");
     try {
       this.appendObservedEvent(
         operation,
-        "indeterminate",
+        status,
         { reason, facts: [{ kind: "session_observed", state: "unknown" }] },
         recordedAt,
       );
       const result = this.database
         .prepare(
           `UPDATE outbox
-              SET status = 'indeterminate', dispatch_owner = NULL,
+              SET status = ?, dispatch_owner = NULL,
                   dispatch_expires_at = NULL, updated_at = ?
             WHERE operation_id = ? AND dispatch_owner = ? AND dispatch_generation = ?`,
         )
         .run(
+          status,
           recordedAt,
           operation.operationId,
           this.options.ownerId,
