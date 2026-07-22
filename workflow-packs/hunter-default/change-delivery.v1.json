@@ -80,7 +80,7 @@
           "waitingBudgetCost": 1
         },
         "timeoutPolicy": { "timeoutMs": 7200000, "onTimeout": "needs_attention" },
-        "budgetCost": { "units": 1, "elapsedMs": 7200000, "cost": 0 },
+        "budgetCost": { "units": 1, "elapsedMs": 7200000, "cost": 1 },
         "sessionPolicy": "new",
         "workspacePolicy": { "mode": "write", "isolation": "worktree", "reuse": true }
       },
@@ -216,6 +216,13 @@
         "outcome": "passed",
         "priority": 0,
         "toStepId": "stp_change_ingest_knowledge_v1"
+      },
+      {
+        "routeId": "rte_change_ingest_passed_v1",
+        "fromStepId": "stp_change_ingest_knowledge_v1",
+        "outcome": "passed",
+        "priority": 0,
+        "toStepId": null
       }
     ],
     "loops": [
@@ -226,10 +233,10 @@
         "toStepId": "stp_change_dispatch_tasks_v1",
         "maxIterations": 2,
         "maxElapsedMs": 7200000,
-        "maxCost": 10,
+        "maxCost": 1,
         "progressPredicate": {
           "kind": "verifier_improved",
-          "source": "integration.verdictFingerprint"
+          "source": "verification.outcome"
         },
         "stagnation": {
           "maxSameFailureFingerprint": 2,

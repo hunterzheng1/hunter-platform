@@ -1,4 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { createWorkflowRevision, deepFreeze, type WorkflowRevision } from "@hunter/domain";
 import { z } from "zod";
@@ -27,30 +29,49 @@ export interface HunterDefaultPack {
   readonly workflows: readonly HunterDefaultWorkflow[];
 }
 
-function assetUrl(name: string): URL {
-  const candidates = [new URL(name, import.meta.url), new URL(`../${name}`, import.meta.url)];
-  const match = candidates.find((candidate) => existsSync(candidate));
-  if (match === undefined) throw new Error(`WORKFLOW_ASSET_NOT_FOUND: ${name}`);
-  return match;
+const WORKFLOW_REVISION_BY_ID: Readonly<Record<HunterDefaultWorkflowId, string>> = {
+  "hunter.change-delivery": "wfr_hunter_change_delivery_v1",
+  "hunter.task-delivery": "wfr_hunter_task_delivery_v1",
+};
+
+function assetPath(name: string): string {
+  const moduleDirectory = dirname(fileURLToPath(import.meta.url));
+  const moduleKind = basename(moduleDirectory);
+  if (moduleKind === "src") return join(moduleDirectory, "..", name);
+  if (moduleKind === "dist") return join(moduleDirectory, name);
+  throw new Error(`WORKFLOW_ASSET_MODULE_LOCATION_INVALID: ${moduleDirectory}`);
 }
 
 export function parseWorkflowAsset(input: unknown): HunterDefaultWorkflow {
   const asset = WorkflowAssetSchema.parse(input);
   const revision = createWorkflowRevision(asset.revision);
+  if (revision.workflowRevisionId !== WORKFLOW_REVISION_BY_ID[asset.workflowId]) {
+    throw new Error("WORKFLOW_ASSET_IDENTITY_MISMATCH");
+  }
   return deepFreeze({ workflowId: asset.workflowId, ...revision });
 }
 
 function readWorkflow(name: string): HunterDefaultWorkflow {
-  return parseWorkflowAsset(JSON.parse(readFileSync(assetUrl(name), "utf8")));
+  return parseWorkflowAsset(JSON.parse(readFileSync(assetPath(name), "utf8")));
 }
 
-export function loadHunterDefaultPack(): Readonly<HunterDefaultPack> {
+export function createHunterDefaultPack(
+  workflows: readonly HunterDefaultWorkflow[],
+): Readonly<HunterDefaultPack> {
+  const identities = new Set(workflows.map(({ workflowId }) => workflowId));
+  if (identities.size !== 2 || Object.keys(WORKFLOW_REVISION_BY_ID).some((id) => !identities.has(id as HunterDefaultWorkflowId))) {
+    throw new Error("WORKFLOW_PACK_IDENTITIES_INVALID");
+  }
   return deepFreeze({
     packId: "hunter-default",
     version: "1.0.0",
-    workflows: [
-      readWorkflow("change-delivery.v1.json"),
-      readWorkflow("task-delivery.v1.json"),
-    ],
+    workflows,
   });
+}
+
+export function loadHunterDefaultPack(): Readonly<HunterDefaultPack> {
+  return createHunterDefaultPack([
+    readWorkflow("change-delivery.v1.json"),
+    readWorkflow("task-delivery.v1.json"),
+  ]);
 }

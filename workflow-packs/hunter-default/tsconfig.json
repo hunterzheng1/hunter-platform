@@ -5,6 +5,9 @@
     "outDir": "dist",
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
-  "references": [{ "path": "../../packages/domain" }],
+  "references": [
+    { "path": "../../packages/domain" },
+    { "path": "../../packages/flow-engine" }
+  ],
   "include": ["src/**/*.ts"]
 }

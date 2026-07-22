@@ -56,7 +56,7 @@
           "waitingBudgetCost": 1
         },
         "timeoutPolicy": { "timeoutMs": 3600000, "onTimeout": "needs_attention" },
-        "budgetCost": { "units": 1, "elapsedMs": 3600000, "cost": 0 },
+        "budgetCost": { "units": 1, "elapsedMs": 3600000, "cost": 1 },
         "sessionPolicy": "resume_if_supported",
         "workspacePolicy": { "mode": "write", "isolation": "worktree", "reuse": true }
       },
@@ -182,6 +182,13 @@
         "outcome": "failed",
         "priority": 0,
         "toStepId": "stp_task_implement_v1"
+      },
+      {
+        "routeId": "rte_task_complete_passed_v1",
+        "fromStepId": "stp_task_complete_v1",
+        "outcome": "passed",
+        "priority": 0,
+        "toStepId": null
       }
     ],
     "loops": [
@@ -192,10 +199,10 @@
         "toStepId": "stp_task_implement_v1",
         "maxIterations": 3,
         "maxElapsedMs": 7200000,
-        "maxCost": 10,
+        "maxCost": 2,
         "progressPredicate": {
           "kind": "fingerprint_changed",
-          "source": "test.failureFingerprint"
+          "source": "verification.evidence"
         },
         "stagnation": {
           "maxSameFailureFingerprint": 2,
@@ -212,8 +219,8 @@
         "toStepId": "stp_task_implement_v1",
         "maxIterations": 3,
         "maxElapsedMs": 7200000,
-        "maxCost": 10,
-        "progressPredicate": { "kind": "diff_present", "source": "workspace.diffFingerprint" },
+        "maxCost": 2,
+        "progressPredicate": { "kind": "diff_present", "source": "workspace.diff" },
         "stagnation": {
           "maxSameFailureFingerprint": 2,
           "maxNoDiffIterations": 1,

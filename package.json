@@ -13,7 +13,7 @@
     "node": ">=24 <25"
   },
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && npm run copy-assets -w @hunter/workflow-pack-default",
     "lint": "eslint .",
     "spike:doctor": "npm run build --workspace @hunter/spike-doctor && node --enable-source-maps spikes/doctor/dist/main.js --output docs/validation/environment-inventory.json",
     "spike:codex": "npm run build --workspace @hunter/spike-codex && node --enable-source-maps spikes/codex/dist/scenario.js --output docs/validation/evidence/codex/direct-runtime.json",

@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { ZodError } from "zod";
 
-import { loadHunterDefaultPack, parseWorkflowAsset } from "./load-pack.js";
+import {
+  createHunterDefaultPack,
+  loadHunterDefaultPack,
+  parseWorkflowAsset,
+} from "./load-pack.js";
 
 function validWorkflowAsset() {
   const workflow = loadHunterDefaultPack().workflows[0]!;
@@ -94,16 +98,19 @@ describe("hunter-default workflow pack", () => {
           outcome: "passed",
           toStepId: "stp_change_ingest_knowledge_v1",
         },
+        {
+          fromStepId: "stp_change_ingest_knowledge_v1",
+          outcome: "passed",
+          toStepId: null,
+        },
       ]),
-    );
-    expect(root.routes.some(({ fromStepId }) => fromStepId === "stp_change_ingest_knowledge_v1")).toBe(
-      false,
     );
 
     const dispatch = root.steps.find(({ stepId }) => stepId === "stp_change_dispatch_tasks_v1")!;
     expect(dispatch).toMatchObject({
       kind: "subflow",
       executor: { kind: "subflow", selector: "wfr_hunter_task_delivery_v1" },
+      budgetCost: { cost: 1 },
     });
 
     expect(root.loops).toContainEqual(
@@ -112,10 +119,10 @@ describe("hunter-default workflow pack", () => {
         toStepId: "stp_change_dispatch_tasks_v1",
         maxIterations: 2,
         maxElapsedMs: 7_200_000,
-        maxCost: 10,
+        maxCost: 1,
         progressPredicate: {
           kind: "verifier_improved",
-          source: "integration.verdictFingerprint",
+          source: "verification.outcome",
         },
         stagnation: {
           maxSameFailureFingerprint: 2,
@@ -174,13 +181,21 @@ describe("hunter-default workflow pack", () => {
           outcome: "failed",
           toStepId: "stp_task_implement_v1",
         }),
+        expect.objectContaining({
+          fromStepId: "stp_task_complete_v1",
+          outcome: "passed",
+          toStepId: null,
+        }),
       ]),
     );
+    expect(task.steps.find(({ stepId }) => stepId === "stp_task_implement_v1")).toMatchObject({
+      budgetCost: { cost: 1 },
+    });
     expect(loopsBySource.stp_task_test_v1).toMatchObject({
       maxIterations: 3,
       maxElapsedMs: 7_200_000,
-      maxCost: 10,
-      progressPredicate: { kind: "fingerprint_changed", source: "test.failureFingerprint" },
+      maxCost: 2,
+      progressPredicate: { kind: "fingerprint_changed", source: "verification.evidence" },
       stagnation: {
         maxSameFailureFingerprint: 2,
         maxNoDiffIterations: 1,
@@ -192,8 +207,8 @@ describe("hunter-default workflow pack", () => {
     expect(loopsBySource.stp_task_review_v1).toMatchObject({
       maxIterations: 3,
       maxElapsedMs: 7_200_000,
-      maxCost: 10,
-      progressPredicate: { kind: "diff_present", source: "workspace.diffFingerprint" },
+      maxCost: 2,
+      progressPredicate: { kind: "diff_present", source: "workspace.diff" },
       stagnation: {
         maxSameFailureFingerprint: 2,
         maxNoDiffIterations: 1,
@@ -226,6 +241,26 @@ describe("hunter-default workflow pack", () => {
         unexpected: true,
       }),
     ).toThrow(/unrecognized key/iu);
+  });
+
+  it("rejects a workflow identity paired with the wrong revision", () => {
+    expect(() =>
+      parseWorkflowAsset({
+        ...validWorkflowAsset(),
+        workflowId: "hunter.task-delivery",
+      }),
+    ).toThrow(/WORKFLOW_ASSET_IDENTITY_MISMATCH/u);
+  });
+
+  it("rejects duplicate and missing workflow identities in a pack", () => {
+    const [root, task] = loadHunterDefaultPack().workflows;
+
+    expect(() => createHunterDefaultPack([root!, root!])).toThrow(
+      /WORKFLOW_PACK_IDENTITIES_INVALID/u,
+    );
+    expect(() => createHunterDefaultPack([task!])).toThrow(
+      /WORKFLOW_PACK_IDENTITIES_INVALID/u,
+    );
   });
 
   it("rejects legacy revision and inline step contracts through the domain parser", () => {
