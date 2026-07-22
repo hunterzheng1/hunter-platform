@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { access } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import type {
   CommandRequest,
   CommandResult,
@@ -161,19 +162,20 @@ class FaultInjectingRunner implements CommandRunner {
 
 describe("Agent Orchestrator Phase 0 fallback evidence", () => {
   it("rejects daemon state paths that escape the explicit Phase 0 root", () => {
+    const phase0Root = resolve("phase0-isolation-test");
     expect(() =>
       assertAgentOrchestratorIsolation({
-        phase0Root: "C:\\phase0",
-        runFile: "C:\\phase0\\running.json",
-        dataDir: "C:\\Users\\private\\.ao\\data",
+        phase0Root,
+        runFile: join(phase0Root, "running.json"),
+        dataDir: resolve("outside-phase0-data"),
       }),
     ).toThrow("AO_DATA_DIR_OUTSIDE_PHASE0_ROOT");
 
     expect(() =>
       assertAgentOrchestratorIsolation({
-        phase0Root: "C:\\phase0",
-        runFile: "C:\\phase0\\running.json",
-        dataDir: "C:\\phase0\\data",
+        phase0Root,
+        runFile: join(phase0Root, "running.json"),
+        dataDir: join(phase0Root, "data"),
       }),
     ).not.toThrow();
   });
