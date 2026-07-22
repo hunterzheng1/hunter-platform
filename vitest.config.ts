@@ -10,6 +10,9 @@ export default defineConfig({
       "@hunter/application": fileURLToPath(
         new URL("./packages/application/src/index.ts", import.meta.url),
       ),
+      "@hunter/domain/ids": fileURLToPath(
+        new URL("./packages/domain/src/ids.ts", import.meta.url),
+      ),
       "@hunter/domain": fileURLToPath(
         new URL("./packages/domain/src/index.ts", import.meta.url),
       ),
@@ -36,6 +39,7 @@ export default defineConfig({
   test: {
     include: [
       "apps/**/*.test.ts",
+      "apps/**/*.test.tsx",
       "packages/**/*.test.ts",
       "spikes/**/*.test.ts",
       "workflow-packs/**/*.test.ts",

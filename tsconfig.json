@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "./apps/daemon" },
+    { "path": "./apps/web" },
     { "path": "./packages/api-contracts" },
     { "path": "./packages/application" },
     { "path": "./packages/domain" },

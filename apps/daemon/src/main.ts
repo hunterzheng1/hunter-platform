@@ -63,9 +63,10 @@ export async function startDaemon(options: DaemonStartOptions) {
       eventStream: services.eventStream,
       services: {
         listProjects: async (authorizedProjectIds) => {
-          services.projectionRunner.runIncremental();
-          const allowed = new Set<string>(authorizedProjectIds);
-          return services.projectionRunner.snapshot("hunter").filter(({ entityType, projectId }) => entityType === "Project" && allowed.has(projectId));
+          return authorizedProjectIds.flatMap((projectId) => {
+            const project = services.repositories.getProject(projectId);
+            return project === null ? [] : [{ projectId: project.projectId, name: project.name }];
+          });
         },
         projectForExecutionPlan: (executionPlanId) => {
           const plan = services.repositories.getExecutionPlan(executionPlanId);

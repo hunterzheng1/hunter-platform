@@ -4,13 +4,14 @@ import type { LocalAuthenticator } from "./auth/local-authenticator.js";
 import { registerDurableEventRoutes, type DurableEventStream } from "./events/durable-event-stream.js";
 import { installSecurityHooks } from "./http/security-hooks.js";
 import { registerProjectRoutes, type ProjectRoutesServices } from "./routes/projects.js";
+import { registerRequirementRoutes, type RequirementRoutesServices } from "./routes/requirements.js";
 import { registerRunRoutes, type RunRoutesServices } from "./routes/runs.js";
 
 export interface BuildAppOptions {
   readonly authenticator: LocalAuthenticator;
   readonly allowedHosts: readonly string[];
   readonly allowedOrigins: readonly string[];
-  readonly services: RunRoutesServices & ProjectRoutesServices;
+  readonly services: RunRoutesServices & ProjectRoutesServices & Partial<RequirementRoutesServices>;
   readonly bodyLimit?: number;
   readonly requestTimeoutMs?: number | undefined;
   readonly limits?: { readonly maxConcurrentRequests?: number; readonly maxRequestsPerWindow?: number; readonly rateWindowMs?: number } | undefined;
@@ -22,6 +23,17 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
   installSecurityHooks(app, options);
   app.get("/health", async () => ({ status: "ok" }));
   registerProjectRoutes(app, options.services);
+  if (
+    options.services.createRequirement !== undefined
+    && options.services.getRequirementRevision !== undefined
+    && options.services.approveRequirement !== undefined
+  ) {
+    registerRequirementRoutes(app, {
+      createRequirement: options.services.createRequirement,
+      getRequirementRevision: options.services.getRequirementRevision,
+      approveRequirement: options.services.approveRequirement,
+    });
+  }
   registerRunRoutes(app, options.services);
   if (options.eventStream !== undefined) registerDurableEventRoutes(app, options.eventStream, options.authenticator);
   return app;
