@@ -15,6 +15,9 @@
   --error-text: #7f2923;
   --error-border: #a43b32;
   --error-surface: #fff5f4;
+  --warning-text: #6f470b;
+  --warning-border: #8a5b12;
+  --warning-surface: #fff7e8;
   --local-indicator: #a9c7ba;
   color: var(--text);
   background: var(--canvas);
@@ -79,7 +82,10 @@ textarea { resize: vertical; }
 .revision-meta { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
 .status { display: inline-flex; align-items: center; min-height: 26px; padding: 3px 8px; border: 1px solid; border-radius: 999px; font-size: 12px; }
 .status-draft { color: var(--muted-text); background: var(--canvas); border-color: var(--strong-border); }
+.status-review { color: var(--warning-text); background: var(--warning-surface); border-color: var(--warning-border); }
 .status-approved { color: var(--approved-text); background: var(--selected-surface); border-color: var(--focus); }
+.status-superseded { color: var(--muted-text); background: var(--selected-surface); border-color: var(--strong-border); }
+.status-withdrawn { color: var(--error-text); background: var(--error-surface); border-color: var(--error-border); }
 .immutable-note { padding: 10px 12px; color: var(--approved-text); background: var(--selected-surface); border-left: 3px solid var(--focus); font-weight: 650; }
 
 @media (prefers-color-scheme: dark) {
@@ -99,6 +105,9 @@ textarea { resize: vertical; }
     --error-text: #ffb4ab;
     --error-border: #d76b61;
     --error-surface: #321c19;
+    --warning-text: #f0c879;
+    --warning-border: #b78a3d;
+    --warning-surface: #302511;
     --local-indicator: #a9ddca;
   }
 }

@@ -6,6 +6,19 @@ import { RequirementEditor } from "../components/requirement-editor.js";
 type ProjectApi = Pick<HunterApi, "getProject" | "createRequirement" | "approveRequirement">;
 type ProjectView = Awaited<ReturnType<ProjectApi["getProject"]>>;
 type RequirementView = ProjectView["requirements"][number];
+type RequirementStatus = RequirementView["status"];
+
+type StatusPresentation =
+  | { readonly label: string; readonly className: string; readonly approvable: true }
+  | { readonly label: string; readonly className: string; readonly approvable: false; readonly terminalNote: string };
+
+const STATUS_PRESENTATION: { readonly [Status in RequirementStatus]: StatusPresentation } = {
+  draft: { label: "草稿", className: "status-draft", approvable: true },
+  in_review: { label: "评审中", className: "status-review", approvable: true },
+  approved: { label: "已批准", className: "status-approved", approvable: false, terminalNote: "此版本已批准且不可修改" },
+  superseded: { label: "已被取代", className: "status-superseded", approvable: false, terminalNote: "此版本已被取代，不能再批准或修改" },
+  withdrawn: { label: "已撤回", className: "status-withdrawn", approvable: false, terminalNote: "此版本已撤回，不能再批准或修改" },
+};
 
 export function ProjectPage({
   projectId,
@@ -87,26 +100,24 @@ export function ProjectPage({
           ) : null}
           <div className="revision-list">
             {project.requirements.map((revision) => {
-              const approved = revision.status === "approved";
+              const presentation = STATUS_PRESENTATION[revision.status];
               const busy = busyRevisionId === revision.revisionId;
               return (
                 <article className="revision-card" key={revision.revisionId}>
                   <div className="revision-meta">
                     <code>{revision.revisionId}</code>
-                    <span className={`status ${approved ? "status-approved" : "status-draft"}`}>{approved ? "已批准" : "草稿"}</span>
+                    <span className={`status ${presentation.className}`}>{presentation.label}</span>
                   </div>
                   <h3>{revision.title}</h3>
                   <p>{revision.body}</p>
                   <h4>验收标准</h4>
                   <ul>{revision.acceptanceCriteria.map((criterion) => <li key={criterion}>{criterion}</li>)}</ul>
                   {revision.constraints.length === 0 ? null : <><h4>约束条件</h4><ul>{revision.constraints.map((constraint) => <li key={constraint}>{constraint}</li>)}</ul></>}
-                  {approved ? (
-                    <p className="immutable-note">此版本已批准且不可修改</p>
-                  ) : (
+                  {presentation.approvable ? (
                     <button className="button button-primary" type="button" disabled={busy} onClick={() => void approve(revision)}>
                       {busy ? "正在批准…" : "批准此版本"}
                     </button>
-                  )}
+                  ) : <p className="immutable-note">{presentation.terminalNote}</p>}
                 </article>
               );
             })}
