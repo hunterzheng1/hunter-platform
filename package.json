@@ -1,0 +1,38 @@
+{
+  "name": "hunter-platform",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "spikes/*"
+  ],
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "lint": "eslint .",
+    "spike:doctor": "npm run build --workspace @hunter/spike-doctor && node --enable-source-maps spikes/doctor/dist/main.js --output docs/validation/environment-inventory.json",
+    "test": "vitest run",
+    "typecheck": "tsc -b --pretty false",
+    "verify:rebuild": "tsx scripts/verify-rebuild.ts",
+    "verify:recovery": "tsx scripts/verify-recovery.ts",
+    "verify:foundation": "npm run lint && npm run typecheck && npm test && npm run verify:rebuild && npm run verify:recovery && npm run build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.0.0",
+    "@types/node": "^24.0.0",
+    "eslint": "^9.0.0",
+    "fast-check": "^4.9.0",
+    "tsx": "^4.23.1",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.0.0",
+    "vitest": "^4.0.0"
+  },
+  "dependencies": {
+    "fastify": "^5.0.0",
+    "zod": "^4.0.0"
+  }
+}

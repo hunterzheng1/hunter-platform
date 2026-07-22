@@ -1,0 +1,17 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./apps/daemon" },
+    { "path": "./packages/api-contracts" },
+    { "path": "./packages/application" },
+    { "path": "./packages/domain" },
+    { "path": "./packages/flow-engine" },
+    { "path": "./packages/policy" },
+    { "path": "./packages/runtime-contracts" },
+    { "path": "./packages/runtime-manager" },
+    { "path": "./packages/storage" },
+    { "path": "./packages/testkit" },
+    { "path": "./spikes/testkit" },
+    { "path": "./spikes/doctor" }
+  ]
+}

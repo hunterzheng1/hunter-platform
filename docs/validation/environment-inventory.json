@@ -1,0 +1,297 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "phase0_environment_inventory",
+  "generatedAt": "2026-07-22T05:46:11.547Z",
+  "generator": {
+    "name": "hunter-phase0-doctor",
+    "version": "0.1.0"
+  },
+  "host": {
+    "platform": "win32",
+    "architecture": "x64",
+    "release": "10.0.26200"
+  },
+  "probes": [
+    {
+      "id": "windows",
+      "displayName": "Windows host",
+      "category": "host",
+      "status": "DETECTED",
+      "version": "10.0.26200",
+      "helpHash": null,
+      "availability": {
+        "status": "DETECTED",
+        "reason": "windows_host_detected"
+      },
+      "authentication": {
+        "required": false,
+        "status": "DETECTED",
+        "method": "not_applicable",
+        "reason": "authentication_not_required"
+      },
+      "commands": []
+    },
+    {
+      "id": "node",
+      "displayName": "Node.js",
+      "category": "host",
+      "status": "DETECTED",
+      "version": "v24.14.0",
+      "helpHash": null,
+      "availability": {
+        "status": "DETECTED",
+        "reason": "executable_detected"
+      },
+      "authentication": {
+        "required": false,
+        "status": "DETECTED",
+        "method": "not_applicable",
+        "reason": "authentication_not_required"
+      },
+      "commands": [
+        {
+          "command": {
+            "executable": "node",
+            "args": [
+              "--version"
+            ]
+          },
+          "cwdScope": "repository",
+          "exitCode": 0,
+          "stdout": "v24.14.0",
+          "stderr": "",
+          "timedOut": false,
+          "spawnError": null,
+          "startedAt": "2026-07-22T05:46:11.473Z",
+          "finishedAt": "2026-07-22T05:46:11.534Z"
+        }
+      ]
+    },
+    {
+      "id": "git",
+      "displayName": "Git",
+      "category": "tool",
+      "status": "DETECTED",
+      "version": "git version 2.50.1.windows.1",
+      "helpHash": null,
+      "availability": {
+        "status": "DETECTED",
+        "reason": "executable_detected"
+      },
+      "authentication": {
+        "required": false,
+        "status": "DETECTED",
+        "method": "not_applicable",
+        "reason": "authentication_not_required"
+      },
+      "commands": [
+        {
+          "command": {
+            "executable": "git",
+            "args": [
+              "--version"
+            ]
+          },
+          "cwdScope": "repository",
+          "exitCode": 0,
+          "stdout": "git version 2.50.1.windows.1",
+          "stderr": "",
+          "timedOut": false,
+          "spawnError": null,
+          "startedAt": "2026-07-22T05:46:11.484Z",
+          "finishedAt": "2026-07-22T05:46:11.547Z"
+        }
+      ]
+    },
+    {
+      "id": "codex",
+      "displayName": "Codex",
+      "category": "agent",
+      "status": "BLOCKED",
+      "version": null,
+      "helpHash": null,
+      "availability": {
+        "status": "BLOCKED",
+        "reason": "executable_missing_or_unusable"
+      },
+      "authentication": {
+        "required": true,
+        "status": "BLOCKED",
+        "method": "codex login status",
+        "reason": "executable_not_available"
+      },
+      "commands": [
+        {
+          "command": {
+            "executable": "codex",
+            "args": [
+              "--version"
+            ]
+          },
+          "cwdScope": "repository",
+          "exitCode": null,
+          "stdout": "",
+          "stderr": "",
+          "timedOut": false,
+          "spawnError": "EPERM",
+          "startedAt": "2026-07-22T05:46:11.493Z",
+          "finishedAt": "2026-07-22T05:46:11.501Z"
+        }
+      ]
+    },
+    {
+      "id": "codebuddy",
+      "displayName": "CodeBuddy Code",
+      "category": "agent",
+      "status": "BLOCKED",
+      "version": null,
+      "helpHash": null,
+      "availability": {
+        "status": "BLOCKED",
+        "reason": "executable_missing_or_unusable"
+      },
+      "authentication": {
+        "required": true,
+        "status": "BLOCKED",
+        "method": "codebuddy auth status",
+        "reason": "executable_not_available"
+      },
+      "commands": [
+        {
+          "command": {
+            "executable": "codebuddy",
+            "args": [
+              "--version"
+            ]
+          },
+          "cwdScope": "repository",
+          "exitCode": null,
+          "stdout": "",
+          "stderr": "",
+          "timedOut": false,
+          "spawnError": "ENOENT",
+          "startedAt": "2026-07-22T05:46:11.501Z",
+          "finishedAt": "2026-07-22T05:46:11.514Z"
+        }
+      ]
+    },
+    {
+      "id": "cursor",
+      "displayName": "Cursor",
+      "category": "agent",
+      "status": "BLOCKED",
+      "version": null,
+      "helpHash": null,
+      "availability": {
+        "status": "BLOCKED",
+        "reason": "executable_missing_or_unusable"
+      },
+      "authentication": {
+        "required": true,
+        "status": "BLOCKED",
+        "method": "no_safe_noninteractive_probe",
+        "reason": "executable_not_available"
+      },
+      "commands": [
+        {
+          "command": {
+            "executable": "cursor",
+            "args": [
+              "--version"
+            ]
+          },
+          "cwdScope": "repository",
+          "exitCode": null,
+          "stdout": "",
+          "stderr": "",
+          "timedOut": false,
+          "spawnError": "ENOENT",
+          "startedAt": "2026-07-22T05:46:11.505Z",
+          "finishedAt": "2026-07-22T05:46:11.514Z"
+        }
+      ]
+    },
+    {
+      "id": "orca",
+      "displayName": "Orca",
+      "category": "runtime",
+      "status": "BLOCKED",
+      "version": null,
+      "helpHash": null,
+      "availability": {
+        "status": "BLOCKED",
+        "reason": "executable_missing_or_unusable"
+      },
+      "authentication": {
+        "required": true,
+        "status": "BLOCKED",
+        "method": "orca status --json",
+        "reason": "executable_not_available"
+      },
+      "commands": [
+        {
+          "command": {
+            "executable": "orca",
+            "args": [
+              "--version"
+            ]
+          },
+          "cwdScope": "repository",
+          "exitCode": null,
+          "stdout": "",
+          "stderr": "",
+          "timedOut": false,
+          "spawnError": "ENOENT",
+          "startedAt": "2026-07-22T05:46:11.508Z",
+          "finishedAt": "2026-07-22T05:46:11.514Z"
+        }
+      ]
+    },
+    {
+      "id": "agent_orchestrator",
+      "displayName": "Agent Orchestrator fallback runtime",
+      "category": "runtime",
+      "status": "BLOCKED",
+      "version": null,
+      "helpHash": null,
+      "availability": {
+        "status": "BLOCKED",
+        "reason": "executable_missing_or_unusable"
+      },
+      "authentication": {
+        "required": true,
+        "status": "BLOCKED",
+        "method": "no_safe_noninteractive_probe",
+        "reason": "executable_not_available"
+      },
+      "commands": [
+        {
+          "command": {
+            "executable": "agent-orchestrator",
+            "args": [
+              "--version"
+            ]
+          },
+          "cwdScope": "repository",
+          "exitCode": null,
+          "stdout": "",
+          "stderr": "",
+          "timedOut": false,
+          "spawnError": "ENOENT",
+          "startedAt": "2026-07-22T05:46:11.510Z",
+          "finishedAt": "2026-07-22T05:46:11.514Z"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "detected": 3,
+    "blocked": 5,
+    "notProven": 0
+  },
+  "redaction": {
+    "applied": true,
+    "schemaVersion": 1
+  },
+  "contentFingerprint": "6d40c83ac3aa56bdc5df38d581ffbf3711413f7f7dcd6a46f5b39f51991377e9"
+}

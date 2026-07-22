@@ -1,0 +1,18 @@
+{
+  "name": "@hunter/daemon",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@hunter/api-contracts": "0.0.0",
+    "@hunter/application": "0.0.0",
+    "@hunter/domain": "0.0.0",
+    "@hunter/flow-engine": "0.0.0",
+    "@hunter/policy": "0.0.0",
+    "@hunter/runtime-contracts": "0.0.0",
+    "@hunter/runtime-manager": "0.0.0",
+    "@hunter/storage": "0.0.0",
+    "fastify": "^5.0.0",
+    "zod": "^4.0.0"
+  }
+}
