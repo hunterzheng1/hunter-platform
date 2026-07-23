@@ -1,4 +1,5 @@
 import {
+  LeaseOwnerIdSchema,
   OperationIdSchema,
   ProjectIdSchema,
   RunIdSchema,
@@ -8,6 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ArchiveKnowledgeProjector,
+  validateArchiveKnowledgeProjectionCommit,
   type ArchiveKnowledgeProjectionCommit,
   type ArchiveKnowledgeProjectionCommitResult,
   type ArchiveKnowledgeProjectionJob,
@@ -17,8 +19,13 @@ import {
 } from "./index.js";
 
 const projectId = ProjectIdSchema.parse("prj_projection_a");
+const otherProjectId = ProjectIdSchema.parse("prj_projection_b");
 const runId = RunIdSchema.parse("run_projection_a");
+const otherRunId = RunIdSchema.parse("run_projection_b");
+const ownerId = LeaseOwnerIdSchema.parse("own_projection_a");
+const otherOwnerId = LeaseOwnerIdSchema.parse("own_projection_b");
 const manifestHash = "a".repeat(64);
+const activeLeaseNow = new Date("2026-07-23T01:30:00.000Z");
 
 function receipt(
   override: Partial<VerifiedArchiveReceipt> = {},
@@ -45,7 +52,10 @@ function leasedJob(
     jobId: OperationIdSchema.parse(`opn_${suffix}`),
     state: "leased" as const,
     attempt: 1,
-    leaseGeneration: 1,
+    ownerId,
+    generation: 1,
+    acquiredAt: "2026-07-23T01:00:00.000Z",
+    expiresAt: "2026-07-23T02:00:00.000Z",
     leaseTokenHash: "f".repeat(64),
     receipt: verifiedReceipt,
   };
@@ -64,29 +74,63 @@ class TestOnlyDurableKnowledgeProjectionStore
   readonly currentLeases = new Map<
     string,
     {
+      readonly state: "leased" | "pending";
       readonly attempt: number;
-      readonly leaseGeneration: number;
+      readonly ownerId: string;
+      readonly generation: number;
+      readonly acquiredAt: string;
+      readonly expiresAt: string;
       readonly leaseTokenHash: string;
     }
   >();
 
+  constructor(private readonly now: () => Date = () => activeLeaseNow) {}
+
   setCurrentLease(job: ArchiveKnowledgeProjectionJob): void {
     this.currentLeases.set(job.jobId, {
+      state: "leased",
       attempt: job.attempt,
-      leaseGeneration: job.leaseGeneration,
+      ownerId: job.ownerId,
+      generation: job.generation,
+      acquiredAt: job.acquiredAt,
+      expiresAt: job.expiresAt,
       leaseTokenHash: job.leaseTokenHash,
     });
   }
 
+  setCurrentLeaseState(
+    job: ArchiveKnowledgeProjectionJob,
+    override: Partial<{
+      readonly state: "leased" | "pending";
+      readonly attempt: number;
+      readonly ownerId: string;
+      readonly generation: number;
+      readonly acquiredAt: string;
+      readonly expiresAt: string;
+      readonly leaseTokenHash: string;
+    }>,
+  ): void {
+    this.setCurrentLease(job);
+    const current = this.currentLeases.get(job.jobId);
+    if (current === undefined) throw new Error("TEST_LEASE_SETUP_FAILED");
+    this.currentLeases.set(job.jobId, { ...current, ...override });
+  }
+
   async commitArchiveProjection(
-    commit: ArchiveKnowledgeProjectionCommit,
+    input: ArchiveKnowledgeProjectionCommit,
   ): Promise<ArchiveKnowledgeProjectionCommitResult> {
+    const commit = validateArchiveKnowledgeProjectionCommit(input);
     const currentLease = this.currentLeases.get(commit.jobId);
     if (
       currentLease === undefined ||
+      currentLease.state !== "leased" ||
       currentLease.attempt !== commit.attempt ||
-      currentLease.leaseGeneration !== commit.leaseGeneration ||
-      currentLease.leaseTokenHash !== commit.leaseTokenHash
+      currentLease.ownerId !== commit.ownerId ||
+      currentLease.generation !== commit.generation ||
+      currentLease.acquiredAt !== commit.acquiredAt ||
+      currentLease.expiresAt !== commit.expiresAt ||
+      currentLease.leaseTokenHash !== commit.leaseTokenHash ||
+      Date.parse(currentLease.expiresAt) <= this.now().getTime()
     ) {
       throw new Error("KNOWLEDGE_PROJECTION_LEASE_NOT_CURRENT");
     }
@@ -108,8 +152,10 @@ class TestOnlyDurableKnowledgeProjectionStore
       };
     }
 
-    const sourceEntryId = this.idBySource.get(commit.sourceKey);
-    const manifestEntryId = this.idByManifest.get(commit.manifestKey);
+    const sourceKey = `${commit.receipt.projectId}\u0000${commit.receipt.runId}`;
+    const manifestKey = `${commit.receipt.projectId}\u0000${commit.receipt.manifestHash}`;
+    const sourceEntryId = this.idBySource.get(sourceKey);
+    const manifestEntryId = this.idByManifest.get(manifestKey);
     const existingId = sourceEntryId ?? manifestEntryId;
 
     if (
@@ -137,8 +183,8 @@ class TestOnlyDurableKnowledgeProjectionStore
     }
 
     this.byId.set(commit.entry.entryId, commit.entry);
-    this.idBySource.set(commit.sourceKey, commit.entry.entryId);
-    this.idByManifest.set(commit.manifestKey, commit.entry.entryId);
+    this.idBySource.set(sourceKey, commit.entry.entryId);
+    this.idByManifest.set(manifestKey, commit.entry.entryId);
     this.byJob.set(commit.jobId, {
       inputFingerprint: commit.inputFingerprint,
       entryId: commit.entry.entryId,
@@ -159,6 +205,26 @@ async function projectWithCurrentLease(
 ) {
   store.setCurrentLease(job);
   return projector.project(job);
+}
+
+async function captureProjectionCommit(
+  job: ArchiveKnowledgeProjectionJob,
+): Promise<ArchiveKnowledgeProjectionCommit> {
+  let captured: ArchiveKnowledgeProjectionCommit | undefined;
+  const store: DurableKnowledgeProjectionStore = {
+    async commitArchiveProjection(commit) {
+      captured = commit;
+      return {
+        jobId: commit.jobId,
+        inputFingerprint: commit.inputFingerprint,
+        outcome: "inserted",
+        entry: commit.entry,
+      };
+    },
+  };
+  await new ArchiveKnowledgeProjector(store).project(job);
+  if (captured === undefined) throw new Error("TEST_COMMIT_CAPTURE_FAILED");
+  return captured;
 }
 
 describe("ArchiveKnowledgeProjector", () => {
@@ -241,15 +307,30 @@ describe("ArchiveKnowledgeProjector", () => {
 
   it.each([
     ["attempt", { attempt: 2 }],
-    ["lease generation", { leaseGeneration: 2 }],
+    ["lease generation", { generation: 2 }],
     ["lease proof hash", { leaseTokenHash: "e".repeat(64) }],
+    ["lease owner takeover", { ownerId: otherOwnerId }],
+    ["lease status", { state: "pending" as const }],
   ])("fails closed for a stale %s", async (_label, currentOverride) => {
     const store = new TestOnlyDurableKnowledgeProjectionStore();
     const submittedJob = leasedJob(receipt(), "projection_stale");
-    store.setCurrentLease({ ...submittedJob, ...currentOverride });
+    store.setCurrentLeaseState(submittedJob, currentOverride);
 
     await expect(
       new ArchiveKnowledgeProjector(store).project(submittedJob),
+    ).rejects.toThrow("KNOWLEDGE_PROJECTION_LEASE_NOT_CURRENT");
+    expect(store.byId).toHaveLength(0);
+  });
+
+  it("fails closed when the store-owned clock observes an expired lease", async () => {
+    const store = new TestOnlyDurableKnowledgeProjectionStore(
+      () => new Date("2026-07-23T02:00:00.000Z"),
+    );
+    const job = leasedJob(receipt(), "projection_expired");
+    store.setCurrentLease(job);
+
+    await expect(
+      new ArchiveKnowledgeProjector(store).project(job),
     ).rejects.toThrow("KNOWLEDGE_PROJECTION_LEASE_NOT_CURRENT");
     expect(store.byId).toHaveLength(0);
   });
@@ -310,6 +391,109 @@ describe("ArchiveKnowledgeProjector", () => {
     await expect(
       new ArchiveKnowledgeProjector(badStore).project(leasedJob(receipt())),
     ).rejects.toThrow();
+  });
+
+  it.each([
+    [
+      "receipt Project",
+      (commit: ArchiveKnowledgeProjectionCommit) => ({
+        ...commit,
+        receipt: { ...commit.receipt, projectId: otherProjectId },
+      }),
+    ],
+    [
+      "receipt Run",
+      (commit: ArchiveKnowledgeProjectionCommit) => ({
+        ...commit,
+        receipt: { ...commit.receipt, runId: otherRunId },
+      }),
+    ],
+    [
+      "manifest hash",
+      (commit: ArchiveKnowledgeProjectionCommit) => ({
+        ...commit,
+        receipt: {
+          ...commit.receipt,
+          manifestHash: "b".repeat(64),
+          manifestRef: `cas:sha256:${"b".repeat(64)}`,
+        },
+      }),
+    ],
+    [
+      "manifest reference",
+      (commit: ArchiveKnowledgeProjectionCommit) => ({
+        ...commit,
+        receipt: {
+          ...commit.receipt,
+          manifestRef: `cas:sha256:${"c".repeat(64)}`,
+        },
+      }),
+    ],
+    [
+      "input fingerprint",
+      (commit: ArchiveKnowledgeProjectionCommit) => ({
+        ...commit,
+        inputFingerprint: "d".repeat(64),
+      }),
+    ],
+    [
+      "entry fingerprint",
+      (commit: ArchiveKnowledgeProjectionCommit) => ({
+        ...commit,
+        expectedEntryFingerprint: "e".repeat(64),
+      }),
+    ],
+    [
+      "historical entry scope and source",
+      (commit: ArchiveKnowledgeProjectionCommit) => ({
+        ...commit,
+        entry: {
+          ...commit.entry,
+          scope: { projectId: otherProjectId },
+          source: { ...commit.entry.source, projectId: otherProjectId },
+        },
+      }),
+    ],
+    [
+      "historical entry outcome",
+      (commit: ArchiveKnowledgeProjectionCommit) => ({
+        ...commit,
+        entry:
+          commit.entry.level === "historical"
+            ? {
+                ...commit.entry,
+                source: { ...commit.entry.source, outcome: "succeeded" as const },
+              }
+            : commit.entry,
+      }),
+    ],
+  ])("rejects a tampered %s before any write", async (_label, tamper) => {
+    const job = leasedJob(receipt(), "projection_tampered");
+    const commit = await captureProjectionCommit(job);
+    const store = new TestOnlyDurableKnowledgeProjectionStore();
+    store.setCurrentLease(job);
+
+    await expect(
+      store.commitArchiveProjection(
+        tamper(commit) as ArchiveKnowledgeProjectionCommit,
+      ),
+    ).rejects.toThrow();
+    expect(store.byId).toHaveLength(0);
+    expect(store.byJob).toHaveLength(0);
+  });
+
+  it("rejects an invalid lease window at the strict commit boundary", async () => {
+    const commit = await captureProjectionCommit(
+      leasedJob(receipt(), "projection_window"),
+    );
+
+    expect(() =>
+      validateArchiveKnowledgeProjectionCommit({
+        ...commit,
+        acquiredAt: "2026-07-23T03:00:00.000Z",
+        expiresAt: "2026-07-23T02:00:00.000Z",
+      }),
+    ).toThrow("LEASE_WINDOW_INVALID");
   });
 
   it("rejects an unleased, raw, or path-bearing job before the durable store", async () => {

@@ -185,4 +185,53 @@ describe("KnowledgeResolver", () => {
       new KnowledgeResolver(store).resolve({ projectId }),
     ).rejects.toThrow();
   });
+
+  it.each([
+    [
+      "the same payload",
+      () => {
+        const entry = authoritative("duplicate_same");
+        return [entry, entry];
+      },
+    ],
+    [
+      "different payloads",
+      () => {
+        const first = authoritative("duplicate_conflict");
+        return [
+          first,
+          {
+            ...authoritative("duplicate_other"),
+            entryId: first.entryId,
+            body: "A contradictory body under the same entry ID.",
+          },
+        ];
+      },
+    ],
+  ])("fails closed for a duplicate entryId with %s", async (_label, entries) => {
+    await expect(
+      new KnowledgeResolver(new TestOnlyKnowledgeReadStore(entries())).resolve({
+        projectId,
+      }),
+    ).rejects.toThrow("KNOWLEDGE_DUPLICATE_ENTRY_ID");
+  });
+
+  it("fails closed deterministically for multiple active records with one typed source identity", async () => {
+    const first = authoritative("source_identity_a");
+    const second = {
+      ...authoritative("source_identity_b"),
+      source: first.source,
+    };
+
+    for (const entries of [
+      [first, second],
+      [second, first],
+    ]) {
+      await expect(
+        new KnowledgeResolver(new TestOnlyKnowledgeReadStore(entries)).resolve({
+          projectId,
+        }),
+      ).rejects.toThrow("KNOWLEDGE_DUPLICATE_SOURCE_IDENTITY");
+    }
+  });
 });

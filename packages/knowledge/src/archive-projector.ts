@@ -2,9 +2,9 @@ import { createHash } from "node:crypto";
 
 import {
   KnowledgeEntryIdSchema,
+  LeaseOwnerIdSchema,
   OperationIdSchema,
   type KnowledgeEntryId,
-  type OperationId,
 } from "@hunter/domain";
 import { z } from "zod";
 
@@ -27,25 +27,64 @@ export const ArchiveKnowledgeProjectionJobSchema = z
     jobId: OperationIdSchema,
     state: z.literal("leased"),
     attempt: z.number().int().positive(),
-    leaseGeneration: z.number().int().positive(),
+    ownerId: LeaseOwnerIdSchema,
+    generation: z.number().int().positive(),
+    acquiredAt: z.iso.datetime(),
+    expiresAt: z.iso.datetime(),
     leaseTokenHash: Sha256Schema,
     receipt: VerifiedArchiveReceiptSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((job, context) => {
+    if (Date.parse(job.expiresAt) <= Date.parse(job.acquiredAt)) {
+      context.addIssue({ code: "custom", message: "LEASE_WINDOW_INVALID" });
+    }
+  });
 export type ArchiveKnowledgeProjectionJob = z.infer<
   typeof ArchiveKnowledgeProjectionJobSchema
 >;
 
-export interface ArchiveKnowledgeProjectionCommit {
-  readonly jobId: OperationId;
-  readonly sourceKey: string;
-  readonly manifestKey: string;
-  readonly inputFingerprint: string;
-  readonly attempt: number;
-  readonly leaseGeneration: number;
-  readonly leaseTokenHash: string;
-  readonly expectedEntryFingerprint: string;
-  readonly entry: KnowledgeEntry;
+export const ArchiveKnowledgeProjectionCommitSchema = z
+  .object({
+    jobId: OperationIdSchema,
+    inputFingerprint: Sha256Schema,
+    attempt: z.number().int().positive(),
+    ownerId: LeaseOwnerIdSchema,
+    generation: z.number().int().positive(),
+    acquiredAt: z.iso.datetime(),
+    expiresAt: z.iso.datetime(),
+    leaseTokenHash: Sha256Schema,
+    expectedEntryFingerprint: Sha256Schema,
+    receipt: VerifiedArchiveReceiptSchema,
+    entry: KnowledgeEntrySchema,
+  })
+  .strict()
+  .superRefine((commit, context) => {
+    if (Date.parse(commit.expiresAt) <= Date.parse(commit.acquiredAt)) {
+      context.addIssue({ code: "custom", message: "LEASE_WINDOW_INVALID" });
+    }
+    const expectedEntry = historicalEntryFor(commit.receipt);
+    const expectedInputFingerprint = fingerprintInput(commit.receipt);
+    const expectedEntryFingerprint = fingerprintEntry(expectedEntry);
+    if (
+      commit.inputFingerprint !== expectedInputFingerprint ||
+      commit.expectedEntryFingerprint !== expectedEntryFingerprint ||
+      fingerprintEntry(commit.entry) !== expectedEntryFingerprint
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "KNOWLEDGE_PROJECTION_BINDING_INVALID",
+      });
+    }
+  });
+export type ArchiveKnowledgeProjectionCommit = z.infer<
+  typeof ArchiveKnowledgeProjectionCommitSchema
+>;
+
+export function validateArchiveKnowledgeProjectionCommit(
+  input: unknown,
+): ArchiveKnowledgeProjectionCommit {
+  return ArchiveKnowledgeProjectionCommitSchema.parse(input);
 }
 
 export const ArchiveKnowledgeProjectionCommitResultSchema = z
@@ -67,9 +106,10 @@ export interface ArchiveKnowledgeProjectionResult {
 
 /**
  * Task 18 must implement this port with one durable atomic transaction. That
- * transaction validates the current attempt, lease generation, and lease proof
- * hash; binds jobId to inputFingerprint; and applies both source and manifest
- * uniqueness keys. It never stores or returns a raw lease token. An in-memory
+ * transaction validates the leased state, current owner, attempt, generation,
+ * lease proof hash, and expiry using the store-owned clock; binds jobId to
+ * inputFingerprint; and derives source/manifest uniqueness keys only from the
+ * validated receipt. It never stores or returns a raw lease token. An in-memory
  * implementation proves only this contract and must remain test-only.
  */
 export interface DurableKnowledgeProjectionStore {
@@ -134,18 +174,21 @@ export class ArchiveKnowledgeProjector {
     const entry = historicalEntryFor(job.receipt);
     const inputFingerprint = fingerprintInput(job.receipt);
     const expectedEntryFingerprint = fingerprintEntry(entry);
+    const commit = validateArchiveKnowledgeProjectionCommit({
+      jobId: job.jobId,
+      inputFingerprint,
+      attempt: job.attempt,
+      ownerId: job.ownerId,
+      generation: job.generation,
+      acquiredAt: job.acquiredAt,
+      expiresAt: job.expiresAt,
+      leaseTokenHash: job.leaseTokenHash,
+      expectedEntryFingerprint,
+      receipt: job.receipt,
+      entry,
+    });
     const result = ArchiveKnowledgeProjectionCommitResultSchema.parse(
-      await this.store.commitArchiveProjection({
-        jobId: job.jobId,
-        sourceKey: `${job.receipt.projectId}\u0000${job.receipt.runId}`,
-        manifestKey: `${job.receipt.projectId}\u0000${job.receipt.manifestHash}`,
-        inputFingerprint,
-        attempt: job.attempt,
-        leaseGeneration: job.leaseGeneration,
-        leaseTokenHash: job.leaseTokenHash,
-        expectedEntryFingerprint,
-        entry,
-      }),
+      await this.store.commitArchiveProjection(commit),
     );
     const persistedEntry = result.entry;
 
