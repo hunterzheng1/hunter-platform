@@ -6,6 +6,7 @@ import { HunterApi } from "./client.js";
 const requestedRunId = RunIdSchema.parse("run_task400001");
 const validResponse = {
   runId: requestedRunId,
+  projectionPosition: 3,
   status: "running",
   steps: [{
     stepRunId: "spr_task400001",
@@ -16,6 +17,7 @@ const validResponse = {
       attemptNumber: 1,
       executionStatus: "returned",
       verificationStatus: "failed",
+      artifactIds: [],
       evidenceIds: [],
     }],
   }],

@@ -12,6 +12,7 @@ const runB = RunIdSchema.parse("run_task400002");
 
 const runView = RunViewHttpResponseSchema.parse({
   runId: runA,
+  projectionPosition: 3,
   status: "running",
   steps: [
     {
@@ -23,6 +24,7 @@ const runView = RunViewHttpResponseSchema.parse({
         attemptNumber: 1,
         executionStatus: "returned",
         verificationStatus: "passed",
+        artifactIds: [],
         evidenceIds: ["evd_task400001"],
       }],
     },
@@ -35,15 +37,19 @@ const runView = RunViewHttpResponseSchema.parse({
           attemptId: "att_task400002",
           attemptNumber: 1,
           executionStatus: "returned",
-          verificationStatus: "failed",
-          agentProfileId: "apr_task400001",
-          evidenceIds: ["evd_task400002"],
+        verificationStatus: "failed",
+        agentProfileId: "apr_task400001",
+        nativeSessionId: "ses_task400001",
+        artifactIds: ["art_task400001"],
+        evidenceIds: ["evd_task400002"],
         },
         {
           attemptId: "att_task400003",
           attemptNumber: 2,
           executionStatus: "running",
-          verificationStatus: "pending",
+          verificationStatus: "needs_human",
+          waitingReason: { code: "human_verification_required" },
+          artifactIds: [],
           evidenceIds: [],
         },
       ],
@@ -74,7 +80,10 @@ function deferred<T>() {
   };
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  sessionStorage.clear();
+});
 
 describe("RunPage", () => {
   it("separates execution from verification, retains failed Attempts, and selects every Step", async () => {
@@ -93,10 +102,13 @@ describe("RunPage", () => {
     expect(screen.getByRole("heading", { name: "第 1 次尝试 · 已返回" })).not.toBeNull();
     expect(screen.getByText("执行：已返回 · 验证：失败")).not.toBeNull();
     expect(screen.getByRole("heading", { name: "第 2 次尝试 · 执行中" })).not.toBeNull();
-    expect(screen.getByText("执行：执行中 · 验证：待验证")).not.toBeNull();
+    expect(screen.getByText("执行：执行中 · 验证：等待人工确认")).not.toBeNull();
+    expect(screen.getByText("等待人工验证")).not.toBeNull();
     expect(screen.getByText(failedAgentProfileId).closest("p")?.textContent)
       .toBe(`Agent Profile：${failedAgentProfileId}`);
-    expect(screen.getByText("证据：1 项")).not.toBeNull();
+    expect(screen.getByText("ses_task400001")).not.toBeNull();
+    expect(screen.getByText("art_task400001")).not.toBeNull();
+    expect(screen.getByText("evd_task400002")).not.toBeNull();
   });
 
   it("announces loading, empty, and failure states without inventing a successful conclusion", async () => {
@@ -106,7 +118,7 @@ describe("RunPage", () => {
     first.unmount();
     pending.resolve(runView);
 
-    const empty = RunViewHttpResponseSchema.parse({ runId: runA, status: "created", steps: [] });
+    const empty = RunViewHttpResponseSchema.parse({ runId: runA, projectionPosition: 0, status: "created", steps: [] });
     const second = render(<RunPage runId={runA} api={{ getRun: async () => empty }} />);
     expect(await screen.findByText("还没有 Step 运行记录")).not.toBeNull();
     second.unmount();
@@ -156,23 +168,59 @@ describe("RunPage", () => {
     };
     const rendered = render(<RunPage runId={runA} api={{ getRun: async () => runView }} eventStream={stream} />);
     await screen.findByRole("heading", { name: `Run ${runA}` });
-    expect(screen.getByRole("status", { name: "实时更新状态" }).textContent).toContain("实时更新已连接");
+    expect((await screen.findByRole("status", { name: "实时更新状态" })).textContent).toContain("实时更新已连接");
 
     act(() => handlers?.onError());
     expect(screen.getByRole("status", { name: "实时更新状态" }).textContent).toContain("正在重新连接");
     rendered.unmount();
 
     handlers = undefined;
-    render(<RunPage runId={runA} api={{ getRun: async () => runView }} eventStream={stream} />);
+    const gapReload = deferred<typeof runView>();
+    const gapApi = { getRun: vi.fn().mockResolvedValueOnce(runView).mockReturnValueOnce(gapReload.promise) };
+    render(<RunPage runId={runA} api={gapApi} eventStream={stream} />);
     await screen.findByRole("heading", { name: `Run ${runA}` });
-    act(() => handlers?.onResyncRequired({
+    await screen.findByRole("status", { name: "实时更新状态" });
+    act(() => handlers?.onCursorGap({
       schemaVersion: 1,
       runId: runA,
-      code: "EVENT_CURSOR_RESYNC_REQUIRED",
+      code: "EVENT_CURSOR_GAP",
       retentionFloor: 4,
       highWaterPosition: 9,
+      instructions: { snapshot: "reload_run_snapshot", rebuild: "replace_run_projection_from_snapshot", resume: "subscribe_after_high_water_position" },
     }));
-    expect(screen.getByRole("alert").textContent).toContain("需要重新同步");
+    expect(screen.getByRole("status", { name: "实时更新状态" }).textContent).toContain("正在重新同步");
+    gapReload.resolve({ ...runView, projectionPosition: 9 });
+    expect(await screen.findByText("实时更新已连接")).not.toBeNull();
+  });
+
+  it("does not subscribe before the initial Run snapshot is authorized and loaded", async () => {
+    const initial = deferred<typeof runView>();
+    const stream = { subscribe: vi.fn(() => vi.fn()) };
+    render(<RunPage runId={runA} api={{ getRun: () => initial.promise }} eventStream={stream} />);
+    expect(screen.getByRole("status").textContent).toContain("正在加载 Run");
+    expect(stream.subscribe).not.toHaveBeenCalled();
+    initial.resolve(runView);
+    await screen.findByRole("heading", { name: `Run ${runA}` });
+    expect(stream.subscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an event refresh failure visible and retries without discarding the prior snapshot", async () => {
+    let handlers: RunEventStreamHandlers | undefined;
+    const stream = { subscribe: vi.fn((_input, next: RunEventStreamHandlers) => { handlers = next; return vi.fn(); }) };
+    const api = { getRun: vi.fn()
+      .mockResolvedValueOnce(runView)
+      .mockRejectedValueOnce(new Error("refresh failed"))
+      .mockResolvedValueOnce({ ...runView, projectionPosition: 5 }) };
+    render(<RunPage runId={runA} api={api} eventStream={stream} />);
+    await screen.findByRole("heading", { name: `Run ${runA}` });
+    await screen.findByRole("status", { name: "实时更新状态" });
+    await act(async () => handlers?.onEvent({ schemaVersion: 1, position: 5, runId: runA, eventType: "run_projection_changed" }));
+    expect(screen.getByRole("alert").textContent).toContain("快照刷新失败");
+    expect(screen.getByRole("heading", { name: `Run ${runA}` })).not.toBeNull();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "重试快照刷新" })));
+    expect(await screen.findByText("实时更新已连接")).not.toBeNull();
+    expect(api.getRun).toHaveBeenCalledTimes(3);
+    expect(stream.subscribe).toHaveBeenCalledTimes(2);
   });
 
   it("shows a malformed live event as a fail-closed page alert", async () => {
@@ -185,6 +233,7 @@ describe("RunPage", () => {
     };
     render(<RunPage runId={runA} api={{ getRun: async () => runView }} eventStream={stream} />);
     await screen.findByRole("heading", { name: `Run ${runA}` });
+    await screen.findByRole("status", { name: "实时更新状态" });
     act(() => handlers?.onEvent({ runId: runA, position: "bad" }));
     expect(screen.getByRole("alert").textContent).toContain("收到无效事件");
   });

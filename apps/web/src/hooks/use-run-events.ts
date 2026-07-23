@@ -1,14 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   RunEventEnvelopeHttpSchema,
-  RunEventResyncHttpSchema,
+  RunEventGapHttpSchema,
 } from "@hunter/api-contracts";
 import type { RunId } from "@hunter/domain/ids";
 
 export interface RunEventStreamHandlers {
   readonly onEvent: (event: unknown) => void;
   readonly onError: () => void;
-  readonly onResyncRequired: (signal: unknown) => void;
+  readonly onCursorGap: (signal: unknown) => void;
 }
 
 export interface AuthorizedRunEventStream {
@@ -22,24 +22,16 @@ export type RunEventConnection =
   | { readonly status: "unavailable" }
   | { readonly status: "live" }
   | { readonly status: "reconnecting" }
-  | { readonly status: "resync_required"; readonly retentionFloor: number; readonly highWaterPosition: number }
+  | { readonly status: "refreshing" }
+  | { readonly status: "refresh_error"; readonly retry: () => void }
+  | { readonly status: "resyncing" }
+  | { readonly status: "gap_error"; readonly retry: () => void }
   | { readonly status: "invalid_event" };
 
 const RECONNECT_DELAY_MS = 250;
 
 function storageKey(runId: RunId): string {
   return `hunter-run-event:${runId}`;
-}
-
-function readCursor(runId: RunId): number {
-  try {
-    const value = globalThis.sessionStorage?.getItem(storageKey(runId));
-    if (value === null || !/^(0|[1-9][0-9]*)$/u.test(value)) return 0;
-    const cursor = Number(value);
-    return Number.isSafeInteger(cursor) ? cursor : 0;
-  } catch {
-    return 0;
-  }
 }
 
 function writeCursor(runId: RunId, cursor: number): void {
@@ -52,9 +44,12 @@ function writeCursor(runId: RunId, cursor: number): void {
 
 export function useRunEvents(
   runId: RunId,
-  onChange: () => void,
+  initialPosition: number,
+  onChange: () => number | Promise<number>,
   stream: AuthorizedRunEventStream | undefined,
 ): RunEventConnection {
+  const initialPositionRef = useRef(initialPosition);
+  initialPositionRef.current = initialPosition;
   const [connection, setConnection] = useState<RunEventConnection>(
     stream === undefined ? { status: "unavailable" } : { status: "live" },
   );
@@ -65,10 +60,19 @@ export function useRunEvents(
       return;
     }
     let active = true;
-    let cursor = readCursor(runId);
+    const snapshotPosition = initialPositionRef.current;
+    let cursor = Number.isSafeInteger(snapshotPosition) && snapshotPosition >= 0 ? snapshotPosition : 0;
     let generation = 0;
     let disconnect: (() => void) | undefined;
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+
+    try {
+      if (cursor > 0 || globalThis.sessionStorage?.getItem(storageKey(runId)) !== null) {
+        writeCursor(runId, cursor);
+      }
+    } catch {
+      // Storage is optional; the validated snapshot position remains authoritative in memory.
+    }
 
     const stopCurrentSubscription = () => {
       const current = disconnect;
@@ -87,6 +91,73 @@ export function useRunEvents(
       clearReconnectTimer();
       stopCurrentSubscription();
       setConnection(next);
+    };
+
+    const beginGapRecovery = (
+      signal: import("@hunter/api-contracts").RunEventGapHttp,
+      expectedGeneration: number,
+    ) => {
+      if (!active || generation !== expectedGeneration) return;
+      generation += 1;
+      const recoveryGeneration = generation;
+      clearReconnectTimer();
+      stopCurrentSubscription();
+      setConnection({ status: "resyncing" });
+      let reload: number | Promise<number>;
+      try {
+        reload = onChange();
+      } catch (caught) {
+        reload = Promise.reject(caught);
+      }
+      void Promise.resolve(reload)
+        .then((snapshotPosition) => {
+          if (!active || generation !== recoveryGeneration) return;
+          if (!Number.isSafeInteger(snapshotPosition) || snapshotPosition < signal.highWaterPosition) {
+            throw new Error("RUN_SNAPSHOT_BEHIND_EVENT_GAP");
+          }
+          cursor = snapshotPosition;
+          writeCursor(runId, cursor);
+          connect();
+        })
+        .catch(() => {
+          if (!active || generation !== recoveryGeneration) return;
+          setConnection({
+            status: "gap_error",
+            retry: () => beginGapRecovery(signal, recoveryGeneration),
+          });
+        });
+    };
+
+    const beginEventRefresh = (requiredPosition: number, expectedGeneration: number) => {
+      if (!active || generation !== expectedGeneration) return;
+      generation += 1;
+      const refreshGeneration = generation;
+      clearReconnectTimer();
+      stopCurrentSubscription();
+      setConnection({ status: "refreshing" });
+      let refresh: number | Promise<number>;
+      try {
+        refresh = onChange();
+      } catch (caught) {
+        refresh = Promise.reject(caught);
+      }
+      void Promise.resolve(refresh)
+        .then((snapshotPosition) => {
+          if (!active || generation !== refreshGeneration) return;
+          if (!Number.isSafeInteger(snapshotPosition) || snapshotPosition < requiredPosition) {
+            throw new Error("RUN_SNAPSHOT_BEHIND_EVENT");
+          }
+          cursor = snapshotPosition;
+          writeCursor(runId, cursor);
+          connect();
+        })
+        .catch(() => {
+          if (!active || generation !== refreshGeneration) return;
+          setConnection({
+            status: "refresh_error",
+            retry: () => beginEventRefresh(requiredPosition, refreshGeneration),
+          });
+        });
     };
 
     const connect = () => {
@@ -119,24 +190,17 @@ export function useRunEvents(
             }
             const event = parsed.data;
             if (event.runId !== runId || event.position <= cursor) return;
-            cursor = event.position;
-            writeCursor(runId, cursor);
-            setConnection({ status: "live" });
-            onChange();
+            beginEventRefresh(event.position, token);
           },
           onError: scheduleReconnect,
-          onResyncRequired(value) {
+          onCursorGap(value) {
             if (!active || generation !== token) return;
-            const parsed = RunEventResyncHttpSchema.safeParse(value);
+            const parsed = RunEventGapHttpSchema.safeParse(value);
             if (!parsed.success || parsed.data.runId !== runId) {
               terminate(token, { status: "invalid_event" });
               return;
             }
-            terminate(token, {
-              status: "resync_required",
-              retentionFloor: parsed.data.retentionFloor,
-              highWaterPosition: parsed.data.highWaterPosition,
-            });
+            beginGapRecovery(parsed.data, token);
           },
         });
       } catch {

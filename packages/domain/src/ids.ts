@@ -69,6 +69,9 @@ export type OperationId = z.infer<typeof OperationIdSchema>;
 export const EvidenceIdSchema = canonicalId("evd", "EvidenceId").brand<"EvidenceId">();
 export type EvidenceId = z.infer<typeof EvidenceIdSchema>;
 
+export const ArtifactIdSchema = canonicalId("art", "ArtifactId").brand<"ArtifactId">();
+export type ArtifactId = z.infer<typeof ArtifactIdSchema>;
+
 export const AgentProfileIdSchema = canonicalId("apr", "AgentProfileId").brand<"AgentProfileId">();
 export type AgentProfileId = z.infer<typeof AgentProfileIdSchema>;
 

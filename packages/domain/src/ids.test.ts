@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AttemptIdSchema,
+  ArtifactIdSchema,
   OperationIdSchema,
   ProjectIdSchema,
   RunIdSchema,
@@ -12,8 +13,10 @@ describe("canonical branded ids", () => {
     expect(RunIdSchema.parse("run_00000001")).toBe("run_00000001");
     expect(AttemptIdSchema.parse("att_00000001")).toBe("att_00000001");
     expect(OperationIdSchema.parse("opn_00000001")).toBe("opn_00000001");
+    expect(ArtifactIdSchema.parse("art_00000001")).toBe("art_00000001");
 
     expect(() => ProjectIdSchema.parse("C:\\repo\\hunter")).toThrow();
     expect(() => RunIdSchema.parse("run")).toThrow();
+    expect(() => ArtifactIdSchema.parse("C:\\private\\artifact")).toThrow();
   });
 });

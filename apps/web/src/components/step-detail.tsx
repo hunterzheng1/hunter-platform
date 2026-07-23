@@ -21,6 +21,13 @@ const VERIFICATION_LABELS: { readonly [Status in StepAttemptHttpView["verificati
   canceled: "已取消",
 };
 
+const WAITING_REASON_LABELS: { readonly [Code in NonNullable<StepAttemptHttpView["waitingReason"]>["code"]]: string } = {
+  input_required: "等待输入",
+  human_verification_required: "等待人工验证",
+  recovery_attention_required: "等待恢复处理",
+  external_operation_indeterminate: "外部操作状态待确认",
+};
+
 export function StepDetail({ step }: { readonly step: RunStepHttpView }) {
   return (
     <section className="step-detail panel" aria-labelledby={`step-detail-${step.stepRunId}`}>
@@ -39,7 +46,12 @@ export function StepDetail({ step }: { readonly step: RunStepHttpView }) {
               <h3>第 {attempt.attemptNumber} 次尝试 · {EXECUTION_LABELS[attempt.executionStatus]}</h3>
               <p>执行：{EXECUTION_LABELS[attempt.executionStatus]} · 验证：{VERIFICATION_LABELS[attempt.verificationStatus]}</p>
               {attempt.agentProfileId === undefined ? null : <p>Agent Profile：<code>{attempt.agentProfileId}</code></p>}
-              <p>证据：{attempt.evidenceIds.length} 项</p>
+              {attempt.nativeSessionId === undefined ? null : <p>Hunter Session：<code>{attempt.nativeSessionId}</code></p>}
+              {attempt.waitingReason === undefined ? null : (
+                <p className="waiting-reason"><strong>{WAITING_REASON_LABELS[attempt.waitingReason.code]}</strong></p>
+              )}
+              {attempt.artifactIds.length === 0 ? <p>产物：无</p> : <div><h4>产物</h4><ul>{attempt.artifactIds.map((artifactId) => <li key={artifactId}><code>{artifactId}</code></li>)}</ul></div>}
+              {attempt.evidenceIds.length === 0 ? <p>证据：无</p> : <div><h4>证据</h4><ul>{attempt.evidenceIds.map((evidenceId) => <li key={evidenceId}><code>{evidenceId}</code></li>)}</ul></div>}
             </article>
           ))}
         </div>

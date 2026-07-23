@@ -32,8 +32,14 @@ function EventConnectionNotice({ connection }: { readonly connection: RunEventCo
       return <p role="status" aria-label="实时更新状态" className="message notice-message">实时更新已连接</p>;
     case "reconnecting":
       return <p role="status" aria-label="实时更新状态" className="message notice-message">实时更新中断，正在重新连接…</p>;
-    case "resync_required":
-      return <p role="alert" className="message error-message">事件历史已超出保留范围，需要重新同步 Run 快照。</p>;
+    case "refreshing":
+      return <p role="status" aria-label="实时更新状态" className="message notice-message">收到新事件，正在刷新 Run 快照…</p>;
+    case "refresh_error":
+      return <div role="alert" className="message error-message">Run 快照刷新失败，实时更新尚未恢复。 <button className="button button-secondary" type="button" onClick={connection.retry}>重试快照刷新</button></div>;
+    case "resyncing":
+      return <p role="status" aria-label="实时更新状态" className="message notice-message">事件历史存在缺口，正在重新同步 Run 快照…</p>;
+    case "gap_error":
+      return <div role="alert" className="message error-message">Run 快照同步失败，实时更新尚未恢复。 <button className="button button-secondary" type="button" onClick={connection.retry}>重试快照同步</button></div>;
     case "invalid_event":
       return <p role="alert" className="message error-message">收到无效事件，实时结果未被采用。</p>;
   }
@@ -53,34 +59,40 @@ function ValidatedRunPage({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const requestEpoch = useRef(0);
+  const hasLoadedRun = useRef(false);
 
-  const refresh = useCallback(() => {
+  const refresh = useCallback(async (): Promise<number> => {
     const epoch = requestEpoch.current + 1;
     requestEpoch.current = epoch;
     setError(false);
-    void Reflect.apply(api.getRun, api, [runId])
-      .then((response) => {
-        if (requestEpoch.current !== epoch || response.runId !== runId) return;
-        setRun(response);
-        setSelected((current) => response.steps.some(({ stepRunId }) => stepRunId === current)
-          ? current
-          : response.steps[0]?.stepRunId);
-      })
-      .catch(() => {
-        if (requestEpoch.current === epoch) setError(true);
-      })
-      .finally(() => {
-        if (requestEpoch.current === epoch) setLoading(false);
-      });
+    try {
+      const response = await Reflect.apply(api.getRun, api, [runId]);
+      if (requestEpoch.current !== epoch || response.runId !== runId) {
+        throw new Error("STALE_RUN_SNAPSHOT");
+      }
+      hasLoadedRun.current = true;
+      setRun(response);
+      setSelected((current) => response.steps.some(({ stepRunId }) => stepRunId === current)
+        ? current
+        : response.steps[0]?.stepRunId);
+      return response.projectionPosition;
+    } catch (caught) {
+      if (requestEpoch.current === epoch && !hasLoadedRun.current) setError(true);
+      throw caught;
+    } finally {
+      if (requestEpoch.current === epoch) setLoading(false);
+    }
   }, [api, runId]);
-  const connection = useRunEvents(runId, refresh, eventStream);
+  const authorizedEventStream = !loading && run?.runId === runId ? eventStream : undefined;
+  const connection = useRunEvents(runId, run?.projectionPosition ?? 0, refresh, authorizedEventStream);
 
   useEffect(() => {
     setRun(undefined);
     setSelected(undefined);
     setLoading(true);
     setError(false);
-    refresh();
+    hasLoadedRun.current = false;
+    void refresh().catch(() => undefined);
     return () => {
       requestEpoch.current += 1;
     };

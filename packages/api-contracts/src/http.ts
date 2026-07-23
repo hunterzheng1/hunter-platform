@@ -1,5 +1,6 @@
 import {
   AgentProfileIdSchema,
+  ArtifactIdSchema,
   ChangeIdSchema,
   ChangeRevisionIdSchema,
   ExecutionPlanIdSchema,
@@ -11,6 +12,7 @@ import {
   StepRunIdSchema,
   AttemptIdSchema,
   EvidenceIdSchema,
+  NativeSessionIdSchema,
   TaskIdSchema,
   WorkflowRevisionIdSchema,
 } from "@hunter/domain/ids";
@@ -69,10 +71,32 @@ export const StepAttemptHttpViewSchema = z.strictObject({
   executionStatus: ExecutionStatusHttpSchema,
   verificationStatus: VerificationStatusHttpSchema,
   agentProfileId: AgentProfileIdSchema.optional(),
+  nativeSessionId: NativeSessionIdSchema.optional(),
+  artifactIds: z.array(ArtifactIdSchema).max(100),
   evidenceIds: z.array(EvidenceIdSchema).max(100),
+  waitingReason: z.strictObject({
+    code: z.enum([
+      "input_required",
+      "human_verification_required",
+      "recovery_attention_required",
+      "external_operation_indeterminate",
+    ]),
+  }).optional(),
 }).superRefine((attempt, context) => {
+  if (new Set(attempt.artifactIds).size !== attempt.artifactIds.length) {
+    context.addIssue({ code: "custom", path: ["artifactIds"], message: "artifactIds must be unique" });
+  }
   if (new Set(attempt.evidenceIds).size !== attempt.evidenceIds.length) {
     context.addIssue({ code: "custom", path: ["evidenceIds"], message: "evidenceIds must be unique" });
+  }
+  const isWaiting = attempt.executionStatus === "waiting_input"
+    || attempt.executionStatus === "needs_attention"
+    || attempt.verificationStatus === "needs_human";
+  if (isWaiting && attempt.waitingReason === undefined) {
+    context.addIssue({ code: "custom", path: ["waitingReason"], message: "waitingReason is required for a waiting status" });
+  }
+  if (!isWaiting && attempt.waitingReason !== undefined) {
+    context.addIssue({ code: "custom", path: ["waitingReason"], message: "waitingReason is only valid for a waiting status" });
   }
 });
 export type StepAttemptHttpView = z.infer<typeof StepAttemptHttpViewSchema>;
@@ -106,6 +130,7 @@ export type RunStepHttpView = z.infer<typeof RunStepHttpViewSchema>;
 
 export const RunViewHttpResponseSchema = z.strictObject({
   runId: RunIdSchema,
+  projectionPosition: z.number().int().nonnegative(),
   status: RunStatusHttpSchema,
   steps: z.array(RunStepHttpViewSchema).max(500),
 }).superRefine((run, context) => {
@@ -138,16 +163,21 @@ export const RunEventEnvelopeHttpSchema = z.strictObject({
 });
 export type RunEventEnvelopeHttp = z.infer<typeof RunEventEnvelopeHttpSchema>;
 
-export const RunEventResyncHttpSchema = z.strictObject({
+export const RunEventGapHttpSchema = z.strictObject({
   schemaVersion: z.literal(1),
   runId: RunIdSchema,
-  code: z.literal("EVENT_CURSOR_RESYNC_REQUIRED"),
+  code: z.literal("EVENT_CURSOR_GAP"),
   retentionFloor: z.number().int().nonnegative(),
   highWaterPosition: z.number().int().nonnegative(),
+  instructions: z.strictObject({
+    snapshot: z.literal("reload_run_snapshot"),
+    rebuild: z.literal("replace_run_projection_from_snapshot"),
+    resume: z.literal("subscribe_after_high_water_position"),
+  }),
 }).refine((signal) => signal.retentionFloor <= signal.highWaterPosition, {
   message: "retentionFloor cannot exceed highWaterPosition",
 });
-export type RunEventResyncHttp = z.infer<typeof RunEventResyncHttpSchema>;
+export type RunEventGapHttp = z.infer<typeof RunEventGapHttpSchema>;
 
 const ProjectNameSchema = z.string().trim().min(1).max(120);
 const RequirementTitleSchema = z.string().trim().min(1).max(200);
