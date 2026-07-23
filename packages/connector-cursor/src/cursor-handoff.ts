@@ -9,6 +9,7 @@ import {
 } from "@hunter/domain";
 import { z } from "zod";
 import {
+  CURSOR_TASK_PACK_LIMITS,
   renderTaskPack,
   type CursorTaskPackInput,
 } from "./task-pack.js";
@@ -47,7 +48,14 @@ const WriteTaskPackRequestSchema = z.strictObject({
     operationId: OperationIdSchema,
     workspaceId: WorkspaceIdSchema,
     relativePath: RelativeTaskPackPathSchema,
-    content: z.string().min(1).max(32 * 1024),
+    content: z
+      .string()
+      .min(1)
+      .refine(
+        (value) =>
+          Buffer.byteLength(value, "utf8") <=
+          CURSOR_TASK_PACK_LIMITS.maxContentBytes,
+      ),
     contentDigest: DigestSchema,
   }),
 });
@@ -103,7 +111,7 @@ const CandidateResultSchema = z.strictObject({
   completionSource: z.literal("manual_receipt"),
   manualReceiptRequiresVerifier: z.literal(true),
   stepCompletion: z.literal("not_established"),
-  taskPackRef: z.strictObject({
+  taskPackIntent: z.strictObject({
     relativePath: RelativeTaskPackPathSchema,
     contentDigest: DigestSchema,
   }),
@@ -375,7 +383,7 @@ export class CursorHandoffCandidate {
         completionSource: "manual_receipt",
         manualReceiptRequiresVerifier: true,
         stepCompletion: "not_established",
-        taskPackRef: {
+        taskPackIntent: {
           relativePath: taskPack.relativePath,
           contentDigest: taskPack.contentDigest,
         },
@@ -384,12 +392,17 @@ export class CursorHandoffCandidate {
     );
   }
 
-  private async call(
-    value: SyntheticCursorHandoffRequest,
-  ): Promise<unknown> {
-    const message = deepFreeze(
-      SyntheticCursorHandoffRequestSchema.parse(value),
-    );
+  private async call(value: unknown): Promise<unknown> {
+    let parsed: z.ZodSafeParseResult<SyntheticCursorHandoffRequest>;
+    try {
+      parsed = SyntheticCursorHandoffRequestSchema.safeParse(value);
+    } catch {
+      throw new Error("CURSOR_SYNTHETIC_REQUEST_INVALID");
+    }
+    if (!parsed.success) {
+      throw new Error("CURSOR_SYNTHETIC_REQUEST_INVALID");
+    }
+    const message = deepFreeze(parsed.data);
     try {
       return await this.requestTransport(message);
     } catch {

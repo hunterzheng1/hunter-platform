@@ -11,6 +11,7 @@ import { z } from "zod";
 
 export const CURSOR_TASK_PACK_LIMITS = Object.freeze({
   maxPromptBytes: 16 * 1024,
+  maxContentBytes: 128 * 1024,
 });
 
 const TaskPackInputSchema = z.strictObject({
@@ -25,7 +26,14 @@ const TaskPackSchema = z.strictObject({
   relativePath: z
     .string()
     .regex(/^\.hunter\/handoffs\/opn_[a-z0-9][a-z0-9_-]{7,63}\.md$/u),
-  content: z.string().min(1),
+  content: z
+    .string()
+    .min(1)
+    .refine(
+      (value) =>
+        Buffer.byteLength(value, "utf8") <=
+        CURSOR_TASK_PACK_LIMITS.maxContentBytes,
+    ),
   contentDigest: z.string().regex(/^[a-f0-9]{64}$/u),
 });
 
@@ -37,6 +45,16 @@ export interface CursorTaskPackInput {
 }
 
 export type CursorTaskPack = z.infer<typeof TaskPackSchema>;
+
+function encodePromptAsSafeJson(value: string): string {
+  return JSON.stringify(value).replace(/[<>&\u2028\u2029]/gu, (character) => {
+    const codePoint = character.codePointAt(0);
+    if (codePoint === undefined) {
+      throw new Error("CURSOR_TASK_PACK_INPUT_INVALID");
+    }
+    return `\\u${codePoint.toString(16).padStart(4, "0")}`;
+  });
+}
 
 function parsePrompt(value: string): string {
   if (value.trim() === "") {
@@ -79,6 +97,7 @@ export function renderTaskPack(value: CursorTaskPackInput): CursorTaskPack {
   const input = parseInput(value);
   const prompt = parsePrompt(input.prompt);
   const relativePath = `.hunter/handoffs/${input.operationId}.md`;
+  const encodedPrompt = encodePromptAsSafeJson(prompt);
   const content = [
     "# Hunter Cursor Task Handoff",
     "",
@@ -89,7 +108,9 @@ export function renderTaskPack(value: CursorTaskPackInput): CursorTaskPack {
     "",
     "## Instruction",
     "",
-    `Instruction JSON: ${JSON.stringify(prompt)}`,
+    "Instruction JSON:",
+    "",
+    `    ${encodedPrompt}`,
     "",
     "## Completion",
     "",
@@ -97,6 +118,12 @@ export function renderTaskPack(value: CursorTaskPackInput): CursorTaskPack {
     "Manual declaration must be followed by Hunter verifier.",
     "",
   ].join("\n");
+  if (
+    Buffer.byteLength(content, "utf8") >
+    CURSOR_TASK_PACK_LIMITS.maxContentBytes
+  ) {
+    throw new Error("CURSOR_TASK_PACK_INPUT_TOO_LARGE");
+  }
   const contentDigest = createHash("sha256")
     .update(content, "utf8")
     .digest("hex");
