@@ -7,17 +7,17 @@ import {
 } from "@hunter/domain";
 import { z } from "zod";
 import {
-  AcpRequestSchema,
-  CancelRunResponseSchema,
   CodeBuddyNativeSessionRefSchema,
-  InitializeResponseSchema,
-  NewSessionResponseSchema,
-  PromptResponseSchema,
-  assertBoundedAcpResponse,
-  type AcpRequest,
-  type AcpTransport,
+  SyntheticCodeBuddyCandidateRequestSchema,
+  SyntheticCodeBuddyCancelRunResponseSchema,
+  SyntheticCodeBuddyInitializeResponseSchema,
+  SyntheticCodeBuddyNewSessionResponseSchema,
+  SyntheticCodeBuddyPromptResponseSchema,
+  assertBoundedSyntheticCodeBuddyCandidateResponse,
   type CodeBuddyNativeSessionRef,
-} from "./acp-transport.js";
+  type SyntheticCodeBuddyCandidateRequest,
+  type SyntheticCodeBuddyCandidateTransport,
+} from "./synthetic-candidate-transport.js";
 
 const PromptSchema = z.string().min(1).max(16_384);
 const CandidateRequestSchema = z.strictObject({
@@ -32,8 +32,8 @@ const CandidateOptionsSchema = z.strictObject({
 
 const CandidateObservationSchema = z.discriminatedUnion("kind", [
   z.strictObject({
-    kind: z.literal("protocol_initialized"),
-    protocolVersion: z.literal(1),
+    kind: z.literal("candidate_initialize_observed"),
+    candidateSchemaVersion: z.literal(1),
   }),
   z.strictObject({ kind: z.literal("session_created") }),
   z.strictObject({
@@ -47,6 +47,7 @@ const CandidateResultSchema = z.strictObject({
   operationId: OperationIdSchema,
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
   mode: z.enum(["launch", "resume"]),
+  fixtureKind: z.literal("hunter.codebuddy.synthetic_candidate_v1"),
   proofScope: z.literal("contract_only"),
   connectorValidationStatus: z.literal("NOT_PROVEN"),
   retrySafety: z.literal("NOT_PROVEN"),
@@ -67,6 +68,7 @@ const InterruptResultSchema = z.strictObject({
   schemaVersion: z.literal(1),
   operationId: OperationIdSchema,
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
+  fixtureKind: z.literal("hunter.codebuddy.synthetic_candidate_v1"),
   proofScope: z.literal("contract_only"),
   connectorValidationStatus: z.literal("NOT_PROVEN"),
   retrySafety: z.literal("NOT_PROVEN"),
@@ -192,14 +194,14 @@ function fingerprint(input: {
 }
 
 /**
- * Contract-only ACP candidate. It has no production endpoint, provider
- * discovery, capability level, durable receipt, or local replay store.
+ * Contract-only synthetic lifecycle candidate. Labels in its injected
+ * transport belong to Hunter's fixture, not to a verified provider protocol.
  */
 export class CodeBuddyCandidateConnector {
   private readonly options: CodeBuddyCandidateConnectorOptions;
 
   constructor(
-    private readonly transport: AcpTransport,
+    private readonly transport: SyntheticCodeBuddyCandidateTransport,
     optionsValue: CodeBuddyCandidateConnectorOptions,
   ) {
     const options = CandidateOptionsSchema.safeParse(optionsValue);
@@ -212,21 +214,26 @@ export class CodeBuddyCandidateConnector {
   ): Promise<CodeBuddyCandidateResult> {
     const request = this.parseRequest(requestValue);
     const initialize = await this.call({
+      fixtureKind: "hunter.codebuddy.synthetic_candidate_v1",
       method: "initialize",
-      params: { client: "hunter", protocolVersion: 1 },
+      params: { client: "hunter", candidateSchemaVersion: 1 },
     });
     const initializeResponse = this.parseResponse(
-      InitializeResponseSchema,
+      SyntheticCodeBuddyInitializeResponseSchema,
       initialize,
     );
     const created = await this.call({
+      fixtureKind: "hunter.codebuddy.synthetic_candidate_v1",
       method: "newSession",
       params: {
         cwd: request.workspacePath,
         profileId: request.profileId,
       },
     });
-    const session = this.parseResponse(NewSessionResponseSchema, created);
+    const session = this.parseResponse(
+      SyntheticCodeBuddyNewSessionResponseSchema,
+      created,
+    );
     const prompted = await this.promptSession(
       session.sessionId,
       request.operationId,
@@ -238,8 +245,8 @@ export class CodeBuddyCandidateConnector {
       session.sessionId,
       [
         {
-          kind: "protocol_initialized",
-          protocolVersion: initializeResponse.protocolVersion,
+          kind: "candidate_initialize_observed",
+          candidateSchemaVersion: initializeResponse.candidateSchemaVersion,
         },
         { kind: "session_created" },
         { kind: "prompt_response", accepted: prompted.accepted },
@@ -271,11 +278,12 @@ export class CodeBuddyCandidateConnector {
     const operation = OperationIdSchema.safeParse(operationIdValue);
     if (!operation.success) throw new Error("CODEBUDDY_OPERATION_ID_INVALID");
     const responseValue = await this.call({
+      fixtureKind: "hunter.codebuddy.synthetic_candidate_v1",
       method: "cancelRun",
       params: { sessionId: sessionRef, runId: operation.data },
     });
     const response = this.parseResponse(
-      CancelRunResponseSchema,
+      SyntheticCodeBuddyCancelRunResponseSchema,
       responseValue,
     );
     this.assertResponseIdentity(
@@ -297,6 +305,7 @@ export class CodeBuddyCandidateConnector {
           sessionRef,
         }),
         proofScope: "contract_only",
+        fixtureKind: "hunter.codebuddy.synthetic_candidate_v1",
         connectorValidationStatus: "NOT_PROVEN",
         retrySafety: "NOT_PROVEN",
         structuredInterrupt: "NOT_PROVEN",
@@ -338,8 +347,12 @@ export class CodeBuddyCandidateConnector {
     return parsed.data;
   }
 
-  private async call(messageValue: AcpRequest): Promise<unknown> {
-    const message = deepFreeze(AcpRequestSchema.parse(messageValue));
+  private async call(
+    messageValue: SyntheticCodeBuddyCandidateRequest,
+  ): Promise<unknown> {
+    const message = deepFreeze(
+      SyntheticCodeBuddyCandidateRequestSchema.parse(messageValue),
+    );
     try {
       return await this.transport.request(message);
     } catch {
@@ -351,7 +364,7 @@ export class CodeBuddyCandidateConnector {
     schema: z.ZodType<T>,
     value: unknown,
   ): T {
-    assertBoundedAcpResponse(value);
+    assertBoundedSyntheticCodeBuddyCandidateResponse(value);
     const parsed = schema.safeParse(value);
     if (!parsed.success) throw new Error("CODEBUDDY_RESPONSE_INVALID");
     return parsed.data;
@@ -361,8 +374,9 @@ export class CodeBuddyCandidateConnector {
     sessionRef: CodeBuddyNativeSessionRef,
     operationId: OperationId,
     prompt: string,
-  ): Promise<z.infer<typeof PromptResponseSchema>> {
+  ): Promise<z.infer<typeof SyntheticCodeBuddyPromptResponseSchema>> {
     const responseValue = await this.call({
+      fixtureKind: "hunter.codebuddy.synthetic_candidate_v1",
       method: "prompt",
       params: {
         sessionId: sessionRef,
@@ -370,7 +384,10 @@ export class CodeBuddyCandidateConnector {
         prompt,
       },
     });
-    const response = this.parseResponse(PromptResponseSchema, responseValue);
+    const response = this.parseResponse(
+      SyntheticCodeBuddyPromptResponseSchema,
+      responseValue,
+    );
     this.assertResponseIdentity(
       response.sessionId,
       response.runId,
@@ -418,6 +435,7 @@ export class CodeBuddyCandidateConnector {
           sessionRef: mode === "resume" ? sessionRef : null,
         }),
         mode,
+        fixtureKind: "hunter.codebuddy.synthetic_candidate_v1",
         proofScope: "contract_only",
         connectorValidationStatus: "NOT_PROVEN",
         retrySafety: "NOT_PROVEN",

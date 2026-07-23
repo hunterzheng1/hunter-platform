@@ -6,10 +6,10 @@ import {
 } from "@hunter/domain";
 import { runtimeFactCanCompleteStep } from "@hunter/runtime-contracts";
 import {
-  ACP_LIMITS,
-  type AcpRequest,
-  type AcpTransport,
-} from "./acp-transport.js";
+  SYNTHETIC_CODEBUDDY_LIMITS,
+  type SyntheticCodeBuddyCandidateRequest,
+  type SyntheticCodeBuddyCandidateTransport,
+} from "./synthetic-candidate-transport.js";
 import { CodeBuddyCandidateConnector } from "./codebuddy-connector.js";
 
 const launchOperationId = OperationIdSchema.parse("opn_codebuddylaunch01");
@@ -20,8 +20,8 @@ const workspacePath = "C:\\fixtures\\hunter-codebuddy-worktree";
 const prompt = "Inspect the fixture and return a bounded summary.";
 const sessionRef = "cb-session-01";
 
-type AcpResponse =
-  | { readonly protocolVersion: 1 }
+type SyntheticCandidateResponse =
+  | { readonly candidateSchemaVersion: 1 }
   | { readonly sessionId: string }
   | {
       readonly accepted: boolean;
@@ -29,12 +29,12 @@ type AcpResponse =
       readonly runId: string;
     };
 
-class FixtureTransport implements AcpTransport {
-  readonly calls: AcpRequest[] = [];
+class FixtureTransport implements SyntheticCodeBuddyCandidateTransport {
+  readonly calls: SyntheticCodeBuddyCandidateRequest[] = [];
 
-  constructor(private readonly responses: readonly AcpResponse[]) {}
+  constructor(private readonly responses: readonly SyntheticCandidateResponse[]) {}
 
-  async request(message: AcpRequest): Promise<unknown> {
+  async request(message: SyntheticCodeBuddyCandidateRequest): Promise<unknown> {
     this.calls.push(message);
     const response = this.responses[this.calls.length - 1];
     if (response === undefined) throw new Error("private token=CREDENTIAL");
@@ -44,14 +44,16 @@ class FixtureTransport implements AcpTransport {
 
 function launchResponses(
   overrides: Partial<{
-    readonly protocolVersion: 1;
+    readonly candidateSchemaVersion: 1;
     readonly sessionId: string;
     readonly accepted: boolean;
     readonly runId: string;
   }> = {},
-): readonly AcpResponse[] {
+): readonly SyntheticCandidateResponse[] {
   return [
-    { protocolVersion: overrides.protocolVersion ?? 1 },
+    {
+      candidateSchemaVersion: overrides.candidateSchemaVersion ?? 1,
+    },
     { sessionId: overrides.sessionId ?? sessionRef },
     {
       accepted: overrides.accepted ?? true,
@@ -61,7 +63,7 @@ function launchResponses(
   ];
 }
 
-describe("CodeBuddy ACP contract-only candidate", () => {
+describe("CodeBuddy synthetic lifecycle contract-only candidate", () => {
   it("uses the exact initialize, newSession, and prompt sequence with immutable messages", async () => {
     const transport = new FixtureTransport(launchResponses());
     const connector = new CodeBuddyCandidateConnector(transport, {
@@ -77,14 +79,17 @@ describe("CodeBuddy ACP contract-only candidate", () => {
 
     expect(transport.calls).toEqual([
       {
+        fixtureKind: "hunter.codebuddy.synthetic_candidate_v1",
         method: "initialize",
-        params: { client: "hunter", protocolVersion: 1 },
+        params: { client: "hunter", candidateSchemaVersion: 1 },
       },
       {
+        fixtureKind: "hunter.codebuddy.synthetic_candidate_v1",
         method: "newSession",
         params: { cwd: workspacePath, profileId },
       },
       {
+        fixtureKind: "hunter.codebuddy.synthetic_candidate_v1",
         method: "prompt",
         params: {
           sessionId: sessionRef,
@@ -151,6 +156,7 @@ describe("CodeBuddy ACP contract-only candidate", () => {
 
     expect(transport.calls).toEqual([
       {
+        fixtureKind: "hunter.codebuddy.synthetic_candidate_v1",
         method: "prompt",
         params: {
           sessionId: sessionRef,
@@ -178,12 +184,14 @@ describe("CodeBuddy ACP contract-only candidate", () => {
 
     expect(transport.calls).toEqual([
       {
+        fixtureKind: "hunter.codebuddy.synthetic_candidate_v1",
         method: "cancelRun",
         params: { sessionId: sessionRef, runId: interruptOperationId },
       },
     ]);
     expect(result).toMatchObject({
       proofScope: "contract_only",
+      fixtureKind: "hunter.codebuddy.synthetic_candidate_v1",
       connectorValidationStatus: "NOT_PROVEN",
       retrySafety: "NOT_PROVEN",
       structuredInterrupt: "NOT_PROVEN",
@@ -214,11 +222,15 @@ describe("CodeBuddy ACP contract-only candidate", () => {
 
       expect(result).toMatchObject({
         proofScope: "contract_only",
+        fixtureKind: "hunter.codebuddy.synthetic_candidate_v1",
         connectorValidationStatus: "NOT_PROVEN",
         retrySafety: "NOT_PROVEN",
         stepCompletion: "not_established",
         observations: [
-          { kind: "protocol_initialized", protocolVersion: 1 },
+          {
+            kind: "candidate_initialize_observed",
+            candidateSchemaVersion: 1,
+          },
           { kind: "session_created" },
           { kind: "prompt_response", accepted },
         ],
@@ -299,7 +311,7 @@ describe("CodeBuddy ACP contract-only candidate", () => {
     {
       label: "initialize extra private field",
       responses: [
-        { protocolVersion: 1, token: "private-token" },
+        { candidateSchemaVersion: 1, token: "private-token" },
         { sessionId: sessionRef },
         {
           accepted: true,
@@ -311,7 +323,7 @@ describe("CodeBuddy ACP contract-only candidate", () => {
     {
       label: "malformed new session",
       responses: [
-        { protocolVersion: 1 },
+        { candidateSchemaVersion: 1 },
         { sessionId: "../private" },
         {
           accepted: true,
@@ -323,11 +335,13 @@ describe("CodeBuddy ACP contract-only candidate", () => {
     {
       label: "oversized prompt response",
       responses: [
-        { protocolVersion: 1 },
+        { candidateSchemaVersion: 1 },
         { sessionId: sessionRef },
         {
           accepted: true,
-          sessionId: "x".repeat(ACP_LIMITS.maxStringBytes + 1),
+          sessionId: "x".repeat(
+            SYNTHETIC_CODEBUDDY_LIMITS.maxStringBytes + 1,
+          ),
           runId: launchOperationId,
         },
       ],
@@ -335,7 +349,7 @@ describe("CodeBuddy ACP contract-only candidate", () => {
     {
       label: "private response object too deep",
       responses: [
-        { protocolVersion: 1 },
+        { candidateSchemaVersion: 1 },
         { sessionId: sessionRef },
         {
           accepted: true,
@@ -469,7 +483,7 @@ describe("CodeBuddy ACP contract-only candidate", () => {
   });
 
   it("sanitizes transport failures without disclosing prompt, paths, or credentials", async () => {
-    const transport: AcpTransport = {
+    const transport: SyntheticCodeBuddyCandidateTransport = {
       request: async () => {
         throw new Error(
           `token=private path=${workspacePath} prompt=${prompt}`,
@@ -493,7 +507,7 @@ describe("CodeBuddy ACP contract-only candidate", () => {
   it("contains no production endpoint, fetch, capability manifest, or bypass switch", async () => {
     const root = new URL("../../../", import.meta.url);
     const files = [
-      "packages/connector-codebuddy/src/acp-transport.ts",
+      "packages/connector-codebuddy/src/synthetic-candidate-transport.ts",
       "packages/connector-codebuddy/src/codebuddy-connector.ts",
     ];
     const source = (
@@ -505,5 +519,23 @@ describe("CodeBuddy ACP contract-only candidate", () => {
     expect(source).not.toMatch(
       /\b(?:fetch|https?:|HttpAcpTransport|CapabilityManifest|localhost|127\.0\.0\.1|yolo|dangerously-bypass|auto-approve)\b/iu,
     );
+  });
+
+  it("cannot expose the synthetic fixture as a verified generic ACP protocol", async () => {
+    const root = new URL("../../../", import.meta.url);
+    const source = (
+      await Promise.all(
+        [
+          "packages/connector-codebuddy/src/synthetic-candidate-transport.ts",
+          "packages/connector-codebuddy/src/codebuddy-connector.ts",
+          "packages/connector-codebuddy/src/index.ts",
+        ].map((file) => readFile(new URL(file, root), "utf8")),
+      )
+    ).join("\n");
+
+    expect(source).not.toMatch(
+      /\b(?:AcpRequestSchema|AcpTransport|protocolVersion|protocol_initialized)\b/u,
+    );
+    expect(source).toContain("hunter.codebuddy.synthetic_candidate_v1");
   });
 });

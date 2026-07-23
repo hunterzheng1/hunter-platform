@@ -1,2 +1,2 @@
-export * from "./acp-transport.js";
+export * from "./synthetic-candidate-transport.js";
 export * from "./codebuddy-connector.js";

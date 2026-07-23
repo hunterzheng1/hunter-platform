@@ -4,7 +4,7 @@ import {
 } from "@hunter/domain";
 import { z } from "zod";
 
-export const ACP_LIMITS = Object.freeze({
+export const SYNTHETIC_CODEBUDDY_LIMITS = Object.freeze({
   maxResponseBytes: 64 * 1024,
   maxStringBytes: 16 * 1024,
   maxDepth: 8,
@@ -24,14 +24,16 @@ export type CodeBuddyNativeSessionRef = z.infer<
 >;
 
 const InitializeRequestSchema = z.strictObject({
+  fixtureKind: z.literal("hunter.codebuddy.synthetic_candidate_v1"),
   method: z.literal("initialize"),
   params: z.strictObject({
     client: z.literal("hunter"),
-    protocolVersion: z.literal(1),
+    candidateSchemaVersion: z.literal(1),
   }),
 });
 
 const NewSessionRequestSchema = z.strictObject({
+  fixtureKind: z.literal("hunter.codebuddy.synthetic_candidate_v1"),
   method: z.literal("newSession"),
   params: z.strictObject({
     cwd: z.string().min(1).max(4096),
@@ -40,6 +42,7 @@ const NewSessionRequestSchema = z.strictObject({
 });
 
 const PromptRequestSchema = z.strictObject({
+  fixtureKind: z.literal("hunter.codebuddy.synthetic_candidate_v1"),
   method: z.literal("prompt"),
   params: z.strictObject({
     sessionId: CodeBuddyNativeSessionRefSchema,
@@ -49,6 +52,7 @@ const PromptRequestSchema = z.strictObject({
 });
 
 const CancelRunRequestSchema = z.strictObject({
+  fixtureKind: z.literal("hunter.codebuddy.synthetic_candidate_v1"),
   method: z.literal("cancelRun"),
   params: z.strictObject({
     sessionId: CodeBuddyNativeSessionRefSchema,
@@ -56,33 +60,39 @@ const CancelRunRequestSchema = z.strictObject({
   }),
 });
 
-export const AcpRequestSchema = z.discriminatedUnion("method", [
+export const SyntheticCodeBuddyCandidateRequestSchema = z.discriminatedUnion("method", [
   InitializeRequestSchema,
   NewSessionRequestSchema,
   PromptRequestSchema,
   CancelRunRequestSchema,
 ]);
-export type AcpRequest = z.infer<typeof AcpRequestSchema>;
+export type SyntheticCodeBuddyCandidateRequest = z.infer<
+  typeof SyntheticCodeBuddyCandidateRequestSchema
+>;
 
-export const InitializeResponseSchema = z.strictObject({
-  protocolVersion: z.literal(1),
+export const SyntheticCodeBuddyInitializeResponseSchema = z.strictObject({
+  candidateSchemaVersion: z.literal(1),
 });
-export const NewSessionResponseSchema = z.strictObject({
+export const SyntheticCodeBuddyNewSessionResponseSchema = z.strictObject({
   sessionId: CodeBuddyNativeSessionRefSchema,
 });
-export const PromptResponseSchema = z.strictObject({
+export const SyntheticCodeBuddyPromptResponseSchema = z.strictObject({
   accepted: z.boolean(),
   sessionId: CodeBuddyNativeSessionRefSchema,
   runId: OperationIdSchema,
 });
-export const CancelRunResponseSchema = z.strictObject({
+export const SyntheticCodeBuddyCancelRunResponseSchema = z.strictObject({
   accepted: z.boolean(),
   sessionId: CodeBuddyNativeSessionRefSchema,
   runId: OperationIdSchema,
 });
 
-export interface AcpTransport {
-  request(message: AcpRequest): Promise<unknown>;
+/**
+ * Hunter-owned synthetic lifecycle fixture. Method labels exercise connector
+ * behavior only; they are not a claim about a CodeBuddy wire protocol.
+ */
+export interface SyntheticCodeBuddyCandidateTransport {
+  request(message: SyntheticCodeBuddyCandidateRequest): Promise<unknown>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -94,11 +104,14 @@ function assertBoundedValue(
   depth = 0,
   ancestors: ReadonlySet<object> = new Set(),
 ): void {
-  if (depth > ACP_LIMITS.maxDepth) {
+  if (depth > SYNTHETIC_CODEBUDDY_LIMITS.maxDepth) {
     throw new Error("CODEBUDDY_RESPONSE_TOO_LARGE");
   }
   if (typeof value === "string") {
-    if (Buffer.byteLength(value, "utf8") > ACP_LIMITS.maxStringBytes) {
+    if (
+      Buffer.byteLength(value, "utf8") >
+      SYNTHETIC_CODEBUDDY_LIMITS.maxStringBytes
+    ) {
       throw new Error("CODEBUDDY_RESPONSE_TOO_LARGE");
     }
     return;
@@ -106,7 +119,7 @@ function assertBoundedValue(
   if (Array.isArray(value)) {
     if (
       ancestors.has(value) ||
-      value.length > ACP_LIMITS.maxArrayItems
+      value.length > SYNTHETIC_CODEBUDDY_LIMITS.maxArrayItems
     ) {
       throw new Error("CODEBUDDY_RESPONSE_TOO_LARGE");
     }
@@ -120,13 +133,16 @@ function assertBoundedValue(
     const entries = Object.entries(value);
     if (
       ancestors.has(value) ||
-      entries.length > ACP_LIMITS.maxObjectKeys
+      entries.length > SYNTHETIC_CODEBUDDY_LIMITS.maxObjectKeys
     ) {
       throw new Error("CODEBUDDY_RESPONSE_TOO_LARGE");
     }
     const nextAncestors = new Set(ancestors).add(value);
     for (const [key, item] of entries) {
-      if (Buffer.byteLength(key, "utf8") > ACP_LIMITS.maxStringBytes) {
+      if (
+        Buffer.byteLength(key, "utf8") >
+        SYNTHETIC_CODEBUDDY_LIMITS.maxStringBytes
+      ) {
         throw new Error("CODEBUDDY_RESPONSE_TOO_LARGE");
       }
       assertBoundedValue(item, depth + 1, nextAncestors);
@@ -134,7 +150,9 @@ function assertBoundedValue(
   }
 }
 
-export function assertBoundedAcpResponse(value: unknown): void {
+export function assertBoundedSyntheticCodeBuddyCandidateResponse(
+  value: unknown,
+): void {
   assertBoundedValue(value);
   let serialized: string;
   try {
@@ -144,7 +162,8 @@ export function assertBoundedAcpResponse(value: unknown): void {
   }
   if (
     serialized === undefined ||
-    Buffer.byteLength(serialized, "utf8") > ACP_LIMITS.maxResponseBytes
+    Buffer.byteLength(serialized, "utf8") >
+      SYNTHETIC_CODEBUDDY_LIMITS.maxResponseBytes
   ) {
     throw new Error("CODEBUDDY_RESPONSE_TOO_LARGE");
   }
