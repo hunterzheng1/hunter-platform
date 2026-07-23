@@ -47,7 +47,17 @@ describe("DurableEventStream", () => {
     expect(() => stream.replay({ headerCursor: "bad", authorizedProjectIds: [projectA] })).toThrow(/EVENT_CURSOR_INVALID/u);
     expect(() => stream.replay({ headerCursor: "2", authorizedProjectIds: [projectA] })).toThrow(/EVENT_CURSOR_INVALID/u);
     reader.setRetentionFloor(1);
-    expect(stream.replay({ headerCursor: "0", authorizedProjectIds: [projectA] })).toEqual({ status: "resync_required", code: "EVENT_CURSOR_RESYNC_REQUIRED", retentionFloor: 1, highWaterPosition: 1, snapshotUrl: "/events/snapshot" });
+    expect(stream.replay({ headerCursor: "0", authorizedProjectIds: [projectA] })).toEqual({
+      status: "resync_required",
+      code: "EVENT_CURSOR_GAP",
+      retentionFloor: 1,
+      highWaterPosition: 1,
+      instructions: {
+        snapshot: "reload_snapshot",
+        rebuild: "replace_projection_from_snapshot",
+        resume: "subscribe_after_high_water_position",
+      },
+    });
     database.close();
   });
 

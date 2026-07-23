@@ -1,5 +1,7 @@
 import { isAllowedExternalUrl } from "./window-policy.js";
 
+export const CHECKED_IN_VITE_RENDERER_URL = "http://127.0.0.1:5173/";
+
 export const LOCKED_DOWN_WEB_PREFERENCES = Object.freeze({
   allowRunningInsecureContent: false,
   contextIsolation: true,

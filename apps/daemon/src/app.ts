@@ -1,6 +1,9 @@
 import Fastify, { type FastifyInstance } from "fastify";
 
 import type { LocalAuthenticator } from "./auth/local-authenticator.js";
+import type { LocalCapabilityVerifier } from "./auth/local-capability.js";
+import type { LocalPrincipal } from "./auth/local-authenticator.js";
+import { assertProtectedLoopbackListen } from "./auth/http-boundary.js";
 import { registerDurableEventRoutes, type DurableEventStream } from "./events/durable-event-stream.js";
 import { installSecurityHooks } from "./http/security-hooks.js";
 import { registerChangeRoutes, type ChangeRoutesServices } from "./routes/changes.js";
@@ -20,6 +23,10 @@ export interface BuildAppOptions {
   readonly requestTimeoutMs?: number | undefined;
   readonly limits?: { readonly maxConcurrentRequests?: number; readonly maxRequestsPerWindow?: number; readonly rateWindowMs?: number } | undefined;
   readonly eventStream?: DurableEventStream | undefined;
+  readonly localCapability?: {
+    readonly verifier: LocalCapabilityVerifier;
+    readonly principal: LocalPrincipal;
+  } | undefined;
 }
 
 export function buildApp(options: BuildAppOptions): FastifyInstance {
@@ -36,7 +43,13 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
     registerRequirementRoutes(app, options.services.requirements);
   }
   registerRunRoutes(app, options.services);
-  if (options.eventStream !== undefined) registerDurableEventRoutes(app, options.eventStream, options.authenticator);
+  if (options.eventStream !== undefined) {
+    registerDurableEventRoutes(
+      app,
+      options.eventStream,
+      options.localCapability === undefined ? options.authenticator : undefined,
+    );
+  }
   return app;
 }
 
@@ -71,5 +84,5 @@ export function assertRequirementRoutesServices(input: unknown): asserts input i
 }
 
 export function assertLoopbackListenOptions(options: { readonly host: string; readonly port: number }): void {
-  if (options.host !== "127.0.0.1" || options.port !== 0) throw new Error("FOUNDATION_REMOTE_LISTENER_FORBIDDEN");
+  assertProtectedLoopbackListen(options);
 }

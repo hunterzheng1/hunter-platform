@@ -4,15 +4,23 @@
   "private": true,
   "type": "module",
   "main": "dist/main.js",
+  "dependencies": {
+    "@hunter/api-contracts": "0.0.0",
+    "@hunter/domain": "0.0.0",
+    "zod": "^4.0.0"
+  },
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && node scripts/build-runtime-bundles.mjs",
     "build:resources": "npm run build -w @hunter/web",
+    "smoke:preload": "electron scripts/verify-preload.mjs",
+    "smoke:sidecar": "node scripts/verify-sidecar.mjs",
     "typecheck": "tsc -b --pretty false",
-    "pack:win": "npm run build:resources && npm run build && electron-builder --win nsis --x64"
+    "pack:win": "npm run build:resources && npm run build && npm run smoke:sidecar && npm run smoke:preload && electron-builder --win nsis --x64"
   },
   "devDependencies": {
     "electron": "37.10.3",
-    "electron-builder": "^26.0.12"
+    "electron-builder": "^26.0.12",
+    "esbuild": "0.28.1"
   },
   "build": {
     "appId": "local.hunter.platform",
@@ -24,6 +32,8 @@
     },
     "files": [
       "dist/**/*.js",
+      "dist/preload.cjs",
+      "!dist/preload.js",
       "!dist/**/*.test.js",
       "package.json"
     ],
@@ -31,6 +41,13 @@
       {
         "from": "../web/dist",
         "to": "web",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "dist-sidecar",
+        "to": "daemon",
         "filter": [
           "**/*"
         ]

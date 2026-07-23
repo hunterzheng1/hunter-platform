@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { desktopPreloadCapabilities } from "./preload.js";
 import {
+  CHECKED_IN_VITE_RENDERER_URL,
   installWindowBoundary,
   loadPackagedRenderer,
   LOCKED_DOWN_WEB_PREFERENCES,
@@ -9,7 +9,7 @@ import {
 } from "./window-boundary.js";
 
 describe("locked-down desktop window boundary", () => {
-  it("freezes the Task 11 web preferences and exposes no preload capability", () => {
+  it("freezes the Task 11 web preferences", () => {
     expect(LOCKED_DOWN_WEB_PREFERENCES).toEqual({
       allowRunningInsecureContent: false,
       contextIsolation: true,
@@ -19,8 +19,7 @@ describe("locked-down desktop window boundary", () => {
       webSecurity: true,
     });
     expect(Object.isFrozen(LOCKED_DOWN_WEB_PREFERENCES)).toBe(true);
-    expect(desktopPreloadCapabilities).toEqual([]);
-    expect(Object.isFrozen(desktopPreloadCapabilities)).toBe(true);
+    expect(CHECKED_IN_VITE_RENDERER_URL).toBe("http://127.0.0.1:5173/");
   });
 
   it("loads only the supplied packaged renderer file", async () => {
