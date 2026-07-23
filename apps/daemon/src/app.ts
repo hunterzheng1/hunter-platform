@@ -7,6 +7,7 @@ import { assertProtectedLoopbackListen } from "./auth/http-boundary.js";
 import { registerDurableEventRoutes, type DurableEventStream } from "./events/durable-event-stream.js";
 import { installSecurityHooks } from "./http/security-hooks.js";
 import { registerChangeRoutes, type ChangeRoutesServices } from "./routes/changes.js";
+import { registerDeviceRoutes, type DeviceRoutesServices } from "./routes/devices.js";
 import { registerProjectRoutes, type ProjectRoutesServices } from "./routes/projects.js";
 import { registerRequirementRoutes, type RequirementRoutesServices } from "./routes/requirements.js";
 import { registerRunRoutes, type RunRoutesServices } from "./routes/runs.js";
@@ -23,6 +24,7 @@ export interface BuildAppOptions {
   readonly requestTimeoutMs?: number | undefined;
   readonly limits?: { readonly maxConcurrentRequests?: number; readonly maxRequestsPerWindow?: number; readonly rateWindowMs?: number } | undefined;
   readonly eventStream?: DurableEventStream | undefined;
+  readonly devices?: DeviceRoutesServices | undefined;
   readonly localCapability?: {
     readonly verifier: LocalCapabilityVerifier;
     readonly principal: LocalPrincipal;
@@ -43,6 +45,9 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
     registerRequirementRoutes(app, options.services.requirements);
   }
   registerRunRoutes(app, options.services);
+  if (options.devices !== undefined) {
+    registerDeviceRoutes(app, options.devices);
+  }
   if (options.eventStream !== undefined) {
     registerDurableEventRoutes(
       app,

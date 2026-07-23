@@ -18,8 +18,29 @@ describe("desktop narrow IPC", () => {
       "runs.get",
       "runs.command",
       "knowledge.list",
+      "devices.pairing.create",
+      "devices.pairing.confirm",
+      "devices.revoke",
       "events.subscribe",
     ]);
+  });
+
+  it("exposes pairing only through named schema-validated desktop methods", async () => {
+    const invoke = vi.fn(async () => ({
+      pairingId: "pair_0123456789abcdef01234567",
+      challenge: "C".repeat(43),
+      expiresAt: "2026-07-24T00:05:00.000Z",
+    }));
+    const api = createDesktopPreloadApi(invoke, () => () => undefined);
+
+    await expect(api.devices.createPairingChallenge({})).resolves.toMatchObject({
+      pairingId: "pair_0123456789abcdef01234567",
+    });
+    await expect(
+      api.devices.createPairingChallenge({ projectId: "prj_private0001" } as never),
+    ).rejects.toThrow();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith("devices.pairing.create", {});
   });
 
   it("strictly validates requests and responses before crossing the renderer boundary", async () => {

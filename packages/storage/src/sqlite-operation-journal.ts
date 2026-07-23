@@ -101,14 +101,31 @@ function toReceipt(row: ReceiptRow): CommandReceipt {
 }
 
 export class SqliteOperationJournal {
+  private transactionDepth = 0;
+
   public constructor(private readonly database: DatabaseSync) {
     this.database.exec(loadCoreMigration());
   }
 
+  public runInImmediateTransaction<T>(work: () => T): T {
+    if (this.transactionDepth > 0) return work();
+    this.database.exec("BEGIN IMMEDIATE");
+    this.transactionDepth += 1;
+    try {
+      const result = work();
+      this.database.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    } finally {
+      this.transactionDepth -= 1;
+    }
+  }
+
   public commitCommand(command: CommitCommand): CommandReceipt {
     validateCommand(command);
-    this.database.exec("BEGIN IMMEDIATE");
-    try {
+    return this.runInImmediateTransaction(() => {
       const existing = this.database
         .prepare(
           `SELECT command_id, request_fingerprint, first_position, last_position, response_json, committed_at
@@ -119,7 +136,6 @@ export class SqliteOperationJournal {
         if (existing.request_fingerprint !== command.requestFingerprint) {
           throw new Error("IDEMPOTENCY_KEY_REUSED");
         }
-        this.database.exec("COMMIT");
         return toReceipt(existing);
       }
 
@@ -209,18 +225,13 @@ export class SqliteOperationJournal {
           committedAt,
         );
 
-      const receipt: CommandReceipt = {
+      return {
         commandId: command.commandId,
         firstPosition,
         lastPosition,
         response: command.response,
         committedAt,
       };
-      this.database.exec("COMMIT");
-      return receipt;
-    } catch (error) {
-      this.database.exec("ROLLBACK");
-      throw error;
-    }
+    });
   }
 }

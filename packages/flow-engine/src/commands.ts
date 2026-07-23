@@ -1,4 +1,11 @@
-import type { RequirementRevisionId, RunId, TaskId } from "@hunter/domain";
+import type {
+  GateId,
+  ProjectId,
+  RequirementRevisionId,
+  RunId,
+  StepRunId,
+  TaskId,
+} from "@hunter/domain";
 import type { ExternalOperation } from "@hunter/runtime-contracts";
 
 import type { WorkflowRunBinding } from "./run-binding.js";
@@ -104,6 +111,21 @@ export interface ResolveTaskDependencyFailureCommand extends ExistingRunCommand 
   readonly humanWaiver?: { readonly actorId: string; readonly contentHash: string } | undefined;
 }
 
+type RunControlTarget =
+  | { readonly kind: "step"; readonly stepRunId: StepRunId }
+  | { readonly kind: "gate"; readonly gateId: GateId };
+
+type RunControlIntent =
+  | { readonly action: "approve"; readonly target: Extract<RunControlTarget, { kind: "gate" }>; readonly payload: Readonly<Record<string, never>> }
+  | { readonly action: "reject"; readonly target: Extract<RunControlTarget, { kind: "gate" }>; readonly payload: { readonly reason?: string | undefined } }
+  | { readonly action: "supplement"; readonly target: Extract<RunControlTarget, { kind: "step" }>; readonly payload: { readonly text: string } }
+  | { readonly action: "pause" | "resume" | "terminate"; readonly target: Extract<RunControlTarget, { kind: "step" }>; readonly payload: Readonly<Record<string, never>> };
+
+export type ApplyRunControlCommand = ExistingRunCommand & {
+  readonly type: "ApplyRunControl";
+  readonly projectId: ProjectId;
+} & RunControlIntent;
+
 export type FlowCommand =
   | StartRunCommand
   | RecordExternalObservationCommand
@@ -121,7 +143,8 @@ export type FlowCommand =
   | RecordResumeFailureCommand
   | RecordExecutionFailureCommand
   | ActivateScheduledRetryCommand
-  | ResolveTaskDependencyFailureCommand;
+  | ResolveTaskDependencyFailureCommand
+  | ApplyRunControlCommand;
 
 export interface FlowCommandReceipt {
   readonly commandId: string;

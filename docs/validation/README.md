@@ -19,6 +19,7 @@ record should retain a hash and a safe summary.
 
 Current records:
 
+- [`first-vertical-slice-task17.md`](first-vertical-slice-task17.md) — Task 17 本机设备身份、TLS、幂等命令与 PWA 安全验证；不代表真实 Provider 或公网生产验证。
 - [`codex-app-server-runtime.md`](codex-app-server-runtime.md) — bounded Windows Codex app-server approval/interrupt verdict; experimental surface, not production adoption.
 - [`evidence/codex/app-server-runtime.json`](evidence/codex/app-server-runtime.json) — versioned, redacted ephemeral stdio protocol receipts.
 - [`codex-direct-runtime.md`](codex-direct-runtime.md) — bounded Windows Direct Codex CLI verdict, real JSONL/resume evidence, and explicit unproven interrupt boundary.

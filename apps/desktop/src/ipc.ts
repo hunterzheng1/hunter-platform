@@ -8,6 +8,7 @@ import {
   RunViewHttpResponseSchema,
 } from "@hunter/api-contracts";
 import {
+  DeviceIdSchema,
   KnowledgeEntryIdSchema,
   ProjectIdSchema,
   RequirementRevisionIdSchema,
@@ -24,6 +25,9 @@ export const DESKTOP_IPC_CHANNELS = Object.freeze([
   "runs.get",
   "runs.command",
   "knowledge.list",
+  "devices.pairing.create",
+  "devices.pairing.confirm",
+  "devices.revoke",
   "events.subscribe",
 ] as const);
 export type DesktopIpcChannel = typeof DESKTOP_IPC_CHANNELS[number];
@@ -46,6 +50,44 @@ const KnowledgeListResponseSchema = z.strictObject({
     title: z.string().min(1).max(200),
   })).max(1_000),
 });
+const PairingIdSchema = z.string().regex(/^pair_[a-f0-9]{24}$/u);
+const PairingChallengeResponseSchema = z.strictObject({
+  pairingId: PairingIdSchema,
+  challenge: z.string().regex(/^[A-Za-z0-9_-]{40,100}$/u),
+  expiresAt: z.string().datetime({ offset: true }),
+});
+const MobileScopeSetSchema = z.array(z.enum([
+  "runs:read",
+  "artifacts:read",
+  "gates:approve",
+  "runs:control",
+])).min(1).max(4).superRefine((scopes, context) => {
+  if (new Set(scopes).size !== scopes.length) {
+    context.addIssue({ code: "custom", message: "mobile scopes must be unique" });
+  }
+});
+const PairingConfirmationRequestSchema = z.strictObject({
+  pairingId: PairingIdSchema,
+  scopes: MobileScopeSetSchema,
+  projectIds: z.array(ProjectIdSchema).min(1).max(100),
+  deviceExpiresAt: z.string().datetime({ offset: true }),
+});
+const StoredDeviceSchema = z.strictObject({
+  deviceId: DeviceIdSchema,
+  displayName: z.string().trim().min(1).max(120),
+  publicJwk: z.record(z.string(), z.unknown()),
+  publicKeyThumbprint: z.string().min(32).max(100),
+  scopes: MobileScopeSetSchema,
+  projectIds: z.array(ProjectIdSchema).min(1).max(100),
+  version: z.number().int().positive(),
+  expiresAt: z.string().datetime({ offset: true }),
+  revokedAt: z.string().datetime({ offset: true }).nullable(),
+});
+const PairingConfirmationResponseSchema = z.strictObject({
+  device: StoredDeviceSchema,
+});
+const DeviceRevokeRequestSchema = z.strictObject({ deviceId: DeviceIdSchema });
+const DeviceRevokeResponseSchema = z.strictObject({ status: z.literal("revoked") });
 const EventSubscriptionResponseSchema = z.strictObject({
   subscriptionId: z.string().regex(/^[A-Za-z0-9_-]{8,128}$/u),
   cursor: z.number().int().nonnegative(),
@@ -103,6 +145,9 @@ const requestSchemas = {
   "runs.get": z.strictObject({ runId: RunIdSchema }),
   "runs.command": RunCommandSchema,
   "knowledge.list": z.strictObject({ projectId: ProjectIdSchema }),
+  "devices.pairing.create": EmptySchema,
+  "devices.pairing.confirm": PairingConfirmationRequestSchema,
+  "devices.revoke": DeviceRevokeRequestSchema,
   "events.subscribe": z.strictObject({ cursor: z.number().int().nonnegative() }),
 } as const;
 
@@ -114,6 +159,9 @@ const responseSchemas = {
   "runs.get": RunViewHttpResponseSchema,
   "runs.command": RunCommandResponseSchema,
   "knowledge.list": KnowledgeListResponseSchema,
+  "devices.pairing.create": PairingChallengeResponseSchema,
+  "devices.pairing.confirm": PairingConfirmationResponseSchema,
+  "devices.revoke": DeviceRevokeResponseSchema,
   "events.subscribe": EventSubscriptionResponseSchema,
 } as const;
 
@@ -264,6 +312,12 @@ function daemonRoute(
     case "runs.get": return { method: "GET", path: `/api/v1/runs/${String(request.runId)}` };
     case "runs.command": return { method: "POST", path: `/api/v1/runs/${String(request.runId)}/commands`, body: request };
     case "knowledge.list": return { method: "GET", path: `/api/v1/projects/${String(request.projectId)}/knowledge` };
+    case "devices.pairing.create": return { method: "POST", path: "/api/v1/devices/pairing-challenges", body: {} };
+    case "devices.pairing.confirm": {
+      const { pairingId, ...body } = request;
+      return { method: "POST", path: `/api/v1/devices/pairings/${String(pairingId)}/confirm`, body };
+    }
+    case "devices.revoke": return { method: "POST", path: `/api/v1/devices/${String(request.deviceId)}/revoke`, body: {} };
     case "events.subscribe": return { method: "GET", path: "/events" };
   }
 }
@@ -480,6 +534,14 @@ export function createDesktopPreloadApi(
     }),
     knowledge: Object.freeze({
       list: (request: unknown) => invokeValidated(invoke, "knowledge.list", request),
+    }),
+    devices: Object.freeze({
+      createPairingChallenge: (request: unknown) =>
+        invokeValidated(invoke, "devices.pairing.create", request),
+      confirmPairing: (request: unknown) =>
+        invokeValidated(invoke, "devices.pairing.confirm", request),
+      revoke: (request: unknown) =>
+        invokeValidated(invoke, "devices.revoke", request),
     }),
     events: Object.freeze({
       subscribe: (request: unknown, listener: (event: unknown) => void) => {

@@ -2,18 +2,22 @@ import { createHash } from "node:crypto";
 
 import {
   AttemptIdSchema,
+  GateIdSchema,
   StepRunIdSchema,
   canonicalSha256,
   type ExecutionPlan,
+  type GateId,
   type RequirementRevision,
   type RequirementRevisionId,
   type RunId,
+  type StepRunId,
   type TaskId,
   type WorkflowRevision,
 } from "@hunter/domain";
 import type { ExternalOperation } from "@hunter/runtime-contracts";
 
 import type {
+  ApplyRunControlCommand,
   FlowCommand,
   FlowCommandReceipt,
   ExistingRunCommand,
@@ -58,6 +62,10 @@ export interface FlowDefinitions {
 
 function derivedId(prefix: "spr" | "att", value: string): string {
   return `${prefix}_${createHash("sha256").update(value).digest("hex").slice(0, 24)}`;
+}
+
+export function deriveHumanGateId(runId: RunId, stepRunId: StepRunId): GateId {
+  return GateIdSchema.parse(`gat_${canonicalSha256({ runId, stepRunId }).slice(0, 24)}`);
 }
 
 function activeStep(state: WorkflowRunState) {
@@ -115,6 +123,121 @@ export class FlowEngine {
         return this.activateScheduledRetry(command, commandId, requestFingerprint);
       case "ResolveTaskDependencyFailure":
         return this.resolveTaskDependencyFailure(command, commandId, requestFingerprint);
+      case "ApplyRunControl":
+        return this.applyRunControl(command, commandId, requestFingerprint);
+    }
+  }
+
+  public activeHumanGateId(runId: RunId): GateId {
+    const state = this.requireActiveRun(runId);
+    const workflow = this.requireWorkflow(state.binding.workflowRevisionId);
+    const { step } = activeStep(state);
+    const definition = workflow.steps.find(({ stepId }) => stepId === step.stepId);
+    if (definition?.verifier.kind !== "human_receipt") {
+      throw new Error("ACTIVE_STEP_NOT_HUMAN_GATE");
+    }
+    return deriveHumanGateId(runId, step.stepRunId);
+  }
+
+  private applyRunControl(
+    command: ApplyRunControlCommand,
+    commandId: string,
+    requestFingerprint: string,
+  ): FlowCommandReceipt {
+    const state = this.requireActiveRun(command.runId);
+    if (state.version !== command.expectedVersion) {
+      throw new Error(
+        `EXPECTED_VERSION_CONFLICT expected=${command.expectedVersion} actual=${state.version}`,
+      );
+    }
+    if (state.binding.projectId !== command.projectId) throw new Error("COMMAND_RUN_SCOPE_MISMATCH");
+    let step: ReturnType<typeof activeStep>["step"];
+    try {
+      ({ step } = activeStep(state));
+    } catch (error) {
+      if (command.target.kind === "gate") throw new Error("GATE_ALREADY_DECIDED");
+      throw error;
+    }
+
+    if (command.target.kind === "gate") {
+      if (command.action !== "approve" && command.action !== "reject") {
+        throw new Error("COMMAND_TARGET_KIND_MISMATCH");
+      }
+      const workflow = this.requireWorkflow(state.binding.workflowRevisionId);
+      const definition = workflow.steps.find(({ stepId }) => stepId === step.stepId);
+      if (definition?.verifier.kind !== "human_receipt") {
+        throw new Error("GATE_ALREADY_DECIDED");
+      }
+      if (deriveHumanGateId(command.runId, step.stepRunId) !== command.target.gateId) {
+        throw new Error("COMMAND_TARGET_SCOPE_MISMATCH");
+      }
+      return this.recordVerifier(
+        {
+          type: "RecordVerifierResult",
+          runId: command.runId,
+          outcome: command.action === "approve" ? "passed" : "canceled",
+          evidenceFingerprint: requestFingerprint,
+          humanReceipt: {
+            contentHash: step.fixedContentHash,
+            actorId: command.actor.actorId,
+          },
+          expectedVersion: command.expectedVersion,
+          idempotencyKey: command.idempotencyKey,
+          actor: {
+            ...command.actor,
+            roles: [
+              ...new Set([
+                ...(command.actor.roles ?? []),
+                definition.verifier.requiredRole,
+              ]),
+            ],
+          },
+        },
+        commandId,
+        requestFingerprint,
+      );
+    }
+
+    if (step.stepRunId !== command.target.stepRunId) {
+      throw new Error("COMMAND_TARGET_SCOPE_MISMATCH");
+    }
+    switch (command.action) {
+      case "pause":
+        if (state.status === "paused") throw new Error("RUN_ALREADY_PAUSED");
+        return this.commitExisting(
+          command,
+          commandId,
+          requestFingerprint,
+          [{ type: "RunStatusChanged", status: "paused" }],
+          { status: "accepted", action: command.action },
+        );
+      case "resume":
+        if (state.status !== "paused") throw new Error("RUN_NOT_PAUSED");
+        return this.commitExisting(
+          command,
+          commandId,
+          requestFingerprint,
+          [{ type: "RunStatusChanged", status: "running" }],
+          { status: "accepted", action: command.action },
+        );
+      case "supplement":
+        return this.commitExisting(
+          command,
+          commandId,
+          requestFingerprint,
+          [{
+            type: "SupplementalInputRecorded",
+            stepRunId: step.stepRunId,
+            text: command.payload.text,
+            actorId: command.actor.actorId,
+          }],
+          { status: "accepted", action: command.action },
+        );
+      case "terminate":
+        return this.cancelRun(command, commandId, requestFingerprint);
+      case "approve":
+      case "reject":
+        throw new Error("COMMAND_TARGET_KIND_MISMATCH");
     }
   }
 

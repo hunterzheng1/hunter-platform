@@ -2,10 +2,36 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import {
+  DeviceGateway,
+  DeviceStore,
+  PairingService,
+  TokenService,
+} from "@hunter/device-gateway";
 import type { ExternalOperationHandler } from "@hunter/runtime-contracts";
 
 import { assertLoopbackListenOptions, buildApp } from "./app.js";
+import { buildRemoteDeviceApp } from "./auth/remote-device-auth.js";
+import {
+  startRemoteTlsListener,
+  type RemoteTlsListenerResult,
+} from "./auth/remote-tls-listener.js";
+import { createMobileProjectionProvider } from "./routes/mobile-projections.js";
 import { createSqliteApplicationServices, type SqliteServiceRepositories } from "./services/sqlite-application-services.js";
+
+export type RemoteDaemonOptions =
+  | { readonly enabled?: false }
+  | {
+      readonly enabled: true;
+      readonly host: string;
+      readonly port: number;
+      readonly issuer: string;
+      readonly allowedHosts: readonly string[];
+      readonly allowedOrigins: readonly string[];
+      readonly signingSecretRef: string;
+      readonly tlsKeyRef: string;
+      readonly tlsCertRef: string;
+    };
 
 export interface DaemonStartOptions {
   readonly dataDirectory: string;
@@ -16,16 +42,29 @@ export interface DaemonStartOptions {
   readonly allowedHost: string;
   readonly allowedOrigin: string;
   readonly publishPort: (port: number) => Promise<void>;
+  readonly remote?: RemoteDaemonOptions | undefined;
+}
+
+function assertSecretRef(reference: string): void {
+  if (!/^os-credential:\/\/[A-Za-z0-9._/-]+$/u.test(reference)) {
+    throw new Error("SECRET_REF_SCHEME_INVALID");
+  }
 }
 
 export async function startDaemon(options: DaemonStartOptions) {
-  if (!/^os-credential:\/\/[A-Za-z0-9._/-]+$/u.test(options.secretRef)) throw new Error("SECRET_REF_SCHEME_INVALID");
+  assertSecretRef(options.secretRef);
+  if (options.remote?.enabled === true) {
+    assertSecretRef(options.remote.signingSecretRef);
+    assertSecretRef(options.remote.tlsKeyRef);
+    assertSecretRef(options.remote.tlsCertRef);
+  }
   mkdirSync(options.dataDirectory, { recursive: true });
   const installSecret = await options.secretStore.resolveSecret(options.secretRef);
   const database = new DatabaseSync(join(options.dataDirectory, "hunter.sqlite"));
   let app: ReturnType<typeof buildApp> | undefined;
   let workerTimer: ReturnType<typeof setInterval> | undefined;
   let workerDrain: Promise<void> = Promise.resolve();
+  let remote: RemoteTlsListenerResult = { status: "disabled" };
   try {
     const services = createSqliteApplicationServices({
       database,
@@ -35,6 +74,30 @@ export async function startDaemon(options: DaemonStartOptions) {
       allowedHosts: [options.allowedHost],
       allowedOrigins: [options.allowedOrigin],
       contentDirectory: options.dataDirectory,
+    });
+    const remoteEnabled = options.remote?.enabled === true;
+    const deviceStore = remoteEnabled ? new DeviceStore(database) : undefined;
+    const pairing = deviceStore === undefined
+      ? undefined
+      : new PairingService({ store: deviceStore });
+    const tokens = deviceStore === undefined || options.remote?.enabled !== true
+      ? undefined
+      : await TokenService.create({
+          store: deviceStore,
+          issuer: options.remote.issuer,
+          audience: "hunter-mobile",
+          signingSecretRef: options.remote.signingSecretRef,
+          secretStore: options.secretStore,
+        });
+    const gateway = deviceStore === undefined
+      ? undefined
+      : new DeviceGateway({
+          journal: services.journal,
+          commands: services.flowEngine,
+        });
+    const projections = createMobileProjectionProvider({
+      flowStore: services.flowStore,
+      repositories: services.repositories,
     });
     database.prepare(
       `INSERT INTO storage_metadata(metadata_key, metadata_value, updated_at)
@@ -61,6 +124,9 @@ export async function startDaemon(options: DaemonStartOptions) {
       allowedHosts: services.allowedHosts,
       allowedOrigins: services.allowedOrigins,
       eventStream: services.eventStream,
+      devices: pairing === undefined || tokens === undefined || deviceStore === undefined
+        ? undefined
+        : { pairing, store: deviceStore },
       services: {
         listProjects: async (authorizedProjectIds) => {
           return authorizedProjectIds.flatMap((projectId) => {
@@ -86,15 +152,47 @@ export async function startDaemon(options: DaemonStartOptions) {
     await app.listen(listenOptions);
     const address = app.server.address();
     if (address === null || typeof address === "string") throw new Error("DAEMON_LISTEN_ADDRESS_INVALID");
+    const remoteOptions = options.remote;
+    if (
+      remoteOptions?.enabled === true
+      && tokens !== undefined
+      && pairing !== undefined
+      && gateway !== undefined
+    ) {
+      const tlsKey = await options.secretStore.resolveSecret(remoteOptions.tlsKeyRef);
+      const tlsCert = await options.secretStore.resolveSecret(remoteOptions.tlsCertRef);
+      remote = await startRemoteTlsListener({
+        enabled: true,
+        host: remoteOptions.host,
+        port: remoteOptions.port,
+        key: tlsKey,
+        cert: tlsCert,
+        buildApp: (https) =>
+          buildRemoteDeviceApp({
+            tokens,
+            pairing,
+            gateway,
+            eventStream: services.eventStream,
+            projections,
+            allowedHosts: remoteOptions.allowedHosts,
+            allowedOrigins: remoteOptions.allowedOrigins,
+            https,
+          }),
+      });
+    } else {
+      remote = await startRemoteTlsListener({ enabled: false });
+    }
     await options.publishPort(address.port);
     const runningApp = app;
     let closed = false;
     return {
       port: address.port,
+      remote,
       services,
       shutdown: async () => {
         if (closed) return;
         closed = true;
+        if (remote.status === "listening") await remote.close();
         await runningApp.close();
         if (workerTimer !== undefined) clearInterval(workerTimer);
         await workerDrain;
@@ -105,6 +203,7 @@ export async function startDaemon(options: DaemonStartOptions) {
   } catch (error) {
     if (workerTimer !== undefined) clearInterval(workerTimer);
     if (app !== undefined) await app.close().catch(() => undefined);
+    if (remote.status === "listening") await remote.close().catch(() => undefined);
     await workerDrain.catch(() => undefined);
     database.close();
     throw error;

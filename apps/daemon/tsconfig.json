@@ -5,6 +5,7 @@
   "references": [
     { "path": "../../packages/api-contracts" },
     { "path": "../../packages/application" },
+    { "path": "../../packages/device-gateway" },
     { "path": "../../packages/domain" },
     { "path": "../../packages/flow-engine" },
     { "path": "../../packages/policy" },

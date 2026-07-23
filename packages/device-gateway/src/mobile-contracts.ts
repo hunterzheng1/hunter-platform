@@ -68,6 +68,16 @@ export const MobileCommandEnvelopeSchema = z.union([
 ]);
 export type MobileCommandEnvelope = z.infer<typeof MobileCommandEnvelopeSchema>;
 
+export const MobileCommandReceiptSchema = z.strictObject({
+  commandId: z.string().trim().min(1).max(256),
+  response: z.unknown(),
+});
+export const MobileCommandResultSchema = z.strictObject({
+  status: z.enum(["accepted", "rejected", "conflict"]),
+  receipt: MobileCommandReceiptSchema,
+});
+export type MobileCommandResult = z.infer<typeof MobileCommandResultSchema>;
+
 export const MobileRunProjectionSchema = z.strictObject({
   projectId: ProjectIdSchema,
   runId: RunIdSchema,

@@ -7,7 +7,11 @@ import {
   type MobileCommandEnvelope,
   type MobileRunProjection,
 } from "@hunter/device-gateway";
-import { MobileCockpit, MobileUnavailablePage } from "./mobile-cockpit.js";
+import {
+  MobileCockpit,
+  MobileCockpitWithOutbox,
+  MobileUnavailablePage,
+} from "./mobile-cockpit.js";
 
 afterEach(cleanup);
 
@@ -85,5 +89,39 @@ describe("MobileCockpit", () => {
     expect((await screen.findByRole("alert")).textContent).toBe("命令未提交；Hunter 状态未改变。");
     expect(screen.getByRole("button", { name: "批准" })).toHaveProperty("disabled", false);
     expect(screen.queryByText("transport detail must not be shown")).toBeNull();
+  });
+
+  it("dispatches the complete envelope through the persistent command outbox", async () => {
+    const transport = vi.fn(async (command: MobileCommandEnvelope) => {
+      void command;
+      return {
+        status: "accepted" as const,
+        receipt: {
+          commandId: "ApplyRunControl:mobile-approve-0001",
+          response: { status: "accepted" },
+        },
+      };
+    });
+    const outbox = {
+      submit: vi.fn(async (
+        command: MobileCommandEnvelope,
+        suppliedTransport: typeof transport,
+      ) => {
+        expect(command).toBe(approveCommand);
+        expect(suppliedTransport).toBe(transport);
+        return await suppliedTransport(command);
+      }),
+    };
+    render(
+      <MobileCockpitWithOutbox
+        runs={[run()]}
+        outbox={outbox}
+        transport={transport}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "批准" }));
+    await vi.waitFor(() => expect(outbox.submit).toHaveBeenCalledOnce());
+    expect(outbox.submit).toHaveBeenCalledWith(approveCommand, transport);
   });
 });

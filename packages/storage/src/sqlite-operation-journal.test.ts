@@ -188,4 +188,20 @@ describe("SqliteOperationJournal", () => {
     );
     expect(receipt).toMatchObject({ firstPosition: null, lastPosition: null, response: { accepted: true } });
   });
+
+  it("owns one immediate transaction across validation and command commit", () => {
+    const { database: db, journal } = setup();
+
+    expect(() =>
+      journal.runInImmediateTransaction(() => {
+        journal.commitCommand(command());
+        expect(db.prepare("SELECT COUNT(*) AS count FROM events").get()).toEqual({ count: 2 });
+        throw new Error("POST_COMMIT_VALIDATION_FAILED");
+      }),
+    ).toThrowError("POST_COMMIT_VALIDATION_FAILED");
+
+    expect(db.prepare("SELECT COUNT(*) AS count FROM events").get()).toEqual({ count: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM command_receipts").get()).toEqual({ count: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM outbox").get()).toEqual({ count: 0 });
+  });
 });

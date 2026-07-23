@@ -4,7 +4,8 @@ import type {
   MobileCommandAction,
   MobileCommandEnvelope,
   MobileRunProjection,
-} from "@hunter/device-gateway";
+} from "@hunter/device-gateway/mobile-contracts";
+import type { MobileCommandOutbox } from "../mobile/command-outbox.js";
 
 import "../styles/mobile.css";
 
@@ -87,4 +88,20 @@ export function MobileCockpit({
       })}
     </main>
   );
+}
+
+export function MobileCockpitWithOutbox({
+  runs,
+  outbox,
+  transport,
+}: {
+  readonly runs: readonly MobileRunProjection[];
+  readonly outbox: Pick<MobileCommandOutbox, "submit">;
+  readonly transport: (command: MobileCommandEnvelope) => Promise<unknown>;
+}) {
+  const onCommand = async (command: MobileCommandEnvelope) => {
+    const terminal = await outbox.submit(command, transport);
+    if (terminal.status !== "accepted") throw new Error("MOBILE_COMMAND_NOT_ACCEPTED");
+  };
+  return <MobileCockpit runs={runs} onCommand={onCommand} />;
 }

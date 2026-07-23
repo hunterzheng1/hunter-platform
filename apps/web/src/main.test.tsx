@@ -16,6 +16,7 @@ it("renders /mobile as an unavailable remote surface without reading the desktop
 
   await import("./main.js");
 
+  expect(window.location.pathname).toBe("/mobile/");
   expect((await screen.findByRole("alert")).textContent).toContain("远程访问尚未配置");
   expect(desktopTransportRead).not.toHaveBeenCalled();
 });

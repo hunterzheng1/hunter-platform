@@ -6,6 +6,8 @@ import {
   HunterApi,
   type AuthenticatedHunterTransport,
 } from "./api/client.js";
+import { MobileApplication } from "./mobile/mobile-application.js";
+import { createMobileComposition } from "./mobile/mobile-composition.js";
 import { MobileUnavailablePage } from "./pages/mobile-cockpit.js";
 import { ProjectListPage } from "./pages/project-list-page.js";
 import { ProjectPage } from "./pages/project-page.js";
@@ -23,6 +25,7 @@ function routeProjectId(pathname: string): string | undefined {
 declare global {
   interface Window {
     readonly hunterAuthenticatedTransport?: unknown;
+    readonly hunterMobileConfig?: unknown;
   }
 }
 
@@ -54,13 +57,29 @@ function Workbench({ transport }: { readonly transport: AuthenticatedHunterTrans
 
 const root = document.getElementById("root");
 if (root === null) throw new Error("WORKBENCH_ROOT_MISSING");
+if (window.location.pathname === "/mobile") {
+  window.history.replaceState(
+    window.history.state,
+    "",
+    `/mobile/${window.location.search}${window.location.hash}`,
+  );
+}
 const mobileRoute = isMobileRoute(window.location.pathname);
 const transport = mobileRoute
   ? undefined
   : AuthenticatedHunterTransportSchema.safeParse(window.hunterAuthenticatedTransport);
+const mobile = mobileRoute
+  ? createMobileComposition(window.hunterMobileConfig, {
+      indexedDB: window.indexedDB,
+      crypto: window.crypto,
+      fetch: globalThis.fetch.bind(globalThis),
+    })
+  : undefined;
 if (mobileRoute) registerMobileServiceWorker();
 createRoot(root).render(mobileRoute
-  ? <MobileUnavailablePage />
+  ? mobile === undefined
+    ? <MobileUnavailablePage />
+    : <MobileApplication runtime={mobile.runtime} outbox={mobile.outbox} />
   : transport?.success === true
   ? <Workbench transport={transport.data} />
   : <main className="page-shell"><p role="alert" className="message error-message">安全连接尚未配置。请从受信任的 Hunter 桌面宿主打开工作台。</p></main>);

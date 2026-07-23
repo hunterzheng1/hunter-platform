@@ -6,6 +6,7 @@
   "dependencies": {
     "@hunter/api-contracts": "0.0.0",
     "@hunter/application": "0.0.0",
+    "@hunter/device-gateway": "0.0.0",
     "@hunter/domain": "0.0.0",
     "@hunter/flow-engine": "0.0.0",
     "@hunter/policy": "0.0.0",

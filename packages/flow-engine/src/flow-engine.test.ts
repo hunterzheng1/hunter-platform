@@ -793,6 +793,90 @@ describe("authoritative FlowEngine", () => {
     }));
   });
 
+  it("applies replay-safe operator controls as canonical Flow events", () => {
+    const { store, engine, actor, runId } = engineHarness();
+    const stepRunId = current(store).steps[0]!.stepRunId;
+    const pause = {
+      type: "ApplyRunControl" as const,
+      projectId: ids.project,
+      runId,
+      target: { kind: "step" as const, stepRunId },
+      action: "pause" as const,
+      payload: {},
+      expectedVersion: current(store).version,
+      idempotencyKey: "operator-pause-0001",
+      actor,
+    };
+
+    const first = engine.handle(pause);
+    const paused = current(store);
+    expect(paused.status).toBe("paused");
+    expect(engine.handle(pause)).toEqual(first);
+    expect(current(store)).toEqual(paused);
+    expect(store.commits.at(-1)!.events).toEqual([
+      { type: "RunStatusChanged", status: "paused" },
+    ]);
+
+    engine.handle({
+      ...pause,
+      action: "resume",
+      expectedVersion: current(store).version,
+      idempotencyKey: "operator-resume-0001",
+    });
+    expect(current(store).status).toBe("running");
+
+    engine.handle({
+      ...pause,
+      action: "supplement",
+      payload: { text: "Use the verified recovery path." },
+      expectedVersion: current(store).version,
+      idempotencyKey: "operator-supplement-0001",
+    });
+    expect(current(store).supplementalInputs).toEqual([
+      {
+        stepRunId,
+        text: "Use the verified recovery path.",
+        actorId: actor.actorId,
+      },
+    ]);
+    expect(store.commits.flatMap(({ events }) => events.map(({ type }) => type))).not.toContain(
+      "MobileRunPaused",
+    );
+  });
+
+  it("decides the derived active Human Gate through the canonical verifier transition", () => {
+    const { store, engine, actor, runId } = engineHarness(humanGateWorkflow());
+    engine.handle({
+      type: "RecordExternalObservation",
+      runId,
+      fact: "agent_returned",
+      expectedVersion: current(store).version,
+      idempotencyKey: "operator-gate-returned",
+      actor,
+    });
+    const stepRunId = current(store).steps[0]!.stepRunId;
+    const gateId = engine.activeHumanGateId(runId);
+
+    engine.handle({
+      type: "ApplyRunControl",
+      projectId: ids.project,
+      runId,
+      target: { kind: "gate", gateId },
+      action: "approve",
+      payload: {},
+      expectedVersion: current(store).version,
+      idempotencyKey: "operator-gate-approve-0001",
+      actor,
+    });
+
+    expect(current(store).steps.find((step) => step.stepRunId === stepRunId)).toMatchObject({
+      verificationStatus: "passed",
+      conclusion: "succeeded",
+    });
+    expect(store.commits.at(-1)!.events.map(({ type }) => type)).toContain("VerificationChanged");
+    expect(store.commits.at(-1)!.events.map(({ type }) => type)).not.toContain("MobileGateApproved");
+  });
+
   it("rejects a canceled verifier outcome for an automated verifier", () => {
     const { store, engine, actor, runId } = engineHarness();
     engine.handle({

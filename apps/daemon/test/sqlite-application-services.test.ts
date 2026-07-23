@@ -285,6 +285,7 @@ describe("createSqliteApplicationServices", () => {
       rmSync(fixture, { recursive: true, force: true });
       temporaryFixtures.delete(fixture);
     },
+    20_000,
   );
 
   it("bootstraps Workspace -> Writer -> Controller leases only from durable worker receipts", async () => {
@@ -572,6 +573,7 @@ describe("createSqliteApplicationServices", () => {
     });
     expect(resolved).toEqual(["os-credential://hunter/install"]);
     expect(daemon.port).toBeGreaterThan(0);
+    expect(daemon.remote).toEqual({ status: "disabled" });
     const inspection = new DatabaseSync(join(dataDirectory, "hunter.sqlite"));
     expect(inspection.prepare("SELECT metadata_value FROM storage_metadata WHERE metadata_key = 'local_secret_ref'").get()).toEqual({ metadata_value: "os-credential://hunter/install" });
     expect(JSON.stringify(inspection.prepare("SELECT metadata_value FROM storage_metadata").all())).not.toContain("resolved-install-secret-tests");
@@ -593,5 +595,51 @@ describe("createSqliteApplicationServices", () => {
       publishPort: async () => undefined,
     })).rejects.toThrow(/SECRET_REF_SCHEME_INVALID/u);
     expect(resolved).toBe(false);
+  });
+
+  it("routes explicit remote enablement through the guarded TLS listener and OS secret references", async () => {
+    const dataDirectory = mkdtempSync(join(tmpdir(), "hunter-remote-composition-"));
+    const resolved: string[] = [];
+    let caught: unknown;
+    try {
+      const daemon = await startDaemon({
+        dataDirectory,
+        secretRef: "os-credential://hunter/install",
+        secretStore: {
+          resolveSecret: async (secretRef) => {
+            resolved.push(secretRef);
+            if (secretRef.endsWith("/signing")) return "device-signing-material-at-least-32-bytes";
+            return "test-only-nonempty-tls-material";
+          },
+        },
+        externalHandler: { execute: async () => { throw new Error("not dispatched"); } },
+        allowedHost: "hunter-test.localhost",
+        allowedOrigin: "app://hunter",
+        publishPort: async () => undefined,
+        remote: {
+          enabled: true,
+          host: "127.0.0.1",
+          port: 0,
+          issuer: "https://remote.hunter",
+          allowedHosts: ["remote.hunter"],
+          allowedOrigins: ["https://phone.example"],
+          signingSecretRef: "os-credential://hunter/device/signing",
+          tlsKeyRef: "os-credential://hunter/device/tls-key",
+          tlsCertRef: "os-credential://hunter/device/tls-cert",
+        },
+      });
+      await daemon.shutdown();
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toBe("REMOTE_LISTENER_REQUIRES_NON_LOOPBACK_HOST");
+    expect(resolved).toEqual([
+      "os-credential://hunter/install",
+      "os-credential://hunter/device/signing",
+      "os-credential://hunter/device/tls-key",
+      "os-credential://hunter/device/tls-cert",
+    ]);
   });
 });

@@ -112,6 +112,72 @@ CREATE TABLE IF NOT EXISTS storage_metadata (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS pairing_challenges (
+  pairing_id TEXT PRIMARY KEY,
+  challenge_hash TEXT NOT NULL UNIQUE,
+  created_by_principal_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  consumed_at TEXT,
+  submitted_at TEXT,
+  submitted_device_name TEXT,
+  submitted_public_jwk_json TEXT,
+  submitted_public_key_thumbprint TEXT,
+  confirmed_device_name TEXT,
+  confirmed_scopes_json TEXT,
+  confirmed_project_ids_json TEXT,
+  confirmed_device_expires_at TEXT,
+  confirmed_device_id TEXT,
+  delivered_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS devices (
+  device_id TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  public_jwk_json TEXT NOT NULL,
+  public_key_thumbprint TEXT NOT NULL UNIQUE,
+  scopes_json TEXT NOT NULL,
+  project_ids_json TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version > 0),
+  expires_at TEXT NOT NULL,
+  revoked_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS refresh_families (
+  family_id TEXT PRIMARY KEY,
+  device_id TEXT NOT NULL REFERENCES devices(device_id),
+  refresh_hash TEXT NOT NULL UNIQUE,
+  previous_refresh_hash TEXT UNIQUE,
+  generation INTEGER NOT NULL CHECK (generation >= 0),
+  expires_at TEXT NOT NULL,
+  revoked_at TEXT,
+  reuse_detected_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS refresh_credential_history (
+  family_id TEXT NOT NULL REFERENCES refresh_families(family_id),
+  refresh_hash TEXT NOT NULL UNIQUE,
+  generation INTEGER NOT NULL CHECK (generation >= 0),
+  retired_at TEXT NOT NULL,
+  PRIMARY KEY (family_id, generation)
+);
+
+CREATE TABLE IF NOT EXISTS device_proof_nonces (
+  device_id TEXT NOT NULL REFERENCES devices(device_id),
+  token_jti TEXT NOT NULL,
+  nonce TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  PRIMARY KEY (device_id, token_jti, nonce)
+);
+
+CREATE INDEX IF NOT EXISTS device_proof_nonces_expiry
+  ON device_proof_nonces(expires_at);
+
 INSERT INTO storage_metadata(metadata_key, metadata_value, updated_at)
 VALUES ('schema_version', '1', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 ON CONFLICT(metadata_key) DO UPDATE SET

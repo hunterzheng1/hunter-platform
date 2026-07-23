@@ -23,6 +23,12 @@ const invoke: DesktopInvoke = (channel, request) => {
       return ipcRenderer.invoke("hunter:runs.command", request);
     case "knowledge.list":
       return ipcRenderer.invoke("hunter:knowledge.list", request);
+    case "devices.pairing.create":
+      return ipcRenderer.invoke("hunter:devices.pairing.create", request);
+    case "devices.pairing.confirm":
+      return ipcRenderer.invoke("hunter:devices.pairing.confirm", request);
+    case "devices.revoke":
+      return ipcRenderer.invoke("hunter:devices.revoke", request);
     case "events.subscribe":
       return ipcRenderer.invoke("hunter:events.subscribe", request);
   }

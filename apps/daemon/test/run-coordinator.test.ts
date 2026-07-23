@@ -99,6 +99,7 @@ function parentState(): WorkflowRunState {
     scheduledRetry: null,
     loopUsage: {},
     acceptedChildRunIds: [],
+    supplementalInputs: [],
     supersedingDecisions: [],
     dependencyFailureDecisions: [],
   };
