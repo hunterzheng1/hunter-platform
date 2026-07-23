@@ -400,6 +400,25 @@ export function createE2eDaemonComposition(input: {
         },
       },
       changes: {
+        getChangeExecutionPlanRelation: (
+          changeId,
+          changeRevisionId,
+          executionPlanId,
+        ) => {
+          const change = services.repositories.getChangeRevision(
+            changeRevisionId,
+          );
+          const plan =
+            services.repositories.getExecutionPlan(executionPlanId);
+          if (change === null && plan === null) return null;
+          return {
+            projectId: change?.projectId ?? plan!.projectId,
+            changeId: change?.changeId ?? changeId,
+            changeRevisionId:
+              change?.revisionId ?? plan!.changeRevisionId,
+            executionPlanId: plan?.executionPlanId ?? executionPlanId,
+          };
+        },
         getRequirementRevision: (revisionId) => {
           const revision = requirementViews.get(revisionId);
           return revision === undefined
@@ -480,6 +499,15 @@ export function createE2eDaemonComposition(input: {
           : {
               projectId: plan.projectId,
               executionPlanId: plan.executionPlanId,
+            };
+      },
+      projectForRun: (runId) => {
+        const run = services.flowStore.loadRun(runId);
+        return run === null
+          ? null
+          : {
+              projectId: run.binding.projectId,
+              runId: run.binding.runId,
             };
       },
       startRun: async (command) => {

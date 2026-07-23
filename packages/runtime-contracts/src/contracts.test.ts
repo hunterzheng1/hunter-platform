@@ -18,9 +18,11 @@ import {
   RunIdSchema,
   WorkspaceIdSchema,
   WorkspaceLeaseIdSchema,
+  WorktreeIdSchema,
   WriterLeaseIdSchema,
 } from "@hunter/domain";
 import {
+  CanonicalWorkspaceKeySchema,
   CapabilityProbeReceiptSchema,
   ControllerLeaseSchema,
   WorkspaceLeaseSchema,
@@ -141,11 +143,22 @@ describe("provider-neutral runtime contracts", () => {
 
   it("freezes workspace, writer, and controller lease scopes", () => {
     const common = {
-      schemaVersion: 1,
+      schemaVersion: 2,
+      projectId: ids.projectId,
+      repositoryId: RepositoryIdSchema.parse("rep_00000001"),
+      deviceBindingId: DeviceBindingIdSchema.parse("dev_00000001"),
+      canonicalWorkspaceKey: CanonicalWorkspaceKeySchema.parse("posix:/fixtures/worktree"),
+      gitHead: "a".repeat(40),
+      branch: "codex/task14-contracts",
+      ownerRunId: ids.runId,
+      ownerAttemptId: ids.attemptId,
       ownerId: LeaseOwnerIdSchema.parse("own_00000001"),
       generation: 1,
+      mode: "write",
       acquiredAt: "2026-07-21T00:00:00.000Z",
       expiresAt: "2026-07-21T00:05:00.000Z",
+      revokedAt: null,
+      revocationReason: null,
     };
 
     expect(
@@ -155,10 +168,6 @@ describe("provider-neutral runtime contracts", () => {
         leaseId: WorkspaceLeaseIdSchema.parse("wsl_00000001"),
         scope: {
           workspaceId: WorkspaceIdSchema.parse("wsp_00000001"),
-          deviceBindingId: DeviceBindingIdSchema.parse("dev_00000001"),
-          repositoryId: RepositoryIdSchema.parse("rep_00000001"),
-          mode: "write",
-          baselineRevision: "a".repeat(40),
         },
       }).kind,
     ).toBe("workspace");
@@ -169,7 +178,7 @@ describe("provider-neutral runtime contracts", () => {
         leaseId: WriterLeaseIdSchema.parse("wrl_00000001"),
         scope: {
           workspaceId: WorkspaceIdSchema.parse("wsp_00000001"),
-          worktreeId: null,
+          worktreeId: WorktreeIdSchema.parse("wtr_00000001"),
         },
       }).kind,
     ).toBe("writer");
@@ -178,7 +187,11 @@ describe("provider-neutral runtime contracts", () => {
         ...common,
         kind: "controller",
         leaseId: ControllerLeaseIdSchema.parse("ctl_00000001"),
-        scope: { nativeSessionId: NativeSessionIdSchema.parse("ses_00000001") },
+        scope: {
+          workspaceId: WorkspaceIdSchema.parse("wsp_00000001"),
+          worktreeId: WorktreeIdSchema.parse("wtr_00000001"),
+          nativeSessionId: NativeSessionIdSchema.parse("ses_00000001"),
+        },
       }).kind,
     ).toBe("controller");
   });

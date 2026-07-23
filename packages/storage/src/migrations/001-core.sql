@@ -65,6 +65,17 @@ CREATE TABLE IF NOT EXISTS side_effect_receipts (
   recorded_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS evidence_records (
+  evidence_id TEXT PRIMARY KEY,
+  operation_id TEXT NOT NULL UNIQUE REFERENCES outbox(operation_id),
+  evidence_hash TEXT NOT NULL,
+  observed_status TEXT NOT NULL CHECK (observed_status IN ('completed','indeterminate','needs_attention')),
+  proof_scope TEXT NOT NULL CHECK (proof_scope IN ('contract_only','local_observation','human_receipt')),
+  observed_at TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  recorded_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS lease_records (
   lease_id TEXT PRIMARY KEY,
   lease_kind TEXT NOT NULL CHECK (lease_kind IN ('workspace','writer','controller')),

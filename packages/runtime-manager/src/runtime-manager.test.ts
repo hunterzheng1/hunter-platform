@@ -20,7 +20,7 @@ import {
   WriterLeaseIdSchema,
   canonicalSha256,
 } from "@hunter/domain";
-import { CapabilityProbeReceiptSchema, ControllerLeaseSchema, WorkspaceLeaseSchema, WriterLeaseSchema, createExternalOperation, type Lease } from "@hunter/runtime-contracts";
+import { CanonicalWorkspaceKeySchema, CapabilityProbeReceiptSchema, ControllerLeaseSchema, WorkspaceLeaseSchema, WriterLeaseSchema, createExternalOperation, type Lease } from "@hunter/runtime-contracts";
 import { SqliteOperationJournal, OperationWorker } from "@hunter/storage";
 import { FakeRuntime } from "@hunter/testkit";
 import { describe, expect, it } from "vitest";
@@ -34,6 +34,8 @@ const projectId = ProjectIdSchema.parse("prj_runtime001");
 const runId = RunIdSchema.parse("run_runtime001");
 const attemptId = AttemptIdSchema.parse("att_runtime001");
 const workspaceId = WorkspaceIdSchema.parse("wsp_runtime001");
+const repositoryId = RepositoryIdSchema.parse("rep_runtime001");
+const worktreeId = WorktreeIdSchema.parse("wtr_runtime001");
 
 function manager(database: DatabaseSync, journal: SqliteOperationJournal, options: { readonly leaseIds?: readonly Lease["leaseId"][]; readonly capabilityReceipt?: ReturnType<typeof capability>; readonly policyDecision?: "allow" | "deny" | "require_approval" } = {}) {
   return new RuntimeManager(database, {
@@ -66,7 +68,7 @@ function manager(database: DatabaseSync, journal: SqliteOperationJournal, option
       requestedCapabilities: ["launch"] as const,
       agentProfileId: AgentProfileIdSchema.parse("apr_runtime001"),
       workspaceId,
-      repositoryIds: [RepositoryIdSchema.parse("rep_runtime001")],
+      repositoryIds: [repositoryId],
     },
   }) });
 }
@@ -87,10 +89,27 @@ async function harness() {
   const database = new DatabaseSync(":memory:");
   const journal = new SqliteOperationJournal(database);
   const leases = new LeaseService(database, () => new Date(now));
-  const common = { schemaVersion: 1 as const, ownerId: owner, generation: 1, acquiredAt: "2026-07-22T10:00:00.000Z", expiresAt: "2026-07-22T10:30:00.000Z" };
-  const workspace = await leases.acquire(WorkspaceLeaseSchema.parse({ ...common, kind: "workspace", leaseId: WorkspaceLeaseIdSchema.parse("wsl_runtime001"), scope: { workspaceId, deviceBindingId: DeviceBindingIdSchema.parse("dev_runtime001"), repositoryId: RepositoryIdSchema.parse("rep_runtime001"), mode: "write", baselineRevision: "a".repeat(40) } }));
-  const writer = await leases.acquire(WriterLeaseSchema.parse({ ...common, kind: "writer", leaseId: WriterLeaseIdSchema.parse("wrl_runtime001"), scope: { workspaceId, worktreeId: WorktreeIdSchema.parse("wtr_runtime001") } }));
-  const controller = await leases.acquire(ControllerLeaseSchema.parse({ ...common, kind: "controller", leaseId: ControllerLeaseIdSchema.parse("ctl_runtime001"), scope: { nativeSessionId: NativeSessionIdSchema.parse("ses_runtime001") } }));
+  const common = {
+    schemaVersion: 2 as const,
+    projectId,
+    repositoryId,
+    deviceBindingId: DeviceBindingIdSchema.parse("dev_runtime001"),
+    canonicalWorkspaceKey: CanonicalWorkspaceKeySchema.parse("posix:/fixtures/runtime"),
+    gitHead: "a".repeat(40),
+    branch: "codex/task14-runtime-manager",
+    ownerRunId: runId,
+    ownerAttemptId: attemptId,
+    ownerId: owner,
+    generation: 1,
+    mode: "write" as const,
+    acquiredAt: "2026-07-22T10:00:00.000Z",
+    expiresAt: "2026-07-22T10:30:00.000Z",
+    revokedAt: null,
+    revocationReason: null,
+  };
+  const workspace = await leases.acquire(WorkspaceLeaseSchema.parse({ ...common, kind: "workspace", leaseId: WorkspaceLeaseIdSchema.parse("wsl_runtime001"), scope: { workspaceId } }));
+  const writer = await leases.acquire(WriterLeaseSchema.parse({ ...common, kind: "writer", leaseId: WriterLeaseIdSchema.parse("wrl_runtime001"), scope: { workspaceId, worktreeId } }));
+  const controller = await leases.acquire(ControllerLeaseSchema.parse({ ...common, kind: "controller", leaseId: ControllerLeaseIdSchema.parse("ctl_runtime001"), scope: { workspaceId, worktreeId, nativeSessionId: NativeSessionIdSchema.parse("ses_runtime001") } }));
   const operation = createExternalOperation({ schemaVersion: 1, operationId: OperationIdSchema.parse("opn_runtime001"), projectId, runId, attemptId, operationVersion: 1, operationType: "session.launch", requestedCapabilities: ["launch"], payload: { agentProfileId: AgentProfileIdSchema.parse("apr_runtime001"), workspaceId } });
   return { database, journal, operation, leaseIds: [workspace.leaseId, writer.leaseId, controller.leaseId] as const };
 }

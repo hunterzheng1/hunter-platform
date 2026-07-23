@@ -57,6 +57,7 @@ export function buildTestApp(overrides: Readonly<TestServiceOverrides> = {}) {
     })),
     getProject: vi.fn(async (): Promise<ProjectDetailHttpResponse | null> => null),
     changes: {
+      getChangeExecutionPlanRelation: vi.fn(() => null),
       getRequirementRevision: vi.fn((candidateRevisionId) => ({
         projectId: projectA,
         revisionId: candidateRevisionId,
@@ -103,6 +104,7 @@ export function buildTestApp(overrides: Readonly<TestServiceOverrides> = {}) {
       projectId: projectA,
       executionPlanId: ExecutionPlanIdSchema.parse("epl_task2000001"),
     })),
+    projectForRun: vi.fn(() => null),
     startRun: vi.fn(async () => ({ runId: "run_task2000001" })),
     ...rootOverrides,
   };

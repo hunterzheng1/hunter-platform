@@ -118,7 +118,7 @@ describe("DurableEventStream", () => {
     const stream = new DurableEventStream(reader, undefined, undefined, (authorizedProjectIds) => ({ projectionVersion: 3, cursor: 2, entities: authorizedProjectIds.map((projectId) => ({ projectId })) }));
     const authenticator = new LocalAuthenticator("stream-endpoint-secret");
     const token = authenticator.issueSession({ principalId: "stream-user", authorizedProjectIds: [projectA], expiresAt: new Date(Date.now() + 60_000), csrf: "stream-csrf" });
-    const app = buildApp({ authenticator, allowedHosts: ["hunter-test.localhost"], allowedOrigins: ["app://hunter"], eventStream: stream, services: { listProjects: async () => [], projectForExecutionPlan: () => null, startRun: async () => ({}) } });
+    const app = buildApp({ authenticator, allowedHosts: ["hunter-test.localhost"], allowedOrigins: ["app://hunter"], eventStream: stream, services: { listProjects: async () => [], projectForExecutionPlan: () => null, projectForRun: () => null, startRun: async () => ({}) } });
     const headers = { host: "hunter-test.localhost", origin: "app://hunter", authorization: `Bearer ${token}` };
     const replay = await app.inject({ method: "GET", url: "/events?once=1", headers });
     expect(replay.statusCode).toBe(200);

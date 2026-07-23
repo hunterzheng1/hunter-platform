@@ -44,10 +44,10 @@ export class StartupRecoveryCoordinator {
     };
     const storage = await timed("storage", async () => await this.ports.validateStorage());
     const migration = await timed("migration", async () => await this.ports.reconcileMigration());
-    const outbox = await timed("outbox", async () => await this.ports.reconcileOutbox());
     const attempts = await timed("attempts", async () => await this.ports.enumerateActiveAttempts());
-    const external = await timed("external", async () => await this.ports.probeExternalState(attempts));
     const leases = await timed("leases", async () => await this.ports.reconcileLeasesAndWorkspace(attempts));
+    const outbox = await timed("outbox", async () => await this.ports.reconcileOutbox());
+    const external = await timed("external", async () => await this.ports.probeExternalState(attempts));
     const projections = await timed("projections", async () => await this.ports.validateProjections());
     const conclusions = [...storage, ...migration, ...outbox, ...external, ...leases, ...projections]
       .map(conclusion);

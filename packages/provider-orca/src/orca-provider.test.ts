@@ -1,6 +1,9 @@
 import { readFile } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
-import { OperationIdSchema } from "@hunter/domain";
+import { AttemptIdSchema, DeviceBindingIdSchema, OperationIdSchema, ProjectIdSchema, RepositoryIdSchema, RunIdSchema, WorkspaceIdSchema } from "@hunter/domain";
+import { createExternalOperation, createWorkspacePathBoundary } from "@hunter/runtime-contracts";
+import { OperationWorker, SqliteOperationJournal } from "@hunter/storage";
 import {
   OrcaClient,
   OrcaCommandRunner,
@@ -12,6 +15,7 @@ import {
 } from "./index.js";
 
 const operationId = OperationIdSchema.parse("opn_orcacandidate01");
+const repositoryId = RepositoryIdSchema.parse("rep_orcacandidate01");
 
 class FixtureRunner implements JsonCommandRunner {
   readonly calls: string[][] = [];
@@ -167,6 +171,24 @@ describe("OrcaCommandRunner", () => {
 });
 
 describe("OrcaClient contract fixtures", () => {
+  it("rejects an oversized provider envelope before consuming its fields", async () => {
+    const runner = new FixtureRunner([
+      {
+        id: "request-repo",
+        ok: true,
+        result: {
+          repo: { id: "repo-01" },
+          padding: "x".repeat(70 * 1024),
+        },
+      },
+    ]);
+    const client = windowsClient(runner);
+
+    await expect(
+      client.addRepository("C:\\fixtures\\hunter"),
+    ).rejects.toThrow("ORCA_OUTPUT_TOO_LARGE");
+  });
+
   it.each([
     {
       id: "request-repo",
@@ -475,44 +497,119 @@ describe("OrcaWorkspaceProvider candidate boundary", () => {
       success({ repo: { id: "repo-01" } }, "request-repo"),
       success({ worktree: { id: fullWorktreeId }, startupTerminal: null }, "request-worktree"),
     ]);
-    return { provider: new OrcaWorkspaceProvider(windowsClient(runner)), runner };
+    const boundary = createWorkspacePathBoundary(
+      new Map([[repositoryId, "C:\\fixtures"]]),
+      {
+        platform: "win32",
+        realpathNative: (candidate) => candidate,
+      },
+    );
+    return {
+      provider: new OrcaWorkspaceProvider(windowsClient(runner), boundary, {
+        repositoryPathFor: () => repositoryPath,
+        observedAt: () => "2026-07-23T00:00:00.000Z",
+      }),
+      runner,
+    };
   }
 
-  it("returns only an honest contract-only candidate receipt", async () => {
-    const { provider } = fixtureProvider();
-    const receipt = await provider.dispatchUnverifiedWorkspaceCandidateOnce({
+  function prepareOperation() {
+    return createExternalOperation({
+      schemaVersion: 1,
       operationId,
-      repositoryPath: "C:\\fixtures\\hunter",
-      mode: "write",
+      projectId: ProjectIdSchema.parse("prj_orcapublic0001"),
+      runId: RunIdSchema.parse("run_orcapublic0001"),
+      attemptId: AttemptIdSchema.parse("att_orcapublic0001"),
+      operationVersion: 1,
+      operationType: "workspace.prepare",
+      requestedCapabilities: ["workspace_prepare"],
+      payload: {
+        repositoryId,
+        deviceBindingId: DeviceBindingIdSchema.parse("dev_orcapublic0001"),
+        workspaceId: WorkspaceIdSchema.parse("wsp_orcapublic0001"),
+        mode: "write",
+        baselineRevision: "a".repeat(40),
+      },
     });
+  }
+
+  it("dispatches repository/worktree creation only from the Foundation worker", async () => {
+    const { provider, runner } = fixtureProvider();
+    const database = new DatabaseSync(":memory:");
+    const journal = new SqliteOperationJournal(database);
+    const operation = createExternalOperation({
+      schemaVersion: 1,
+      operationId,
+      projectId: ProjectIdSchema.parse("prj_orcaworker0001"),
+      runId: RunIdSchema.parse("run_orcaworker0001"),
+      attemptId: AttemptIdSchema.parse("att_orcaworker0001"),
+      operationVersion: 1,
+      operationType: "workspace.prepare",
+      requestedCapabilities: ["workspace_prepare"],
+      payload: {
+        repositoryId,
+        deviceBindingId: DeviceBindingIdSchema.parse("dev_orcaworker0001"),
+        workspaceId: WorkspaceIdSchema.parse("wsp_orcaworker0001"),
+        mode: "write",
+        baselineRevision: "a".repeat(40),
+      },
+    });
+    journal.commitCommand({
+      commandId: "orca-workspace-worker",
+      requestFingerprint: operation.fingerprint,
+      projectId: operation.projectId,
+      aggregateId: "attempt:att_orcaworker0001",
+      expectedVersion: 0,
+      actor: { actorId: "test", correlationId: "orca-worker" },
+      events: [],
+      operations: [operation],
+      response: {},
+    });
+    const worker = new OperationWorker(database, provider as never, {
+      ownerId: "orca-worker",
+      replayPolicy: () => "inspectable",
+    });
+
+    expect(runner.calls).toHaveLength(0);
+    await expect(worker.runOnce()).resolves.toBe("completed");
+    expect(runner.calls).toHaveLength(2);
+    expect(database.prepare(
+      "SELECT COUNT(*) AS count FROM side_effect_receipts",
+    ).get()).toEqual({ count: 1 });
+    database.close();
+  });
+
+  it("returns a public receipt with a provider-neutral verified workspace result", async () => {
+    const { provider } = fixtureProvider();
+    const receipt = await provider.execute(prepareOperation());
 
     expect(receipt).toMatchObject({
       schemaVersion: 1,
       operationId,
-      operationLabel: "hunter-opn_orcacandidate01",
-      proofScope: "contract_only",
-      providerValidationStatus: "NOT_PROVEN",
-      retrySafety: "NOT_PROVEN",
-      privateWorkspace: {
-        worktreeId: "repo-01::C:\\fixtures\\hunter-worktree",
-        reportedAbsolutePath: "C:\\fixtures\\hunter-worktree",
-        startupTerminalId: null,
+      operationStatus: "completed",
+      evidence: { proofScope: "contract_only" },
+      workspaceResult: {
+        workspaceRef:
+          "repo-01::C:\\fixtures\\hunter-worktree",
+        worktreeId: expect.stringMatching(/^wtr_[a-f0-9]{24}$/u),
+        reportedWorkspacePath: "C:\\fixtures\\hunter-worktree",
       },
     });
-    expect(receipt).not.toHaveProperty("operationStatus");
+    expect(receipt).not.toHaveProperty("privateWorkspace");
     expect(receipt).not.toHaveProperty("leaseId");
-    expect(receipt).not.toHaveProperty("evidence");
   });
 
   it.each([
     {
       worktreeId: { arbitrary: true },
-      reportedAbsolutePath: "C:\\fixtures\\hunter-worktree",
+      workspaceRef: "repo-01::C:\\fixtures\\hunter-worktree",
+      verifiedWorkspacePath: "C:\\fixtures\\hunter-worktree",
       startupTerminalId: null,
     },
     {
       worktreeId: "not-a-complete-selector",
-      reportedAbsolutePath: "C:\\fixtures\\hunter-worktree",
+      workspaceRef: "repo-01::C:\\fixtures\\hunter-worktree",
+      verifiedWorkspacePath: "C:\\fixtures\\hunter-worktree",
       startupTerminalId: null,
     },
   ])("rejects an invalid private workspace receipt shape", (privateWorkspace) => {
@@ -541,8 +638,10 @@ describe("OrcaWorkspaceProvider candidate boundary", () => {
         providerValidationStatus: "NOT_PROVEN",
         retrySafety: "NOT_PROVEN",
         privateWorkspace: {
+          workspaceRef:
+            "repo-01::C:\\fixtures\\hunter-worktree",
           worktreeId: "repo-01::C:\\fixtures\\hunter-worktree",
-          reportedAbsolutePath: "C:\\fixtures\\hunter-worktree",
+          verifiedWorkspacePath: "C:\\fixtures\\hunter-worktree",
           startupTerminalId: null,
         },
       }).success,
@@ -560,28 +659,33 @@ describe("OrcaWorkspaceProvider candidate boundary", () => {
         "request-worktree",
       ),
     ]);
-    const provider = new OrcaWorkspaceProvider(windowsClient(runner));
+    const provider = new OrcaWorkspaceProvider(
+      windowsClient(runner),
+      createWorkspacePathBoundary(
+        new Map([[repositoryId, "C:\\fixtures"]]),
+        {
+          platform: "win32",
+          realpathNative: (candidate) => candidate,
+        },
+      ),
+      {
+        repositoryPathFor: () => "C:\\fixtures\\hunter",
+        observedAt: () => "2026-07-23T00:00:00.000Z",
+      },
+    );
 
     await expect(
-      provider.dispatchUnverifiedWorkspaceCandidateOnce({
-        operationId,
-        repositoryPath: "C:\\fixtures\\hunter",
-        mode: "write",
-      }),
+      provider.execute(prepareOperation()),
     ).rejects.toThrow("ORCA_OUTPUT_SCHEMA_MISMATCH");
   });
 
   it.each(["relative\\repository", "C:\\fixtures\\hunter\u0000escape"])(
     "rejects unsafe repository path %s before any candidate dispatch",
     async (repositoryPath) => {
-      const { provider, runner } = fixtureProvider();
+      const { provider, runner } = fixtureProvider(repositoryPath);
 
       await expect(
-        provider.dispatchUnverifiedWorkspaceCandidateOnce({
-          operationId,
-          repositoryPath,
-          mode: "write",
-        }),
+        provider.execute(prepareOperation()),
       ).rejects.toThrow();
       expect(runner.calls).toHaveLength(0);
     },
@@ -592,25 +696,54 @@ describe("OrcaWorkspaceProvider candidate boundary", () => {
     const second = fixtureProvider();
     const changed = fixtureProvider("C:\\fixtures\\other");
 
-    const firstReceipt = await first.provider.dispatchUnverifiedWorkspaceCandidateOnce({
-      operationId,
-      repositoryPath: "C:\\fixtures\\hunter",
-      mode: "write",
-    });
-    const secondReceipt = await second.provider.dispatchUnverifiedWorkspaceCandidateOnce({
-      operationId,
-      repositoryPath: "C:\\fixtures\\hunter",
-      mode: "write",
-    });
-    const changedReceipt = await changed.provider.dispatchUnverifiedWorkspaceCandidateOnce({
-      operationId,
-      repositoryPath: "C:\\fixtures\\other",
-      mode: "write",
-    });
+    const firstReceipt = await first.provider.execute(prepareOperation());
+    const secondReceipt = await second.provider.execute(prepareOperation());
+    const changedReceipt = await changed.provider.execute(prepareOperation());
 
-    expect(secondReceipt.fingerprint).toBe(firstReceipt.fingerprint);
+    expect(secondReceipt.evidence.evidenceHash).toBe(
+      firstReceipt.evidence.evidenceHash,
+    );
     expect(second.runner.calls).toEqual(first.runner.calls);
-    expect(changedReceipt.fingerprint).not.toBe(firstReceipt.fingerprint);
+    expect(changedReceipt.evidence.evidenceHash).not.toBe(
+      firstReceipt.evidence.evidenceHash,
+    );
+  });
+
+  it("rejects a returned workspace that resolves outside the registered root", async () => {
+    const runner = new FixtureRunner([
+      success({ repo: { id: "repo-01" } }, "request-repo"),
+      success(
+        {
+          worktree: {
+            id: "repo-01::C:\\provider-alias\\escaped-worktree",
+          },
+          startupTerminal: null,
+        },
+        "request-worktree",
+      ),
+    ]);
+    const boundary = createWorkspacePathBoundary(
+      new Map([[repositoryId, "C:\\fixtures"]]),
+      {
+        platform: "win32",
+        realpathNative: (candidate) =>
+          candidate.includes("provider-alias")
+            ? "C:\\outside\\escaped-worktree"
+            : candidate,
+      },
+    );
+    const provider = new OrcaWorkspaceProvider(
+      windowsClient(runner),
+      boundary,
+      {
+        repositoryPathFor: () => "C:\\fixtures\\hunter",
+        observedAt: () => "2026-07-23T00:00:00.000Z",
+      },
+    );
+
+    await expect(
+      provider.execute(prepareOperation()),
+    ).rejects.toThrow("PATH_SCOPE_VIOLATION");
   });
 
   it("does not leak Orca-private vocabulary into shared domain/runtime contracts", async () => {

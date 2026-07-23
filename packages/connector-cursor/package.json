@@ -11,10 +11,11 @@
   },
   "dependencies": {
     "@hunter/domain": "0.0.0",
+    "@hunter/runtime-contracts": "0.0.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {
-    "@hunter/runtime-contracts": "0.0.0"
+    "@hunter/storage": "0.0.0"
   },
   "scripts": {
     "build": "tsc -b",

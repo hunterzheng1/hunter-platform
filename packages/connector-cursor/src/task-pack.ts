@@ -7,6 +7,7 @@ import {
   type OperationId,
   type WorkspaceId,
 } from "@hunter/domain";
+import { decodeExternalId } from "@hunter/runtime-contracts";
 import { z } from "zod";
 
 export const CURSOR_TASK_PACK_LIMITS = Object.freeze({
@@ -25,7 +26,7 @@ const TaskPackSchema = z.strictObject({
   schemaVersion: z.literal(1),
   relativePath: z
     .string()
-    .regex(/^\.hunter\/handoffs\/opn_[a-z0-9][a-z0-9_-]{7,63}\.md$/u),
+    .regex(/^\.hunter\/handoffs\/opn_[a-z0-9][a-z0-9_-]{7,91}\.md$/u),
   content: z
     .string()
     .min(1)
@@ -45,6 +46,11 @@ export interface CursorTaskPackInput {
 }
 
 export type CursorTaskPack = z.infer<typeof TaskPackSchema>;
+
+export function taskPackRelativePath(operationId: OperationId): string {
+  const decoded = decodeExternalId(OperationIdSchema, operationId);
+  return `.hunter/handoffs/${decoded}.md`;
+}
 
 function encodePromptAsSafeJson(value: string): string {
   return JSON.stringify(value).replace(/[<>&\u2028\u2029]/gu, (character) => {
@@ -96,7 +102,7 @@ function parseInput(value: CursorTaskPackInput): z.infer<
 export function renderTaskPack(value: CursorTaskPackInput): CursorTaskPack {
   const input = parseInput(value);
   const prompt = parsePrompt(input.prompt);
-  const relativePath = `.hunter/handoffs/${input.operationId}.md`;
+  const relativePath = taskPackRelativePath(input.operationId);
   const encodedPrompt = encodePromptAsSafeJson(prompt);
   const content = [
     "# Hunter Cursor Task Handoff",

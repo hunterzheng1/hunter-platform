@@ -1,5 +1,9 @@
 import { posix } from "node:path";
 import { OperationIdSchema, type OperationId } from "@hunter/domain";
+import {
+  ExternalBoundaryError,
+  parseBoundedProviderObject,
+} from "@hunter/runtime-contracts";
 import { z } from "zod";
 import type { JsonCommandRunner } from "./command-runner.js";
 
@@ -110,8 +114,12 @@ const CreateTerminalEnvelopeSchema = envelope(CreateTerminalResultSchema);
 const TerminalReadEnvelopeSchema = envelope(TerminalReadResultSchema);
 
 export class OrcaOutputError extends Error {
-  constructor() {
-    super("ORCA_OUTPUT_SCHEMA_MISMATCH");
+  constructor(
+    readonly code:
+      | "ORCA_OUTPUT_SCHEMA_MISMATCH"
+      | "ORCA_OUTPUT_TOO_LARGE" = "ORCA_OUTPUT_SCHEMA_MISMATCH",
+  ) {
+    super(code);
     this.name = "OrcaOutputError";
   }
 }
@@ -119,10 +127,19 @@ export class OrcaOutputError extends Error {
 function parseEnvelope<Result>(
   schema: z.ZodType<{ readonly result: Result }>,
   input: unknown,
+  maxBytes = 64 * 1024,
 ): Result {
-  const parsed = schema.safeParse(input);
-  if (!parsed.success) throw new OrcaOutputError();
-  return parsed.data.result;
+  try {
+    return parseBoundedProviderObject(schema, input, maxBytes).result;
+  } catch (error) {
+    if (
+      error instanceof ExternalBoundaryError &&
+      error.code === "PROVIDER_OUTPUT_TOO_LARGE"
+    ) {
+      throw new OrcaOutputError("ORCA_OUTPUT_TOO_LARGE");
+    }
+    throw new OrcaOutputError();
+  }
 }
 
 function splitWorktreeId(
@@ -276,6 +293,7 @@ export class OrcaClient {
         String(limit),
         "--json",
       ]),
+      2 * 1024 * 1024,
     );
     if (
       result.nextCursor > result.latestCursor ||

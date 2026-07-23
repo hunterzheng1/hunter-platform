@@ -1,12 +1,23 @@
 import { createHash } from "node:crypto";
 import {
   AgentProfileIdSchema,
+  ConnectorIdSchema,
+  EvidenceIdSchema,
+  ExternalReferenceIdSchema,
   OperationIdSchema,
   WorkspaceIdSchema,
   type AgentProfileId,
   type OperationId,
   type WorkspaceId,
 } from "@hunter/domain";
+import {
+  ExternalOperationSchema,
+  type ExternalOperation,
+  type ExternalOperationHandler,
+  type ExternalOperationReconciliation,
+  type ExternalOperationReceipt,
+  type ExternalOperationReconciler,
+} from "@hunter/runtime-contracts";
 import { z } from "zod";
 import {
   CURSOR_TASK_PACK_LIMITS,
@@ -38,7 +49,7 @@ const CandidateRequestSchema = z.strictObject({
 
 const RelativeTaskPackPathSchema = z
   .string()
-  .regex(/^\.hunter\/handoffs\/opn_[a-z0-9][a-z0-9_-]{7,63}\.md$/u);
+  .regex(/^\.hunter\/handoffs\/opn_[a-z0-9][a-z0-9_-]{7,91}\.md$/u);
 const DigestSchema = z.string().regex(/^[a-f0-9]{64}$/u);
 
 const WriteTaskPackRequestSchema = z.strictObject({
@@ -290,13 +301,28 @@ function requestFingerprint(input: ParsedRequest): string {
  * Contract-only Cursor handoff fixture. Real Cursor discovery, authentication,
  * workspace opening, and observation all remain NOT_PROVEN.
  */
-export class CursorHandoffCandidate {
+export class CursorHandoffCandidate
+  implements ExternalOperationHandler, ExternalOperationReconciler
+{
   private readonly options: FrozenOptions;
   private readonly requestTransport: TransportRequest;
 
   constructor(
     transport: SyntheticCursorHandoffTransport,
     optionsValue: CursorHandoffCandidateOptions,
+    private readonly operationOptions?: {
+      readonly taskPackInputFor: (operation: ExternalOperation) => {
+        readonly profileId: AgentProfileId;
+        readonly prompt: string;
+      } | null;
+      readonly observeTaskPack?: (observation: {
+        readonly operationId: OperationId;
+        readonly workspaceId: WorkspaceId;
+        readonly relativePath: string;
+        readonly contentDigest: string;
+      }) => Promise<"attached" | "confirmed_absent" | "unknown">;
+      readonly observedAt?: (() => string) | undefined;
+    },
   ) {
     this.options = parseOptions(optionsValue);
     try {
@@ -310,7 +336,126 @@ export class CursorHandoffCandidate {
     }
   }
 
-  async launch(
+  async execute(input: ExternalOperation): Promise<ExternalOperationReceipt> {
+    const operation = ExternalOperationSchema.parse(input);
+    if (operation.operationType === "task_pack.write") {
+      const taskPackInput = this.operationOptions?.taskPackInputFor(operation);
+      if (taskPackInput === undefined || taskPackInput === null) {
+        throw new Error("CURSOR_TASK_PACK_EVIDENCE_NOT_FOUND");
+      }
+      const taskPack = renderTaskPack({
+        operationId: operation.operationId,
+        profileId: taskPackInput.profileId,
+        workspaceId: operation.payload.workspaceId,
+        prompt: taskPackInput.prompt,
+      });
+      const writeValue = await this.call({
+        fixtureKind: FIXTURE_KIND,
+        method: "writeTaskPack",
+        params: {
+          operationId: operation.operationId,
+          workspaceId: operation.payload.workspaceId,
+          relativePath: taskPack.relativePath,
+          content: taskPack.content,
+          contentDigest: taskPack.contentDigest,
+        },
+      });
+      const response = this.parseResponse(WriteTaskPackResponseSchema, writeValue);
+      if (
+        response.operationId !== operation.operationId
+        || response.contentDigest !== taskPack.contentDigest
+      ) {
+        throw new Error("CURSOR_RESPONSE_IDENTITY_MISMATCH");
+      }
+      return this.operationReceipt(
+        operation,
+        response.accepted ? "completed" : "needs_attention",
+        taskPack.contentDigest,
+        response.accepted ? [{ kind: "operation_accepted" }] : [],
+        [{
+          kind: "artifact",
+          referenceId: ExternalReferenceIdSchema.parse(
+            `xrf_${taskPack.contentDigest.slice(0, 24)}`,
+          ),
+        }],
+      );
+    }
+    if (operation.operationType === "native_surface.open") {
+      const openValue = await this.call({
+        fixtureKind: FIXTURE_KIND,
+        method: "openWorkspace",
+        params: {
+          operationId: operation.operationId,
+          workspaceId: operation.payload.workspaceId,
+        },
+      });
+      const response = this.parseResponse(OpenWorkspaceResponseSchema, openValue);
+      if (response.operationId !== operation.operationId) {
+        throw new Error("CURSOR_RESPONSE_IDENTITY_MISMATCH");
+      }
+      const digest = createHash("sha256")
+        .update(JSON.stringify({ operationId: operation.operationId, opened: response.opened }))
+        .digest("hex");
+      return this.operationReceipt(
+        operation,
+        response.opened ? "completed" : "needs_attention",
+        digest,
+        response.opened ? [{ kind: "native_surface_opened" }] : [],
+        [],
+      );
+    }
+    throw new Error("CURSOR_OPERATION_UNSUPPORTED");
+  }
+
+  async reconcile(
+    input: ExternalOperation,
+  ): Promise<ExternalOperationReconciliation> {
+    const operation = ExternalOperationSchema.parse(input);
+    if (operation.operationType !== "task_pack.write") {
+      return { outcome: "unknown" };
+    }
+    const taskPackInput = this.operationOptions?.taskPackInputFor(operation);
+    const observeTaskPack = this.operationOptions?.observeTaskPack;
+    if (taskPackInput === undefined || taskPackInput === null || observeTaskPack === undefined) {
+      return { outcome: "unknown" };
+    }
+    const taskPack = renderTaskPack({
+      operationId: operation.operationId,
+      profileId: taskPackInput.profileId,
+      workspaceId: operation.payload.workspaceId,
+      prompt: taskPackInput.prompt,
+    });
+    const observation = await observeTaskPack({
+      operationId: operation.operationId,
+      workspaceId: operation.payload.workspaceId,
+      relativePath: taskPack.relativePath,
+      contentDigest: taskPack.contentDigest,
+    });
+    if (observation === "confirmed_absent") {
+      return { outcome: "confirmed_absent" };
+    }
+    if (observation === "unknown") {
+      return { outcome: "unknown" };
+    }
+    return {
+      outcome: "attached",
+      receipt: this.operationReceipt(
+        operation,
+        "completed",
+        taskPack.contentDigest,
+        [{ kind: "operation_accepted" }],
+        [{
+          kind: "artifact",
+          referenceId: ExternalReferenceIdSchema.parse(
+            `xrf_${taskPack.contentDigest.slice(0, 24)}`,
+          ),
+        }],
+        "local_observation",
+      ),
+    };
+  }
+
+  private async dispatchFixture(
     requestValue: CursorHandoffCandidateRequest,
   ): Promise<CursorHandoffCandidateResult> {
     const request = parseCandidateRequest(requestValue);
@@ -390,6 +535,37 @@ export class CursorHandoffCandidate {
         observations,
       }),
     );
+  }
+
+  private operationReceipt(
+    operation: ExternalOperation,
+    operationStatus: "completed" | "needs_attention",
+    evidenceHash: string,
+    facts: ExternalOperationReceipt["facts"],
+    nativeReferences: ExternalOperationReceipt["nativeReferences"],
+    proofScope: ExternalOperationReceipt["evidence"]["proofScope"] = "contract_only",
+  ): ExternalOperationReceipt {
+    return {
+      schemaVersion: 1,
+      operationId: operation.operationId,
+      fingerprint: operation.fingerprint,
+      operationStatus,
+      subject: {
+        kind: "connector",
+        connectorId: ConnectorIdSchema.parse("con_cursor_handoff"),
+        implementationVersion: "contract-fixture",
+      },
+      nativeReferences,
+      facts,
+      evidence: {
+        evidenceId: EvidenceIdSchema.parse(
+          `evd_${createHash("sha256").update(operation.operationId).digest("hex").slice(0, 24)}`,
+        ),
+        evidenceHash,
+        proofScope,
+      },
+      observedAt: this.operationOptions?.observedAt?.() ?? new Date().toISOString(),
+    };
   }
 
   private async call(value: unknown): Promise<unknown> {

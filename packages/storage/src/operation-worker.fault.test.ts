@@ -139,7 +139,7 @@ describe("OperationWorker crash convergence", () => {
     expect(database!.prepare("SELECT COUNT(*) AS count FROM side_effect_receipts").get()).toEqual({ count: 1 });
   });
 
-  it("marks an unprovable prior delivery indeterminate without blind replay", async () => {
+  it("marks an unprovable prior delivery indeterminate and needing attention without blind replay", async () => {
     const runtime = fake();
     commit(open());
     const crashing = new OperationWorker(database!, runtime, {
@@ -156,10 +156,10 @@ describe("OperationWorker crash convergence", () => {
       now: () => new Date("2026-07-22T00:00:01.000Z"),
       replayPolicy: () => "unsafe",
     });
-    await expect(resumed.runOnce()).resolves.toBe("indeterminate");
+    await expect(resumed.runOnce()).resolves.toBe("needs_attention");
     expect(runtime.executeCount).toBe(1);
     expect(runtime.nativeEffectCount).toBe(1);
-    expect(database!.prepare("SELECT status FROM outbox").get()).toEqual({ status: "indeterminate" });
+    expect(database!.prepare("SELECT status FROM outbox").get()).toEqual({ status: "needs_attention" });
     expect(
       database!.prepare("SELECT event_type, event_data FROM events ORDER BY position DESC LIMIT 1").get(),
     ).toMatchObject({ event_type: "ExternalOperationObserved" });
@@ -197,6 +197,57 @@ describe("OperationWorker crash convergence", () => {
     expect(runtime.executeCount).toBe(1);
     expect(runtime.nativeEffectCount).toBe(1);
     expect(database!.prepare("SELECT status FROM outbox").get()).toEqual({ status: "completed" });
+  });
+
+  it("rolls back receipt, Evidence, lease issuance, and completion when the receipt hook crashes", async () => {
+    const runtime = fake();
+    commit(open());
+    const worker = new OperationWorker(database!, runtime, {
+      ownerId: "worker-receipt-hook",
+      replayPolicy: () => "inspectable",
+      prepareReceiptTransaction: () => () => {
+        database!.prepare(
+          `INSERT INTO lease_records(
+             lease_id, lease_kind, scope_key, owner_id, generation,
+             expires_at, receipt_json, updated_at
+           ) VALUES (?, 'workspace', ?, ?, 1, ?, '{}', ?)`,
+        ).run(
+          "wsl_hookrollback01",
+          "hook:rollback",
+          "own_hookrollback01",
+          "2026-07-22T01:00:00.000Z",
+          "2026-07-22T00:00:01.000Z",
+        );
+        throw new Error("RECEIPT_HOOK_CRASH");
+      },
+    });
+
+    await expect(worker.runOnce()).rejects.toThrow(/^RECEIPT_HOOK_CRASH$/u);
+    expect(database!.prepare("SELECT COUNT(*) AS count FROM side_effect_receipts").get()).toEqual({ count: 0 });
+    expect(database!.prepare("SELECT COUNT(*) AS count FROM evidence_records").get()).toEqual({ count: 0 });
+    expect(database!.prepare("SELECT COUNT(*) AS count FROM lease_records").get()).toEqual({ count: 0 });
+    expect(database!.prepare("SELECT status FROM outbox").get()).toEqual({ status: "pending" });
+  });
+
+  it("prepares receipt work before the SQLite writer transaction", async () => {
+    const runtime = fake();
+    commit(open());
+    const phases: string[] = [];
+    const worker = new OperationWorker(database!, runtime, {
+      ownerId: "worker-receipt-phases",
+      replayPolicy: () => "inspectable",
+      prepareReceiptTransaction: () => {
+        expect(database!.isTransaction).toBe(false);
+        phases.push("prepare");
+        return () => {
+          expect(database!.isTransaction).toBe(true);
+          phases.push("commit");
+        };
+      },
+    });
+
+    await expect(worker.runOnce()).resolves.toBe("completed");
+    expect(phases).toEqual(["prepare", "commit"]);
   });
 
   it("returns the stored receipt for duplicate delivery and rejects different content", async () => {

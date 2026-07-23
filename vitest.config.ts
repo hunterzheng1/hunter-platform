@@ -28,6 +28,9 @@ export default defineConfig({
       "@hunter/runtime-contracts": fileURLToPath(
         new URL("./packages/runtime-contracts/src/index.ts", import.meta.url),
       ),
+      "@hunter/runtime-manager": fileURLToPath(
+        new URL("./packages/runtime-manager/src/index.ts", import.meta.url),
+      ),
       "@hunter/storage": fileURLToPath(
         new URL("./packages/storage/src/index.ts", import.meta.url),
       ),

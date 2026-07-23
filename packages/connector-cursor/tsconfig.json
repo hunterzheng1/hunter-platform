@@ -7,7 +7,8 @@
   },
   "references": [
     { "path": "../domain" },
-    { "path": "../runtime-contracts" }
+    { "path": "../runtime-contracts" },
+    { "path": "../storage" }
   ],
   "include": ["src/**/*.ts"]
 }

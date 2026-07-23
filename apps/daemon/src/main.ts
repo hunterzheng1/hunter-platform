@@ -72,6 +72,12 @@ export async function startDaemon(options: DaemonStartOptions) {
           const plan = services.repositories.getExecutionPlan(executionPlanId);
           return plan === null ? null : { projectId: plan.projectId, executionPlanId: plan.executionPlanId };
         },
+        projectForRun: (runId) => {
+          const run = services.flowStore.loadRun(runId);
+          return run === null
+            ? null
+            : { projectId: run.binding.projectId, runId: run.binding.runId };
+        },
         startRun: async (command, actor) => services.startRun.execute(command, actor),
       },
     });

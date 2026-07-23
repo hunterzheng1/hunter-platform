@@ -4,7 +4,7 @@ function canonicalId(prefix: string, label: string) {
   return z
     .string()
     .regex(
-      new RegExp(`^${prefix}_[a-z0-9][a-z0-9_-]{7,63}$`, "u"),
+      new RegExp(`^${prefix}_[a-z0-9][a-z0-9_-]{7,91}$`, "u"),
       `${label} must be a canonical opaque identifier`,
     );
 }

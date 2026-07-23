@@ -46,6 +46,8 @@ export function assertChangeRoutesServices(input: unknown): asserts input is Cha
     || typeof input !== "object"
     || !("getRequirementRevision" in input)
     || typeof input.getRequirementRevision !== "function"
+    || !("getChangeExecutionPlanRelation" in input)
+    || typeof input.getChangeExecutionPlanRelation !== "function"
     || !("publishChange" in input)
     || typeof input.publishChange !== "function"
   ) {

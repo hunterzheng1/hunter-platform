@@ -1,13 +1,21 @@
 import { readFile } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 import {
   AgentProfileIdSchema,
+  AttemptIdSchema,
+  EvidenceIdSchema,
   OperationIdSchema,
+  ProjectIdSchema,
+  RunIdSchema,
   WorkspaceIdSchema,
 } from "@hunter/domain";
-import { runtimeFactCanCompleteStep } from "@hunter/runtime-contracts";
+import { createExternalOperation, runtimeFactCanCompleteStep } from "@hunter/runtime-contracts";
+import { OperationWorker, SqliteOperationJournal } from "@hunter/storage";
 import { describe, expect, it } from "vitest";
 import {
   CURSOR_SYNTHETIC_LIMITS,
+  type CursorHandoffCandidateRequest,
+  type CursorHandoffCandidateResult,
   type SyntheticCursorHandoffRequest,
   type SyntheticCursorHandoffTransport,
 } from "./cursor-handoff.js";
@@ -15,6 +23,7 @@ import { CursorHandoffCandidate } from "./cursor-handoff.js";
 import {
   CURSOR_TASK_PACK_LIMITS,
   renderTaskPack,
+  taskPackRelativePath,
 } from "./task-pack.js";
 
 const operationId = OperationIdSchema.parse("opn_cursorhandoff01");
@@ -68,6 +77,19 @@ function successfulTransport(): FixtureTransport {
 
 const request = { operationId, profileId, workspaceId, prompt };
 
+function dispatchFixture(
+  candidate: CursorHandoffCandidate,
+  value: CursorHandoffCandidateRequest,
+): Promise<CursorHandoffCandidateResult> {
+  return (
+    candidate as unknown as {
+      dispatchFixture(
+        input: CursorHandoffCandidateRequest,
+      ): Promise<CursorHandoffCandidateResult>;
+    }
+  ).dispatchFixture(value);
+}
+
 describe("Cursor deterministic task pack", () => {
   it("renders a deterministic provenance-rich pack at a canonical safe path", () => {
     const first = renderTaskPack(request);
@@ -84,6 +106,19 @@ describe("Cursor deterministic task pack", () => {
     expect(first.content).toContain(`Workspace: ${workspaceId}`);
     expect(first.content).toContain(
       "Manual declaration must be followed by Hunter verifier.",
+    );
+  });
+
+  it("BND-05 derives a task-pack filename only from a branded OperationId", () => {
+    expect(taskPackRelativePath(operationId)).toBe(
+      ".hunter/handoffs/opn_cursorhandoff01.md",
+    );
+    expect(() =>
+      taskPackRelativePath("opn_../../private" as never),
+    ).toThrow("UNBRANDED_ID");
+    const maximum = OperationIdSchema.parse(`opn_${"a".repeat(92)}`);
+    expect(taskPackRelativePath(maximum)).toBe(
+      `.hunter/handoffs/${maximum}.md`,
     );
   });
 
@@ -147,12 +182,174 @@ describe("Cursor deterministic task pack", () => {
 });
 
 describe("Cursor contract-only synthetic handoff candidate", () => {
+  it.each([
+    { observed: "attached" as const, expected: "attached" },
+    { observed: "confirmed_absent" as const, expected: "confirmed_absent" },
+  ])(
+    "reconciles a task pack by operation identity and content fingerprint: $observed",
+    async ({ observed, expected }) => {
+      const transport = successfulTransport();
+      const observations: unknown[] = [];
+      const operation = createExternalOperation({
+        schemaVersion: 1,
+        projectId: ProjectIdSchema.parse("prj_cursorreconcile"),
+        runId: RunIdSchema.parse("run_cursorreconcile"),
+        attemptId: AttemptIdSchema.parse("att_cursorreconcile"),
+        operationId: OperationIdSchema.parse("opn_cursorreconcile"),
+        operationVersion: 2,
+        operationType: "task_pack.write",
+        requestedCapabilities: ["artifact_export"],
+        payload: {
+          workspaceId,
+          inputEvidenceId: EvidenceIdSchema.parse("evd_cursorreconcile"),
+        },
+      });
+      const handler = new CursorHandoffCandidate(
+        transport,
+        { candidateSchemaVersion: 1 },
+        {
+          taskPackInputFor: () => ({ profileId, prompt }),
+          observeTaskPack: async (observation) => {
+            observations.push(observation);
+            return observed;
+          },
+          observedAt: () => "2026-07-23T00:00:00.000Z",
+        },
+      );
+      const pack = renderTaskPack({
+        operationId: operation.operationId,
+        profileId,
+        workspaceId,
+        prompt,
+      });
+
+      const result = await handler.reconcile(operation);
+
+      expect(result.outcome).toBe(expected);
+      expect(observations).toEqual([{
+        operationId: operation.operationId,
+        workspaceId,
+        relativePath: pack.relativePath,
+        contentDigest: pack.contentDigest,
+      }]);
+      if (result.outcome === "attached") {
+        expect(result.receipt).toMatchObject({
+          operationId: operation.operationId,
+          fingerprint: operation.fingerprint,
+          operationStatus: "completed",
+          evidence: {
+            evidenceHash: pack.contentDigest,
+            proofScope: "local_observation",
+          },
+        });
+      }
+      expect(transport.calls).toHaveLength(0);
+    },
+  );
+
+  it("keeps native-surface recovery UNKNOWN without observing or reopening it", async () => {
+    const transport = successfulTransport();
+    let observations = 0;
+    const operation = createExternalOperation({
+      schemaVersion: 1,
+      projectId: ProjectIdSchema.parse("prj_cursorreconcile"),
+      runId: RunIdSchema.parse("run_cursorreconcile"),
+      attemptId: AttemptIdSchema.parse("att_cursorreconcile"),
+      operationId: OperationIdSchema.parse("opn_cursorreopen001"),
+      operationVersion: 1,
+      operationType: "native_surface.open",
+      requestedCapabilities: ["native_surface"],
+      payload: { workspaceId },
+    });
+    const handler = new CursorHandoffCandidate(
+      transport,
+      { candidateSchemaVersion: 1 },
+      {
+        taskPackInputFor: () => ({ profileId, prompt }),
+        observeTaskPack: async () => {
+          observations += 1;
+          return "attached";
+        },
+      },
+    );
+
+    await expect(handler.reconcile(operation)).resolves.toEqual({
+      outcome: "unknown",
+    });
+    expect(observations).toBe(0);
+    expect(transport.calls).toHaveLength(0);
+  });
+
+  it("dispatches task-pack write and native-surface open only from the Foundation worker", async () => {
+    const transport = successfulTransport();
+    const handler = new CursorHandoffCandidate(transport, {
+      candidateSchemaVersion: 1,
+    }, {
+      taskPackInputFor: () => ({ profileId, prompt }),
+      observedAt: () => "2026-07-23T00:00:00.000Z",
+    });
+    const database = new DatabaseSync(":memory:");
+    const journal = new SqliteOperationJournal(database);
+    const common = {
+      schemaVersion: 1,
+      projectId: ProjectIdSchema.parse("prj_cursorworker01"),
+      runId: RunIdSchema.parse("run_cursorworker01"),
+      attemptId: AttemptIdSchema.parse("att_cursorworker01"),
+    };
+    const write = createExternalOperation({
+      ...common,
+      operationId: OperationIdSchema.parse("opn_cursorworker01"),
+      operationVersion: 2,
+      operationType: "task_pack.write",
+      requestedCapabilities: ["artifact_export"],
+      payload: {
+        workspaceId,
+        inputEvidenceId: EvidenceIdSchema.parse("evd_cursorworker01"),
+      },
+    });
+    const open = createExternalOperation({
+      ...common,
+      operationId: OperationIdSchema.parse("opn_cursorworker02"),
+      operationVersion: 1,
+      operationType: "native_surface.open",
+      requestedCapabilities: ["native_surface"],
+      payload: { workspaceId },
+    });
+    journal.commitCommand({
+      commandId: "cursor-worker-operations",
+      requestFingerprint: "a".repeat(64),
+      projectId: common.projectId,
+      aggregateId: "attempt:att_cursorworker01",
+      expectedVersion: 0,
+      actor: { actorId: "test", correlationId: "cursor-worker" },
+      events: [],
+      operations: [write, open],
+      response: {},
+    });
+    const worker = new OperationWorker(database, handler as never, {
+      ownerId: "cursor-worker",
+      replayPolicy: () => "inspectable",
+    });
+
+    expect(transport.calls).toHaveLength(0);
+    await expect(worker.runOnce()).resolves.toBe("completed");
+    await expect(worker.runOnce()).resolves.toBe("completed");
+    expect(transport.calls.map(({ method }) => method)).toEqual([
+      "writeTaskPack",
+      "openWorkspace",
+    ]);
+    expect(database.prepare(
+      "SELECT COUNT(*) AS count FROM side_effect_receipts",
+    ).get()).toEqual({ count: 2 });
+    database.close();
+  });
+
   it("sends the exact frozen writer then opener messages without a raw path", async () => {
     const transport = successfulTransport();
     const candidate = new CursorHandoffCandidate(transport, {
       candidateSchemaVersion: 1,
     });
-    const result = await candidate.launch(request);
+    const result = await dispatchFixture(candidate, request);
     const pack = renderTaskPack(request);
 
     expect(transport.calls).toEqual([
@@ -197,7 +394,7 @@ describe("Cursor contract-only synthetic handoff candidate", () => {
       candidateSchemaVersion: 1,
     });
 
-    const result = await candidate.launch(request);
+    const result = await dispatchFixture(candidate, request);
 
     expect(result).toMatchObject({
       fixtureKind: "hunter.cursor.synthetic_handoff_v1",
@@ -236,7 +433,7 @@ describe("Cursor contract-only synthetic handoff candidate", () => {
       candidateSchemaVersion: 1,
     });
 
-    const result = await candidate.launch(request);
+    const result = await dispatchFixture(candidate, request);
 
     expect(transport.calls).toHaveLength(1);
     expect(result).toMatchObject({
@@ -263,9 +460,9 @@ describe("Cursor contract-only synthetic handoff candidate", () => {
           },
     );
 
-    const result = await new CursorHandoffCandidate(transport, {
+    const result = await dispatchFixture(new CursorHandoffCandidate(transport, {
       candidateSchemaVersion: 1,
-    }).launch(request);
+    }), request);
 
     expect(result.status).toBe("needs_attention");
     expect(result.stepCompletion).toBe("not_established");
@@ -273,9 +470,9 @@ describe("Cursor contract-only synthetic handoff candidate", () => {
 
   it("binds the deterministic fingerprint to every request field without local replay state", async () => {
     const launch = async (value = request) =>
-      new CursorHandoffCandidate(successfulTransport(), {
+      dispatchFixture(new CursorHandoffCandidate(successfulTransport(), {
         candidateSchemaVersion: 1,
-      }).launch(value);
+      }), value);
     const baseline = await launch();
 
     expect((await launch()).fingerprint).toBe(baseline.fingerprint);
@@ -299,9 +496,9 @@ describe("Cursor contract-only synthetic handoff candidate", () => {
   });
 
   it("deep-freezes the result and all nested values", async () => {
-    const result = await new CursorHandoffCandidate(successfulTransport(), {
+    const result = await dispatchFixture(new CursorHandoffCandidate(successfulTransport(), {
       candidateSchemaVersion: 1,
-    }).launch(request);
+    }), request);
 
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen(result.taskPackIntent)).toBe(true);
@@ -340,7 +537,7 @@ describe("Cursor contract-only synthetic handoff candidate", () => {
       candidateSchemaVersion: 1,
     });
 
-    await expect(candidate.launch(request)).rejects.toThrow(
+    await expect(dispatchFixture(candidate, request)).rejects.toThrow(
       new RegExp(`^${expected}$`, "u"),
     );
   });
@@ -359,9 +556,9 @@ describe("Cursor contract-only synthetic handoff candidate", () => {
     } as unknown as SyntheticCursorHandoffTransport;
 
     await expect(
-      new CursorHandoffCandidate(transport, {
+      dispatchFixture(new CursorHandoffCandidate(transport, {
         candidateSchemaVersion: 1,
-      }).launch(request),
+      }), request),
     ).rejects.toThrow(/^CURSOR_RESPONSE_INVALID$/u);
     expect(reads).toBe(0);
   });
@@ -385,9 +582,9 @@ describe("Cursor contract-only synthetic handoff candidate", () => {
       };
 
       await expect(
-        new CursorHandoffCandidate(transport, {
+        dispatchFixture(new CursorHandoffCandidate(transport, {
           candidateSchemaVersion: 1,
-        }).launch(request),
+        }), request),
       ).rejects.toThrow(/^CURSOR_SYNTHETIC_TRANSPORT_FAILED$/u);
     }
   });
@@ -412,9 +609,9 @@ describe("Cursor contract-only synthetic handoff candidate", () => {
         CURSOR_TASK_PACK_LIMITS.maxPromptBytes,
       );
       const transport = successfulTransport();
-      const result = await new CursorHandoffCandidate(transport, {
+      const result = await dispatchFixture(new CursorHandoffCandidate(transport, {
         candidateSchemaVersion: 1,
-      }).launch({ ...request, prompt: extremePrompt });
+      }), { ...request, prompt: extremePrompt });
 
       expect(result.status).toBe("waiting_input");
       expect(transport.calls).toHaveLength(2);
@@ -463,7 +660,7 @@ describe("Cursor contract-only synthetic handoff candidate", () => {
       candidateSchemaVersion: 1,
     });
 
-    await expect(candidate.launch(unsafe as never)).rejects.toThrow(
+    await expect(dispatchFixture(candidate, unsafe as never)).rejects.toThrow(
       /^CURSOR_REQUEST_(?:INVALID|TOO_LARGE|UNSAFE)$/u,
     );
     expect(transport.calls).toHaveLength(0);

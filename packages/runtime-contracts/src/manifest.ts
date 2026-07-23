@@ -32,12 +32,12 @@ const ProbeSubjectSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("provider"),
     providerId: RuntimeProviderIdSchema,
-    implementationVersion: z.string().min(1),
+    implementationVersion: z.string().min(1).max(256),
   }),
   z.strictObject({
     kind: z.literal("connector"),
     connectorId: ConnectorIdSchema,
-    implementationVersion: z.string().min(1),
+    implementationVersion: z.string().min(1).max(256),
   }),
 ]);
 
@@ -56,7 +56,7 @@ export const CapabilityProbeReceiptSchema = z
     platform: z.enum(["windows", "linux"]),
     observedAt: z.iso.datetime(),
     validUntil: z.iso.datetime(),
-    results: z.array(AtomicCapabilityProbeResultSchema).min(1),
+    results: z.array(AtomicCapabilityProbeResultSchema).min(1).max(19),
   })
   .superRefine((receipt, context) => {
     if (Date.parse(receipt.validUntil) <= Date.parse(receipt.observedAt)) {

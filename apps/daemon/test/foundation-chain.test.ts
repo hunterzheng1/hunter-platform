@@ -15,7 +15,7 @@ import {
   createWorkflowRevision, canonicalSha256,
 } from "@hunter/domain";
 import { createWorkflowRunBinding, type RunBudgetLimit } from "@hunter/flow-engine";
-import { CapabilityProbeReceiptSchema, ControllerLeaseSchema, ExternalOperationReceiptSchema, WorkspaceLeaseSchema, WriterLeaseSchema, createExternalOperation } from "@hunter/runtime-contracts";
+import { CapabilityProbeReceiptSchema, ControllerLeaseSchema, ExternalOperationReceiptSchema, WorkspaceLeaseSchema, WriterLeaseSchema, createExternalOperation, createWorkspacePathBoundary } from "@hunter/runtime-contracts";
 import { SqliteOperationJournal } from "@hunter/storage";
 import { FakeRuntime } from "@hunter/testkit";
 import { describe, expect, it } from "vitest";
@@ -91,6 +91,10 @@ function chainApp(services: ReturnType<typeof createSqliteApplicationServices>) 
         const plan = services.repositories.getExecutionPlan(executionPlanId);
         return plan === null ? null : { projectId: plan.projectId, executionPlanId: plan.executionPlanId };
       },
+      projectForRun: (runId) => {
+        const run = services.flowStore.loadRun(runId);
+        return run === null ? null : { projectId: run.binding.projectId, runId: run.binding.runId };
+      },
       startRun: async (command, actor) => services.startRun.execute(command, actor),
     },
   });
@@ -129,11 +133,33 @@ describe("Foundation chain", () => {
     const childRunId = fanout.children[0]!.childRunId;
     const parent = services.flowStore.loadRun(ids.root)!.binding;
 
-    const common = { schemaVersion: 1 as const, ownerId: ids.owner, generation: 1, acquiredAt: "2026-07-22T10:00:00.000Z", expiresAt: "2027-07-22T10:30:00.000Z" };
-    await services.leaseService.acquire(WorkspaceLeaseSchema.parse({ ...common, kind: "workspace", leaseId: WorkspaceLeaseIdSchema.parse("wsl_chain00001"), scope: { workspaceId: ids.workspace, deviceBindingId: DeviceBindingIdSchema.parse("dev_chain00001"), repositoryId: ids.repository, mode: "write", baselineRevision: baseline } }));
-    await services.leaseService.acquire(WriterLeaseSchema.parse({ ...common, kind: "writer", leaseId: WriterLeaseIdSchema.parse("wrl_chain00001"), scope: { workspaceId: ids.workspace, worktreeId: WorktreeIdSchema.parse("wtr_chain00001") } }));
-    await services.leaseService.acquire(ControllerLeaseSchema.parse({ ...common, kind: "controller", leaseId: ControllerLeaseIdSchema.parse("ctl_chain00001"), scope: { nativeSessionId: NativeSessionIdSchema.parse("ses_chain00001") } }));
     let attemptId = services.flowStore.loadRun(childRunId)!.steps[0]!.attempts[0]!.attemptId;
+    const worktreeId = WorktreeIdSchema.parse("wtr_chain00001");
+    const deviceBindingId = DeviceBindingIdSchema.parse("dev_chain00001");
+    const workspaceLeaseId = WorkspaceLeaseIdSchema.parse("wsl_chain00001");
+    const writerLeaseId = WriterLeaseIdSchema.parse("wrl_chain00001");
+    const boundary = createWorkspacePathBoundary(new Map([[ids.repository, workspacePath]]));
+    const common = {
+      schemaVersion: 2 as const,
+      projectId: ids.project,
+      repositoryId: ids.repository,
+      deviceBindingId,
+      canonicalWorkspaceKey: boundary.canonicalKey(boundary.verify(ids.repository, workspacePath)),
+      gitHead: baseline,
+      branch: execFileSync("git", ["-C", workspacePath, "branch", "--show-current"], { encoding: "utf8", windowsHide: true }).trim(),
+      ownerRunId: childRunId,
+      ownerAttemptId: attemptId,
+      ownerId: ids.owner,
+      generation: 1,
+      mode: "write" as const,
+      acquiredAt: "2026-07-22T10:00:00.000Z",
+      expiresAt: "2027-07-22T10:30:00.000Z",
+      revokedAt: null,
+      revocationReason: null,
+    };
+    await services.leaseService.acquire(WorkspaceLeaseSchema.parse({ ...common, kind: "workspace", leaseId: workspaceLeaseId, scope: { workspaceId: ids.workspace } }));
+    await services.leaseService.acquire(WriterLeaseSchema.parse({ ...common, kind: "writer", leaseId: writerLeaseId, scope: { workspaceId: ids.workspace, worktreeId } }));
+    await services.leaseService.acquire(ControllerLeaseSchema.parse({ ...common, kind: "controller", leaseId: ControllerLeaseIdSchema.parse("ctl_chain00001"), scope: { workspaceId: ids.workspace, worktreeId, nativeSessionId: NativeSessionIdSchema.parse("ses_chain00001") } }));
     expect(definitions.workflow.steps.find(({ stepId }) => stepId === services.flowStore.loadRun(childRunId)!.steps[0]!.stepId)!.permissionPolicy.decision).toBe("allow");
     const operation = (index: number) => createExternalOperation({ schemaVersion: 1, operationId: OperationIdSchema.parse(`opn_chain0000${index}`), projectId: ids.project, runId: childRunId, attemptId: AttemptIdSchema.parse(attemptId), operationVersion: 1, operationType: "session.launch", requestedCapabilities: ["launch"], payload: { agentProfileId: ids.profile, workspaceId: ids.workspace } });
     services.runtimeManager.requestAssignment({ commandId: "assign-chain-1", expectedVersion: services.flowStore.loadRun(childRunId)!.version, operation: operation(1) });
@@ -143,17 +169,50 @@ describe("Foundation chain", () => {
     clock = new Date("2026-07-22T12:00:00.010Z");
     services.flowEngine.handle({ type: "ActivateScheduledRetry", runId: childRunId, expectedVersion: services.flowStore.loadRun(childRunId)!.version, idempotencyKey: "activate-retry-chain", actor: { actorId: "chain", correlationId: "chain" } });
     attemptId = services.flowStore.loadRun(childRunId)!.steps[0]!.attempts.at(-1)!.attemptId;
+    await services.leaseService.release({ leaseId: workspaceLeaseId, ownerId: ids.owner, generation: 1 });
+    await services.leaseService.release({ leaseId: writerLeaseId, ownerId: ids.owner, generation: 1 });
+    const retryWorkspaceLeaseId = WorkspaceLeaseIdSchema.parse("wsl_chainretry01");
+    const retryWriterLeaseId = WriterLeaseIdSchema.parse("wrl_chainretry01");
+    await services.leaseService.acquire(WorkspaceLeaseSchema.parse({ ...common, ownerAttemptId: attemptId, generation: 2, kind: "workspace", leaseId: retryWorkspaceLeaseId, scope: { workspaceId: ids.workspace } }));
+    await services.leaseService.acquire(WriterLeaseSchema.parse({ ...common, ownerAttemptId: attemptId, generation: 2, kind: "writer", leaseId: retryWriterLeaseId, scope: { workspaceId: ids.workspace, worktreeId } }));
     const recoveryLaunch = operation(2);
     services.runtimeManager.requestAssignment({ commandId: "assign-chain-2", expectedVersion: services.flowStore.loadRun(childRunId)!.version, operation: recoveryLaunch });
     expect(await services.operationWorker.runOnce()).toBe("completed");
     const recoveryLaunchReceipt = ExternalOperationReceiptSchema.parse(JSON.parse((database.prepare("SELECT provider_receipt_json FROM side_effect_receipts WHERE operation_id = ?").get(recoveryLaunch.operationId) as { provider_receipt_json: string }).provider_receipt_json));
     const recoverySessionId = recoveryLaunchReceipt.nativeReferences.find((reference) => reference.kind === "session")!.referenceId;
-    await services.leaseService.acquire(ControllerLeaseSchema.parse({ ...common, kind: "controller", leaseId: ControllerLeaseIdSchema.parse("ctl_recovery001"), scope: { nativeSessionId: recoverySessionId } }));
+    await expect(
+      services.leaseService.findActiveController(ids.project, recoverySessionId),
+    ).resolves.toMatchObject({
+      kind: "controller",
+      ownerAttemptId: attemptId,
+      scope: { nativeSessionId: recoverySessionId },
+    });
     writeFileSync(join(workspacePath, "unexpected.txt"), "drift\n", "utf8");
     database.close();
 
     database = new DatabaseSync(path);
-    services = createSqliteApplicationServices({ database, externalHandler: fake, installSecret: "foundation-secret-tests", allowedHosts: ["hunter-test.localhost"], allowedOrigins: ["app://hunter"], capabilityReceiptFor: () => capability(), now: () => clock });
+    services = createSqliteApplicationServices({
+      database,
+      externalHandler: fake,
+      installSecret: "foundation-secret-tests",
+      allowedHosts: ["hunter-test.localhost"],
+      allowedOrigins: ["app://hunter"],
+      capabilityReceiptFor: () => capability(),
+      leaseRecoveryObservationFor: (lease) =>
+        lease.kind === "workspace"
+          ? null
+          : lease.kind === "writer"
+            ? { worktreeId: lease.scope.worktreeId }
+            : {
+                worktreeId: lease.scope.worktreeId,
+                nativeSessionId: lease.scope.nativeSessionId,
+              },
+      verifiedWorkspacePathForLease: (lease) =>
+        lease.kind === "workspace"
+          ? null
+          : boundary.verify(ids.repository, workspacePath),
+      now: () => clock,
+    });
     const recovery = await services.recovery.run();
     expect(recovery.conclusions).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "session", status: "observed", reason: expect.stringContaining("session_observation_receipt:") }),
@@ -193,11 +252,28 @@ describe("Foundation chain", () => {
     services.flowEngine.handle({ type: "StartRun", binding: cancelChild, expectedVersion: 0, idempotencyKey: "start-cancel-child", actor });
     const cancelAttemptId = services.flowStore.loadRun(cancelChild.runId)!.steps[0]!.attempts[0]!.attemptId;
     const cancelLaunch = createExternalOperation({ schemaVersion: 1, operationId: "opn_cancelchain01", projectId: ids.project, runId: cancelChild.runId, attemptId: cancelAttemptId, operationVersion: 1, operationType: "session.launch", requestedCapabilities: ["launch"], payload: { agentProfileId: ids.profile, workspaceId: ids.workspace } });
+    await expect(services.leaseService.inspect(retryWorkspaceLeaseId)).resolves.toBeNull();
+    expect(JSON.parse((database.prepare(
+      "SELECT receipt_json FROM lease_records WHERE lease_id = ?",
+    ).get(retryWorkspaceLeaseId) as { receipt_json: string }).receipt_json)).toMatchObject({
+      revokedAt: expect.any(String),
+      revocationReason: "workspace_unexpected_writes",
+    });
+    await services.leaseService.release({ leaseId: retryWriterLeaseId, ownerId: ids.owner, generation: 2 });
+    await services.leaseService.acquire(WorkspaceLeaseSchema.parse({ ...common, ownerRunId: cancelChild.runId, ownerAttemptId: cancelAttemptId, generation: 3, kind: "workspace", leaseId: WorkspaceLeaseIdSchema.parse("wsl_chaincancel01"), scope: { workspaceId: ids.workspace } }));
+    await services.leaseService.acquire(WriterLeaseSchema.parse({ ...common, ownerRunId: cancelChild.runId, ownerAttemptId: cancelAttemptId, generation: 3, kind: "writer", leaseId: WriterLeaseIdSchema.parse("wrl_chaincancel01"), scope: { workspaceId: ids.workspace, worktreeId } }));
     services.runtimeManager.requestAssignment({ commandId: "assign-cancel-chain", expectedVersion: services.flowStore.loadRun(cancelChild.runId)!.version, operation: cancelLaunch });
     expect(await services.operationWorker.runOnce()).toBe("completed");
     const launchReceipt = ExternalOperationReceiptSchema.parse(JSON.parse((database.prepare("SELECT provider_receipt_json FROM side_effect_receipts WHERE operation_id = ?").get(cancelLaunch.operationId) as { provider_receipt_json: string }).provider_receipt_json));
     const nativeSessionId = launchReceipt.nativeReferences.find((reference) => reference.kind === "session")!.referenceId;
-    await services.leaseService.acquire(ControllerLeaseSchema.parse({ ...common, kind: "controller", leaseId: ControllerLeaseIdSchema.parse("ctl_cancel00001"), scope: { nativeSessionId } }));
+    await expect(
+      services.leaseService.findActiveController(ids.project, nativeSessionId),
+    ).resolves.toMatchObject({
+      kind: "controller",
+      ownerRunId: cancelChild.runId,
+      ownerAttemptId: cancelAttemptId,
+      scope: { workspaceId: ids.workspace, worktreeId, nativeSessionId },
+    });
     services.flowEngine.handle({ type: "CancelRun", runId: ids.cancelRoot, expectedVersion: services.flowStore.loadRun(ids.cancelRoot)!.version, idempotencyKey: "cancel-root-chain", actor });
     await services.reconcileCancellationRequests();
     expect(services.flowStore.loadRun(cancelChild.runId)!.status).toBe("canceled");

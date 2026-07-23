@@ -1,12 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
-import { accessSync, constants, existsSync, realpathSync } from "node:fs";
+import { accessSync, constants, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { isAbsolute } from "node:path";
 
 import { PublishChangeService, StartRunService, type PublishChangeRepositories, type StartRunRepositories } from "@hunter/application";
-import type { ExecutionPlan, ProjectId, TaskId, WorkflowRevision } from "@hunter/domain";
-import { OperationIdSchema, ProjectIdSchema, canonicalSha256, createProject } from "@hunter/domain";
+import type { ExecutionPlan, NativeSessionId, ProjectId, TaskId, WorkflowRevision, WorktreeId } from "@hunter/domain";
+import { ControllerLeaseIdSchema, LeaseOwnerIdSchema, OperationIdSchema, ProjectIdSchema, WorkspaceLeaseIdSchema, WriterLeaseIdSchema, canonicalSha256, createProject } from "@hunter/domain";
 import { FlowEngine, reduceFlowEvents, type FlowCommandReceipt, type FlowCommit, type FlowDefinitions, type FlowEvent, type FlowStore, type WorkflowRunState } from "@hunter/flow-engine";
-import { CapabilityProbeReceiptSchema, ExternalOperationReceiptSchema, LeaseSchema, createExternalOperation, type CapabilityProbeReceipt, type ExternalOperation, type ExternalOperationHandler, type Lease } from "@hunter/runtime-contracts";
+import { ExternalOperationReceiptSchema, LeaseSchema, createExternalOperation, createWorkspacePathBoundary, decodeCapabilityProbeReceipt, decodeExternalOperationReceipt, type CapabilityProbeReceipt, type ExternalOperation, type ExternalOperationHandler, type Lease, type VerifiedWorkspacePath } from "@hunter/runtime-contracts";
 import { deriveStepPolicy } from "@hunter/policy";
 import { LeaseService, RuntimeManager, RuntimeOperationHandler } from "@hunter/runtime-manager";
 import { EventLedgerReader, HunterProjection, OperationWorker, ProjectionRunner, SqliteOperationJournal } from "@hunter/storage";
@@ -25,6 +26,14 @@ interface ReceiptRow {
 interface FlowEventRow {
   readonly aggregate_id: string;
   readonly event_data: string;
+}
+
+function withoutLeaseGeneration<T extends Lease>(
+  lease: T,
+): Omit<T, "generation"> {
+  const { generation, ...template } = lease;
+  void generation;
+  return template;
 }
 
 export class SqliteFlowStore implements FlowStore {
@@ -114,6 +123,11 @@ export function createSqliteApplicationServices(input: {
   readonly allowedHosts: readonly string[];
   readonly allowedOrigins: readonly string[];
   readonly capabilityReceiptFor?: ((operation: ExternalOperation) => CapabilityProbeReceipt | null) | undefined;
+  readonly leaseRecoveryObservationFor?: ((lease: Lease) => {
+    readonly worktreeId?: WorktreeId | undefined;
+    readonly nativeSessionId?: NativeSessionId | undefined;
+  } | null) | undefined;
+  readonly verifiedWorkspacePathForLease?: ((lease: Lease) => VerifiedWorkspacePath | null) | undefined;
   readonly resolveAuthorizedProjectIds?: ((principalId: string) => readonly ProjectId[] | undefined) | undefined;
   readonly now?: (() => Date) | undefined;
   readonly contentDirectory?: string | undefined;
@@ -211,7 +225,146 @@ export function createSqliteApplicationServices(input: {
   };
   const eventReader = new EventLedgerReader(input.database);
   const projectionRunner = new ProjectionRunner(input.database, [new HunterProjection()]);
-  const leaseService = new LeaseService(input.database);
+  const leaseService = new LeaseService(input.database, now);
+  const deterministicLeaseId = (
+    prefix: "wsl" | "wrl" | "ctl" | "own",
+    value: unknown,
+  ): string => `${prefix}_${canonicalSha256(value).slice(0, 24)}`;
+  const persistedDeviceBindingFor = (
+    operation: Extract<ExternalOperation, { operationType: "workspace.prepare" }>,
+  ) => {
+    const rows = input.database.prepare(
+      `SELECT event_data
+         FROM events
+        WHERE aggregate_id = ? AND event_type = 'ProjectCreated'
+        ORDER BY position DESC`,
+    ).all(`project:${operation.projectId}`) as Array<{ event_data: string }>;
+    for (const row of rows) {
+      try {
+        const eventData = JSON.parse(row.event_data) as {
+          readonly projectId?: unknown;
+          readonly project?: unknown;
+        };
+        const project = createProject(eventData.project);
+        if (
+          project.projectId !== operation.projectId
+          || eventData.projectId !== operation.projectId
+          || !project.repositoryBindings.some(
+            ({ repositoryId }) =>
+              repositoryId === operation.payload.repositoryId,
+          )
+        ) {
+          continue;
+        }
+        const binding = project.deviceBindings.find(
+          ({ deviceBindingId }) =>
+            deviceBindingId === operation.payload.deviceBindingId,
+        );
+        if (
+          binding === undefined
+          || binding.repositoryId !== operation.payload.repositoryId
+          || binding.availability !== "available"
+          || !isAbsolute(binding.localPath)
+        ) {
+          continue;
+        }
+        return binding;
+      } catch {
+        continue;
+      }
+    }
+    throw new Error("PERSISTED_DEVICE_BINDING_SCOPE_REQUIRED");
+  };
+  const inspectGitWorkspace = (
+    workspacePath: string,
+    args: readonly string[],
+  ): string => {
+    try {
+      return execFileSync("git", ["-C", workspacePath, ...args], {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: 5_000,
+      }).trim();
+    } catch {
+      throw new Error("GIT_WORKSPACE_INSPECTION_FAILED");
+    }
+  };
+  const acquireWorkspaceLease = async (
+    operation: ExternalOperation,
+  ) => {
+    if (operation.operationType !== "workspace.prepare") {
+      throw new Error("WORKSPACE_PREPARE_OPERATION_REQUIRED");
+    }
+    if (operation.runId === null || operation.attemptId === null) {
+      throw new Error("WORKSPACE_LEASE_RUN_SCOPE_REQUIRED");
+    }
+    const binding = persistedDeviceBindingFor(operation);
+    const boundary = createWorkspacePathBoundary(
+      new Map([[operation.payload.repositoryId, binding.localPath]]),
+    );
+    const verifiedRepositoryPath = boundary.verify(
+      operation.payload.repositoryId,
+      binding.localPath,
+    );
+    const topLevel = inspectGitWorkspace(
+      verifiedRepositoryPath,
+      ["rev-parse", "--show-toplevel"],
+    );
+    const verifiedTopLevel = boundary.verify(operation.payload.repositoryId, topLevel);
+    const gitHead = inspectGitWorkspace(
+      verifiedRepositoryPath,
+      ["rev-parse", "HEAD"],
+    );
+    if (gitHead !== operation.payload.baselineRevision) {
+      throw new Error("WORKSPACE_BASELINE_MISMATCH");
+    }
+    const branch = inspectGitWorkspace(
+      verifiedRepositoryPath,
+      ["branch", "--show-current"],
+    );
+    const acquiredAt = now();
+    return leaseService.acquireNext({
+      schemaVersion: 2,
+      projectId: operation.projectId,
+      repositoryId: operation.payload.repositoryId,
+      deviceBindingId: operation.payload.deviceBindingId,
+      canonicalWorkspaceKey: boundary.canonicalKey(verifiedTopLevel),
+      gitHead,
+      branch,
+      ownerRunId: operation.runId,
+      ownerAttemptId: operation.attemptId,
+      kind: "workspace",
+      leaseId: WorkspaceLeaseIdSchema.parse(deterministicLeaseId("wsl", operation)),
+      ownerId: LeaseOwnerIdSchema.parse(deterministicLeaseId("own", {
+        runId: operation.runId,
+        attemptId: operation.attemptId,
+        workspaceId: operation.payload.workspaceId,
+      })),
+      mode: operation.payload.mode,
+      acquiredAt: acquiredAt.toISOString(),
+      expiresAt: new Date(acquiredAt.getTime() + 30 * 60_000).toISOString(),
+      revokedAt: null,
+      revocationReason: null,
+      scope: { workspaceId: operation.payload.workspaceId },
+    });
+  };
+  const activeLeasesFor = (operation: ExternalOperation): readonly Lease[] =>
+    (input.database.prepare(
+      "SELECT receipt_json FROM lease_records WHERE expires_at > ?",
+    ).all(now().toISOString()) as Array<{ receipt_json: string }>).flatMap(
+      (row) => {
+        try {
+          const lease = LeaseSchema.parse(JSON.parse(row.receipt_json));
+          return lease.revokedAt === null ? [lease] : [];
+        } catch {
+          return [];
+        }
+      },
+    ).filter((lease) =>
+      lease.projectId === operation.projectId
+      && lease.ownerRunId === operation.runId
+      && lease.ownerAttemptId === operation.attemptId
+    );
   const runtimeManager = new RuntimeManager(input.database, flowEngine, {
     resolve: (operation) => {
       if (operation.runId === null) throw new Error("ASSIGNMENT_RUN_SCOPE_REQUIRED");
@@ -234,14 +387,14 @@ export function createSqliteApplicationServices(input: {
       if (capabilityReceipt === undefined || capabilityReceipt === null) throw new Error("CAPABILITY_RECEIPT_NOT_CONFIGURED");
       const rows = input.database.prepare("SELECT receipt_json FROM lease_records WHERE expires_at > ?").all(now().toISOString()) as unknown as Array<{ receipt_json: string }>;
       const leases = rows.map((row) => LeaseSchema.parse(JSON.parse(row.receipt_json))) as Lease[];
-      const workspaceCandidates = leases.flatMap((lease) => lease.kind === "workspace" && task.repositoryIds.includes(lease.scope.repositoryId) ? [lease] : []);
+      const workspaceCandidates = leases.flatMap((lease) => lease.kind === "workspace" && lease.revokedAt === null && task.repositoryIds.includes(lease.repositoryId) ? [lease] : []);
       if (workspaceCandidates.length !== 1) throw new Error("ASSIGNMENT_AUTHORITATIVE_WORKSPACE_REQUIRED");
       const workspaceId = workspaceCandidates[0]!.scope.workspaceId;
       const scoped = leases.filter((lease) => lease.kind !== "controller" && lease.scope.workspaceId === workspaceId);
       const workspaceOwner = scoped.find((lease) => lease.kind === "workspace")?.ownerId;
       const requiredLeaseIds = scoped.filter((lease) => workspaceOwner === undefined || lease.ownerId === workspaceOwner).map(({ leaseId }) => leaseId);
       const expectedMode = step.workspacePolicy.mode === "write" ? "write" : "read_only";
-      if (workspaceCandidates[0]!.scope.mode !== expectedMode) throw new Error("ASSIGNMENT_WORKSPACE_MODE_MISMATCH");
+      if (workspaceCandidates[0]!.mode !== expectedMode) throw new Error("ASSIGNMENT_WORKSPACE_MODE_MISMATCH");
       const writerLeases = scoped.flatMap((lease) => lease.kind === "writer" && lease.ownerId === workspaceOwner ? [lease] : []);
       if (step.workspacePolicy.isolation === "worktree" && (writerLeases.length !== 1 || writerLeases[0]!.scope.worktreeId === null)) throw new Error("ASSIGNMENT_WORKTREE_LEASE_REQUIRED");
       const usedLeaseIds = new Set(flowStore.allRuns().filter((candidate) => !["succeeded", "failed", "canceled"].includes(candidate.status)).flatMap((candidate) => candidate.steps.flatMap(({ attempts }) => attempts.flatMap((attempt) => attempt.assignment === undefined || attempt.attemptId === operation.attemptId || ["failed", "canceled", "returned", "stale"].includes(attempt.executionStatus) ? [] : attempt.assignment.leaseIds))));
@@ -270,17 +423,165 @@ export function createSqliteApplicationServices(input: {
     now,
     replayPolicy: () => "inspectable",
     dispatchAuthority: (operation) => {
-      if (operation.operationType !== "session.observe" && operation.operationType !== "session.send" && operation.operationType !== "session.interrupt") return { allowed: true };
-      if (operation.operationVersion !== 2) return { allowed: false, reason: "controller_lease_authority_version_required" };
-      const row = input.database.prepare("SELECT lease_kind, owner_id, generation, expires_at, receipt_json FROM lease_records WHERE lease_id = ?").get(operation.payload.controllerLeaseId) as { lease_kind: string; owner_id: string; generation: number; expires_at: string; receipt_json: string } | undefined;
-      if (row === undefined || row.lease_kind !== "controller" || row.owner_id !== operation.payload.controllerLeaseOwnerId || row.generation !== operation.payload.controllerLeaseGeneration || Date.parse(row.expires_at) <= now().getTime()) return { allowed: false, reason: "controller_lease_dispatch_authority_missing" };
-      try {
-        const lease = LeaseSchema.parse(JSON.parse(row.receipt_json));
-        if (lease.kind !== "controller" || lease.leaseId !== operation.payload.controllerLeaseId || lease.ownerId !== operation.payload.controllerLeaseOwnerId || lease.generation !== operation.payload.controllerLeaseGeneration || lease.expiresAt !== row.expires_at || lease.scope.nativeSessionId !== operation.payload.nativeSessionId) return { allowed: false, reason: "controller_lease_dispatch_authority_mismatch" };
-      } catch {
-        return { allowed: false, reason: "controller_lease_dispatch_authority_invalid" };
+      const activeLeases = (input.database.prepare(
+        "SELECT receipt_json FROM lease_records WHERE expires_at > ?",
+      ).all(now().toISOString()) as Array<{ receipt_json: string }>).flatMap((row) => {
+        try {
+          const lease = LeaseSchema.parse(JSON.parse(row.receipt_json));
+          return lease.revokedAt === null ? [lease] : [];
+        } catch {
+          return [];
+        }
+      }).filter((lease) =>
+        lease.projectId === operation.projectId
+        && lease.ownerRunId === operation.runId
+        && lease.ownerAttemptId === operation.attemptId
+      );
+      if (
+        operation.operationType === "session.observe"
+        || operation.operationType === "session.send"
+        || operation.operationType === "session.interrupt"
+        || operation.operationType === "session.resume"
+      ) {
+        if (operation.operationVersion !== 2) return { allowed: false, reason: "controller_lease_authority_version_required" };
+        const controller = activeLeases.find((lease) =>
+          lease.kind === "controller"
+          && lease.leaseId === operation.payload.controllerLeaseId
+          && lease.ownerId === operation.payload.controllerLeaseOwnerId
+          && lease.generation === operation.payload.controllerLeaseGeneration
+          && lease.scope.nativeSessionId === operation.payload.nativeSessionId
+        );
+        return controller === undefined
+          ? { allowed: false, reason: "controller_lease_dispatch_authority_missing" }
+          : { allowed: true };
       }
-      return { allowed: true };
+      const workspaceId = operation.payload.workspaceId;
+      const workspace = activeLeases.find((lease) =>
+        lease.kind === "workspace" && lease.scope.workspaceId === workspaceId
+      );
+      if (workspace === undefined) {
+        return { allowed: false, reason: "workspace_lease_dispatch_authority_missing" };
+      }
+      if (operation.operationType === "workspace.release") return { allowed: true };
+      if (
+        operation.operationType === "workspace.prepare"
+        && (
+          workspace.repositoryId !== operation.payload.repositoryId
+          || workspace.deviceBindingId !== operation.payload.deviceBindingId
+          || workspace.mode !== operation.payload.mode
+          || workspace.gitHead !== operation.payload.baselineRevision
+        )
+      ) {
+        return { allowed: false, reason: "workspace_lease_dispatch_authority_mismatch" };
+      }
+      const requiresWriter =
+        operation.operationType === "session.launch"
+        || operation.operationType === "task_pack.write"
+        || operation.operationType === "native_surface.open";
+      if (!requiresWriter) return { allowed: true };
+      const writer = activeLeases.find((lease) =>
+        lease.kind === "writer"
+        && lease.scope.workspaceId === workspaceId
+        && lease.repositoryId === workspace.repositoryId
+        && lease.deviceBindingId === workspace.deviceBindingId
+        && lease.ownerId === workspace.ownerId
+      );
+      return writer === undefined
+        ? { allowed: false, reason: "writer_lease_dispatch_authority_missing" }
+        : { allowed: true };
+    },
+    prepareReceiptTransaction: (operation, receiptInput) => {
+      const receipt = decodeExternalOperationReceipt(receiptInput);
+      if (
+        receipt.operationId !== operation.operationId
+        || receipt.fingerprint !== operation.fingerprint
+      ) {
+        throw new Error("OPERATION_RECEIPT_IDENTITY_MISMATCH");
+      }
+      if (receipt.operationStatus !== "completed") return;
+      if (operation.operationType === "workspace.prepare" && operation.payload.mode === "write") {
+        const prepared = receipt.workspaceResult;
+        if (prepared === undefined) {
+          throw new Error("PREPARED_WORKSPACE_IDENTITY_NOT_PROVEN");
+        }
+        const binding = persistedDeviceBindingFor(operation);
+        const boundary = createWorkspacePathBoundary(
+          new Map([[
+            operation.payload.repositoryId,
+            binding.localPath,
+          ]]),
+        );
+        const verifiedWorkspacePath = boundary.verify(
+          operation.payload.repositoryId,
+          prepared.reportedWorkspacePath,
+        );
+        const topLevel = inspectGitWorkspace(
+          verifiedWorkspacePath,
+          ["rev-parse", "--show-toplevel"],
+        );
+        const verifiedTopLevel = boundary.verify(operation.payload.repositoryId, topLevel);
+        const gitHead = inspectGitWorkspace(
+          verifiedWorkspacePath,
+          ["rev-parse", "HEAD"],
+        );
+        if (gitHead !== operation.payload.baselineRevision) {
+          throw new Error("PREPARED_WORKSPACE_BASELINE_MISMATCH");
+        }
+        const branch = inspectGitWorkspace(
+          verifiedWorkspacePath,
+          ["branch", "--show-current"],
+        );
+        const canonicalWorkspaceKey = boundary.canonicalKey(verifiedTopLevel);
+        return () => {
+          const workspace = activeLeasesFor(operation).find((lease) =>
+            lease.kind === "workspace"
+            && lease.scope.workspaceId === operation.payload.workspaceId
+            && lease.repositoryId === operation.payload.repositoryId
+            && lease.deviceBindingId === operation.payload.deviceBindingId
+          );
+          if (workspace === undefined) {
+            throw new Error("WORKSPACE_LEASE_RECEIPT_AUTHORITY_MISSING");
+          }
+          const workspaceTemplate = withoutLeaseGeneration(workspace);
+          leaseService.acquireNext({
+            ...workspaceTemplate,
+            kind: "writer",
+            leaseId: WriterLeaseIdSchema.parse(deterministicLeaseId("wrl", operation)),
+            canonicalWorkspaceKey,
+            gitHead,
+            branch,
+            mode: "write",
+            scope: {
+              workspaceId: operation.payload.workspaceId,
+              worktreeId: prepared.worktreeId,
+            },
+          }, { transaction: "existing" });
+        };
+      }
+      if (operation.operationType === "session.launch") {
+        const session = receipt.nativeReferences.find((reference) => reference.kind === "session");
+        if (session === undefined) throw new Error("NATIVE_SESSION_RECEIPT_REQUIRED");
+        return () => {
+          const writer = activeLeasesFor(operation)
+            .flatMap((lease) => lease.kind === "writer" ? [lease] : [])
+            .find((lease) => lease.scope.workspaceId === operation.payload.workspaceId);
+          if (writer === undefined) {
+            throw new Error("WRITER_LEASE_RECEIPT_AUTHORITY_MISSING");
+          }
+          const writerTemplate = withoutLeaseGeneration(writer);
+          leaseService.acquireNext({
+            ...writerTemplate,
+            kind: "controller",
+            leaseId: ControllerLeaseIdSchema.parse(deterministicLeaseId("ctl", operation)),
+            scope: {
+              workspaceId: writer.scope.workspaceId,
+              worktreeId: writer.scope.worktreeId,
+              nativeSessionId: session.referenceId,
+            },
+          }, { transaction: "existing" });
+        };
+      }
+      return;
     },
   });
   const authenticator = new LocalAuthenticator(input.installSecret, () => false, input.resolveAuthorizedProjectIds ?? defaultAuthorizationResolver);
@@ -356,18 +657,22 @@ export function createSqliteApplicationServices(input: {
       if (launchReceipt.operationId !== launchOperation.operationId || launchReceipt.fingerprint !== launchOperation.fingerprint) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "indeterminate", reason: "launch_receipt_identity_mismatch" };
       const session = launchReceipt.nativeReferences.find((reference) => reference.kind === "session");
       if (session === undefined) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "indeterminate", reason: "native_session_reference_missing" };
-      const controllerRow = input.database.prepare("SELECT receipt_json FROM lease_records WHERE lease_kind = 'controller' AND scope_key = ? AND expires_at > ?").get(session.referenceId, now().toISOString()) as { receipt_json: string } | undefined;
-      if (controllerRow === undefined) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "needs_attention", reason: "controller_lease_not_available", nativeSessionId: session.referenceId };
-      let controller = LeaseSchema.parse(JSON.parse(controllerRow.receipt_json));
-      if (controller.kind !== "controller") return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "needs_attention", reason: "controller_lease_invalid", nativeSessionId: session.referenceId };
+      let controller = await leaseService.findActiveController(
+        launchOperation.projectId,
+        session.referenceId,
+      );
+      if (controller === null) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "needs_attention", reason: "controller_lease_not_available", nativeSessionId: session.referenceId };
       const renewalFloor = new Date(now().getTime() + 5 * 60_000);
-      if (Date.parse(controller.expiresAt) < renewalFloor.getTime()) controller = await leaseService.renew({ leaseId: controller.leaseId, ownerId: controller.ownerId, generation: controller.generation, expiresAt: renewalFloor.toISOString() });
-      if (controller.kind !== "controller") throw new Error("CONTROLLER_LEASE_KIND_CHANGED");
+      if (Date.parse(controller.expiresAt) < renewalFloor.getTime()) {
+        const renewed = await leaseService.renew({ leaseId: controller.leaseId, ownerId: controller.ownerId, generation: controller.generation, expiresAt: renewalFloor.toISOString() });
+        if (renewed.kind !== "controller") throw new Error("CONTROLLER_LEASE_KIND_CHANGED");
+        controller = renewed;
+      }
       const observeOperationId = OperationIdSchema.parse(`opn_${canonicalSha256({ runId: attempt.runId, attemptId: attempt.attemptId, nativeSessionId: session.referenceId, action: "recovery-observe" }).slice(0, 24)}`);
       const observe = createExternalOperation({ schemaVersion: 1, operationId: observeOperationId, projectId: launchOperation.projectId, runId: launchOperation.runId, attemptId: launchOperation.attemptId, operationVersion: 2, operationType: "session.observe", requestedCapabilities: ["observe"], payload: { nativeSessionId: session.referenceId, controllerLeaseId: controller.leaseId, controllerLeaseOwnerId: controller.ownerId, controllerLeaseGeneration: controller.generation } });
       const capability = input.capabilityReceiptFor?.(observe);
       if (capability === undefined || capability === null) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "needs_attention", reason: "session_observe_capability_not_configured", nativeSessionId: session.referenceId };
-      const probe = CapabilityProbeReceiptSchema.parse(capability);
+      const probe = decodeCapabilityProbeReceipt(capability);
       const observedAt = now().getTime();
       const observeSupported = probe.results.some(({ capability: atomicCapability, status }) => atomicCapability === "observe" && status === "SUPPORTED");
       if (!observeSupported || observedAt < Date.parse(probe.observedAt) || observedAt > Date.parse(probe.validUntil)) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "needs_attention", reason: "session_observe_capability_not_proven", nativeSessionId: session.referenceId };
@@ -416,25 +721,61 @@ export function createSqliteApplicationServices(input: {
         }
         let lease = LeaseSchema.parse(JSON.parse(row.receipt_json));
         const affected = attempts.filter((attempt) => Array.isArray(attempt.leaseIds) && attempt.leaseIds.includes(row.lease_id));
-        const renewalFloor = new Date(now().getTime() + 5 * 60_000);
-        if (affected.length > 0 && Date.parse(lease.expiresAt) < renewalFloor.getTime()) lease = await leaseService.renew({ leaseId: lease.leaseId, ownerId: lease.ownerId, generation: lease.generation, expiresAt: renewalFloor.toISOString() });
-        if (lease.kind !== "workspace") continue;
-        const binding = projects.flatMap(({ deviceBindings }) => deviceBindings).find(({ deviceBindingId }) => deviceBindingId === lease.scope.deviceBindingId);
+        if (lease.revokedAt !== null) {
+          recordForAffectedRuns(lease.leaseId, { kind: "lease", leaseId: lease.leaseId, leaseKind: lease.kind, status: "expired", reason: "lease_revoked" });
+          continue;
+        }
+        const binding = projects.flatMap(({ deviceBindings }) => deviceBindings).find(({ deviceBindingId }) => deviceBindingId === lease.deviceBindingId);
         if (binding === undefined || !existsSync(binding.localPath)) {
+          await leaseService.quarantine(lease.leaseId, "device_binding_path_missing");
           recordForAffectedRuns(lease.leaseId, { kind: "workspace", leaseId: lease.leaseId, status: "missing", reason: "device_binding_path_missing" });
           continue;
         }
         try {
-          const realpath = realpathSync.native(binding.localPath);
-          const topLevel = execFileSync("git", ["-C", binding.localPath, "rev-parse", "--show-toplevel"], { encoding: "utf8", windowsHide: true }).trim();
-          const head = execFileSync("git", ["-C", binding.localPath, "rev-parse", "HEAD"], { encoding: "utf8", windowsHide: true }).trim();
-          const changes = execFileSync("git", ["-C", binding.localPath, "status", "--porcelain"], { encoding: "utf8", windowsHide: true }).trim();
-          LeaseService.verifyWorkspaceIdentity({ expectedWorktreeId: realpath, observedWorktreeId: realpath, expectedRealpath: realpath, observedRealpath: realpathSync.native(topLevel), baselineRevision: lease.scope.baselineRevision, observedHead: head });
-          recordForAffectedRuns(lease.leaseId, changes === ""
-            ? { kind: "workspace", leaseId: lease.leaseId, status: "observed", reason: "workspace_identity_confirmed" }
-            : { kind: "workspace", leaseId: lease.leaseId, status: "drift", reason: "workspace_unexpected_writes" });
+          const externalObservation = input.leaseRecoveryObservationFor?.(lease) ?? null;
+          if (lease.kind !== "workspace" && externalObservation === null) {
+            await leaseService.quarantine(lease.leaseId, "lease_external_identity_not_proven");
+            recordForAffectedRuns(lease.leaseId, { kind: "lease", leaseId: lease.leaseId, leaseKind: lease.kind, status: "needs_attention", reason: "lease_external_identity_not_proven" });
+            continue;
+          }
+          const bindingBoundary = createWorkspacePathBoundary(new Map([[lease.repositoryId, binding.localPath]]));
+          const workspacePath = lease.kind === "workspace"
+            ? bindingBoundary.verify(lease.repositoryId, binding.localPath)
+            : input.verifiedWorkspacePathForLease?.(lease) ?? null;
+          if (workspacePath === null) {
+            await leaseService.quarantine(lease.leaseId, "leased_worktree_path_not_proven");
+            recordForAffectedRuns(lease.leaseId, { kind: "lease", leaseId: lease.leaseId, leaseKind: lease.kind, status: "needs_attention", reason: "leased_worktree_path_not_proven" });
+            continue;
+          }
+          const workspaceBoundary = createWorkspacePathBoundary(new Map([[lease.repositoryId, workspacePath]]));
+          const topLevel = execFileSync("git", ["-C", workspacePath, "rev-parse", "--show-toplevel"], { encoding: "utf8", windowsHide: true }).trim();
+          const head = execFileSync("git", ["-C", workspacePath, "rev-parse", "HEAD"], { encoding: "utf8", windowsHide: true }).trim();
+          const changes = execFileSync("git", ["-C", workspacePath, "status", "--porcelain"], { encoding: "utf8", windowsHide: true }).trim();
+          const verifiedTopLevel = workspaceBoundary.verify(lease.repositoryId, topLevel);
+          await leaseService.recoverLease(lease.leaseId, {
+            deviceBindingId: binding.deviceBindingId,
+            canonicalWorkspaceKey: workspaceBoundary.canonicalKey(verifiedTopLevel),
+            gitHead: head,
+            worktreeId: externalObservation?.worktreeId,
+            nativeSessionId: externalObservation?.nativeSessionId,
+          });
+          if (lease.kind === "workspace" && changes !== "") {
+            await leaseService.quarantine(lease.leaseId, "workspace_unexpected_writes");
+            recordForAffectedRuns(lease.leaseId, { kind: "workspace", leaseId: lease.leaseId, status: "drift", reason: "workspace_unexpected_writes" });
+            continue;
+          }
+          const renewalFloor = new Date(now().getTime() + 5 * 60_000);
+          if (affected.length > 0 && Date.parse(lease.expiresAt) < renewalFloor.getTime()) {
+            lease = await leaseService.renew({ leaseId: lease.leaseId, ownerId: lease.ownerId, generation: lease.generation, expiresAt: renewalFloor.toISOString() });
+          }
+          if (lease.kind === "workspace") {
+            recordForAffectedRuns(lease.leaseId, { kind: "workspace", leaseId: lease.leaseId, status: "observed", reason: "workspace_identity_confirmed" });
+          } else {
+            recordForAffectedRuns(lease.leaseId, { kind: "lease", leaseId: lease.leaseId, leaseKind: lease.kind, status: "observed", reason: "lease_identity_confirmed" });
+          }
         } catch {
-          recordForAffectedRuns(lease.leaseId, { kind: "workspace", leaseId: lease.leaseId, status: "drift", reason: "workspace_identity_or_head_drift" });
+          await leaseService.quarantine(lease.leaseId, "workspace_identity_or_head_drift");
+          recordForAffectedRuns(lease.leaseId, { kind: lease.kind === "workspace" ? "workspace" : "lease", leaseId: lease.leaseId, leaseKind: lease.kind, status: "drift", reason: "workspace_identity_or_head_drift" });
         }
       }
       return facts;
@@ -485,6 +826,7 @@ export function createSqliteApplicationServices(input: {
     projectionRunner,
     eventStream,
     leaseService,
+    acquireWorkspaceLease,
     runtimeManager,
     operationWorker,
     authenticator,

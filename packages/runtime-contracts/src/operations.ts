@@ -61,6 +61,14 @@ const sessionInterruptPayload = z.strictObject({
   ...controllerAuthorityFields,
 });
 const nativeSurfacePayload = z.strictObject({ workspaceId: WorkspaceIdSchema });
+const taskPackWritePayload = z.strictObject({
+  workspaceId: WorkspaceIdSchema,
+  inputEvidenceId: EvidenceIdSchema,
+});
+const sessionResumePayload = z.strictObject({
+  nativeSessionId: NativeSessionIdSchema,
+  ...controllerAuthorityFields,
+});
 
 const unsignedVariants = [
   z.strictObject({
@@ -112,6 +120,16 @@ const unsignedVariants = [
     ...versionOneFields,
     operationType: z.literal("native_surface.open"),
     payload: nativeSurfacePayload,
+  }),
+  z.strictObject({
+    ...versionTwoFields,
+    operationType: z.literal("task_pack.write"),
+    payload: taskPackWritePayload,
+  }),
+  z.strictObject({
+    ...versionTwoFields,
+    operationType: z.literal("session.resume"),
+    payload: sessionResumePayload,
   }),
 ] as const;
 
@@ -175,6 +193,18 @@ const signedVariants = [
     ...fingerprintField,
     operationType: z.literal("native_surface.open"),
     payload: nativeSurfacePayload,
+  }),
+  z.strictObject({
+    ...versionTwoFields,
+    ...fingerprintField,
+    operationType: z.literal("task_pack.write"),
+    payload: taskPackWritePayload,
+  }),
+  z.strictObject({
+    ...versionTwoFields,
+    ...fingerprintField,
+    operationType: z.literal("session.resume"),
+    payload: sessionResumePayload,
   }),
 ] as const;
 

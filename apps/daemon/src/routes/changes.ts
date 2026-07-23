@@ -8,6 +8,9 @@ import {
 import {
   createChangeRevision,
   validateTaskGraph,
+  type ChangeId,
+  type ChangeRevisionId,
+  type ExecutionPlanId,
   type ProjectId,
   type RequirementRevisionId,
 } from "@hunter/domain";
@@ -22,6 +25,16 @@ export interface ChangeRequirementRevisionIdentity {
 }
 
 export interface ChangeRoutesServices {
+  getChangeExecutionPlanRelation(
+    changeId: ChangeId,
+    changeRevisionId: ChangeRevisionId,
+    executionPlanId: ExecutionPlanId,
+  ): {
+    readonly projectId: ProjectId;
+    readonly changeId: ChangeId;
+    readonly changeRevisionId: ChangeRevisionId;
+    readonly executionPlanId: ExecutionPlanId;
+  } | null;
   getRequirementRevision(revisionId: RequirementRevisionId): ChangeRequirementRevisionIdentity | null;
   publishChange(
     projectId: ProjectId,
@@ -60,6 +73,31 @@ export function registerChangeRoutes(app: FastifyInstance, services: ChangeRoute
     const principal = requirePrincipal(request);
     if (!principal.authorizedProjectIds.includes(params.data.projectId)) {
       return await reply.code(403).send({ code: "PROJECT_FORBIDDEN" });
+    }
+    let existingRelation: ReturnType<
+      ChangeRoutesServices["getChangeExecutionPlanRelation"]
+    >;
+    try {
+      existingRelation = services.getChangeExecutionPlanRelation(
+        body.data.changeId,
+        body.data.changeRevisionId,
+        body.data.executionPlanId,
+      );
+    } catch {
+      return await reply
+        .code(500)
+        .send({ code: "CHANGE_EXECUTION_PLAN_LOOKUP_FAILED" });
+    }
+    if (
+      existingRelation !== null &&
+      (existingRelation.projectId !== params.data.projectId ||
+        existingRelation.changeId !== body.data.changeId ||
+        existingRelation.changeRevisionId !== body.data.changeRevisionId ||
+        existingRelation.executionPlanId !== body.data.executionPlanId)
+    ) {
+      return await reply
+        .code(409)
+        .send({ code: "CHANGE_EXECUTION_PLAN_SCOPE_MISMATCH" });
     }
 
     try {

@@ -67,7 +67,11 @@ export function registerRequirementRoutes(app: FastifyInstance, services: Requir
       return await reply.code(403).send({ code: "PROJECT_FORBIDDEN" });
     }
     const existing = services.getRequirementRevision(params.data.revisionId);
-    if (existing === null || existing.projectId !== params.data.projectId) {
+    if (
+      existing === null
+      || existing.projectId !== params.data.projectId
+      || existing.revisionId !== params.data.revisionId
+    ) {
       return await reply.code(404).send({ code: "REQUIREMENT_REVISION_NOT_FOUND" });
     }
     if (existing.status !== "draft" && existing.status !== "in_review") {
@@ -95,7 +99,11 @@ export function registerRequirementRoutes(app: FastifyInstance, services: Requir
       return await reply.code(403).send({ code: "PROJECT_FORBIDDEN" });
     }
     const existing = services.getRequirementRevision(params.data.revisionId);
-    if (existing === null || existing.projectId !== params.data.projectId) {
+    if (
+      existing === null
+      || existing.projectId !== params.data.projectId
+      || existing.revisionId !== params.data.revisionId
+    ) {
       return await reply.code(404).send({ code: "REQUIREMENT_REVISION_NOT_FOUND" });
     }
     return await reply.code(409).send({
