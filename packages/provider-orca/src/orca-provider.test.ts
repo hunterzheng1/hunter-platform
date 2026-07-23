@@ -29,7 +29,7 @@ class FixtureRunner implements JsonCommandRunner {
 }
 
 function success(result: unknown, id = "fixture-request") {
-  return { id, ok: true, result, _meta: { ignored: true } };
+  return { id, ok: true, result };
 }
 
 describe("OrcaCommandRunner", () => {
@@ -135,6 +135,28 @@ describe("OrcaCommandRunner", () => {
 });
 
 describe("OrcaClient contract fixtures", () => {
+  it.each([
+    {
+      id: "request-repo",
+      ok: true,
+      result: { repo: { id: "repo-01" } },
+      unexpectedTopLevel: true,
+    },
+    {
+      id: "request-repo",
+      ok: true,
+      result: { repo: { id: "repo-01" } },
+      _meta: { ignored: true },
+    },
+  ])("rejects unknown top-level envelope metadata", async (fixture) => {
+    const runner = new FixtureRunner([fixture]);
+    const client = new OrcaClient(runner);
+
+    await expect(client.addRepository("C:\\fixtures\\hunter")).rejects.toThrow(
+      "ORCA_OUTPUT_SCHEMA_MISMATCH",
+    );
+  });
+
   it("maps repository and worktree creation to the current public argv contract", async () => {
     const fullWorktreeId = "repo-01::C:\\fixtures\\hunter-worktree";
     const runner = new FixtureRunner([
@@ -269,6 +291,10 @@ describe("OrcaClient contract fixtures", () => {
 
   it.each([
     "relative\\repository",
+    "C:relative\\repository",
+    "\\rooted-current-drive",
+    "\\\\server-without-share",
+    "\\\\.\\pipe\\hunter",
     "C:\\fixtures\\hunter\u0000escape",
   ])("rejects unsafe repository path %s before client dispatch", async (repositoryPath) => {
     const runner = new FixtureRunner([success({ repo: { id: "repo-01" } })]);
@@ -278,6 +304,29 @@ describe("OrcaClient contract fixtures", () => {
       "ORCA_REPOSITORY_PATH_INVALID",
     );
     expect(runner.calls).toHaveLength(0);
+  });
+
+  it.each([
+    "C:\\fixtures\\hunter",
+    "C:/fixtures/hunter",
+    "\\\\server\\share\\hunter",
+    "\\\\?\\C:\\fixtures\\hunter",
+    "\\\\?\\UNC\\server\\share\\hunter",
+    "/tmp/hunter",
+  ])("accepts a fully-qualified repository path %s", async (repositoryPath) => {
+    const runner = new FixtureRunner([success({ repo: { id: "repo-01" } })]);
+    const client = new OrcaClient(runner);
+
+    await expect(client.addRepository(repositoryPath)).resolves.toEqual({
+      repoId: "repo-01",
+    });
+    expect(runner.calls[0]).toEqual([
+      "repo",
+      "add",
+      "--path",
+      repositoryPath,
+      "--json",
+    ]);
   });
 
   it.each([
@@ -377,6 +426,24 @@ describe("OrcaWorkspaceProvider candidate boundary", () => {
         providerValidationStatus: "NOT_PROVEN",
         retrySafety: "NOT_PROVEN",
         privateWorkspace,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a candidate receipt whose deterministic label does not match its operation", () => {
+    expect(
+      OrcaWorkspaceCandidateReceiptSchema.safeParse({
+        schemaVersion: 1,
+        operationId,
+        operationLabel: "hunter-opn_forgedcandidate01",
+        fingerprint: "a".repeat(64),
+        proofScope: "contract_only",
+        providerValidationStatus: "NOT_PROVEN",
+        retrySafety: "NOT_PROVEN",
+        privateWorkspace: {
+          worktreeId: "repo-01::C:\\fixtures\\hunter-worktree",
+          reportedAbsolutePath: "C:\\fixtures\\hunter-worktree",
+        },
       }).success,
     ).toBe(false);
   });

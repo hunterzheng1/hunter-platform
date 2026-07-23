@@ -16,6 +16,11 @@ const WorkspaceCandidateInputSchema = z.strictObject({
 });
 export type WorkspaceCandidateInput = z.infer<typeof WorkspaceCandidateInputSchema>;
 
+/**
+ * This candidate schema checks receipt structure, deterministic label and
+ * private workspace consistency. Its fingerprint field is format-only here:
+ * durable operation input binding belongs to Task 14's journal and receipts.
+ */
 export const OrcaWorkspaceCandidateReceiptSchema = z
   .strictObject({
     schemaVersion: z.literal(1),
@@ -32,6 +37,13 @@ export const OrcaWorkspaceCandidateReceiptSchema = z
   })
   .superRefine((receipt, context) => {
     const separator = receipt.privateWorkspace.worktreeId.indexOf("::");
+    if (receipt.operationLabel !== `hunter-${receipt.operationId}`) {
+      context.addIssue({
+        code: "custom",
+        path: ["operationLabel"],
+        message: "ORCA_OPERATION_LABEL_MISMATCH",
+      });
+    }
     if (
       receipt.privateWorkspace.worktreeId.slice(separator + 2) !==
       receipt.privateWorkspace.reportedAbsolutePath

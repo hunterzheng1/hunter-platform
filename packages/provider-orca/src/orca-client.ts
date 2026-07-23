@@ -1,4 +1,3 @@
-import { posix, win32 } from "node:path";
 import { OperationIdSchema, type OperationId } from "@hunter/domain";
 import { z } from "zod";
 import type { JsonCommandRunner } from "./command-runner.js";
@@ -24,8 +23,12 @@ const OrcaTerminalIdSchema = z
   .max(256)
   .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u)
   .brand<"OrcaTerminalId">();
-function isAbsoluteOnSupportedHost(path: string): boolean {
-  return win32.isAbsolute(path) || posix.isAbsolute(path);
+function isSupportedFullyQualifiedPath(path: string): boolean {
+  if (path.startsWith("/")) return true;
+  if (/^[A-Za-z]:[\\/]/u.test(path)) return true;
+  if (/^\\\\\?\\[A-Za-z]:\\/u.test(path)) return true;
+  if (/^\\\\\?\\UNC\\[^\\/]+\\[^\\/]+(?:\\.*)?$/iu.test(path)) return true;
+  return /^\\\\(?![?.]\\)[^\\/]+\\[^\\/]+(?:\\.*)?$/u.test(path);
 }
 
 export const OrcaAbsolutePathSchema = z
@@ -33,7 +36,7 @@ export const OrcaAbsolutePathSchema = z
   .min(1)
   .max(4_096)
   .refine(hasNoControlCharacters)
-  .refine(isAbsoluteOnSupportedHost);
+  .refine(isSupportedFullyQualifiedPath);
 
 export const OrcaWorktreeIdSchema = z
   .string()
@@ -83,9 +86,9 @@ function envelope<ResultSchema extends z.ZodType>(
   ok: z.ZodLiteral<true>;
   result: ResultSchema;
 }> {
-  // Top-level transport metadata is deliberately discarded. The command result
-  // remains strict so schema drift cannot become an assumed capability.
-  return z.object({
+  // Both envelope and result are strict. Unversioned transport metadata is
+  // rejected so schema drift cannot become an assumed capability.
+  return z.strictObject({
     id: ProviderRequestIdSchema,
     ok: z.literal(true),
     result,
