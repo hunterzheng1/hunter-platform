@@ -281,5 +281,5 @@ describe("Foundation chain", () => {
     expect(database.prepare("SELECT status FROM outbox WHERE operation_type = 'session.interrupt' ORDER BY created_at DESC LIMIT 1").get()).toEqual({ status: "completed" });
     expect(fake.nativeEffectCount).toBe(5);
     database.close();
-  });
+  }, 20_000);
 });

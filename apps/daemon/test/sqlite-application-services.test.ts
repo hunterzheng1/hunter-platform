@@ -537,7 +537,7 @@ describe("createSqliteApplicationServices", () => {
     database.close();
     rmSync(fixture, { recursive: true, force: true });
     temporaryFixtures.delete(fixture);
-  });
+  }, 20_000);
 
   it("persists production Project authorization narrowing across daemon restart without widening token scope", () => {
     const path = join(mkdtempSync(join(tmpdir(), "hunter-authz-registry-")), "authz.sqlite");

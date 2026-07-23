@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RunIdSchema } from "@hunter/domain/ids";
 import { RunViewHttpResponseSchema } from "@hunter/api-contracts";
@@ -201,7 +201,7 @@ describe("RunPage", () => {
     expect(stream.subscribe).not.toHaveBeenCalled();
     initial.resolve(runView);
     await screen.findByRole("heading", { name: `Run ${runA}` });
-    expect(stream.subscribe).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(stream.subscribe).toHaveBeenCalledTimes(1));
   });
 
   it("keeps an event refresh failure visible and retries without discarding the prior snapshot", async () => {

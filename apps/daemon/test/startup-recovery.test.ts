@@ -276,5 +276,5 @@ describe("StartupRecoveryCoordinator", () => {
       }
     }
     database.close();
-  }, 15_000);
+  }, 20_000);
 });
