@@ -96,6 +96,24 @@ textarea { resize: vertical; }
 .task-node > div { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .task-node p { margin: 8px 0 0; }
 .dependency-label { color: var(--muted-text); font-size: 13px; font-weight: 650; }
+.run-page > .message { margin-bottom: 16px; }
+.run-layout { display: grid; grid-template-columns: minmax(240px, 4fr) minmax(0, 8fr); gap: 24px; align-items: start; }
+.run-navigation { padding: 12px; }
+.run-line { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.run-line-item { position: relative; }
+.run-line-item::before { position: absolute; top: 20px; left: 13px; width: 8px; height: 8px; content: ""; background: var(--strong-border); border: 2px solid var(--surface); border-radius: 50%; z-index: 1; }
+.run-line-item[data-conclusion="succeeded"]::before { background: var(--focus); }
+.run-line-item[data-conclusion="failed"]::before,
+.run-line-item[data-conclusion="canceled"]::before { background: var(--error-border); }
+.run-step-button { width: 100%; min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px 10px 34px; color: var(--text); text-align: left; background: transparent; border: 1px solid transparent; border-radius: 6px; cursor: pointer; }
+.run-step-button:hover { background: var(--canvas); border-color: var(--subtle-border); }
+.run-step-button[aria-current="step"] { background: var(--selected-surface); border-color: var(--focus); }
+.run-step-status { color: var(--muted-text); font-size: 13px; font-weight: 650; white-space: nowrap; }
+.step-detail .section-heading { margin-bottom: 16px; }
+.attempt-list { display: grid; gap: 12px; }
+.attempt-card { padding: 16px; background: var(--canvas); border: 1px solid var(--subtle-border); border-left: 4px solid var(--strong-border); border-radius: 6px; }
+.attempt-card h3 { margin: 0 0 8px; font-size: 16px; }
+.attempt-card p { margin: 6px 0; }
 
 @media (prefers-color-scheme: dark) {
   :root {
@@ -131,6 +149,8 @@ textarea { resize: vertical; }
   .project-row .button { width: 100%; }
   .planner-panel .button { width: 100%; }
   .task-node > div { align-items: flex-start; }
+  .run-layout { grid-template-columns: 1fr; }
+  .run-navigation { padding: 8px; }
 }
 
 @media (prefers-reduced-motion: no-preference) {

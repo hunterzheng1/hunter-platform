@@ -10,12 +10,15 @@ import {
   PublishChangeHttpResponseSchema,
   RequirementRevisionHttpResponseSchema,
   RequirementRevisionParamsSchema,
+  RunIdParamsSchema,
+  RunViewHttpResponseSchema,
   type ProjectDetailHttpResponse,
   type ProjectListHttpResponse,
   type PublishChangeHttpRequest,
   type PublishChangeHttpResponse,
   type CreateProjectHttpResponse,
   type RequirementRevisionHttpResponse,
+  type RunViewHttpResponse,
 } from "@hunter/api-contracts";
 import {
   ProjectIdSchema,
@@ -179,6 +182,15 @@ export class HunterApi {
         return published;
       },
     );
+  }
+
+  public async getRun(runId: string): Promise<RunViewHttpResponse> {
+    const params = RunIdParamsSchema.parse({ runId });
+    const response = RunViewHttpResponseSchema.parse(
+      await this.transport.request(`/api/v1/runs/${params.runId}`),
+    );
+    if (response.runId !== params.runId) throw new Error("RUN_RESPONSE_SCOPE_MISMATCH");
+    return response;
   }
 
   private jsonCommand(path: string, command: unknown): PendingCommandEnvelope {
