@@ -13,6 +13,7 @@ import {
   createRequirementRevision,
   createWorkflowRevision,
   canonicalSha256,
+  type ExecutionPlan,
   type WorkflowRevision,
 } from "@hunter/domain";
 import { createExternalOperation } from "@hunter/runtime-contracts";
@@ -23,6 +24,7 @@ import { FlowEngine } from "./flow-engine.js";
 import { reduceFlowEvents, type WorkflowRunState } from "./state.js";
 import { createWorkflowRunBinding } from "./run-binding.js";
 import { remainingRunBudget } from "./run-budget.js";
+import { MAX_EXECUTION_PLAN_TASKS } from "./task-scheduler.js";
 import { validWorkflowInput } from "../../domain/src/workflow-test-fixtures.js";
 
 const ids = {
@@ -403,9 +405,12 @@ function childAgentWorkflow(): WorkflowRevision {
   return createWorkflowRevision(input);
 }
 
-function engineHarness(workflow = singleStepWorkflow(), now: () => Date = () => new Date("2026-07-22T10:00:00.000Z")) {
+function engineHarness(
+  workflow = singleStepWorkflow(),
+  now: () => Date = () => new Date("2026-07-22T10:00:00.000Z"),
+  plan: Readonly<ExecutionPlan> = executionPlan(),
+) {
   const store = new TestFlowStore();
-  const plan = executionPlan();
   const engine = new FlowEngine(store, {
     getWorkflowRevision: () => workflow,
     getExecutionPlan: () => plan,
@@ -866,6 +871,7 @@ describe("authoritative FlowEngine", () => {
     void ignoredFingerprint;
     const workflow = createWorkflowRevision({ ...unsigned, loops: base.loops.map((loop) => ({ ...loop, exhaustion: { ...loop.exhaustion, target } })) });
     const { store, engine, actor, runId } = engineHarness(workflow);
+    let finalReceipt: ReturnType<typeof engine.handle> | null = null;
     for (let index = 0; index < 3 && current(store).status === "running"; index += 1) {
       engine.handle({
         type: "RecordExternalObservation",
@@ -875,7 +881,7 @@ describe("authoritative FlowEngine", () => {
         idempotencyKey: `exhaust-return-${index}`,
         actor,
       });
-      engine.handle({
+      finalReceipt = engine.handle({
         type: "RecordVerifierResult",
         runId,
         outcome: "failed",
@@ -890,6 +896,10 @@ describe("authoritative FlowEngine", () => {
     expect(current(store).status).toBe(target);
     expect(current(store).steps[0]!.attempts).toHaveLength(3);
     expect(current(store).budgetUsage).toMatchObject({ attempts: 3, loopIterations: 2 });
+    expect(finalReceipt?.response).toMatchObject({
+      loopIteration: 3,
+      loopGuardReason: "MAX_ITERATIONS",
+    });
   });
 
   it("does not treat repeated ordinary verifier failures as verifier improvement", () => {
@@ -923,6 +933,37 @@ describe("authoritative FlowEngine", () => {
     const second = engine.handle({ type: "ScheduleTaskFanOut", runId, expectedVersion: current(store).version, idempotencyKey: "fanout-two", actor });
     expect(second.response).toEqual({ children: [] });
     expect(current(store).scheduledChildren).toHaveLength(1);
+  });
+
+  it("rejects an oversized frozen Task graph before persisting fan-out", () => {
+    const baseTask = executionPlan().tasks[0]!;
+    const oversizedPlan = createExecutionPlan({
+      executionPlanId: ids.plan,
+      projectId: ids.project,
+      changeRevisionId: "crv_revision01",
+      requirementRevisionIds: requirements,
+      tasks: Array.from({ length: MAX_EXECUTION_PLAN_TASKS + 1 }, (_, index) => ({
+        ...baseTask,
+        taskId: TaskIdSchema.parse(`tsk_flowlimit${index.toString().padStart(5, "0")}`),
+        title: `Task ${index}`,
+      })),
+      publishedAt: "2026-07-22T01:00:00.000Z",
+    });
+    const { store, engine, actor, runId } = engineHarness(
+      singleStepWorkflow(),
+      () => new Date("2026-07-22T10:00:00.000Z"),
+      oversizedPlan,
+    );
+    const commitsBefore = store.commits.length;
+    expect(() => engine.handle({
+      type: "ScheduleTaskFanOut",
+      runId,
+      expectedVersion: current(store).version,
+      idempotencyKey: "fanout-oversized-plan",
+      actor,
+    })).toThrow(/TASK_SCHEDULER_PLAN_LIMIT_EXCEEDED/u);
+    expect(store.commits).toHaveLength(commitsBefore);
+    expect(current(store).scheduledChildren).toEqual([]);
   });
 
   it("keeps a canceled parent non-terminal until every requested child is terminal", () => {
@@ -1085,6 +1126,48 @@ describe("authoritative FlowEngine", () => {
     const receipt = engine.handle({ ...base, humanWaiver: { actorId: actor.actorId, contentHash } } as never);
     expect(receipt.response).toMatchObject({ action: "waived", children: [{ taskId: ids.dependent }] });
     expect(store.loadRun(ids.rootRun)!.dependencyFailureDecisions[0]).toMatchObject({ waiverReceiptHash: contentHash });
+    const scheduled = (receipt.response as {
+      children: Array<{
+        taskId: typeof ids.dependent;
+        childRunId: typeof ids.childRun;
+        budget: typeof initialBudget;
+      }>;
+    }).children[0]!;
+    const parent = store.loadRun(ids.rootRun)!.binding;
+    const plan = dependencyPlan();
+    const child = createWorkflowRunBinding({
+      runId: scheduled.childRunId,
+      projectId: parent.projectId,
+      changeRevisionId: parent.changeRevisionId,
+      requirementRevisionIds: parent.requirementRevisionIds,
+      workflowRevisionId: ids.workflow,
+      policySnapshot: parent.policySnapshot,
+      initialBudget: scheduled.budget,
+      subjectKind: "task",
+      parentRunId: parent.runId,
+      taskId: scheduled.taskId,
+      executionPlanId: parent.executionPlanId,
+    }, {
+      parent,
+      executionPlan: plan,
+      activeTaskIds: [],
+      parentTerminal: false,
+      childBudgetAllocation: scheduled.budget,
+    });
+    engine.handle({
+      type: "StartRun",
+      binding: child,
+      expectedVersion: 0,
+      idempotencyKey: "start-waived-dependent",
+      actor,
+    });
+    expect(engine.handle({
+      type: "ScheduleTaskFanOut",
+      runId: ids.rootRun,
+      expectedVersion: store.loadRun(ids.rootRun)!.version,
+      idempotencyKey: "fanout-after-waiver-start",
+      actor,
+    }).response).toEqual({ children: [] });
   });
 
   it("can finish an already verified parent after an accepted failed dependency is explicitly skipped", () => {

@@ -119,12 +119,15 @@ describe("Foundation chain", () => {
     const firstApp = chainApp(services);
     expect((await firstApp.inject({ method: "POST", url: "/runs", headers: authenticatedHeaders(services), payload: { runId: ids.root, executionPlanId: ids.plan, workflowRevisionId: ids.workflow, expectedVersion: 0, idempotencyKey: "start-chain-root" } })).statusCode).toBe(200);
     await firstApp.close();
-    const fanout = services.flowEngine.handle({ type: "ScheduleTaskFanOut", runId: ids.root, expectedVersion: services.flowStore.loadRun(ids.root)!.version, idempotencyKey: "fanout-chain", actor: { actorId: "chain", correlationId: "chain" } }).response as { children: Array<{ taskId: typeof ids.task; childRunId: ReturnType<typeof RunIdSchema.parse>; budget: RunBudgetLimit }> };
+    const dispatchCommand = { parentRunId: ids.root, expectedVersion: services.flowStore.loadRun(ids.root)!.version, idempotencyKey: "fanout-chain", actor: { actorId: "chain", correlationId: "chain" } };
+    const fanout = services.runCoordinator.dispatch(dispatchCommand);
+    expect(services.runCoordinator.dispatch(dispatchCommand)).toEqual(fanout);
+    expect(() => services.runCoordinator.dispatch({
+      ...dispatchCommand,
+      idempotencyKey: "fanout-chain-stale-new-key",
+    })).toThrow(/EXPECTED_VERSION_CONFLICT/u);
     const childRunId = fanout.children[0]!.childRunId;
     const parent = services.flowStore.loadRun(ids.root)!.binding;
-    const childBudget = fanout.children[0]!.budget;
-    const childBinding = createWorkflowRunBinding({ runId: childRunId, projectId: ids.project, changeRevisionId: ids.changeRevision, requirementRevisionIds: [ids.requirementRevision], workflowRevisionId: ids.workflow, policySnapshot: parent.policySnapshot, initialBudget: childBudget, subjectKind: "task", parentRunId: ids.root, taskId: ids.task, executionPlanId: ids.plan }, { parent, executionPlan: published.executionPlan, activeTaskIds: [], parentTerminal: false, childBudgetAllocation: childBudget });
-    services.flowEngine.handle({ type: "StartRun", binding: childBinding, expectedVersion: 0, idempotencyKey: "start-chain-child", actor: { actorId: "chain", correlationId: "chain" } });
 
     const common = { schemaVersion: 1 as const, ownerId: ids.owner, generation: 1, acquiredAt: "2026-07-22T10:00:00.000Z", expiresAt: "2027-07-22T10:30:00.000Z" };
     await services.leaseService.acquire(WorkspaceLeaseSchema.parse({ ...common, kind: "workspace", leaseId: WorkspaceLeaseIdSchema.parse("wsl_chain00001"), scope: { workspaceId: ids.workspace, deviceBindingId: DeviceBindingIdSchema.parse("dev_chain00001"), repositoryId: ids.repository, mode: "write", baselineRevision: baseline } }));

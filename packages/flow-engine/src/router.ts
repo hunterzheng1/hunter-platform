@@ -1,5 +1,11 @@
-import { TaskIdSchema, type ExecutionPlan, type RouteOutcome, type SessionPolicy, type TaskId, type WorkflowRevision } from "@hunter/domain";
+import { TaskIdSchema, type RouteOutcome, type SessionPolicy, type TaskId, type WorkflowRevision } from "@hunter/domain";
 import { z } from "zod";
+
+export {
+  deriveTaskFanOut,
+  type ChildTaskStatus,
+  type DependencyFailureDecisionView,
+} from "./task-scheduler.js";
 
 export function selectRoute(
   workflow: WorkflowRevision,
@@ -22,35 +28,6 @@ export function selectRoute(
   };
 }
 
-export type ChildTaskStatus = "running" | "succeeded" | "failed" | "canceled" | "skipped";
-
-export function deriveTaskFanOut(
-  plan: Readonly<ExecutionPlan>,
-  children: readonly { readonly taskId: TaskId; readonly status: ChildTaskStatus }[],
-  decisions: readonly DependencyFailureDecisionView[] = [],
-): readonly TaskId[] {
-  const byTask: Partial<Record<TaskId, ChildTaskStatus>> = {};
-  for (const child of children) {
-    if (byTask[child.taskId] !== undefined) throw new Error("TASK_CHILD_DUPLICATE");
-    byTask[child.taskId] = child.status;
-  }
-  for (const decision of decisions) {
-    if (decision.action === "skipped") byTask[decision.taskId] = "skipped";
-  }
-  const ready: TaskId[] = [];
-  for (const task of plan.tasks) {
-    if (byTask[task.taskId] !== undefined) continue;
-    const decision = decisions.find(({ taskId }) => taskId === task.taskId);
-    if (decision !== undefined && decision.action !== "waived") continue;
-    const dependencyStatuses = task.dependsOn.map((taskId) => byTask[taskId]);
-    if (dependencyStatuses.some((status) => status === "failed" || status === "canceled")) {
-      if (decision?.action !== "waived") throw new Error("DEPENDENCY_FAILURE_DECISION_REQUIRED");
-    }
-    if (dependencyStatuses.every((status) => status === "succeeded" || status === "skipped" || (decision?.action === "waived" && (status === "failed" || status === "canceled")))) ready.push(task.taskId);
-  }
-  return ready.sort();
-}
-
 export type DependencyFailurePolicy = "block" | "skip" | "compensation" | "waiver" | "terminate";
 
 export const FrozenDependencyFailureRuleSchema = z.discriminatedUnion("policy", [
@@ -59,11 +36,6 @@ export const FrozenDependencyFailureRuleSchema = z.discriminatedUnion("policy", 
   z.strictObject({ policy: z.literal("waiver"), requiredRole: z.string().trim().min(1) }),
 ]);
 export type FrozenDependencyFailureRule = z.infer<typeof FrozenDependencyFailureRuleSchema>;
-
-export interface DependencyFailureDecisionView {
-  readonly taskId: TaskId;
-  readonly action: "blocked" | "skipped" | "compensate" | "waived" | "terminate";
-}
 
 export function resolveDependencyFailure(input: {
   readonly policy: DependencyFailurePolicy;

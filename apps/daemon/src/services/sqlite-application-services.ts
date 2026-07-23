@@ -15,6 +15,7 @@ import { LocalAuthenticator } from "../auth/local-authenticator.js";
 import { DurableEventStream } from "../events/durable-event-stream.js";
 import { StartupRecoveryCoordinator, type RecoveryFact } from "../startup/startup-recovery-coordinator.js";
 import { SqliteDefinitionRepository } from "./sqlite-definition-repository.js";
+import { RunCoordinator } from "./run-coordinator.js";
 
 interface ReceiptRow {
   readonly request_fingerprint: string;
@@ -140,6 +141,11 @@ export function createSqliteApplicationServices(input: {
   const repositories: SqliteServiceRepositories = input.repositories ?? new SqliteDefinitionRepository(input.database);
   const flowStore = new SqliteFlowStore(input.database, journal, now);
   const flowEngine = new FlowEngine(flowStore, repositories, now);
+  const runCoordinator = new RunCoordinator({
+    store: flowStore,
+    definitions: repositories,
+    commands: flowEngine,
+  });
   const reconcileCancellationRequests = async () => {
     const receipts: FlowCommandReceipt[] = [];
     for (let round = 0; round < 100; round += 1) {
@@ -474,6 +480,7 @@ export function createSqliteApplicationServices(input: {
     journal,
     flowStore,
     flowEngine,
+    runCoordinator,
     eventReader,
     projectionRunner,
     eventStream,

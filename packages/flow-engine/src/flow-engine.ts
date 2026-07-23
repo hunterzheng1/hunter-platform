@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 
 import {
   AttemptIdSchema,
-  RunIdSchema,
   StepRunIdSchema,
   canonicalSha256,
   type ExecutionPlan,
@@ -23,11 +22,13 @@ import type {
   StartRunCommand,
 } from "./commands.js";
 import type { FlowEvent } from "./events.js";
-import { deriveTaskFanOut, resolveDependencyFailure, resolveResumeFailure, resolveSupersedingRequirement, selectRoute, type FrozenDependencyFailureRule } from "./router.js";
+import { evaluateLoopGuard } from "./loop-guard.js";
+import { resolveDependencyFailure, resolveResumeFailure, resolveSupersedingRequirement, selectRoute, type FrozenDependencyFailureRule } from "./router.js";
 import { createWorkflowRunBinding } from "./run-binding.js";
 import type { PolicySnapshot } from "./run-binding.js";
 import type { WorkflowRunState } from "./state.js";
 import { remainingRunBudget } from "./run-budget.js";
+import { deriveChildRunId, deriveTaskFanOut } from "./task-scheduler.js";
 import { canTransitionExecution, isTerminalRun } from "./transition-table.js";
 
 export interface FlowCommit {
@@ -55,7 +56,7 @@ export interface FlowDefinitions {
   getDependencyFailureRule?(executionPlanId: string, taskId: TaskId, policySnapshot: PolicySnapshot): Readonly<FrozenDependencyFailureRule> | null;
 }
 
-function derivedId(prefix: "spr" | "att" | "run", value: string): string {
+function derivedId(prefix: "spr" | "att", value: string): string {
   return `${prefix}_${createHash("sha256").update(value).digest("hex").slice(0, 24)}`;
 }
 
@@ -214,9 +215,16 @@ export class FlowEngine {
       .map((child) => ({ taskId: child.binding.subjectKind === "task" ? child.binding.taskId : plan.tasks[0]!.taskId, status: isTerminalRun(child.status) ? child.status as "succeeded" | "failed" | "canceled" : "running" as const }));
     const actualIds = new Set(actual.map(({ taskId }) => taskId));
     const decided = state.scheduledChildren.filter(({ taskId }) => !actualIds.has(taskId)).map(({ taskId }) => ({ taskId, status: "running" as const }));
-    const taskIds = deriveTaskFanOut(plan, [...actual, ...decided], state.dependencyFailureDecisions);
+    const taskIds = deriveTaskFanOut(
+      plan,
+      [...actual, ...decided],
+      state.dependencyFailureDecisions.map(({ taskId, action }) => ({
+        taskId,
+        action,
+      })),
+    );
     const budget = this.allocateChildBudget(state, plan, taskIds.length);
-    const children = taskIds.map((taskId) => ({ taskId, childRunId: RunIdSchema.parse(derivedId("run", `${command.runId}:${taskId}`)), budget }));
+    const children = taskIds.map((taskId) => ({ taskId, childRunId: deriveChildRunId(command.runId, taskId), budget }));
     const events: FlowEvent[] = [{ type: "TaskFanOutDecided", children }];
     return this.commitExisting(command, commandId, requestFingerprint, events, { children });
   }
@@ -429,7 +437,7 @@ export class FlowEngine {
     const recordedDecision: WorkflowRunState["dependencyFailureDecisions"][number] = { taskId: command.taskId, failedDependencyIds, action: decision.action, compensationTaskId, waiverReceiptHash };
     const events: FlowEvent[] = [{ type: "DependencyFailureDecided", ...recordedDecision }];
     const scheduledTaskId = decision.action === "compensate" ? decision.taskId : decision.action === "waived" ? command.taskId : null;
-    const children = scheduledTaskId === null ? [] : [{ taskId: scheduledTaskId, childRunId: RunIdSchema.parse(derivedId("run", `${command.runId}:${scheduledTaskId}`)), budget: this.allocateChildBudget(state, plan, 1) }];
+    const children = scheduledTaskId === null ? [] : [{ taskId: scheduledTaskId, childRunId: deriveChildRunId(command.runId, scheduledTaskId), budget: this.allocateChildBudget(state, plan, 1) }];
     if (scheduledTaskId !== null) {
       if (!plan.tasks.some(({ taskId }) => taskId === scheduledTaskId)) throw new Error("DEPENDENCY_DECISION_TASK_NOT_IN_PLAN");
       if (state.scheduledChildren.some(({ taskId }) => taskId === scheduledTaskId) || childByTask.has(scheduledTaskId)) throw new Error("DEPENDENCY_DECISION_TASK_ALREADY_SCHEDULED");
@@ -631,7 +639,6 @@ export class FlowEngine {
       const target = workflow.steps.find(({ stepId }) => stepId === selected.loop?.toStepId);
       if (target === undefined) throw new Error("LOOP_TARGET_STEP_MISSING");
       const loopUsage = state.loopUsage[selected.loop.loopId] ?? { iterations: 0, elapsedMs: 0, cost: 0, lastProgressFingerprint: null, repeatedFailureFingerprintCount: 0, lastFailureFingerprint: null, noProgressCount: 0, verifierErrorCount: 0 };
-      const nextIteration = loopUsage.iterations + 1;
       const progressFingerprint = selected.loop.progressPredicate.source === "workspace.diff"
         ? command.diffFingerprint ?? null
         : selected.loop.progressPredicate.source === "verification.evidence"
@@ -646,25 +653,21 @@ export class FlowEngine {
         : selected.loop.progressPredicate.kind === "fingerprint_changed"
           ? progressFingerprint !== null && progressFingerprint !== loopUsage.lastProgressFingerprint
           : loopUsage.lastProgressFingerprint === null || (loopUsage.lastProgressFingerprint === "verifier:error" && progressFingerprint === "verifier:failed");
-      const repeatedFailureCount = command.failureFingerprint === undefined
-        ? loopUsage.repeatedFailureFingerprintCount
-        : command.failureFingerprint === loopUsage.lastFailureFingerprint
-          ? loopUsage.repeatedFailureFingerprintCount + 1
-          : 1;
-      const noProgressCount = progressSatisfied ? 0 : loopUsage.noProgressCount + 1;
-      const verifierErrorCount = command.outcome === "error" ? loopUsage.verifierErrorCount + 1 : 0;
-      const nextLoopElapsedMs = loopUsage.elapsedMs + target.budgetCost.elapsedMs;
-      const nextLoopCost = loopUsage.cost + target.budgetCost.cost;
-      const exhausted =
-        nextIteration > selected.loop.maxIterations ||
-        state.budgetUsage.loopIterations + 1 > state.binding.initialBudget.maxLoopIterations ||
-        nextLoopElapsedMs > selected.loop.maxElapsedMs ||
-        (selected.loop.maxCost !== undefined && nextLoopCost > selected.loop.maxCost) ||
-        repeatedFailureCount > selected.loop.stagnation.maxSameFailureFingerprint ||
-        noProgressCount > selected.loop.stagnation.maxNoDiffIterations ||
-        verifierErrorCount > selected.loop.stagnation.maxVerifierErrors ||
-        !this.budgetAvailable(state, target);
-      if (exhausted) {
+      const guard = evaluateLoopGuard({
+        policy: selected.loop,
+        usage: loopUsage,
+        runLimit: state.binding.initialBudget,
+        runUsage: state.budgetUsage,
+        targetBudgetCost: {
+          elapsedMs: target.budgetCost.elapsedMs,
+          cost: target.budgetCost.cost,
+        },
+        stepBudgetAvailable: this.budgetAvailable(state, target),
+        progressSatisfied,
+        failureFingerprint: command.failureFingerprint ?? null,
+        verifierError: command.outcome === "error",
+      });
+      if (!guard.proceed) {
         events.push({ type: "StepConcluded", stepRunId: step.stepRunId, conclusion: "failed" });
         if (selected.loop.exhaustion.target === "paused") events.push({ type: "RunStatusChanged", status: "paused" });
         else events.push({ type: "RunConcluded", status: selected.loop.exhaustion.target });
@@ -678,7 +681,7 @@ export class FlowEngine {
         const attemptId = AttemptIdSchema.parse(
           derivedId("att", `${state.binding.runId}:${target.stepId}:${attemptNumber}`),
         );
-        events.push({ type: "LoopActivated", loopId: selected.loop.loopId, iteration: nextIteration, elapsedMs: nextLoopElapsedMs, cost: nextLoopCost, progressFingerprint, progressSatisfied, failureFingerprint: command.failureFingerprint ?? null, verifierError: command.outcome === "error" });
+        events.push({ type: "LoopActivated", loopId: selected.loop.loopId, iteration: guard.next.iteration, elapsedMs: guard.next.elapsedMs, cost: guard.next.cost, progressFingerprint, progressSatisfied, failureFingerprint: command.failureFingerprint ?? null, verifierError: command.outcome === "error" });
         events.push({
           type: "BudgetConsumed",
           attempts: 1,
@@ -704,7 +707,8 @@ export class FlowEngine {
         });
       }
       return this.commitExisting(command, commandId, requestFingerprint, events, {
-        loopIteration: nextIteration,
+        loopIteration: guard.next.iteration,
+        loopGuardReason: guard.proceed ? null : guard.reason,
       });
     }
 
