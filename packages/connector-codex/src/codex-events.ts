@@ -42,7 +42,6 @@ export const CodexCandidateObservationSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("runtime_error") }),
   z.strictObject({
     kind: z.literal("unknown_event"),
-    eventType: ProviderTypeSchema,
     rawEventDigest: z.string().regex(/^[a-f0-9]{64}$/u),
   }),
   z.strictObject({
@@ -60,6 +59,18 @@ export const ParsedCodexEventStreamSchema = z.strictObject({
   observations: z.array(CodexCandidateObservationSchema).max(CODEX_EVENT_LIMITS.maxEvents),
 });
 export type ParsedCodexEventStream = z.infer<typeof ParsedCodexEventStreamSchema>;
+
+const knownEventTypes = new Set([
+  "thread.started",
+  "turn.started",
+  "turn.completed",
+  "turn.failed",
+  "item.started",
+  "item.updated",
+  "item.completed",
+  "approval.requested",
+  "error",
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -146,11 +157,21 @@ export function parseCodexEventLines(
 
   const observations: CodexCandidateObservation[] = [];
   let sessionRef: CodexNativeSessionRef | null = null;
+  let turnStarted = false;
+  let terminalSeen = false;
   let terminalOutcome: ParsedCodexEventStream["terminalOutcome"] = "indeterminate";
 
   for (const line of lines) {
     const raw = parseLine(line);
     const type = parseType(raw);
+
+    if (!knownEventTypes.has(type)) {
+      observations.push({
+        kind: "unknown_event",
+        rawEventDigest: rawEventDigest(line),
+      });
+      continue;
+    }
 
     if (type === "thread.started") {
       const parsedSession = CodexNativeSessionRefSchema.safeParse(raw.thread_id);
@@ -167,27 +188,37 @@ export function parseCodexEventLines(
       continue;
     }
 
+    if (sessionRef === null) throw new Error("CODEX_THREAD_STARTED_REQUIRED");
+
+    if (terminalSeen) {
+      if (type === "turn.completed" || type === "turn.failed") {
+        throw new Error("CODEX_TURN_TERMINAL_CONFLICT");
+      }
+      throw new Error("CODEX_EVENT_AFTER_TERMINAL");
+    }
+
     if (type === "turn.started") {
+      if (turnStarted) throw new Error("CODEX_TURN_STARTED_DUPLICATE");
+      turnStarted = true;
       observations.push({ kind: "turn_started" });
       continue;
     }
 
     if (type === "turn.completed" || type === "turn.failed") {
+      if (!turnStarted) throw new Error("CODEX_TURN_NOT_STARTED");
       const nextOutcome = type === "turn.completed" ? "agent_returned" : "turn_failed";
-      if (terminalOutcome !== "indeterminate") {
-        throw new Error("CODEX_TURN_TERMINAL_CONFLICT");
-      }
+      terminalSeen = true;
       terminalOutcome = nextOutcome;
       observations.push({ kind: nextOutcome });
       continue;
     }
 
     if (type === "item.started" || type === "item.updated" || type === "item.completed") {
+      if (!turnStarted) throw new Error("CODEX_TURN_NOT_STARTED");
       const itemType = parseItemType(raw);
       if (itemType === null) {
         observations.push({
           kind: "unknown_event",
-          eventType: type,
           rawEventDigest: rawEventDigest(line),
         });
         continue;
@@ -212,21 +243,17 @@ export function parseCodexEventLines(
     }
 
     if (type === "approval.requested") {
+      if (!turnStarted) throw new Error("CODEX_TURN_NOT_STARTED");
       if (!isRecord(raw.request)) throw new Error("CODEX_APPROVAL_EVENT_INVALID");
       observations.push({ kind: "approval_requested" });
       continue;
     }
 
     if (type === "error") {
+      if (!turnStarted) throw new Error("CODEX_TURN_NOT_STARTED");
       observations.push({ kind: "runtime_error" });
       continue;
     }
-
-    observations.push({
-      kind: "unknown_event",
-      eventType: type,
-      rawEventDigest: rawEventDigest(line),
-    });
   }
 
   if (sessionRef === null) throw new Error("CODEX_SESSION_ID_MISSING");

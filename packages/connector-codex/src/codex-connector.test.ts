@@ -78,7 +78,6 @@ describe("bounded Codex 0.144.6 JSONL candidate parser", () => {
         { kind: "agent_returned" },
         {
           kind: "unknown_event",
-          eventType: "future.event",
           rawEventDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
         },
       ],
@@ -90,6 +89,7 @@ describe("bounded Codex 0.144.6 JSONL candidate parser", () => {
     expect(
       parseCodexEventLines([
         line({ type: "thread.started", thread_id: "thread-01" }),
+        line({ type: "turn.started" }),
         line({ type: "approval.requested", request: { kind: "command" } }),
         line({ type: "item.started", item: { type: "command_execution" } }),
         line({ type: "item.updated", item: { type: "command_execution" } }),
@@ -101,6 +101,7 @@ describe("bounded Codex 0.144.6 JSONL candidate parser", () => {
       terminalOutcome: "turn_failed",
       observations: [
         { kind: "thread_started", sessionRef: "thread-01" },
+        { kind: "turn_started" },
         { kind: "approval_requested" },
         { kind: "item_started", itemType: "command_execution" },
         { kind: "item_updated", itemType: "command_execution" },
@@ -116,6 +117,7 @@ describe("bounded Codex 0.144.6 JSONL candidate parser", () => {
     (eventType) => {
       const parsed = parseCodexEventLines([
         line({ type: "thread.started", thread_id: "thread-01" }),
+        line({ type: "turn.started" }),
         line({
           type: eventType,
           item: { type: "command_execution", status: "failed", exit_code: 23 },
@@ -179,7 +181,7 @@ describe("bounded Codex 0.144.6 JSONL candidate parser", () => {
     {
       name: "missing thread identity",
       lines: [line({ type: "turn.completed" })],
-      error: "CODEX_SESSION_ID_MISSING",
+      error: "CODEX_THREAD_STARTED_REQUIRED",
     },
     {
       name: "duplicate thread event",
@@ -201,6 +203,7 @@ describe("bounded Codex 0.144.6 JSONL candidate parser", () => {
       name: "conflicting terminal outcome",
       lines: [
         line({ type: "thread.started", thread_id: "thread-01" }),
+        line({ type: "turn.started" }),
         line({ type: "turn.completed" }),
         line({ type: "turn.failed" }),
       ],
@@ -210,6 +213,7 @@ describe("bounded Codex 0.144.6 JSONL candidate parser", () => {
       name: "duplicate completed terminal",
       lines: [
         line({ type: "thread.started", thread_id: "thread-01" }),
+        line({ type: "turn.started" }),
         line({ type: "turn.completed" }),
         line({ type: "turn.completed" }),
       ],
@@ -219,6 +223,7 @@ describe("bounded Codex 0.144.6 JSONL candidate parser", () => {
       name: "duplicate failed terminal",
       lines: [
         line({ type: "thread.started", thread_id: "thread-01" }),
+        line({ type: "turn.started" }),
         line({ type: "turn.failed" }),
         line({ type: "turn.failed" }),
       ],
@@ -231,6 +236,7 @@ describe("bounded Codex 0.144.6 JSONL candidate parser", () => {
   it("does not guess interruption from free text", () => {
     const parsed = parseCodexEventLines([
       line({ type: "thread.started", thread_id: "thread-01" }),
+      line({ type: "turn.started" }),
       line({
         type: "turn.failed",
         error: { message: "the operator wrote interrupted and cancelled" },
@@ -246,15 +252,15 @@ describe("bounded Codex 0.144.6 JSONL candidate parser", () => {
   it("retains an unknown item shape as a digest without exposing its private type", () => {
     const parsed = parseCodexEventLines([
       line({ type: "thread.started", thread_id: "thread-01" }),
+      line({ type: "turn.started" }),
       line({
         type: "item.completed",
         item: { type: "private_prompt_name", value: "private output" },
       }),
     ]);
 
-    expect(parsed.observations[1]).toEqual({
+    expect(parsed.observations[2]).toEqual({
       kind: "unknown_event",
-      eventType: "item.completed",
       rawEventDigest: createHash("sha256")
         .update(
           line({
@@ -286,7 +292,6 @@ describe("bounded Codex 0.144.6 JSONL candidate parser", () => {
     expect(first.observations[1]).toEqual(second.observations[1]);
     expect(first.observations[1]).toEqual({
       kind: "unknown_event",
-      eventType: "future.event",
       rawEventDigest: createHash("sha256").update(rawLine, "utf8").digest("hex"),
     });
   });
@@ -316,15 +321,132 @@ describe("bounded Codex 0.144.6 JSONL candidate parser", () => {
 
     expect(leftParsed.observations[1]).toEqual({
       kind: "unknown_event",
-      eventType: "future.event",
       rawEventDigest: createHash("sha256").update(left, "utf8").digest("hex"),
     });
     expect(rightParsed.observations[1]).toEqual({
       kind: "unknown_event",
-      eventType: "future.event",
       rawEventDigest: createHash("sha256").update(right, "utf8").digest("hex"),
     });
     expect(leftParsed.observations[1]).not.toEqual(rightParsed.observations[1]);
+  });
+
+  it("does not expose a provider-controlled unknown type", () => {
+    const maliciousLine = line({
+      type: "token/sk_live_privatevalue",
+      value: "private provider output",
+    });
+    const parsed = parseCodexEventLines([
+      maliciousLine,
+      line({ type: "thread.started", thread_id: "thread-01" }),
+      line({ type: "turn.started" }),
+    ]);
+
+    expect(parsed.observations[0]).toEqual({
+      kind: "unknown_event",
+      rawEventDigest: createHash("sha256").update(maliciousLine, "utf8").digest("hex"),
+    });
+    expect(JSON.stringify(parsed)).not.toMatch(
+      /token\/sk_live_privatevalue|private provider output/u,
+    );
+  });
+
+  it.each([
+    {
+      name: "turn before thread",
+      lines: [
+        line({ type: "turn.started" }),
+        line({ type: "thread.started", thread_id: "thread-01" }),
+      ],
+      error: "CODEX_THREAD_STARTED_REQUIRED",
+    },
+    {
+      name: "terminal before turn",
+      lines: [
+        line({ type: "thread.started", thread_id: "thread-01" }),
+        line({ type: "turn.completed" }),
+      ],
+      error: "CODEX_TURN_NOT_STARTED",
+    },
+    {
+      name: "duplicate turn start",
+      lines: [
+        line({ type: "thread.started", thread_id: "thread-01" }),
+        line({ type: "turn.started" }),
+        line({ type: "turn.started" }),
+      ],
+      error: "CODEX_TURN_STARTED_DUPLICATE",
+    },
+    {
+      name: "item before turn",
+      lines: [
+        line({ type: "thread.started", thread_id: "thread-01" }),
+        line({ type: "item.completed", item: { type: "agent_message" } }),
+      ],
+      error: "CODEX_TURN_NOT_STARTED",
+    },
+    {
+      name: "approval before turn",
+      lines: [
+        line({ type: "thread.started", thread_id: "thread-01" }),
+        line({ type: "approval.requested", request: { kind: "command" } }),
+      ],
+      error: "CODEX_TURN_NOT_STARTED",
+    },
+    {
+      name: "error before turn",
+      lines: [
+        line({ type: "thread.started", thread_id: "thread-01" }),
+        line({ type: "error" }),
+      ],
+      error: "CODEX_TURN_NOT_STARTED",
+    },
+    {
+      name: "known item after terminal",
+      lines: [
+        line({ type: "thread.started", thread_id: "thread-01" }),
+        line({ type: "turn.started" }),
+        line({ type: "turn.completed" }),
+        line({ type: "item.completed", item: { type: "agent_message" } }),
+      ],
+      error: "CODEX_EVENT_AFTER_TERMINAL",
+    },
+    {
+      name: "known turn after terminal",
+      lines: [
+        line({ type: "thread.started", thread_id: "thread-01" }),
+        line({ type: "turn.started" }),
+        line({ type: "turn.completed" }),
+        line({ type: "turn.started" }),
+      ],
+      error: "CODEX_EVENT_AFTER_TERMINAL",
+    },
+  ])("fails closed for single-turn lifecycle: $name", ({ lines, error }) => {
+    expect(() => parseCodexEventLines(lines)).toThrow(error);
+  });
+
+  it("allows unknown observations without advancing the single-turn lifecycle", () => {
+    const beforeThread = line({ type: "future.before" });
+    const duringTurn = line({ type: "future.during" });
+    const parsed = parseCodexEventLines([
+      beforeThread,
+      line({ type: "thread.started", thread_id: "thread-01" }),
+      duringTurn,
+      line({ type: "turn.started" }),
+    ]);
+
+    expect(parsed.terminalOutcome).toBe("indeterminate");
+    expect(parsed.observations).toEqual([
+      {
+        kind: "unknown_event",
+        rawEventDigest: createHash("sha256").update(beforeThread, "utf8").digest("hex"),
+      },
+      { kind: "thread_started", sessionRef: "thread-01" },
+      {
+        kind: "unknown_event",
+        rawEventDigest: createHash("sha256").update(duringTurn, "utf8").digest("hex"),
+      },
+      { kind: "turn_started" },
+    ]);
   });
 });
 
