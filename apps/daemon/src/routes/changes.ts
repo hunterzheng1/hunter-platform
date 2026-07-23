@@ -81,8 +81,9 @@ export function registerChangeRoutes(app: FastifyInstance, services: ChangeRoute
     } catch {
       return await reply.code(422).send({ code: "INVALID_CHANGE" });
     }
+    let authoritativeTaskGraphFingerprint: string;
     try {
-      validateTaskGraph(body.data.tasks);
+      authoritativeTaskGraphFingerprint = validateTaskGraph(body.data.tasks).taskGraphFingerprint;
     } catch (error) {
       return await reply.code(422).send({ code: taskGraphFailureCode(error) });
     }
@@ -101,18 +102,31 @@ export function registerChangeRoutes(app: FastifyInstance, services: ChangeRoute
       }
     }
 
-    const result = PublishChangeHttpResponseSchema.parse(await services.publishChange(
-      params.data.projectId,
-      body.data,
-      { actorId: principal.principalId, correlationId: body.data.idempotencyKey },
-    ));
+    let applicationResult: unknown;
+    try {
+      applicationResult = await services.publishChange(
+        params.data.projectId,
+        body.data,
+        { actorId: principal.principalId, correlationId: body.data.idempotencyKey },
+      );
+    } catch {
+      return await reply.code(500).send({ code: "PUBLISH_CHANGE_FAILED" });
+    }
+    const parsedResult = PublishChangeHttpResponseSchema.safeParse(applicationResult);
+    if (!parsedResult.success) {
+      return await reply.code(500).send({ code: "PUBLISH_CHANGE_RESPONSE_INVALID" });
+    }
+    const result = parsedResult.data;
     if (
       result.projectId !== params.data.projectId
       || result.changeId !== body.data.changeId
       || result.changeRevisionId !== body.data.changeRevisionId
       || result.executionPlanId !== body.data.executionPlanId
     ) {
-      throw new Error("PUBLISH_CHANGE_RESPONSE_SCOPE_MISMATCH");
+      return await reply.code(500).send({ code: "PUBLISH_CHANGE_RESPONSE_SCOPE_MISMATCH" });
+    }
+    if (result.taskGraphFingerprint !== authoritativeTaskGraphFingerprint) {
+      return await reply.code(500).send({ code: "PUBLISH_CHANGE_RESPONSE_FINGERPRINT_MISMATCH" });
     }
     return await reply.code(201).send(result);
   });

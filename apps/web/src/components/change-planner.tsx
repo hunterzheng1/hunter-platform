@@ -11,7 +11,7 @@ import {
   TaskIdSchema,
   type RequirementRevisionId,
 } from "@hunter/domain/ids";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { TaskGraph } from "./task-graph.js";
 
@@ -32,6 +32,20 @@ const defaultIdFactory: ChangePlannerIdFactory = {
   executionPlanId: () => `epl_${crypto.randomUUID()}`,
   taskId: () => `tsk_${crypto.randomUUID()}`,
 };
+
+function planningSourceSignature(
+  requirementRevisionIds: readonly RequirementRevisionId[],
+  defaults: ChangePlanningDefaultsHttp,
+): string {
+  return JSON.stringify({
+    requirementRevisionIds: [...requirementRevisionIds].sort(),
+    repositoryIds: [...defaults.repositoryIds].sort(),
+    workflowRevisionId: defaults.workflowRevisionId,
+    defaultAgentProfileId: defaults.defaultAgentProfileId,
+    sessionPolicy: defaults.sessionPolicy,
+    workspacePolicy: defaults.workspacePolicy,
+  });
+}
 
 function createParallelPlan(
   requirementRevisionIds: readonly RequirementRevisionId[],
@@ -120,20 +134,43 @@ export function ChangePlanner({
   const [published, setPublished] = useState<PublishChangeHttpResponse>();
   const planFrozen = useRef(false);
   const attemptPending = useRef(false);
+  const draftSourceSignature = useRef<string | undefined>(undefined);
+  const currentSourceSignature = planningSourceSignature(requirementRevisionIds, planningDefaults);
+
+  useEffect(() => {
+    if (
+      planFrozen.current
+      || draft === undefined
+      || draftSourceSignature.current === currentSourceSignature
+    ) return;
+    draftSourceSignature.current = undefined;
+    setDraft(undefined);
+    setPublished(undefined);
+    setError("规划来源已变化，请重新选择模板");
+  }, [currentSourceSignature, draft]);
 
   const chooseTemplate = () => {
     if (planFrozen.current) return;
     setError(undefined);
     setPublished(undefined);
     try {
-      setDraft(createParallelPlan(requirementRevisionIds, planningDefaults, idFactory));
+      const nextDraft = createParallelPlan(requirementRevisionIds, planningDefaults, idFactory);
+      draftSourceSignature.current = currentSourceSignature;
+      setDraft(nextDraft);
     } catch {
+      draftSourceSignature.current = undefined;
       setDraft(undefined);
       setError("无法生成合法任务标识，请重试");
     }
   };
   const publish = async () => {
     if (draft === undefined || attemptPending.current || published !== undefined) return;
+    if (!planFrozen.current && draftSourceSignature.current !== currentSourceSignature) {
+      draftSourceSignature.current = undefined;
+      setDraft(undefined);
+      setError("规划来源已变化，请重新选择模板");
+      return;
+    }
     planFrozen.current = true;
     attemptPending.current = true;
     setHasDispatched(true);

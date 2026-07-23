@@ -76,18 +76,21 @@ export const TaskDefinitionHttpSchema = z.strictObject({
 });
 export type TaskDefinitionHttp = z.infer<typeof TaskDefinitionHttpSchema>;
 
+const ParallelWriteWorkspacePolicyHttpSchema = z.strictObject({
+  mode: z.literal("write"),
+  isolation: z.literal("worktree"),
+  reuse: z.literal(false),
+});
+
 export const ChangePlanningDefaultsHttpSchema = z.strictObject({
   repositoryIds: z.array(RepositoryIdSchema).min(1).max(50),
   workflowRevisionId: WorkflowRevisionIdSchema,
   defaultAgentProfileId: AgentProfileIdSchema,
   sessionPolicy: SessionPolicyHttpSchema,
-  workspacePolicy: WorkspacePolicyHttpSchema,
+  workspacePolicy: ParallelWriteWorkspacePolicyHttpSchema,
 }).superRefine((defaults, context) => {
   if (new Set(defaults.repositoryIds).size !== defaults.repositoryIds.length) {
     context.addIssue({ code: "custom", path: ["repositoryIds"], message: "repositoryIds must be unique" });
-  }
-  if (defaults.workspacePolicy.mode !== "write") {
-    context.addIssue({ code: "custom", path: ["workspacePolicy", "mode"], message: "write planning requires write workspace access" });
   }
 });
 export type ChangePlanningDefaultsHttp = z.infer<typeof ChangePlanningDefaultsHttpSchema>;

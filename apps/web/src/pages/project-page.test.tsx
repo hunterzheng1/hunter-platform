@@ -224,7 +224,7 @@ describe("ProjectPage", () => {
           workflowRevisionId: WorkflowRevisionIdSchema.parse("wfr_task3000001"),
           defaultAgentProfileId: AgentProfileIdSchema.parse("apr_task3000001"),
           sessionPolicy: "new" as const,
-          workspacePolicy: { mode: "write" as const, isolation: "worktree" as const, reuse: false },
+          workspacePolicy: { mode: "write" as const, isolation: "worktree" as const, reuse: false as const },
         },
       })),
       createRequirement: vi.fn(),

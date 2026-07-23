@@ -7,6 +7,7 @@ import {
   RequirementRevisionIdSchema,
   TaskIdSchema,
   WorkflowRevisionIdSchema,
+  validateTaskGraph,
   type TaskId,
 } from "@hunter/domain";
 import { describe, expect, it, vi } from "vitest";
@@ -94,16 +95,17 @@ describe("Change routes", () => {
   });
 
   it("publishes the complete authenticated command and strictly scopes the response", async () => {
+    const command = payload([task(ids.taskA, [])]);
+    const taskGraphFingerprint = validateTaskGraph(command.tasks).taskGraphFingerprint;
     const publishChange = vi.fn(async (projectId, command) => ({
       projectId,
       changeId: command.changeId,
       changeRevisionId: command.changeRevisionId,
       executionPlanId: command.executionPlanId,
       status: "published" as const,
-      taskGraphFingerprint: "a".repeat(64),
+      taskGraphFingerprint,
     }));
     const { app, headers } = buildTestApp({ changes: { publishChange } });
-    const command = payload([task(ids.taskA, [])]);
     const response = await app.inject({
       method: "POST",
       url: `/api/v1/projects/${projectA}/changes`,
@@ -117,8 +119,8 @@ describe("Change routes", () => {
       changeId: ids.change,
       changeRevisionId: ids.changeRevision,
       executionPlanId: ids.executionPlan,
-      status: "published",
-      taskGraphFingerprint: "a".repeat(64),
+      status: "published" as const,
+      taskGraphFingerprint,
     });
     expect(publishChange).toHaveBeenCalledWith(
       projectA,
@@ -158,8 +160,69 @@ describe("Change routes", () => {
       payload: command,
     });
     expect(invalidResponse.statusCode).toBe(500);
+    expect(invalidResponse.json()).toEqual({ code: "PUBLISH_CHANGE_RESPONSE_INVALID" });
     expect(invalidResponse.body).not.toContain("C:/private");
     await app.close();
+  });
+
+  it("rejects a mismatched application TaskGraph fingerprint", async () => {
+    const publishChange = vi.fn(async (projectId, command) => ({
+      projectId,
+      changeId: command.changeId,
+      changeRevisionId: command.changeRevisionId,
+      executionPlanId: command.executionPlanId,
+      status: "published" as const,
+      taskGraphFingerprint: "a".repeat(64),
+    }));
+    const { app, headers } = buildTestApp({ changes: { publishChange } });
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectA}/changes`,
+      headers,
+      payload: payload([task(ids.taskA, [])]),
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({ code: "PUBLISH_CHANGE_RESPONSE_FINGERPRINT_MISMATCH" });
+    await app.close();
+  });
+
+  it("sanitizes application failures and response scope mismatches", async () => {
+    const sensitiveMarker = "credential-bearing-sensitive-marker";
+    const publishChange = vi.fn(async () => { throw new Error(sensitiveMarker); });
+    const { app, headers } = buildTestApp({ changes: { publishChange } });
+    const command = payload([task(ids.taskA, [])]);
+    const failed = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectA}/changes`,
+      headers,
+      payload: command,
+    });
+    expect(failed.statusCode).toBe(500);
+    expect(failed.json()).toEqual({ code: "PUBLISH_CHANGE_FAILED" });
+    expect(failed.body).not.toContain(sensitiveMarker);
+
+    await app.close();
+
+    const scopePublishChange = vi.fn(async () => ({
+      projectId: projectB,
+      changeId: ids.change,
+      changeRevisionId: ids.changeRevision,
+      executionPlanId: ids.executionPlan,
+      status: "published" as const,
+      taskGraphFingerprint: validateTaskGraph(command.tasks).taskGraphFingerprint,
+    }));
+    const scopeApp = buildTestApp({ changes: { publishChange: scopePublishChange } });
+    const mismatched = await scopeApp.app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectA}/changes`,
+      headers: scopeApp.headers,
+      payload: command,
+    });
+    expect(mismatched.statusCode).toBe(500);
+    expect(mismatched.json()).toEqual({ code: "PUBLISH_CHANGE_RESPONSE_SCOPE_MISMATCH" });
+    expect(mismatched.body).not.toContain(sensitiveMarker);
+    await scopeApp.app.close();
   });
 
   it("rejects malformed, unknown, cross-project, and unapproved Requirement inputs before publish", async () => {

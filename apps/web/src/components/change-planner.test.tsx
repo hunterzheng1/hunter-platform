@@ -22,6 +22,7 @@ const ids = {
   changeRevision: ChangeRevisionIdSchema.parse("crv_task3000001"),
   executionPlan: ExecutionPlanIdSchema.parse("epl_task3000001"),
   requirementRevision: RequirementRevisionIdSchema.parse("rrv_task3000001"),
+  otherRequirementRevision: RequirementRevisionIdSchema.parse("rrv_task3000002"),
   repository: RepositoryIdSchema.parse("rep_task3000001"),
   workflowRevision: WorkflowRevisionIdSchema.parse("wfr_task3000001"),
   agentProfile: AgentProfileIdSchema.parse("apr_task3000001"),
@@ -32,7 +33,7 @@ const planningDefaults = {
   workflowRevisionId: ids.workflowRevision,
   defaultAgentProfileId: ids.agentProfile,
   sessionPolicy: "new" as const,
-  workspacePolicy: { mode: "write" as const, isolation: "worktree" as const, reuse: false },
+  workspacePolicy: { mode: "write" as const, isolation: "worktree" as const, reuse: false as const },
 };
 
 const idFactory = {
@@ -98,7 +99,7 @@ it("shows busy and recoverable error states without regenerating the selected pl
     void input;
     return pending;
   });
-  render(
+  const view = render(
     <ChangePlanner
       requirementRevisionIds={[ids.requirementRevision]}
       planningDefaults={planningDefaults}
@@ -118,10 +119,55 @@ it("shows busy and recoverable error states without regenerating the selected pl
   reject?.(new Error("response lost"));
 
   expect((await screen.findByRole("alert")).textContent).toContain("重试会复用同一组标识");
+  view.rerender(
+    <ChangePlanner
+      requirementRevisionIds={[ids.otherRequirementRevision]}
+      planningDefaults={planningDefaults}
+      idFactory={idFactory}
+      onPublish={publish}
+    />,
+  );
   const templateButton = screen.getByRole("button", { name: "使用并行交付模板" });
   expect(templateButton.hasAttribute("disabled")).toBe(true);
   fireEvent.click(templateButton);
   fireEvent.click(screen.getByRole("button", { name: "重试同一计划" }));
   expect(publish).toHaveBeenCalledTimes(2);
   expect(publish.mock.calls[1]?.[0]).toEqual(publish.mock.calls[0]?.[0]);
+});
+
+it("invalidates an unsubmitted draft when its Requirement source changes", async () => {
+  const publish = vi.fn(async (input: ChangePlanDraft) => ({
+    projectId: ids.project,
+    changeId: input.changeId,
+    changeRevisionId: input.changeRevisionId,
+    executionPlanId: input.executionPlanId,
+    status: "published" as const,
+    taskGraphFingerprint: "a".repeat(64),
+  }));
+  const view = render(
+    <ChangePlanner
+      requirementRevisionIds={[ids.requirementRevision]}
+      planningDefaults={planningDefaults}
+      idFactory={idFactory}
+      onPublish={publish}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "使用并行交付模板" }));
+
+  view.rerender(
+    <ChangePlanner
+      requirementRevisionIds={[ids.otherRequirementRevision]}
+      planningDefaults={planningDefaults}
+      idFactory={idFactory}
+      onPublish={publish}
+    />,
+  );
+
+  expect((await screen.findByRole("alert")).textContent).toContain("规划来源已变化，请重新选择模板");
+  expect(screen.queryByRole("list", { name: "任务依赖图" })).toBeNull();
+  expect(screen.getByRole("button", { name: "确认执行计划" }).hasAttribute("disabled")).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "使用并行交付模板" }));
+  fireEvent.click(screen.getByRole("button", { name: "确认执行计划" }));
+  await waitFor(() => expect(publish).toHaveBeenCalledOnce());
+  expect(publish.mock.calls[0]?.[0].requirementRevisionIds).toEqual([ids.otherRequirementRevision]);
 });

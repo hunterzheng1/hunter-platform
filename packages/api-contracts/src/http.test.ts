@@ -3,6 +3,7 @@ import { TaskDefinitionSchema } from "@hunter/domain";
 
 import {
   ApproveRequirementHttpRequestSchema,
+  ChangePlanningDefaultsHttpSchema,
   CreateProjectHttpRequestSchema,
   CreateProjectHttpResponseSchema,
   CreateRequirementHttpRequestSchema,
@@ -150,5 +151,28 @@ describe("Workbench HTTP schemas", () => {
     };
     expect(PublishChangeHttpResponseSchema.parse(response)).toEqual(response);
     expect(() => PublishChangeHttpResponseSchema.parse({ ...response, localPath: "C:/private" })).toThrow();
+  });
+
+  it("accepts only isolated non-reused write worktrees as parallel planning defaults", () => {
+    const valid = {
+      repositoryIds: ["rep_task3000001"],
+      workflowRevisionId: "wfr_task3000001",
+      defaultAgentProfileId: "apr_task3000001",
+      sessionPolicy: "new",
+      workspacePolicy: { mode: "write", isolation: "worktree", reuse: false },
+    };
+    expect(ChangePlanningDefaultsHttpSchema.parse(valid)).toEqual(valid);
+    expect(() => ChangePlanningDefaultsHttpSchema.parse({
+      ...valid,
+      workspacePolicy: { ...valid.workspacePolicy, isolation: "shared_snapshot" },
+    })).toThrow();
+    expect(() => ChangePlanningDefaultsHttpSchema.parse({
+      ...valid,
+      workspacePolicy: { ...valid.workspacePolicy, isolation: "single_writer" },
+    })).toThrow();
+    expect(() => ChangePlanningDefaultsHttpSchema.parse({
+      ...valid,
+      workspacePolicy: { ...valid.workspacePolicy, reuse: true },
+    })).toThrow();
   });
 });
