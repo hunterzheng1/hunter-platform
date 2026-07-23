@@ -34,10 +34,18 @@
 | `npm test` | 首轮 811/814，通过断言无失败但 3 个 Git fixture 超过默认 5 秒；保留该失败历史。将该集成测试时间盒明确为 20 秒后复跑，并在新增安全负例后最终 PASS：87 files、816 tests |
 | `npm run build` | PASS |
 | `npm run build -w @hunter/web` | 首轮发现浏览器包错误引入 Node `crypto` 并失败；改为 browser-safe contracts + WebCrypto 后复跑 PASS |
+| CI 稳定化精确回归 | PASS；RunPage 套件独立进程重复 10/10，三条有真实超时记录的 Git/SQLite 集成测试 20/20，全量最终 87 files、816 tests |
+
+## 远端 CI 失败历史与最终结果
+
+- `a8fbdfc8`：Ubuntu 的 Orca candidate fixture 因固定 Windows 路径失败 4 项；Windows 的 native `realpath` 因 8.3 短路径被规范化失败 1 项。
+- `e4e4e6b`：Windows 两组通过；Ubuntu 因 candidate fixture 仍显式使用 Windows path flavor 失败 5 项。
+- `8ec3748`：push Ubuntu 与两组 Windows 通过；PR Ubuntu 的 RunPage 测试在 heading 出现后立即断言异步订阅，发生 1 项时序竞态失败。
+- `9f85227`：push 与 PR 两组均通过；Ubuntu 约 1:04/1:05，Windows 约 1:59/1:45。每组均真实运行 `npm ci`、lint、typecheck、816 tests、rebuild、recovery 与 build。
 
 ## 尚未证明
 
-- GitHub Actions 的 Windows/Ubuntu 远端运行：PENDING，提交推送后观察真实结果。
+- GitHub Actions 的 Windows/Ubuntu 远端运行：PASS；仅证明上述提交与工作流，不外推为真实 Provider、实机手机或生产部署验证。
 - 公网域名、正式证书、反向代理、NAT、防火墙和真实手机跨设备链路：NOT_PROVEN。
 - 生产签名、安装器发布、应用商店与生产发布：NOT_PROVEN，且不在本任务授权范围。
 - Orca、Codex、CodeBuddy、Cursor 等真实 Provider 的移动控制能力：NOT_PROVEN；Fake/本机契约结果不得提升其能力等级。
