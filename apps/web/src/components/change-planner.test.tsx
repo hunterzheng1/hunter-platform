@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
   AgentProfileIdSchema,
   ChangeIdSchema,
@@ -87,6 +87,8 @@ it("publishes two parallel write Tasks and one dependent integration Task", asyn
       }),
     ],
   }));
+  expect(screen.getByRole("button", { name: "使用并行交付模板" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("button", { name: "计划已发布" }).hasAttribute("disabled")).toBe(true);
 });
 
 it("shows busy and recoverable error states without regenerating the selected plan", async () => {
@@ -106,12 +108,20 @@ it("shows busy and recoverable error states without regenerating the selected pl
   );
 
   fireEvent.click(screen.getByRole("button", { name: "使用并行交付模板" }));
-  fireEvent.click(screen.getByRole("button", { name: "确认执行计划" }));
+  const confirmButton = screen.getByRole("button", { name: "确认执行计划" });
+  act(() => {
+    confirmButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    confirmButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  expect(publish).toHaveBeenCalledOnce();
   expect(screen.getByRole("button", { name: "正在确认…" }).hasAttribute("disabled")).toBe(true);
   reject?.(new Error("response lost"));
 
   expect((await screen.findByRole("alert")).textContent).toContain("重试会复用同一组标识");
-  fireEvent.click(screen.getByRole("button", { name: "确认执行计划" }));
+  const templateButton = screen.getByRole("button", { name: "使用并行交付模板" });
+  expect(templateButton.hasAttribute("disabled")).toBe(true);
+  fireEvent.click(templateButton);
+  fireEvent.click(screen.getByRole("button", { name: "重试同一计划" }));
   expect(publish).toHaveBeenCalledTimes(2);
   expect(publish.mock.calls[1]?.[0]).toEqual(publish.mock.calls[0]?.[0]);
 });

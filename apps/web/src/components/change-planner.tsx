@@ -11,7 +11,7 @@ import {
   TaskIdSchema,
   type RequirementRevisionId,
 } from "@hunter/domain/ids";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { TaskGraph } from "./task-graph.js";
 
@@ -115,10 +115,14 @@ export function ChangePlanner({
 }) {
   const [draft, setDraft] = useState<ChangePlanDraft>();
   const [busy, setBusy] = useState(false);
+  const [hasDispatched, setHasDispatched] = useState(false);
   const [error, setError] = useState<string>();
   const [published, setPublished] = useState<PublishChangeHttpResponse>();
+  const planFrozen = useRef(false);
+  const attemptPending = useRef(false);
 
   const chooseTemplate = () => {
+    if (planFrozen.current) return;
     setError(undefined);
     setPublished(undefined);
     try {
@@ -129,7 +133,10 @@ export function ChangePlanner({
     }
   };
   const publish = async () => {
-    if (draft === undefined || busy) return;
+    if (draft === undefined || attemptPending.current || published !== undefined) return;
+    planFrozen.current = true;
+    attemptPending.current = true;
+    setHasDispatched(true);
     setBusy(true);
     setError(undefined);
     try {
@@ -137,6 +144,7 @@ export function ChangePlanner({
     } catch {
       setError("执行计划尚未确认，请重试；重试会复用同一组标识");
     } finally {
+      attemptPending.current = false;
       setBusy(false);
     }
   };
@@ -151,12 +159,12 @@ export function ChangePlanner({
         <span className="count-label">{requirementRevisionIds.length} 个已批准版本</span>
       </div>
       <p className="field-help">规划仅引用领域 ID；本地路径、终端与 Provider 私有字段不会进入请求。</p>
-      <button className="button button-quiet" type="button" disabled={busy} onClick={chooseTemplate}>使用并行交付模板</button>
+      <button className="button button-quiet" type="button" disabled={busy || hasDispatched} onClick={chooseTemplate}>使用并行交付模板</button>
       {draft === undefined ? <div className="empty-state compact-empty"><strong>尚未选择任务模板</strong><p>选择模板后可检查并行与依赖关系。</p></div> : <TaskGraph tasks={draft.tasks} />}
       {error === undefined ? null : <p role="alert" className="message error-message">{error}</p>}
       {published === undefined ? null : <p role="status" className="message notice-message">执行计划已发布：{published.executionPlanId}</p>}
-      <button className="button button-primary" type="button" disabled={draft === undefined || busy} onClick={() => void publish()}>
-        {busy ? "正在确认…" : "确认执行计划"}
+      <button className="button button-primary" type="button" disabled={draft === undefined || busy || published !== undefined} onClick={() => void publish()}>
+        {published !== undefined ? "计划已发布" : busy ? "正在确认…" : hasDispatched ? "重试同一计划" : "确认执行计划"}
       </button>
     </section>
   );

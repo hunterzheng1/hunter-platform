@@ -89,7 +89,11 @@ export function registerChangeRoutes(app: FastifyInstance, services: ChangeRoute
 
     for (const requirementRevisionId of body.data.requirementRevisionIds) {
       const requirement = services.getRequirementRevision(requirementRevisionId);
-      if (requirement === null || requirement.projectId !== params.data.projectId) {
+      if (
+        requirement === null
+        || requirement.projectId !== params.data.projectId
+        || requirement.revisionId !== requirementRevisionId
+      ) {
         return await reply.code(404).send({ code: "REQUIREMENT_REVISION_NOT_FOUND" });
       }
       if (requirement.status !== "approved") {

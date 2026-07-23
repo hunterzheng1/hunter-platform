@@ -185,6 +185,28 @@ describe("Change routes", () => {
     await app.close();
   });
 
+  it("rejects a relation lookup that returns a different RequirementRevision identity", async () => {
+    const publishChange = vi.fn();
+    const getRequirementRevision = vi.fn(() => ({
+      projectId: projectA,
+      revisionId: RequirementRevisionIdSchema.parse("rrv_task3000002"),
+      status: "approved" as const,
+    }));
+    const { app, headers } = buildTestApp({ changes: { getRequirementRevision, publishChange } });
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectA}/changes`,
+      headers,
+      payload: payload([task(ids.taskA, [])]),
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ code: "REQUIREMENT_REVISION_NOT_FOUND" });
+    expect(getRequirementRevision).toHaveBeenCalledWith(ids.requirement);
+    expect(publishChange).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it("distinguishes invalid Change content from TaskGraph failures", async () => {
     const publishChange = vi.fn();
     const { app, headers } = buildTestApp({ changes: { publishChange } });
