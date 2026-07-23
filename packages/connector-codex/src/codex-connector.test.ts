@@ -79,7 +79,7 @@ describe("bounded Codex 0.144.6 JSONL candidate parser", () => {
         {
           kind: "unknown_event",
           eventType: "future.event",
-          payloadDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          rawEventDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
         },
       ],
     });
@@ -255,38 +255,76 @@ describe("bounded Codex 0.144.6 JSONL candidate parser", () => {
     expect(parsed.observations[1]).toEqual({
       kind: "unknown_event",
       eventType: "item.completed",
-      payloadDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      rawEventDigest: createHash("sha256")
+        .update(
+          line({
+            type: "item.completed",
+            item: { type: "private_prompt_name", value: "private output" },
+          }),
+          "utf8",
+        )
+        .digest("hex"),
     });
     expect(JSON.stringify(parsed)).not.toMatch(/private_prompt_name|private output/u);
   });
 
-  it("derives the same unknown-event digest regardless of object insertion order", () => {
+  it("derives the same unknown-event digest for the same exact UTF-8 line", () => {
+    const rawLine = line({
+      type: "future.event",
+      zeta: 1,
+      alpha: { second: 2, first: 1 },
+    });
     const first = parseCodexEventLines([
       line({ type: "thread.started", thread_id: "thread-01" }),
-      line({ type: "future.event", zeta: 1, alpha: { second: 2, first: 1 } }),
+      rawLine,
     ]);
     const second = parseCodexEventLines([
       line({ type: "thread.started", thread_id: "thread-01" }),
-      line({ alpha: { first: 1, second: 2 }, zeta: 1, type: "future.event" }),
+      rawLine,
     ]);
 
     expect(first.observations[1]).toEqual(second.observations[1]);
-  });
-
-  it("uses code-unit key order for a locale-independent unknown-event digest", () => {
-    const parsed = parseCodexEventLines([
-      line({ type: "thread.started", thread_id: "thread-01" }),
-      line({ "ä": 2, zeta: 1, type: "future.event" }),
-    ]);
-    const expectedDigest = createHash("sha256")
-      .update('{"type":"future.event","zeta":1,"ä":2}')
-      .digest("hex");
-
-    expect(parsed.observations[1]).toEqual({
+    expect(first.observations[1]).toEqual({
       kind: "unknown_event",
       eventType: "future.event",
-      payloadDigest: expectedDigest,
+      rawEventDigest: createHash("sha256").update(rawLine, "utf8").digest("hex"),
     });
+  });
+
+  it.each([
+    [
+      '{"type":"future.event","value":9007199254740992}',
+      '{"type":"future.event","value":9007199254740993}',
+    ],
+    [
+      '{"type":"future.event","value":1e400}',
+      '{"type":"future.event","value":null}',
+    ],
+    [
+      '{"type":"future.event","value":7}',
+      '{ "type": "future.event", "value": 7 }',
+    ],
+  ])("keeps distinct valid raw bytes distinct even when parsed values can collapse", (left, right) => {
+    const leftParsed = parseCodexEventLines([
+      line({ type: "thread.started", thread_id: "thread-01" }),
+      left,
+    ]);
+    const rightParsed = parseCodexEventLines([
+      line({ type: "thread.started", thread_id: "thread-01" }),
+      right,
+    ]);
+
+    expect(leftParsed.observations[1]).toEqual({
+      kind: "unknown_event",
+      eventType: "future.event",
+      rawEventDigest: createHash("sha256").update(left, "utf8").digest("hex"),
+    });
+    expect(rightParsed.observations[1]).toEqual({
+      kind: "unknown_event",
+      eventType: "future.event",
+      rawEventDigest: createHash("sha256").update(right, "utf8").digest("hex"),
+    });
+    expect(leftParsed.observations[1]).not.toEqual(rightParsed.observations[1]);
   });
 });
 

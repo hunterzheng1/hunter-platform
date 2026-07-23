@@ -43,7 +43,7 @@ export const CodexCandidateObservationSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("unknown_event"),
     eventType: ProviderTypeSchema,
-    payloadDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+    rawEventDigest: z.string().regex(/^[a-f0-9]{64}$/u),
   }),
   z.strictObject({
     kind: z.literal("process_exited"),
@@ -96,21 +96,9 @@ function assertBoundedValue(value: unknown, depth = 0): void {
   }
 }
 
-function canonicalize(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map((item) => canonicalize(item));
-  if (isRecord(value)) {
-    return Object.fromEntries(
-      Object.entries(value)
-        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-        .map(([key, item]) => [key, canonicalize(item)]),
-    );
-  }
-  return value;
-}
-
-function payloadDigest(value: unknown): string {
+function rawEventDigest(line: string): string {
   return createHash("sha256")
-    .update(JSON.stringify(canonicalize(value)))
+    .update(line, "utf8")
     .digest("hex");
 }
 
@@ -200,7 +188,7 @@ export function parseCodexEventLines(
         observations.push({
           kind: "unknown_event",
           eventType: type,
-          payloadDigest: payloadDigest(raw),
+          rawEventDigest: rawEventDigest(line),
         });
         continue;
       }
@@ -237,7 +225,7 @@ export function parseCodexEventLines(
     observations.push({
       kind: "unknown_event",
       eventType: type,
-      payloadDigest: payloadDigest(raw),
+      rawEventDigest: rawEventDigest(line),
     });
   }
 
