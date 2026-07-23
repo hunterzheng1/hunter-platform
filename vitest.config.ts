@@ -43,7 +43,9 @@ export default defineConfig({
     include: [
       "apps/**/*.test.ts",
       "apps/**/*.test.tsx",
+      "e2e/fixtures/**/*.test.ts",
       "packages/**/*.test.ts",
+      "scripts/**/*.test.ts",
       "spikes/**/*.test.ts",
       "workflow-packs/**/*.test.ts",
     ],
