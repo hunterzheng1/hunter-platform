@@ -1,3 +1,4 @@
+import { posix } from "node:path";
 import { OperationIdSchema, type OperationId } from "@hunter/domain";
 import { z } from "zod";
 import type { JsonCommandRunner } from "./command-runner.js";
@@ -23,12 +24,15 @@ const OrcaTerminalIdSchema = z
   .max(256)
   .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u)
   .brand<"OrcaTerminalId">();
-function isSupportedFullyQualifiedPath(path: string): boolean {
-  if (path.startsWith("/")) return true;
+function isFullyQualifiedWindowsPath(path: string): boolean {
   if (/^[A-Za-z]:[\\/]/u.test(path)) return true;
   if (/^\\\\\?\\[A-Za-z]:\\/u.test(path)) return true;
   if (/^\\\\\?\\UNC\\[^\\/]+\\[^\\/]+(?:\\.*)?$/iu.test(path)) return true;
   return /^\\\\(?![?.]\\)[^\\/]+\\[^\\/]+(?:\\.*)?$/u.test(path);
+}
+
+function isSupportedFullyQualifiedPath(path: string): boolean {
+  return isFullyQualifiedWindowsPath(path) || posix.isAbsolute(path);
 }
 
 export const OrcaAbsolutePathSchema = z
@@ -58,6 +62,11 @@ export const OrcaWorktreeIdSchema = z
 export type OrcaRepoId = z.infer<typeof OrcaRepoIdSchema>;
 export type OrcaTerminalId = z.infer<typeof OrcaTerminalIdSchema>;
 export type OrcaWorktreeId = z.infer<typeof OrcaWorktreeIdSchema>;
+export type OrcaPathFlavor = "windows" | "posix";
+
+export interface OrcaClientOptions {
+  readonly pathFlavor?: OrcaPathFlavor;
+}
 
 const AddRepositoryResultSchema = z.strictObject({
   repo: z.strictObject({ id: OrcaRepoIdSchema }),
@@ -119,11 +128,12 @@ function parseEnvelope<Result>(
 function splitWorktreeId(
   id: OrcaWorktreeId,
   expectedRepoId: OrcaRepoId,
+  pathFlavor: OrcaPathFlavor,
 ): { readonly worktreeId: OrcaWorktreeId; readonly reportedAbsolutePath: string } {
   const prefix = `${expectedRepoId}::`;
   if (!id.startsWith(prefix)) throw new OrcaOutputError();
   const reportedAbsolutePath = id.slice(prefix.length);
-  if (!OrcaAbsolutePathSchema.safeParse(reportedAbsolutePath).success) {
+  if (!isPathForFlavor(reportedAbsolutePath, pathFlavor)) {
     throw new OrcaOutputError();
   }
   return { worktreeId: id, reportedAbsolutePath };
@@ -143,23 +153,47 @@ function boundedInteger(input: number, minimum: number, maximum: number, code: s
   return input;
 }
 
-function parseRepositoryPath(input: string): string {
+function isPathForFlavor(input: string, pathFlavor: OrcaPathFlavor): boolean {
+  if (!OrcaAbsolutePathSchema.safeParse(input).success) return false;
+  return pathFlavor === "windows"
+    ? isFullyQualifiedWindowsPath(input)
+    : posix.isAbsolute(input);
+}
+
+function parseRepositoryPath(input: string, pathFlavor: OrcaPathFlavor): string {
   const parsed = OrcaAbsolutePathSchema.safeParse(input);
-  if (!parsed.success) throw new Error("ORCA_REPOSITORY_PATH_INVALID");
+  if (!parsed.success || !isPathForFlavor(parsed.data, pathFlavor)) {
+    throw new Error("ORCA_REPOSITORY_PATH_INVALID");
+  }
   return parsed.data;
 }
 
-function parseWorktreeId(input: OrcaWorktreeId | string): OrcaWorktreeId {
+function parseWorktreeId(
+  input: OrcaWorktreeId | string,
+  pathFlavor: OrcaPathFlavor,
+): OrcaWorktreeId {
   const parsed = OrcaWorktreeIdSchema.safeParse(input);
   if (!parsed.success) throw new Error("ORCA_WORKTREE_ID_INVALID");
+  const separator = parsed.data.indexOf("::");
+  if (!isPathForFlavor(parsed.data.slice(separator + 2), pathFlavor)) {
+    throw new Error("ORCA_WORKTREE_ID_INVALID");
+  }
   return parsed.data;
 }
 
 export class OrcaClient {
-  constructor(private readonly runner: JsonCommandRunner) {}
+  readonly #pathFlavor: OrcaPathFlavor;
+
+  constructor(
+    private readonly runner: JsonCommandRunner,
+    options: OrcaClientOptions = {},
+  ) {
+    this.#pathFlavor =
+      options.pathFlavor ?? (process.platform === "win32" ? "windows" : "posix");
+  }
 
   async addRepository(repositoryPath: string): Promise<{ readonly repoId: OrcaRepoId }> {
-    const parsedRepositoryPath = parseRepositoryPath(repositoryPath);
+    const parsedRepositoryPath = parseRepositoryPath(repositoryPath, this.#pathFlavor);
     const result = parseEnvelope(
       AddRepositoryEnvelopeSchema,
       await this.runner.run(["repo", "add", "--path", parsedRepositoryPath, "--json"]),
@@ -191,14 +225,14 @@ export class OrcaClient {
         "--json",
       ]),
     );
-    return splitWorktreeId(result.worktree.id, repoId);
+    return splitWorktreeId(result.worktree.id, repoId, this.#pathFlavor);
   }
 
   async createTerminal(
     worktreeIdInput: OrcaWorktreeId | string,
     executableInput: string,
   ): Promise<{ readonly terminalId: OrcaTerminalId }> {
-    const worktreeId = parseWorktreeId(worktreeIdInput);
+    const worktreeId = parseWorktreeId(worktreeIdInput, this.#pathFlavor);
     const executable = terminalExecutableToken(executableInput);
     const result = parseEnvelope(
       CreateTerminalEnvelopeSchema,

@@ -32,6 +32,10 @@ function success(result: unknown, id = "fixture-request") {
   return { id, ok: true, result };
 }
 
+function windowsClient(runner: JsonCommandRunner): OrcaClient {
+  return new OrcaClient(runner, { pathFlavor: "windows" });
+}
+
 describe("OrcaCommandRunner", () => {
   it("resolves only an executable and runs argv without a shell", async () => {
     const execFile = vi.fn(async () => ({ stdout: JSON.stringify({ ok: true }) }));
@@ -150,7 +154,7 @@ describe("OrcaClient contract fixtures", () => {
     },
   ])("rejects unknown top-level envelope metadata", async (fixture) => {
     const runner = new FixtureRunner([fixture]);
-    const client = new OrcaClient(runner);
+    const client = windowsClient(runner);
 
     await expect(client.addRepository("C:\\fixtures\\hunter")).rejects.toThrow(
       "ORCA_OUTPUT_SCHEMA_MISMATCH",
@@ -163,7 +167,7 @@ describe("OrcaClient contract fixtures", () => {
       success({ repo: { id: "repo-01" } }, "request-repo"),
       success({ worktree: { id: fullWorktreeId }, startupTerminal: null }, "request-worktree"),
     ]);
-    const client = new OrcaClient(runner);
+    const client = windowsClient(runner);
 
     const repository = await client.addRepository("C:\\fixtures\\hunter");
     const worktree = await client.createWorktree(repository.repoId, operationId);
@@ -201,7 +205,7 @@ describe("OrcaClient contract fixtures", () => {
         "request-read",
       ),
     ]);
-    const client = new OrcaClient(runner);
+    const client = windowsClient(runner);
     const terminal = await client.createTerminal(fullWorktreeId, "pwsh.exe");
     const observation = await client.readTerminal(terminal.terminalId, 7, 100);
 
@@ -236,7 +240,7 @@ describe("OrcaClient contract fixtures", () => {
     "rejects non-token terminal command %s before dispatch",
     async (command) => {
       const runner = new FixtureRunner([success({ terminal: { handle: "terminal-01" } })]);
-      const client = new OrcaClient(runner);
+      const client = windowsClient(runner);
 
       await expect(
         client.createTerminal("repo-01::C:\\fixtures\\hunter-worktree", command),
@@ -247,7 +251,7 @@ describe("OrcaClient contract fixtures", () => {
 
   it("rejects unknown private repository result fields", async () => {
     const runner = new FixtureRunner([success({ repo: { id: "repo-01", drift: true } })]);
-    const client = new OrcaClient(runner);
+    const client = windowsClient(runner);
 
     await expect(client.addRepository("C:\\fixtures\\hunter")).rejects.toThrow(
       "ORCA_OUTPUT_SCHEMA_MISMATCH",
@@ -262,7 +266,7 @@ describe("OrcaClient contract fixtures", () => {
     const runner = new FixtureRunner([
       success({ worktree: { id: worktreeId }, startupTerminal: null }),
     ]);
-    const client = new OrcaClient(runner);
+    const client = windowsClient(runner);
 
     await expect(client.createWorktree("repo-01", operationId)).rejects.toThrow(
       "ORCA_OUTPUT_SCHEMA_MISMATCH",
@@ -273,7 +277,7 @@ describe("OrcaClient contract fixtures", () => {
     const runner = new FixtureRunner([
       success({ terminal: { handle: "terminal-01", secret: "not-accepted" } }),
     ]);
-    const client = new OrcaClient(runner);
+    const client = windowsClient(runner);
 
     await expect(
       client.createTerminal("repo-01::C:\\fixtures\\hunter-worktree", "pwsh"),
@@ -282,7 +286,7 @@ describe("OrcaClient contract fixtures", () => {
 
   it("rejects control characters in provider-private identifiers", async () => {
     const runner = new FixtureRunner([success({ repo: { id: "repo\u0000-01" } })]);
-    const client = new OrcaClient(runner);
+    const client = windowsClient(runner);
 
     await expect(client.addRepository("C:\\fixtures\\hunter")).rejects.toThrow(
       "ORCA_OUTPUT_SCHEMA_MISMATCH",
@@ -295,10 +299,11 @@ describe("OrcaClient contract fixtures", () => {
     "\\rooted-current-drive",
     "\\\\server-without-share",
     "\\\\.\\pipe\\hunter",
+    "/rooted-on-current-drive",
     "C:\\fixtures\\hunter\u0000escape",
   ])("rejects unsafe repository path %s before client dispatch", async (repositoryPath) => {
     const runner = new FixtureRunner([success({ repo: { id: "repo-01" } })]);
-    const client = new OrcaClient(runner);
+    const client = windowsClient(runner);
 
     await expect(client.addRepository(repositoryPath)).rejects.toThrow(
       "ORCA_REPOSITORY_PATH_INVALID",
@@ -312,10 +317,9 @@ describe("OrcaClient contract fixtures", () => {
     "\\\\server\\share\\hunter",
     "\\\\?\\C:\\fixtures\\hunter",
     "\\\\?\\UNC\\server\\share\\hunter",
-    "/tmp/hunter",
   ])("accepts a fully-qualified repository path %s", async (repositoryPath) => {
     const runner = new FixtureRunner([success({ repo: { id: "repo-01" } })]);
-    const client = new OrcaClient(runner);
+    const client = windowsClient(runner);
 
     await expect(client.addRepository(repositoryPath)).resolves.toEqual({
       repoId: "repo-01",
@@ -329,6 +333,32 @@ describe("OrcaClient contract fixtures", () => {
     ]);
   });
 
+  it("uses POSIX path semantics when explicitly configured", async () => {
+    const acceptedRunner = new FixtureRunner([success({ repo: { id: "repo-01" } })]);
+    const acceptedClient = new OrcaClient(acceptedRunner, { pathFlavor: "posix" });
+    const rejectedRunner = new FixtureRunner([success({ repo: { id: "repo-01" } })]);
+    const rejectedClient = new OrcaClient(rejectedRunner, { pathFlavor: "posix" });
+
+    await expect(acceptedClient.addRepository("/tmp/hunter")).resolves.toEqual({
+      repoId: "repo-01",
+    });
+    await expect(rejectedClient.addRepository("C:\\fixtures\\hunter")).rejects.toThrow(
+      "ORCA_REPOSITORY_PATH_INVALID",
+    );
+    expect(rejectedRunner.calls).toHaveLength(0);
+  });
+
+  it("validates returned worktree paths with the configured host flavor", async () => {
+    const runner = new FixtureRunner([
+      success({ worktree: { id: "repo-01::/tmp/hunter" }, startupTerminal: null }),
+    ]);
+    const client = windowsClient(runner);
+
+    await expect(client.createWorktree("repo-01", operationId)).rejects.toThrow(
+      "ORCA_OUTPUT_SCHEMA_MISMATCH",
+    );
+  });
+
   it.each([
     { cursor: 7, nextCursor: 9, latestCursor: 8 },
     { cursor: 7, nextCursor: 6, latestCursor: 8 },
@@ -338,7 +368,7 @@ describe("OrcaClient contract fixtures", () => {
       const runner = new FixtureRunner([
         success({ text: "", nextCursor, latestCursor, limited: false }),
       ]);
-      const client = new OrcaClient(runner);
+      const client = windowsClient(runner);
 
       await expect(client.readTerminal("terminal-01", cursor, 100)).rejects.toThrow(
         "ORCA_OUTPUT_SCHEMA_MISMATCH",
@@ -347,15 +377,27 @@ describe("OrcaClient contract fixtures", () => {
   );
 
   it.each([
+    "abcd",
     "repo-01::relative\\worktree",
+    "repo-01::/tmp/hunter",
     "repo-01::C:\\fixtures\\hunter\u0000escape",
   ])("rejects unsafe worktree selector %s before terminal dispatch", async (worktreeId) => {
     const runner = new FixtureRunner([success({ terminal: { handle: "terminal-01" } })]);
-    const client = new OrcaClient(runner);
+    const client = windowsClient(runner);
 
     await expect(client.createTerminal(worktreeId, "pwsh")).rejects.toThrow(
       "ORCA_WORKTREE_ID_INVALID",
     );
+    expect(runner.calls).toHaveLength(0);
+  });
+
+  it("applies POSIX semantics before terminal selector dispatch", async () => {
+    const runner = new FixtureRunner([success({ terminal: { handle: "terminal-01" } })]);
+    const client = new OrcaClient(runner, { pathFlavor: "posix" });
+
+    await expect(
+      client.createTerminal("repo-01::C:\\fixtures\\hunter-worktree", "pwsh"),
+    ).rejects.toThrow("ORCA_WORKTREE_ID_INVALID");
     expect(runner.calls).toHaveLength(0);
   });
 
@@ -368,7 +410,7 @@ describe("OrcaClient contract fixtures", () => {
     const runner = new FixtureRunner([
       success({ text: "", nextCursor: 0, latestCursor: 0, limited: false }),
     ]);
-    const client = new OrcaClient(runner);
+    const client = windowsClient(runner);
 
     await expect(client.readTerminal("terminal-01", cursor, limit)).rejects.toThrow(
       /ORCA_(?:CURSOR|LIMIT)_INVALID/u,
@@ -384,7 +426,7 @@ describe("OrcaWorkspaceProvider candidate boundary", () => {
       success({ repo: { id: "repo-01" } }, "request-repo"),
       success({ worktree: { id: fullWorktreeId }, startupTerminal: null }, "request-worktree"),
     ]);
-    return { provider: new OrcaWorkspaceProvider(new OrcaClient(runner)), runner };
+    return { provider: new OrcaWorkspaceProvider(windowsClient(runner)), runner };
   }
 
   it("returns only an honest contract-only candidate receipt", async () => {
