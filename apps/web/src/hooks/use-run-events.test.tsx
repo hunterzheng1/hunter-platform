@@ -141,6 +141,27 @@ describe("useRunEvents", () => {
     expect(subscriptions[1]?.input).toEqual({ runId: runA, after: 9 });
   });
 
+  it("rejects a gap below the committed cursor without refreshing or moving backward", () => {
+    const { stream, subscriptions } = createStream();
+    const onChange = vi.fn(() => 9);
+    render(<Harness runId={runA} initialPosition={7} stream={stream} onChange={onChange} />);
+
+    act(() => subscriptions[0]?.handlers.onCursorGap({
+      schemaVersion: 1,
+      runId: runA,
+      code: "EVENT_CURSOR_GAP",
+      retentionFloor: 4,
+      highWaterPosition: 5,
+      instructions: { snapshot: "reload_run_snapshot", rebuild: "replace_run_projection_from_snapshot", resume: "subscribe_after_high_water_position" },
+    }));
+
+    expect(screen.getByText("invalid_event")).not.toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem(`hunter-run-event:${runA}`)).toBe("7");
+    expect(subscriptions).toHaveLength(1);
+    expect(subscriptions[0]?.cleanup).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects a lagging ordinary-event snapshot and retries without advancing the cursor", async () => {
     const { stream, subscriptions } = createStream();
     const onChange = vi.fn()

@@ -93,27 +93,36 @@ export function useRunEvents(
       setConnection(next);
     };
 
-    const beginGapRecovery = (
-      signal: import("@hunter/api-contracts").RunEventGapHttp,
-      expectedGeneration: number,
-    ) => {
+    const beginSnapshotRecovery = ({
+      requiredPosition,
+      expectedGeneration,
+      pendingStatus,
+      errorStatus,
+      retry,
+    }: {
+      readonly requiredPosition: number;
+      readonly expectedGeneration: number;
+      readonly pendingStatus: "resyncing" | "refreshing";
+      readonly errorStatus: "gap_error" | "refresh_error";
+      readonly retry: (generation: number) => void;
+    }) => {
       if (!active || generation !== expectedGeneration) return;
       generation += 1;
       const recoveryGeneration = generation;
       clearReconnectTimer();
       stopCurrentSubscription();
-      setConnection({ status: "resyncing" });
-      let reload: number | Promise<number>;
+      setConnection({ status: pendingStatus });
+      let snapshot: number | Promise<number>;
       try {
-        reload = onChange();
+        snapshot = onChange();
       } catch (caught) {
-        reload = Promise.reject(caught);
+        snapshot = Promise.reject(caught);
       }
-      void Promise.resolve(reload)
+      void Promise.resolve(snapshot)
         .then((snapshotPosition) => {
           if (!active || generation !== recoveryGeneration) return;
-          if (!Number.isSafeInteger(snapshotPosition) || snapshotPosition < signal.highWaterPosition) {
-            throw new Error("RUN_SNAPSHOT_BEHIND_EVENT_GAP");
+          if (!Number.isSafeInteger(snapshotPosition) || snapshotPosition < requiredPosition) {
+            throw new Error("RUN_SNAPSHOT_BEHIND_REQUIRED_POSITION");
           }
           cursor = snapshotPosition;
           writeCursor(runId, cursor);
@@ -121,43 +130,34 @@ export function useRunEvents(
         })
         .catch(() => {
           if (!active || generation !== recoveryGeneration) return;
-          setConnection({
-            status: "gap_error",
-            retry: () => beginGapRecovery(signal, recoveryGeneration),
-          });
+          const retryRecovery = () => retry(recoveryGeneration);
+          setConnection(errorStatus === "gap_error"
+            ? { status: "gap_error", retry: retryRecovery }
+            : { status: "refresh_error", retry: retryRecovery });
         });
     };
 
+    const beginGapRecovery = (
+      signal: import("@hunter/api-contracts").RunEventGapHttp,
+      expectedGeneration: number,
+    ) => {
+      beginSnapshotRecovery({
+        requiredPosition: Math.max(signal.highWaterPosition, cursor),
+        expectedGeneration,
+        pendingStatus: "resyncing",
+        errorStatus: "gap_error",
+        retry: (nextGeneration) => beginGapRecovery(signal, nextGeneration),
+      });
+    };
+
     const beginEventRefresh = (requiredPosition: number, expectedGeneration: number) => {
-      if (!active || generation !== expectedGeneration) return;
-      generation += 1;
-      const refreshGeneration = generation;
-      clearReconnectTimer();
-      stopCurrentSubscription();
-      setConnection({ status: "refreshing" });
-      let refresh: number | Promise<number>;
-      try {
-        refresh = onChange();
-      } catch (caught) {
-        refresh = Promise.reject(caught);
-      }
-      void Promise.resolve(refresh)
-        .then((snapshotPosition) => {
-          if (!active || generation !== refreshGeneration) return;
-          if (!Number.isSafeInteger(snapshotPosition) || snapshotPosition < requiredPosition) {
-            throw new Error("RUN_SNAPSHOT_BEHIND_EVENT");
-          }
-          cursor = snapshotPosition;
-          writeCursor(runId, cursor);
-          connect();
-        })
-        .catch(() => {
-          if (!active || generation !== refreshGeneration) return;
-          setConnection({
-            status: "refresh_error",
-            retry: () => beginEventRefresh(requiredPosition, refreshGeneration),
-          });
-        });
+      beginSnapshotRecovery({
+        requiredPosition,
+        expectedGeneration,
+        pendingStatus: "refreshing",
+        errorStatus: "refresh_error",
+        retry: (nextGeneration) => beginEventRefresh(requiredPosition, nextGeneration),
+      });
     };
 
     const connect = () => {
@@ -197,6 +197,10 @@ export function useRunEvents(
             if (!active || generation !== token) return;
             const parsed = RunEventGapHttpSchema.safeParse(value);
             if (!parsed.success || parsed.data.runId !== runId) {
+              terminate(token, { status: "invalid_event" });
+              return;
+            }
+            if (parsed.data.highWaterPosition < cursor) {
               terminate(token, { status: "invalid_event" });
               return;
             }

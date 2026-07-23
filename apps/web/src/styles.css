@@ -114,6 +114,7 @@ textarea { resize: vertical; }
 .attempt-card { padding: 16px; background: var(--canvas); border: 1px solid var(--subtle-border); border-left: 4px solid var(--strong-border); border-radius: 6px; }
 .attempt-card h3 { margin: 0 0 8px; font-size: 16px; }
 .attempt-card p { margin: 6px 0; }
+.attempt-card code { overflow-wrap: anywhere; word-break: break-word; }
 
 @media (prefers-color-scheme: dark) {
   :root {
