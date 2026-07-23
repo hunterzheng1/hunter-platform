@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { AttemptIdSchema, DeviceBindingIdSchema, OperationIdSchema, ProjectIdSchema, RepositoryIdSchema, RunIdSchema, WorkspaceIdSchema } from "@hunter/domain";
@@ -491,16 +492,19 @@ describe("OrcaClient contract fixtures", () => {
 });
 
 describe("OrcaWorkspaceProvider candidate boundary", () => {
-  function fixtureProvider(repositoryPath = "C:\\fixtures\\hunter") {
+  const fixtureRoot = resolve("fixtures", "orca-provider");
+  const defaultRepositoryPath = join(fixtureRoot, "hunter");
+  const defaultWorktreePath = `${defaultRepositoryPath}-worktree`;
+
+  function fixtureProvider(repositoryPath = defaultRepositoryPath) {
     const fullWorktreeId = `repo-01::${repositoryPath}-worktree`;
     const runner = new FixtureRunner([
       success({ repo: { id: "repo-01" } }, "request-repo"),
       success({ worktree: { id: fullWorktreeId }, startupTerminal: null }, "request-worktree"),
     ]);
     const boundary = createWorkspacePathBoundary(
-      new Map([[repositoryId, "C:\\fixtures"]]),
+      new Map([[repositoryId, fixtureRoot]]),
       {
-        platform: "win32",
         realpathNative: (candidate) => candidate,
       },
     );
@@ -589,10 +593,9 @@ describe("OrcaWorkspaceProvider candidate boundary", () => {
       operationStatus: "completed",
       evidence: { proofScope: "contract_only" },
       workspaceResult: {
-        workspaceRef:
-          "repo-01::C:\\fixtures\\hunter-worktree",
+        workspaceRef: `repo-01::${defaultWorktreePath}`,
         worktreeId: expect.stringMatching(/^wtr_[a-f0-9]{24}$/u),
-        reportedWorkspacePath: "C:\\fixtures\\hunter-worktree",
+        reportedWorkspacePath: defaultWorktreePath,
       },
     });
     expect(receipt).not.toHaveProperty("privateWorkspace");
@@ -653,7 +656,7 @@ describe("OrcaWorkspaceProvider candidate boundary", () => {
       success({ repo: { id: "repo-01" } }, "request-repo"),
       success(
         {
-          worktree: { id: "repo-01::C:\\fixtures\\hunter-worktree" },
+          worktree: { id: `repo-01::${defaultWorktreePath}` },
           startupTerminal: { handle: "terminal\u0000-invalid" },
         },
         "request-worktree",
@@ -662,14 +665,13 @@ describe("OrcaWorkspaceProvider candidate boundary", () => {
     const provider = new OrcaWorkspaceProvider(
       windowsClient(runner),
       createWorkspacePathBoundary(
-        new Map([[repositoryId, "C:\\fixtures"]]),
+        new Map([[repositoryId, fixtureRoot]]),
         {
-          platform: "win32",
           realpathNative: (candidate) => candidate,
         },
       ),
       {
-        repositoryPathFor: () => "C:\\fixtures\\hunter",
+        repositoryPathFor: () => defaultRepositoryPath,
         observedAt: () => "2026-07-23T00:00:00.000Z",
       },
     );
@@ -679,7 +681,7 @@ describe("OrcaWorkspaceProvider candidate boundary", () => {
     ).rejects.toThrow("ORCA_OUTPUT_SCHEMA_MISMATCH");
   });
 
-  it.each(["relative\\repository", "C:\\fixtures\\hunter\u0000escape"])(
+  it.each(["relative/repository", `${defaultRepositoryPath}\u0000escape`])(
     "rejects unsafe repository path %s before any candidate dispatch",
     async (repositoryPath) => {
       const { provider, runner } = fixtureProvider(repositoryPath);
@@ -694,7 +696,7 @@ describe("OrcaWorkspaceProvider candidate boundary", () => {
   it("derives deterministic fingerprints and argv without claiming replay safety", async () => {
     const first = fixtureProvider();
     const second = fixtureProvider();
-    const changed = fixtureProvider("C:\\fixtures\\other");
+    const changed = fixtureProvider(join(fixtureRoot, "other"));
 
     const firstReceipt = await first.provider.execute(prepareOperation());
     const secondReceipt = await second.provider.execute(prepareOperation());
@@ -715,7 +717,7 @@ describe("OrcaWorkspaceProvider candidate boundary", () => {
       success(
         {
           worktree: {
-            id: "repo-01::C:\\provider-alias\\escaped-worktree",
+            id: `repo-01::${join(fixtureRoot, "provider-alias", "escaped-worktree")}`,
           },
           startupTerminal: null,
         },
@@ -723,12 +725,11 @@ describe("OrcaWorkspaceProvider candidate boundary", () => {
       ),
     ]);
     const boundary = createWorkspacePathBoundary(
-      new Map([[repositoryId, "C:\\fixtures"]]),
+      new Map([[repositoryId, fixtureRoot]]),
       {
-        platform: "win32",
         realpathNative: (candidate) =>
           candidate.includes("provider-alias")
-            ? "C:\\outside\\escaped-worktree"
+            ? resolve(fixtureRoot, "..", "outside", "escaped-worktree")
             : candidate,
       },
     );
@@ -736,7 +737,7 @@ describe("OrcaWorkspaceProvider candidate boundary", () => {
       windowsClient(runner),
       boundary,
       {
-        repositoryPathFor: () => "C:\\fixtures\\hunter",
+        repositoryPathFor: () => defaultRepositoryPath,
         observedAt: () => "2026-07-23T00:00:00.000Z",
       },
     );

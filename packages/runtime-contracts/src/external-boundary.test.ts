@@ -233,7 +233,9 @@ describe("shared external trust boundary", () => {
     const boundary = createWorkspacePathBoundary(
       new Map([[repositoryId, registeredRoot]]),
     );
-    expect(boundary.verify(repositoryId, workspace)).toBe(workspace);
+    expect(boundary.verify(repositoryId, workspace)).toBe(
+      realpathSync.native(workspace),
+    );
     expect(() => boundary.verify(repositoryId, escape)).toThrow(
       expect.objectContaining<Partial<ExternalBoundaryError>>({
         code: "PATH_SCOPE_VIOLATION",
