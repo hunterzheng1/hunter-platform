@@ -6,10 +6,14 @@ import {
   ProjectDetailHttpResponseSchema,
   ProjectIdParamsSchema,
   ProjectListHttpResponseSchema,
+  PublishChangeHttpRequestSchema,
+  PublishChangeHttpResponseSchema,
   RequirementRevisionHttpResponseSchema,
   RequirementRevisionParamsSchema,
   type ProjectDetailHttpResponse,
   type ProjectListHttpResponse,
+  type PublishChangeHttpRequest,
+  type PublishChangeHttpResponse,
   type CreateProjectHttpResponse,
   type RequirementRevisionHttpResponse,
 } from "@hunter/api-contracts";
@@ -54,6 +58,8 @@ export interface CreateRequirementDraftInput {
   readonly acceptanceCriteria: readonly string[];
   readonly constraints: readonly string[];
 }
+
+export type PublishChangeDraftInput = Omit<PublishChangeHttpRequest, "expectedVersion" | "idempotencyKey">;
 
 export class HunterApi {
   private readonly pendingCommands = new Map<string, PendingCommandEnvelope>();
@@ -141,6 +147,37 @@ export class HunterApi {
         );
       },
       (response) => RequirementRevisionHttpResponseSchema.parse(response),
+    );
+  }
+
+  public async publishChange(
+    projectId: string,
+    input: PublishChangeDraftInput,
+  ): Promise<PublishChangeHttpResponse> {
+    const params = ProjectIdParamsSchema.parse({ projectId });
+    const logicalKey = `publish-change:${JSON.stringify([params.projectId, input])}`;
+    return this.sendPending(
+      logicalKey,
+      () => {
+        const command = PublishChangeHttpRequestSchema.parse({
+          ...input,
+          expectedVersion: 0,
+          idempotencyKey: this.ids.idempotencyKey("publish-change"),
+        });
+        return this.jsonCommand(`/api/v1/projects/${params.projectId}/changes`, command);
+      },
+      (response) => {
+        const published = PublishChangeHttpResponseSchema.parse(response);
+        if (
+          published.projectId !== params.projectId
+          || published.changeId !== input.changeId
+          || published.changeRevisionId !== input.changeRevisionId
+          || published.executionPlanId !== input.executionPlanId
+        ) {
+          throw new Error("PUBLISH_CHANGE_RESPONSE_SCOPE_MISMATCH");
+        }
+        return published;
+      },
     );
   }
 

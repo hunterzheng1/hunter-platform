@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { HunterApi } from "../api/client.js";
+import { ChangePlanner } from "../components/change-planner.js";
 import { RequirementEditor } from "../components/requirement-editor.js";
 
-type ProjectApi = Pick<HunterApi, "getProject" | "createRequirement" | "approveRequirement">;
+type ProjectApi = Pick<HunterApi, "getProject" | "createRequirement" | "approveRequirement">
+  & Partial<Pick<HunterApi, "publishChange">>;
 type ProjectView = Awaited<ReturnType<ProjectApi["getProject"]>>;
 type RequirementView = ProjectView["requirements"][number];
 type RequirementStatus = RequirementView["status"];
@@ -72,6 +74,10 @@ export function ProjectPage({
 
   if (loading || (project !== undefined && project.projectId !== projectId)) return <main className="page-shell"><p role="status">正在加载项目…</p></main>;
   if (project === undefined) return <main className="page-shell"><p role="alert" className="message error-message">{error ?? "项目不存在"}</p></main>;
+  const approvedRequirementRevisionIds = project.requirements
+    .filter((revision) => revision.status === "approved")
+    .map((revision) => revision.revisionId);
+  const publishChange = api.publishChange?.bind(api);
 
   return (
     <main className="page-shell" aria-busy={busyRevisionId !== undefined}>
@@ -138,6 +144,19 @@ export function ProjectPage({
           </div>
         </section>
       </div>
+      <section className="planning-section" aria-label="Change 规划">
+        {approvedRequirementRevisionIds.length === 0 ? (
+          <div className="empty-state"><strong>暂无可规划的已批准需求</strong><p>未批准版本不会进入 Change。批准至少一个需求版本后可继续。</p></div>
+        ) : project.planningDefaults === undefined || publishChange === undefined ? (
+          <p role="status" className="message notice-message">执行规划上下文尚未配置。请由受信任的 Hunter 宿主提供仓库、工作流与 Agent Profile 的领域 ID。</p>
+        ) : (
+          <ChangePlanner
+            requirementRevisionIds={approvedRequirementRevisionIds}
+            planningDefaults={project.planningDefaults}
+            onPublish={(input) => publishChange(projectId, input)}
+          />
+        )}
+      </section>
     </main>
   );
 }

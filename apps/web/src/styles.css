@@ -87,6 +87,15 @@ textarea { resize: vertical; }
 .status-superseded { color: var(--muted-text); background: var(--selected-surface); border-color: var(--strong-border); }
 .status-withdrawn { color: var(--error-text); background: var(--error-surface); border-color: var(--error-border); }
 .immutable-note { padding: 10px 12px; color: var(--approved-text); background: var(--selected-surface); border-left: 3px solid var(--focus); font-weight: 650; }
+.planning-section { margin-top: 24px; }
+.planner-panel { display: grid; gap: 16px; }
+.planner-panel .section-heading { margin-bottom: 0; }
+.compact-empty { padding: 20px; }
+.task-graph { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.task-node { padding: 16px; background: var(--canvas); border: 1px solid var(--subtle-border); border-left: 4px solid var(--focus); border-radius: 6px; }
+.task-node > div { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.task-node p { margin: 8px 0 0; }
+.dependency-label { color: var(--muted-text); font-size: 13px; font-weight: 650; }
 
 @media (prefers-color-scheme: dark) {
   :root {
@@ -120,6 +129,8 @@ textarea { resize: vertical; }
   .inline-form { grid-template-columns: 1fr; }
   .project-row { flex-direction: column; }
   .project-row .button { width: 100%; }
+  .planner-panel .button { width: 100%; }
+  .task-node > div { align-items: flex-start; }
 }
 
 @media (prefers-reduced-motion: no-preference) {

@@ -1,6 +1,7 @@
 import type {
   CreateProjectHttpResponse,
   ProjectDetailHttpResponse,
+  PublishChangeHttpResponse,
   RequirementRevisionHttpResponse,
 } from "@hunter/api-contracts";
 import {
@@ -8,12 +9,14 @@ import {
   ProjectIdSchema,
   RequirementIdSchema,
   RequirementRevisionIdSchema,
+  validateTaskGraph,
 } from "@hunter/domain";
 import { vi } from "vitest";
 
 import { LocalAuthenticator } from "../../src/auth/local-authenticator.js";
 import { buildApp } from "../../src/app.js";
 import type { ProjectRoutesServices } from "../../src/routes/projects.js";
+import type { ChangeRoutesServices } from "../../src/routes/changes.js";
 import type { RequirementRoutesServices } from "../../src/routes/requirements.js";
 import type { RunRoutesServices } from "../../src/routes/runs.js";
 
@@ -27,10 +30,12 @@ const requirementId = RequirementIdSchema.parse("req_task2000001");
 const revisionId = RequirementRevisionIdSchema.parse("rrv_task2000001");
 
 type TestServices = ProjectRoutesServices & RunRoutesServices & {
+  readonly changes: ChangeRoutesServices;
   readonly requirements: RequirementRoutesServices;
 };
 
 type TestServiceOverrides = Partial<ProjectRoutesServices & RunRoutesServices> & {
+  readonly changes?: Readonly<Partial<ChangeRoutesServices>>;
   readonly requirements?: Readonly<Partial<RequirementRoutesServices>>;
 };
 
@@ -42,7 +47,7 @@ export function buildTestApp(overrides: Readonly<TestServiceOverrides> = {}) {
     expiresAt: new Date(Date.now() + 60_000),
     csrf,
   });
-  const { requirements: requirementOverrides, ...rootOverrides } = overrides;
+  const { changes: changeOverrides, requirements: requirementOverrides, ...rootOverrides } = overrides;
   const services: TestServices = {
     listProjects: vi.fn(async () => []),
     createProject: vi.fn(async (): Promise<CreateProjectHttpResponse> => ({
@@ -51,6 +56,22 @@ export function buildTestApp(overrides: Readonly<TestServiceOverrides> = {}) {
       authorization: "host_session_reissue_required",
     })),
     getProject: vi.fn(async (): Promise<ProjectDetailHttpResponse | null> => null),
+    changes: {
+      getRequirementRevision: vi.fn((candidateRevisionId) => ({
+        projectId: projectA,
+        revisionId: candidateRevisionId,
+        status: "approved" as const,
+      })),
+      publishChange: vi.fn(async (projectId, command): Promise<PublishChangeHttpResponse> => ({
+        projectId,
+        changeId: command.changeId,
+        changeRevisionId: command.changeRevisionId,
+        executionPlanId: command.executionPlanId,
+        status: "published",
+        taskGraphFingerprint: validateTaskGraph(command.tasks).taskGraphFingerprint,
+      })),
+      ...changeOverrides,
+    },
     requirements: {
       createRequirement: vi.fn(async (): Promise<RequirementRevisionHttpResponse> => ({
         projectId: projectA,

@@ -1,8 +1,16 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ProjectIdSchema, RequirementIdSchema, RequirementRevisionIdSchema } from "@hunter/domain";
+import {
+  AgentProfileIdSchema,
+  ProjectIdSchema,
+  RepositoryIdSchema,
+  RequirementIdSchema,
+  RequirementRevisionIdSchema,
+  WorkflowRevisionIdSchema,
+} from "@hunter/domain";
 
+import type { PublishChangeDraftInput } from "../api/client.js";
 import { ProjectPage } from "./project-page.js";
 
 const projectId = ProjectIdSchema.parse("prj_task2000001");
@@ -187,5 +195,68 @@ describe("ProjectPage", () => {
     approvalA.reject(new Error("late failure"));
     await Promise.resolve();
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("plans only approved revisions with host-provided provider-neutral defaults", async () => {
+    const approvedRevisionId = RequirementRevisionIdSchema.parse("rrv_task3000001");
+    const publishChange = vi.fn(async function (this: { readonly owner: string }, _projectId: string, input: PublishChangeDraftInput) {
+      if (this.owner !== "trusted-host") throw new Error("PUBLISH_CHANGE_RECEIVER_LOST");
+      return {
+      projectId,
+      changeId: input.changeId,
+      changeRevisionId: input.changeRevisionId,
+      executionPlanId: input.executionPlanId,
+      status: "published" as const,
+      taskGraphFingerprint: "a".repeat(64),
+      };
+    });
+    const api = {
+      owner: "trusted-host",
+      getProject: vi.fn(async () => ({
+        projectId,
+        name: "Hunter",
+        requirements: [
+          draft,
+          { ...draft, revisionId: approvedRevisionId, status: "approved" as const, approvedAt: "2026-07-23T01:00:00.000Z" },
+        ],
+        planningDefaults: {
+          repositoryIds: [RepositoryIdSchema.parse("rep_task3000001")],
+          workflowRevisionId: WorkflowRevisionIdSchema.parse("wfr_task3000001"),
+          defaultAgentProfileId: AgentProfileIdSchema.parse("apr_task3000001"),
+          sessionPolicy: "new" as const,
+          workspacePolicy: { mode: "write" as const, isolation: "worktree" as const, reuse: false },
+        },
+      })),
+      createRequirement: vi.fn(),
+      approveRequirement: vi.fn(),
+      publishChange,
+    };
+    render(<ProjectPage projectId={projectId} api={api} onBack={vi.fn()} />);
+
+    await screen.findByRole("heading", { name: "执行规划" });
+    fireEvent.click(screen.getByRole("button", { name: "使用并行交付模板" }));
+    fireEvent.click(screen.getByRole("button", { name: "确认执行计划" }));
+    await waitFor(() => expect(publishChange).toHaveBeenCalledOnce());
+    expect(await screen.findByText(/执行计划已发布/u)).not.toBeNull();
+    expect(publishChange.mock.calls[0]?.[0]).toBe(projectId);
+    expect(publishChange.mock.calls[0]?.[1].requirementRevisionIds).toEqual([approvedRevisionId]);
+    expect(publishChange.mock.calls[0]?.[1].requirementRevisionIds).not.toContain(revisionId);
+  });
+
+  it("fails closed with an explicit prompt when planning defaults are unavailable", async () => {
+    const api = {
+      getProject: vi.fn(async () => ({
+        projectId,
+        name: "Hunter",
+        requirements: [{ ...draft, status: "approved" as const, approvedAt: "2026-07-23T01:00:00.000Z" }],
+      })),
+      createRequirement: vi.fn(),
+      approveRequirement: vi.fn(),
+      publishChange: vi.fn(),
+    };
+    render(<ProjectPage projectId={projectId} api={api} onBack={vi.fn()} />);
+
+    expect((await screen.findByText(/执行规划上下文尚未配置/u)).textContent).toContain("执行规划上下文尚未配置");
+    expect(screen.queryByRole("button", { name: "使用并行交付模板" })).toBeNull();
   });
 });

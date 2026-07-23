@@ -3,8 +3,19 @@ import {
   CreateProjectHttpRequestSchema,
   CreateRequirementHttpRequestSchema,
   ApproveRequirementHttpRequestSchema,
+  PublishChangeHttpRequestSchema,
 } from "@hunter/api-contracts";
-import { ProjectIdSchema, RequirementRevisionIdSchema } from "@hunter/domain/ids";
+import {
+  AgentProfileIdSchema,
+  ChangeIdSchema,
+  ChangeRevisionIdSchema,
+  ExecutionPlanIdSchema,
+  ProjectIdSchema,
+  RepositoryIdSchema,
+  RequirementRevisionIdSchema,
+  TaskIdSchema,
+  WorkflowRevisionIdSchema,
+} from "@hunter/domain/ids";
 
 import { AuthenticatedHunterTransportSchema, HunterApi } from "./client.js";
 
@@ -116,5 +127,87 @@ describe("HunterApi", () => {
     expect(generatedProjectIds).toBe(32);
     expect(bodies).toHaveLength(33);
     expect(bodies[32]).toBe(firstBody);
+  });
+
+  it("reuses the exact Change IDs and idempotency key after an ambiguous result, then rejects a mismatched response", async () => {
+    const projectId = ProjectIdSchema.parse("prj_task3000001");
+    const changeId = ChangeIdSchema.parse("chg_task3000001");
+    const changeRevisionId = ChangeRevisionIdSchema.parse("crv_task3000001");
+    const executionPlanId = ExecutionPlanIdSchema.parse("epl_task3000001");
+    const requirementRevisionId = RequirementRevisionIdSchema.parse("rrv_task3000001");
+    const repositoryId = RepositoryIdSchema.parse("rep_task3000001");
+    const workflowRevisionId = WorkflowRevisionIdSchema.parse("wfr_task3000001");
+    const defaultAgentProfileId = AgentProfileIdSchema.parse("apr_task3000001");
+    const taskId = TaskIdSchema.parse("tsk_task300api1");
+    const bodies: string[] = [];
+    let attempts = 0;
+    const api = new HunterApi(
+      {
+        request: async (_path, init) => {
+          if (typeof init?.body !== "string") throw new Error("REQUEST_BODY_MISSING");
+          bodies.push(init.body);
+          attempts += 1;
+          if (attempts <= 2) throw new Error("response lost");
+          return {
+            projectId,
+            changeId: ChangeIdSchema.parse("chg_task3000002"),
+            changeRevisionId,
+            executionPlanId,
+            status: "published",
+            taskGraphFingerprint: "a".repeat(64),
+          };
+        },
+      },
+      {
+        projectId: () => "prj_unused00001",
+        requirementId: () => "req_unused00001",
+        requirementRevisionId: () => "rrv_unused00001",
+        idempotencyKey: () => "publish-change-stable-key",
+      },
+    );
+    const draft = {
+      changeId,
+      changeRevisionId,
+      executionPlanId,
+      title: "并行交付",
+      goal: "完成计划",
+      nonGoals: [],
+      requirementRevisionIds: [requirementRevisionId],
+      repositoryIds: [repositoryId],
+      acceptanceCriteria: ["集成通过"],
+      constraints: [],
+      risks: [],
+      dependsOnChangeRevisionIds: [],
+      tasks: [{
+        taskId,
+        title: "控制 API",
+        objective: "交付接口",
+        acceptanceCriteria: ["接口测试通过"],
+        repositoryIds: [repositoryId],
+        moduleScopes: ["control-api"],
+        dependsOn: [],
+        readSet: ["control-contract"],
+        writeSet: ["control-api"],
+        access: "write" as const,
+        workflowRevisionId,
+        defaultAgentProfileId,
+        sessionPolicy: "new" as const,
+        workspacePolicy: { mode: "write" as const, isolation: "worktree" as const, reuse: false },
+      }],
+    };
+
+    await expect(api.publishChange(projectId, draft)).rejects.toThrow("response lost");
+    await expect(api.publishChange(projectId, draft)).rejects.toThrow("response lost");
+    await expect(api.publishChange(projectId, draft)).rejects.toThrow("PUBLISH_CHANGE_RESPONSE_SCOPE_MISMATCH");
+
+    expect(bodies[1]).toBe(bodies[0]);
+    expect(bodies[2]).toBe(bodies[0]);
+    expect(PublishChangeHttpRequestSchema.parse(JSON.parse(bodies[0]!))).toMatchObject({
+      changeId,
+      changeRevisionId,
+      executionPlanId,
+      expectedVersion: 0,
+      idempotencyKey: "publish-change-stable-key",
+    });
   });
 });

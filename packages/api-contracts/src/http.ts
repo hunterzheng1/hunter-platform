@@ -1,9 +1,14 @@
 import {
+  AgentProfileIdSchema,
+  ChangeIdSchema,
+  ChangeRevisionIdSchema,
   ExecutionPlanIdSchema,
   ProjectIdSchema,
+  RepositoryIdSchema,
   RequirementIdSchema,
   RequirementRevisionIdSchema,
   RunIdSchema,
+  TaskIdSchema,
   WorkflowRevisionIdSchema,
 } from "@hunter/domain/ids";
 import { z } from "zod";
@@ -41,6 +46,80 @@ function requirementListSchema(minimumItems: number) {
 
 const AcceptanceCriteriaSchema = requirementListSchema(1);
 const RequirementConstraintsSchema = requirementListSchema(0);
+
+const ChangeTitleSchema = z.string().trim().min(1).max(200);
+const ChangeGoalSchema = z.string().trim().min(1).max(4_000);
+const ChangeItemsSchema = requirementListSchema(0);
+const ChangeAcceptanceCriteriaSchema = requirementListSchema(1);
+
+export const SessionPolicyHttpSchema = z.enum(["reuse", "resume_if_supported", "new", "manual"]);
+export const WorkspacePolicyHttpSchema = z.strictObject({
+  mode: z.enum(["read", "write"]),
+  isolation: z.enum(["shared_snapshot", "worktree", "single_writer"]),
+  reuse: z.boolean(),
+});
+export const TaskDefinitionHttpSchema = z.strictObject({
+  taskId: TaskIdSchema,
+  title: z.string().trim().min(1).max(200),
+  objective: z.string().trim().min(1).max(4_000),
+  acceptanceCriteria: ChangeAcceptanceCriteriaSchema,
+  repositoryIds: z.array(RepositoryIdSchema).min(1).max(50),
+  moduleScopes: requirementListSchema(1),
+  dependsOn: z.array(TaskIdSchema).max(100),
+  readSet: requirementListSchema(0),
+  writeSet: requirementListSchema(0),
+  access: z.enum(["read", "write"]),
+  workflowRevisionId: WorkflowRevisionIdSchema,
+  defaultAgentProfileId: AgentProfileIdSchema,
+  sessionPolicy: SessionPolicyHttpSchema,
+  workspacePolicy: WorkspacePolicyHttpSchema,
+});
+export type TaskDefinitionHttp = z.infer<typeof TaskDefinitionHttpSchema>;
+
+export const ChangePlanningDefaultsHttpSchema = z.strictObject({
+  repositoryIds: z.array(RepositoryIdSchema).min(1).max(50),
+  workflowRevisionId: WorkflowRevisionIdSchema,
+  defaultAgentProfileId: AgentProfileIdSchema,
+  sessionPolicy: SessionPolicyHttpSchema,
+  workspacePolicy: WorkspacePolicyHttpSchema,
+}).superRefine((defaults, context) => {
+  if (new Set(defaults.repositoryIds).size !== defaults.repositoryIds.length) {
+    context.addIssue({ code: "custom", path: ["repositoryIds"], message: "repositoryIds must be unique" });
+  }
+  if (defaults.workspacePolicy.mode !== "write") {
+    context.addIssue({ code: "custom", path: ["workspacePolicy", "mode"], message: "write planning requires write workspace access" });
+  }
+});
+export type ChangePlanningDefaultsHttp = z.infer<typeof ChangePlanningDefaultsHttpSchema>;
+
+export const PublishChangeHttpRequestSchema = z.strictObject({
+  changeId: ChangeIdSchema,
+  changeRevisionId: ChangeRevisionIdSchema,
+  executionPlanId: ExecutionPlanIdSchema,
+  title: ChangeTitleSchema,
+  goal: ChangeGoalSchema,
+  nonGoals: ChangeItemsSchema,
+  requirementRevisionIds: z.array(RequirementRevisionIdSchema).min(1).max(50),
+  repositoryIds: z.array(RepositoryIdSchema).min(1).max(50),
+  acceptanceCriteria: ChangeAcceptanceCriteriaSchema,
+  constraints: ChangeItemsSchema,
+  risks: ChangeItemsSchema,
+  dependsOnChangeRevisionIds: z.array(ChangeRevisionIdSchema).max(50),
+  tasks: z.array(TaskDefinitionHttpSchema).min(1).max(100),
+  expectedVersion: CommandMetadataSchema.shape.expectedVersion,
+  idempotencyKey: CommandMetadataSchema.shape.idempotencyKey,
+});
+export type PublishChangeHttpRequest = z.infer<typeof PublishChangeHttpRequestSchema>;
+
+export const PublishChangeHttpResponseSchema = z.strictObject({
+  projectId: ProjectIdSchema,
+  changeId: ChangeIdSchema,
+  changeRevisionId: ChangeRevisionIdSchema,
+  executionPlanId: ExecutionPlanIdSchema,
+  status: z.literal("published"),
+  taskGraphFingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
+});
+export type PublishChangeHttpResponse = z.infer<typeof PublishChangeHttpResponseSchema>;
 
 export const ProjectIdParamsSchema = z.strictObject({ projectId: ProjectIdSchema });
 export const RequirementRevisionParamsSchema = z.strictObject({
@@ -121,5 +200,6 @@ export type ProjectListHttpResponse = z.infer<typeof ProjectListHttpResponseSche
 
 export const ProjectDetailHttpResponseSchema = ProjectSummaryHttpResponseSchema.extend({
   requirements: z.array(RequirementRevisionHttpResponseSchema),
+  planningDefaults: ChangePlanningDefaultsHttpSchema.optional(),
 }).strict();
 export type ProjectDetailHttpResponse = z.infer<typeof ProjectDetailHttpResponseSchema>;

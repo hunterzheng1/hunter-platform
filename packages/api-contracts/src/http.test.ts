@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { TaskDefinitionSchema } from "@hunter/domain";
 
 import {
   ApproveRequirementHttpRequestSchema,
@@ -7,6 +8,8 @@ import {
   CreateRequirementHttpRequestSchema,
   ProjectDetailHttpResponseSchema,
   ProjectIdParamsSchema,
+  PublishChangeHttpRequestSchema,
+  PublishChangeHttpResponseSchema,
   RequirementRevisionHttpResponseSchema,
   RequirementRevisionParamsSchema,
   StartRunHttpRequestSchema,
@@ -89,5 +92,63 @@ describe("Workbench HTTP schemas", () => {
     expect(ProjectDetailHttpResponseSchema.parse({ projectId, name: "Hunter", requirements: [revision] })).toMatchObject({ projectId, name: "Hunter" });
     expect(() => ProjectDetailHttpResponseSchema.parse({ projectId, name: "Hunter", requirements: [], extra: true })).toThrow();
     expect(CreateProjectHttpResponseSchema.parse({ projectId, name: "Hunter", authorization: "host_session_reissue_required" })).toMatchObject({ projectId });
+  });
+
+  it("owns the complete provider-neutral Change planning request and response", () => {
+    const request = {
+      changeId: "chg_task3000001",
+      changeRevisionId: "crv_task3000001",
+      executionPlanId: "epl_task3000001",
+      title: "并行交付",
+      goal: "并行完成实现后集成",
+      nonGoals: ["不接入真实 Provider"],
+      requirementRevisionIds: ["rrv_task3000001"],
+      repositoryIds: ["rep_task3000001"],
+      acceptanceCriteria: ["集成测试通过"],
+      constraints: ["provider-neutral"],
+      risks: ["集成冲突"],
+      dependsOnChangeRevisionIds: [],
+      tasks: [{
+        taskId: "tsk_task300api1",
+        title: "控制 API",
+        objective: "交付控制接口",
+        acceptanceCriteria: ["接口测试通过"],
+        repositoryIds: ["rep_task3000001"],
+        moduleScopes: ["control-api"],
+        dependsOn: [],
+        readSet: ["control-contract"],
+        writeSet: ["control-api"],
+        access: "write",
+        workflowRevisionId: "wfr_task3000001",
+        defaultAgentProfileId: "apr_task3000001",
+        sessionPolicy: "new",
+        workspacePolicy: { mode: "write", isolation: "worktree", reuse: false },
+      }],
+      expectedVersion: 0,
+      idempotencyKey: "publish-change-task3",
+    };
+    const parsed = PublishChangeHttpRequestSchema.parse(request);
+    expect(parsed).toMatchObject({
+      changeId: request.changeId,
+      tasks: [expect.objectContaining({ objective: "交付控制接口", access: "write" })],
+    });
+    expect(TaskDefinitionSchema.parse(parsed.tasks[0])).toEqual(parsed.tasks[0]);
+    expect(() => PublishChangeHttpRequestSchema.parse({
+      ...request,
+      tasks: [{ ...request.tasks[0], providerId: "private" }],
+    })).toThrow();
+    for (const forbidden of ["absolutePath", "workspaceRef", "providerId", "terminalId", "windowId"] as const) {
+      expect(() => PublishChangeHttpRequestSchema.parse({ ...request, [forbidden]: "private" })).toThrow();
+    }
+    const response = {
+      projectId,
+      changeId: request.changeId,
+      changeRevisionId: request.changeRevisionId,
+      executionPlanId: request.executionPlanId,
+      status: "published",
+      taskGraphFingerprint: "a".repeat(64),
+    };
+    expect(PublishChangeHttpResponseSchema.parse(response)).toEqual(response);
+    expect(() => PublishChangeHttpResponseSchema.parse({ ...response, localPath: "C:/private" })).toThrow();
   });
 });
