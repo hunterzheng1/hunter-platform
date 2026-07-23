@@ -162,8 +162,11 @@ export class HunterApi {
   ): Promise<T> {
     let envelope = this.pendingCommands.get(logicalKey);
     if (envelope === undefined) {
+      if (this.pendingCommands.size >= HunterApi.pendingCommandLimit) {
+        throw new Error("PENDING_COMMAND_LIMIT_REACHED");
+      }
       envelope = createEnvelope();
-      this.rememberPending(logicalKey, envelope);
+      this.pendingCommands.set(logicalKey, envelope);
     }
     const response = await this.transport.request(envelope.path, envelope.init);
     const parsed = parseResponse(response);
@@ -171,11 +174,4 @@ export class HunterApi {
     return parsed;
   }
 
-  private rememberPending(logicalKey: string, envelope: PendingCommandEnvelope): void {
-    if (this.pendingCommands.size >= HunterApi.pendingCommandLimit) {
-      const oldestKey = this.pendingCommands.keys().next().value;
-      if (oldestKey !== undefined) this.pendingCommands.delete(oldestKey);
-    }
-    this.pendingCommands.set(logicalKey, envelope);
-  }
 }

@@ -63,10 +63,19 @@ export function ProjectListPage({
     setNotice(undefined);
     try {
       const created = await api.createProject(normalized);
-      setProjectAuthorization((current) => ({
-        projects: [...current.projects, { projectId: created.projectId, name: created.name }],
-        pendingAuthorization: new Set(current.pendingAuthorization).add(created.projectId),
-      }));
+      setProjectAuthorization((current) => {
+        const alreadyPresent = current.projects.some((project) => project.projectId === created.projectId);
+        return {
+          projects: alreadyPresent
+            ? current.projects.map((project) => project.projectId === created.projectId
+              ? { projectId: created.projectId, name: created.name }
+              : project)
+            : [...current.projects, { projectId: created.projectId, name: created.name }],
+          pendingAuthorization: alreadyPresent
+            ? current.pendingAuthorization
+            : new Set(current.pendingAuthorization).add(created.projectId),
+        };
+      });
       setNotice("项目已创建；可信宿主刷新安全会话后即可打开。");
       setName("");
     } catch {

@@ -145,4 +145,44 @@ describe("ProjectListPage", () => {
     expect(screen.getByRole("button", { name: "等待授权 并发项目" })).toHaveProperty("disabled", true);
     expect(screen.queryByText("还没有项目")).toBeNull();
   });
+
+  it("keeps an authorized project unique and openable when its create response arrives after the recheck", async () => {
+    const seedProjectId = ProjectIdSchema.parse("prj_task2000002");
+    const createdProjectId = ProjectIdSchema.parse("prj_task2000003");
+    const authorizedProject = { projectId: createdProjectId, name: "已授权并发项目" };
+    const authorizationRefresh = deferred<{ projects: Array<typeof authorizedProject> }>();
+    const inFlightCreation = deferred<{
+      projectId: typeof createdProjectId;
+      name: string;
+      authorization: "host_session_reissue_required";
+    }>();
+    const api = {
+      listProjects: vi.fn()
+        .mockResolvedValueOnce({ projects: [] })
+        .mockReturnValueOnce(authorizationRefresh.promise),
+      createProject: vi.fn()
+        .mockResolvedValueOnce({ projectId: seedProjectId, name: "先前待授权", authorization: "host_session_reissue_required" as const })
+        .mockReturnValueOnce(inFlightCreation.promise),
+    };
+    render(<ProjectListPage api={api} onOpen={vi.fn()} />);
+
+    await screen.findByText("还没有项目");
+    fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "先前待授权" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建项目" }));
+    await screen.findByRole("button", { name: "等待授权 先前待授权" });
+
+    fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: authorizedProject.name } });
+    fireEvent.click(screen.getByRole("button", { name: "创建项目" }));
+    fireEvent.click(screen.getByRole("button", { name: "重新检查授权" }));
+
+    authorizationRefresh.resolve({ projects: [authorizedProject] });
+    expect(await screen.findByRole("button", { name: `打开 ${authorizedProject.name}` })).toHaveProperty("disabled", false);
+
+    inFlightCreation.resolve({ ...authorizedProject, authorization: "host_session_reissue_required" });
+    await screen.findByRole("button", { name: "创建项目" });
+
+    expect(screen.getAllByText(authorizedProject.name)).toHaveLength(1);
+    expect(screen.getByRole("button", { name: `打开 ${authorizedProject.name}` })).toHaveProperty("disabled", false);
+    expect(screen.queryByRole("button", { name: `等待授权 ${authorizedProject.name}` })).toBeNull();
+  });
 });

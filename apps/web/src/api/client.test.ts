@@ -79,4 +79,42 @@ describe("HunterApi", () => {
     expect(bodies[3]).toBe(bodies[2]);
     expect(ApproveRequirementHttpRequestSchema.parse(JSON.parse(bodies[2]!))).toEqual(expect.objectContaining({ expectedVersion: 7 }));
   });
+
+  it("fails closed at pending capacity without evicting or regenerating an unconfirmed command", async () => {
+    const bodies: string[] = [];
+    let generatedProjectIds = 0;
+    const api = new HunterApi(
+      {
+        request: async (_path, init) => {
+          if (typeof init?.body !== "string") throw new Error("REQUEST_BODY_MISSING");
+          bodies.push(init.body);
+          throw new Error("response lost");
+        },
+      },
+      {
+        projectId: () => `prj_capacity${String(++generatedProjectIds).padStart(6, "0")}`,
+        requirementId: () => "req_capacity000001",
+        requirementRevisionId: () => "rrv_capacity000001",
+        idempotencyKey: (action) => `${action}-capacity-${generatedProjectIds}`,
+      },
+    );
+
+    for (let index = 1; index <= 32; index += 1) {
+      await expect(api.createProject(`Pending ${index}`)).rejects.toThrow("response lost");
+    }
+    const firstBody = bodies[0];
+
+    let capacityError: unknown;
+    try {
+      await api.createProject("Pending 33");
+    } catch (error) {
+      capacityError = error;
+    }
+    await expect(api.createProject("Pending 1")).rejects.toThrow("response lost");
+
+    expect(capacityError).toEqual(new Error("PENDING_COMMAND_LIMIT_REACHED"));
+    expect(generatedProjectIds).toBe(32);
+    expect(bodies).toHaveLength(33);
+    expect(bodies[32]).toBe(firstBody);
+  });
 });
