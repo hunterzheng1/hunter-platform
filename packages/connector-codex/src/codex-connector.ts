@@ -1,9 +1,26 @@
 import { createHash } from "node:crypto";
 import {
+  ConnectorIdSchema,
+  EvidenceIdSchema,
+  NativeSessionIdSchema,
   OperationIdSchema,
   type OperationId,
 } from "@hunter/domain";
 import { z } from "zod";
+import {
+  CapabilityProbeReceiptSchema,
+  ExternalOperationSchema,
+  capabilityManifestSupportsOperation,
+  computeCapabilityManifest,
+  parseBoundedProviderObject,
+  type CapabilityManifest,
+  type CapabilityProbeReceipt,
+  type ExternalOperation,
+  type ExternalOperationHandler,
+  type ExternalOperationReceipt,
+  type ExternalOperationReconciliation,
+  type ExternalOperationReconciler,
+} from "@hunter/runtime-contracts";
 import {
   CODEX_EVENT_LIMITS,
   CodexCandidateObservationSchema,
@@ -298,5 +315,177 @@ export class CodexCandidateConnector {
         ],
       }),
     );
+  }
+}
+
+const CodexOperationObservationSchema = z.strictObject({
+  operationId: OperationIdSchema,
+  nativeSessionId: NativeSessionIdSchema,
+  state: z.enum(["created", "running", "waiting_input", "returned", "unknown"]),
+  evidenceDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+});
+export type CodexOperationObservation = z.infer<
+  typeof CodexOperationObservationSchema
+>;
+
+const CodexOperationReconcileResultSchema = z.discriminatedUnion("outcome", [
+  z.strictObject({
+    outcome: z.literal("attached"),
+    observation: CodexOperationObservationSchema,
+  }),
+  z.strictObject({ outcome: z.literal("confirmed_absent") }),
+  z.strictObject({ outcome: z.literal("unknown") }),
+]);
+
+export interface CodexOperationTransport {
+  execute(operation: ExternalOperation): Promise<unknown>;
+  reconcile(operation: ExternalOperation): Promise<unknown>;
+}
+
+function receiptEvidenceId(operation: ExternalOperation): ReturnType<typeof EvidenceIdSchema.parse> {
+  return EvidenceIdSchema.parse(
+    `evd_${createHash("sha256").update(`codex:${operation.operationId}`).digest("hex").slice(0, 24)}`,
+  );
+}
+
+export class CodexConnector
+  implements ExternalOperationHandler, ExternalOperationReconciler
+{
+  readonly connectorId = ConnectorIdSchema.parse("con_codex_direct");
+  private readonly selectedReceipt: CapabilityProbeReceipt;
+
+  constructor(
+    private readonly operationTransport: CodexOperationTransport,
+    receiptInput: unknown,
+    private readonly now: () => Date = () => new Date(),
+  ) {
+    let receipt: z.ZodSafeParseResult<CapabilityProbeReceipt>;
+    try {
+      receipt = CapabilityProbeReceiptSchema.safeParse(receiptInput);
+    } catch {
+      throw new Error("CODEX_PROBE_RECEIPT_MISMATCH");
+    }
+    if (
+      !receipt.success
+      || receipt.data.schemaVersion !== 2
+      || receipt.data.subject.kind !== "connector"
+      || receipt.data.subject.connectorId !== this.connectorId
+    ) {
+      throw new Error("CODEX_PROBE_RECEIPT_MISMATCH");
+    }
+    this.selectedReceipt = deepFreeze(receipt.data);
+  }
+
+  get manifest(): CapabilityManifest {
+    return computeCapabilityManifest(this.selectedReceipt, this.now());
+  }
+
+  async probe(): Promise<CapabilityProbeReceipt> {
+    return this.selectedReceipt;
+  }
+
+  async execute(input: ExternalOperation): Promise<ExternalOperationReceipt> {
+    const operation = ExternalOperationSchema.parse(input);
+    this.assertOperationSupported(operation);
+    let raw: unknown;
+    try {
+      raw = await this.operationTransport.execute(operation);
+    } catch {
+      throw new Error("CODEX_TRANSPORT_FAILED");
+    }
+    let observation: CodexOperationObservation;
+    try {
+      observation = parseBoundedProviderObject(
+        CodexOperationObservationSchema,
+        raw,
+      );
+    } catch {
+      throw new Error("CODEX_TRANSPORT_RESPONSE_INVALID");
+    }
+    return this.receiptFor(operation, observation);
+  }
+
+  async reconcile(
+    input: ExternalOperation,
+  ): Promise<ExternalOperationReconciliation> {
+    const operation = ExternalOperationSchema.parse(input);
+    this.assertOperationSupported(operation);
+    let raw: unknown;
+    try {
+      raw = await this.operationTransport.reconcile(operation);
+    } catch {
+      return { outcome: "unknown" };
+    }
+    let result: z.infer<typeof CodexOperationReconcileResultSchema>;
+    try {
+      result = parseBoundedProviderObject(
+        CodexOperationReconcileResultSchema,
+        raw,
+      );
+    } catch {
+      return { outcome: "unknown" };
+    }
+    if (result.outcome !== "attached") return result;
+    return {
+      outcome: "attached",
+      receipt: this.receiptFor(operation, result.observation),
+    };
+  }
+
+  private assertOperationSupported(operation: ExternalOperation): void {
+    if (
+      ![
+        "session.launch",
+        "session.send",
+        "session.resume",
+        "session.interrupt",
+      ].includes(operation.operationType)
+    ) {
+      throw new Error("CODEX_OPERATION_UNSUPPORTED");
+    }
+    if (!capabilityManifestSupportsOperation(this.manifest, operation)) {
+      throw new Error("CODEX_CAPABILITY_NOT_PROVEN");
+    }
+  }
+
+  private receiptFor(
+    operation: ExternalOperation,
+    observation: CodexOperationObservation,
+  ): ExternalOperationReceipt {
+    if (observation.operationId !== operation.operationId) {
+      throw new Error("CODEX_RESPONSE_IDENTITY_MISMATCH");
+    }
+    if (
+      operation.operationType !== "session.launch"
+      && "nativeSessionId" in operation.payload
+      && operation.payload.nativeSessionId !== observation.nativeSessionId
+    ) {
+      throw new Error("CODEX_RESPONSE_IDENTITY_MISMATCH");
+    }
+    return {
+      schemaVersion: 1,
+      operationId: operation.operationId,
+      fingerprint: operation.fingerprint,
+      operationStatus: "completed",
+      subject: {
+        kind: "connector",
+        connectorId: this.connectorId,
+        implementationVersion: this.selectedReceipt.subject.implementationVersion,
+      },
+      nativeReferences: [{
+        kind: "session",
+        referenceId: observation.nativeSessionId,
+      }],
+      facts: [
+        { kind: "operation_accepted" },
+        { kind: "session_observed", state: observation.state },
+      ],
+      evidence: {
+        evidenceId: receiptEvidenceId(operation),
+        evidenceHash: observation.evidenceDigest,
+        proofScope: "local_observation",
+      },
+      observedAt: this.now().toISOString(),
+    };
   }
 }

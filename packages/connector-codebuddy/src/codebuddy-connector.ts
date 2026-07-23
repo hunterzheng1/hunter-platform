@@ -1,11 +1,38 @@
 import { createHash } from "node:crypto";
 import {
   AgentProfileIdSchema,
+  ConnectorIdSchema,
+  EvidenceIdSchema,
+  NativeSessionIdSchema,
   OperationIdSchema,
   type AgentProfileId,
   type OperationId,
 } from "@hunter/domain";
 import { z } from "zod";
+import {
+  CapabilityProbeReceiptSchema,
+  ExternalOperationSchema,
+  capabilityManifestSupportsOperation,
+  computeCapabilityManifest,
+  parseBoundedProviderObject,
+  type CapabilityManifest,
+  type CapabilityProbeReceipt,
+  type CurrentCapabilityProbeReceipt,
+  type ExternalOperation,
+  type ExternalOperationHandler,
+  type ExternalOperationReceipt,
+  type ExternalOperationReconciliation,
+  type ExternalOperationReconciler,
+} from "@hunter/runtime-contracts";
+import {
+  VerifiedCodeBuddyTransportSelectionSchema,
+  type VerifiedCodeBuddyTransportSelection,
+} from "./acp-transport.js";
+import {
+  codeBuddyReceiptDigest,
+  codeBuddySelectionDigest,
+  type CodeBuddyProbeResult,
+} from "./codebuddy-probe.js";
 import {
   CodeBuddyNativeSessionRefSchema,
   SyntheticCodeBuddyCandidateRequestSchema,
@@ -469,5 +496,227 @@ export class CodeBuddyCandidateConnector {
         observations,
       }),
     );
+  }
+}
+
+const CodeBuddyOperationObservationSchema = z.strictObject({
+  operationId: OperationIdSchema,
+  nativeSessionId: NativeSessionIdSchema,
+  state: z.enum(["created", "running", "waiting_input", "returned", "unknown"]),
+  evidenceDigest: z.string().regex(/^[a-f0-9]{64}$/u),
+});
+export type CodeBuddyOperationObservation = z.infer<
+  typeof CodeBuddyOperationObservationSchema
+>;
+
+const CodeBuddyOperationReconcileResultSchema = z.discriminatedUnion("outcome", [
+  z.strictObject({
+    outcome: z.literal("attached"),
+    observation: CodeBuddyOperationObservationSchema,
+  }),
+  z.strictObject({ outcome: z.literal("confirmed_absent") }),
+  z.strictObject({ outcome: z.literal("unknown") }),
+]);
+
+export interface CodeBuddyOperationTransport {
+  execute(
+    operation: ExternalOperation,
+    selection: VerifiedCodeBuddyTransportSelection,
+  ): Promise<unknown>;
+  reconcile(
+    operation: ExternalOperation,
+    selection: VerifiedCodeBuddyTransportSelection,
+  ): Promise<unknown>;
+}
+
+function selectionBase(selection: VerifiedCodeBuddyTransportSelection) {
+  return {
+    schemaVersion: selection.schemaVersion,
+    transportKind: selection.transportKind,
+    endpoint: selection.endpoint,
+    protocolKind: selection.protocolKind,
+    protocolVersion: selection.protocolVersion,
+    supportedProtocolVersions: selection.supportedProtocolVersions,
+    protocolSchemaVersion: selection.protocolSchemaVersion,
+    supportedProtocolSchemaVersions: selection.supportedProtocolSchemaVersions,
+    protocolSchemaDigest: selection.protocolSchemaDigest,
+    sourceEvidenceDigest: selection.sourceEvidenceDigest,
+  };
+}
+
+function receiptEvidenceId(operation: ExternalOperation): ReturnType<typeof EvidenceIdSchema.parse> {
+  return EvidenceIdSchema.parse(
+    `evd_${createHash("sha256").update(`codebuddy:${operation.operationId}`).digest("hex").slice(0, 24)}`,
+  );
+}
+
+export class CodeBuddyConnector
+  implements ExternalOperationHandler, ExternalOperationReconciler
+{
+  readonly connectorId = ConnectorIdSchema.parse("con_codebuddy_acp");
+  private readonly selectedReceipt: CurrentCapabilityProbeReceipt;
+  private readonly selectedTransport: VerifiedCodeBuddyTransportSelection;
+
+  constructor(
+    private readonly operationTransport: CodeBuddyOperationTransport,
+    selectedInput: CodeBuddyProbeResult,
+    private readonly now: () => Date = () => new Date(),
+  ) {
+    let receipt: z.ZodSafeParseResult<CapabilityProbeReceipt>;
+    let selection: z.ZodSafeParseResult<VerifiedCodeBuddyTransportSelection>;
+    try {
+      receipt = CapabilityProbeReceiptSchema.safeParse(selectedInput.receipt);
+      selection = VerifiedCodeBuddyTransportSelectionSchema.safeParse(
+        selectedInput.selection,
+      );
+    } catch {
+      throw new Error("CODEBUDDY_TRANSPORT_SELECTION_MISMATCH");
+    }
+    if (
+      !receipt.success
+      || receipt.data.schemaVersion !== 2
+      || receipt.data.subject.kind !== "connector"
+      || receipt.data.subject.connectorId !== this.connectorId
+      || !selection.success
+      || selection.data.probeReceiptId !== receipt.data.probeReceiptId
+      || selection.data.selectionDigest
+        !== codeBuddySelectionDigest(selectionBase(selection.data))
+      || selection.data.receiptDigest !== codeBuddyReceiptDigest(receipt.data)
+      || selection.data.protocolKind !== receipt.data.protocol.kind
+      || selection.data.protocolVersion !== receipt.data.protocol.observedVersion
+      || selection.data.protocolSchemaVersion !== receipt.data.protocol.schemaVersion
+      || selection.data.protocolSchemaDigest !== receipt.data.protocol.schemaDigest
+      || selection.data.supportedProtocolVersions.join("\u0000")
+        !== receipt.data.protocol.supportedVersions.join("\u0000")
+      || selection.data.supportedProtocolSchemaVersions.join("\u0000")
+        !== receipt.data.protocol.supportedSchemaVersions.join("\u0000")
+      || receipt.data.results.some(
+        ({ status, evidence }) => status === "supported"
+          && evidence.digest !== selection.data.selectionDigest,
+      )
+    ) {
+      throw new Error("CODEBUDDY_TRANSPORT_SELECTION_MISMATCH");
+    }
+    this.selectedReceipt = receipt.data;
+    this.selectedTransport = deepFreeze(selection.data);
+  }
+
+  get manifest(): CapabilityManifest {
+    return computeCapabilityManifest(this.selectedReceipt, this.now());
+  }
+
+  async probe(): Promise<CapabilityProbeReceipt> {
+    return this.selectedReceipt;
+  }
+
+  async execute(input: ExternalOperation): Promise<ExternalOperationReceipt> {
+    const operation = ExternalOperationSchema.parse(input);
+    this.assertOperationSupported(operation);
+    let raw: unknown;
+    try {
+      raw = await this.operationTransport.execute(
+        operation,
+        this.selectedTransport,
+      );
+    } catch {
+      throw new Error("CODEBUDDY_TRANSPORT_FAILED");
+    }
+    let observation: CodeBuddyOperationObservation;
+    try {
+      observation = parseBoundedProviderObject(
+        CodeBuddyOperationObservationSchema,
+        raw,
+      );
+    } catch {
+      throw new Error("CODEBUDDY_TRANSPORT_RESPONSE_INVALID");
+    }
+    return this.receiptFor(operation, observation);
+  }
+
+  async reconcile(
+    input: ExternalOperation,
+  ): Promise<ExternalOperationReconciliation> {
+    const operation = ExternalOperationSchema.parse(input);
+    this.assertOperationSupported(operation);
+    let raw: unknown;
+    try {
+      raw = await this.operationTransport.reconcile(
+        operation,
+        this.selectedTransport,
+      );
+    } catch {
+      return { outcome: "unknown" };
+    }
+    let result: z.infer<typeof CodeBuddyOperationReconcileResultSchema>;
+    try {
+      result = parseBoundedProviderObject(
+        CodeBuddyOperationReconcileResultSchema,
+        raw,
+      );
+    } catch {
+      return { outcome: "unknown" };
+    }
+    if (result.outcome !== "attached") return result;
+    return {
+      outcome: "attached",
+      receipt: this.receiptFor(operation, result.observation),
+    };
+  }
+
+  private assertOperationSupported(operation: ExternalOperation): void {
+    if (
+      ![
+        "session.launch",
+        "session.send",
+        "session.resume",
+        "session.interrupt",
+      ].includes(operation.operationType)
+    ) {
+      throw new Error("CODEBUDDY_OPERATION_UNSUPPORTED");
+    }
+    if (!capabilityManifestSupportsOperation(this.manifest, operation)) {
+      throw new Error("CODEBUDDY_CAPABILITY_NOT_PROVEN");
+    }
+  }
+
+  private receiptFor(
+    operation: ExternalOperation,
+    observation: CodeBuddyOperationObservation,
+  ): ExternalOperationReceipt {
+    if (observation.operationId !== operation.operationId) {
+      throw new Error("CODEBUDDY_RESPONSE_IDENTITY_MISMATCH");
+    }
+    if (
+      operation.operationType !== "session.launch"
+      && "nativeSessionId" in operation.payload
+      && operation.payload.nativeSessionId !== observation.nativeSessionId
+    ) {
+      throw new Error("CODEBUDDY_RESPONSE_IDENTITY_MISMATCH");
+    }
+    return {
+      schemaVersion: 1,
+      operationId: operation.operationId,
+      fingerprint: operation.fingerprint,
+      operationStatus: "completed",
+      subject: {
+        kind: "connector",
+        connectorId: this.connectorId,
+        implementationVersion: this.selectedReceipt.subject.implementationVersion,
+      },
+      nativeReferences: [{
+        kind: "session",
+        referenceId: observation.nativeSessionId,
+      }],
+      facts: [
+        { kind: "operation_accepted" },
+        { kind: "session_observed", state: observation.state },
+      ],
+      evidence: {
+        evidenceId: receiptEvidenceId(operation),
+        evidenceHash: observation.evidenceDigest,
+        proofScope: "local_observation",
+      },
+      observedAt: this.now().toISOString(),
+    };
   }
 }

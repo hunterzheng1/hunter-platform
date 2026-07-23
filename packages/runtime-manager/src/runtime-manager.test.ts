@@ -75,13 +75,17 @@ function manager(database: DatabaseSync, journal: SqliteOperationJournal, option
 
 function capability() {
   return CapabilityProbeReceiptSchema.parse({
-    schemaVersion: 1,
+    schemaVersion: 2,
     probeReceiptId: CapabilityProbeReceiptIdSchema.parse("cpr_runtime001"),
     subject: { kind: "provider", providerId: RuntimeProviderIdSchema.parse("rtp_runtime001"), implementationVersion: "1.0.0" },
     platform: "windows",
-    observedAt: "2026-07-22T09:00:00.000Z",
+    executable: { status: "available" },
+    loginState: "not_required",
+    productVersion: { observed: "fake-1", supported: ["fake-1"] },
+    protocol: { kind: "fake", observedVersion: "1", supportedVersions: ["1"], schemaVersion: 1, supportedSchemaVersions: [1], schemaDigest: "b".repeat(64) },
+    probedAt: "2026-07-22T09:00:00.000Z",
     validUntil: "2026-07-22T11:00:00.000Z",
-    results: [{ capability: "launch", status: "SUPPORTED", evidenceId: EvidenceIdSchema.parse("evd_runtime001"), evidenceHash: "a".repeat(64) }],
+    results: [{ capability: "launch", status: "supported", evidenceId: EvidenceIdSchema.parse("evd_runtime001"), evidence: { source: "local_probe", digest: "a".repeat(64) }, probedAt: "2026-07-22T09:00:00.000Z" }],
   });
 }
 
@@ -138,7 +142,7 @@ describe("RuntimeManager", () => {
     const receipt = capability();
     const unsupported = CapabilityProbeReceiptSchema.parse({
       ...receipt,
-      results: receipt.results.map((result) => ({ ...result, status: "NOT_PROVEN" as const })),
+      results: receipt.results.map((result) => ({ ...result, status: "unknown" as const })),
     });
     expect(() => manager(database, journal, { capabilityReceipt: unsupported }).requestAssignment({ commandId: "assign:no-cap", expectedVersion: 0, operation })).toThrow(/CAPABILITY_NOT_PROVEN/u);
     expect(() => manager(database, journal, { capabilityReceipt: receipt }).requestAssignment({ commandId: "assign:no-lease", expectedVersion: 0, operation })).toThrow(/LEASE_RECEIPT_REQUIRED/u);

@@ -7,7 +7,7 @@ import { PublishChangeService, StartRunService, type PublishChangeRepositories, 
 import type { ExecutionPlan, NativeSessionId, ProjectId, TaskId, WorkflowRevision, WorktreeId } from "@hunter/domain";
 import { ControllerLeaseIdSchema, LeaseOwnerIdSchema, OperationIdSchema, ProjectIdSchema, WorkspaceLeaseIdSchema, WriterLeaseIdSchema, canonicalSha256, createProject } from "@hunter/domain";
 import { FlowEngine, reduceFlowEvents, type FlowCommandReceipt, type FlowCommit, type FlowDefinitions, type FlowEvent, type FlowStore, type WorkflowRunState } from "@hunter/flow-engine";
-import { ExternalOperationReceiptSchema, LeaseSchema, createExternalOperation, createWorkspacePathBoundary, decodeCapabilityProbeReceipt, decodeExternalOperationReceipt, type CapabilityProbeReceipt, type ExternalOperation, type ExternalOperationHandler, type Lease, type VerifiedWorkspacePath } from "@hunter/runtime-contracts";
+import { ExternalOperationReceiptSchema, LeaseSchema, computeCapabilityManifest, createExternalOperation, createWorkspacePathBoundary, decodeCapabilityProbeReceipt, decodeExternalOperationReceipt, type CapabilityProbeReceipt, type ExternalOperation, type ExternalOperationHandler, type Lease, type VerifiedWorkspacePath } from "@hunter/runtime-contracts";
 import { deriveStepPolicy } from "@hunter/policy";
 import { LeaseService, RuntimeManager, RuntimeOperationHandler } from "@hunter/runtime-manager";
 import { EventLedgerReader, HunterProjection, OperationWorker, ProjectionRunner, SqliteOperationJournal } from "@hunter/storage";
@@ -674,8 +674,9 @@ export function createSqliteApplicationServices(input: {
       if (capability === undefined || capability === null) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "needs_attention", reason: "session_observe_capability_not_configured", nativeSessionId: session.referenceId };
       const probe = decodeCapabilityProbeReceipt(capability);
       const observedAt = now().getTime();
-      const observeSupported = probe.results.some(({ capability: atomicCapability, status }) => atomicCapability === "observe" && status === "SUPPORTED");
-      if (!observeSupported || observedAt < Date.parse(probe.observedAt) || observedAt > Date.parse(probe.validUntil)) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "needs_attention", reason: "session_observe_capability_not_proven", nativeSessionId: session.referenceId };
+      const manifest = computeCapabilityManifest(probe, new Date(observedAt));
+      const observeSupported = manifest.capabilities.some(({ capability: atomicCapability, status }) => atomicCapability === "observe" && status === "supported");
+      if (!observeSupported) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "needs_attention", reason: "session_observe_capability_not_proven", nativeSessionId: session.referenceId };
       const aggregateId = `recovery-session:${attempt.attemptId}`;
       const version = (input.database.prepare("SELECT COALESCE(MAX(aggregate_version), 0) AS version FROM events WHERE aggregate_id = ?").get(aggregateId) as { version: number }).version;
       journal.commitCommand({ commandId: `recovery-observe:${attempt.attemptId}`, requestFingerprint: observe.fingerprint, projectId: observe.projectId, aggregateId, expectedVersion: version, actor: { actorId: "startup-recovery", correlationId: `recovery:${attempt.runId}` }, events: [], operations: [observe], response: { operationId: observe.operationId } });

@@ -69,9 +69,9 @@ function persistCatalog(database: DatabaseSync, localPath: string) {
 }
 
 function capability() {
-  return CapabilityProbeReceiptSchema.parse({ schemaVersion: 1, probeReceiptId: CapabilityProbeReceiptIdSchema.parse("cpr_chain00001"), subject: { kind: "provider", providerId: RuntimeProviderIdSchema.parse("rtp_chain00001"), implementationVersion: "fake" }, platform: "windows", observedAt: "2026-07-21T00:00:00.000Z", validUntil: "2026-07-24T00:00:00.000Z", results: [
-    { capability: "launch", status: "SUPPORTED", evidenceId: EvidenceIdSchema.parse("evd_chain00001"), evidenceHash: "a".repeat(64) },
-    { capability: "observe", status: "SUPPORTED", evidenceId: EvidenceIdSchema.parse("evd_chain00002"), evidenceHash: "b".repeat(64) },
+  return CapabilityProbeReceiptSchema.parse({ schemaVersion: 2, probeReceiptId: CapabilityProbeReceiptIdSchema.parse("cpr_chain00001"), subject: { kind: "provider", providerId: RuntimeProviderIdSchema.parse("rtp_chain00001"), implementationVersion: "fake" }, platform: "windows", executable: { status: "available" }, loginState: "not_required", productVersion: { observed: "fake-1", supported: ["fake-1"] }, protocol: { kind: "fake", observedVersion: "1", supportedVersions: ["1"], schemaVersion: 1, supportedSchemaVersions: [1], schemaDigest: "c".repeat(64) }, probedAt: "2026-07-21T00:00:00.000Z", validUntil: "2026-07-24T00:00:00.000Z", results: [
+    { capability: "launch", status: "supported", evidenceId: EvidenceIdSchema.parse("evd_chain00001"), evidence: { source: "local_probe", digest: "a".repeat(64) }, probedAt: "2026-07-21T00:00:00.000Z" },
+    { capability: "observe", status: "supported", evidenceId: EvidenceIdSchema.parse("evd_chain00002"), evidence: { source: "local_probe", digest: "b".repeat(64) }, probedAt: "2026-07-21T00:00:00.000Z" },
   ] });
 }
 

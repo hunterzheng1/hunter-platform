@@ -14,7 +14,11 @@ import {
   WorkspaceIdSchema,
 } from "@hunter/domain";
 import { z } from "zod";
-import { AtomicCapabilitySchema } from "./manifest.js";
+import {
+  AtomicCapabilitySchema,
+  CapabilityManifestSchema,
+  type CapabilityManifest,
+} from "./manifest.js";
 
 const operationFields = {
   schemaVersion: z.literal(1),
@@ -251,4 +255,19 @@ export function fingerprintExternalOperation(operation: ExternalOperation): stri
     Object.entries(operation).filter(([key]) => key !== "fingerprint"),
   );
   return hash(ExternalOperationUnsignedSchema.parse(unsigned));
+}
+
+export function capabilityManifestSupportsOperation(
+  manifestInput: CapabilityManifest,
+  operationInput: ExternalOperation,
+): boolean {
+  const manifest = CapabilityManifestSchema.parse(manifestInput);
+  const operation = ExternalOperationSchema.parse(operationInput);
+  const supported = new Set(
+    manifest.capabilities
+      .filter(({ status }) => status === "supported")
+      .map(({ capability }) => capability),
+  );
+  return operation.requestedCapabilities.every((capability) =>
+    supported.has(capability));
 }

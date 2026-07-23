@@ -51,13 +51,18 @@ const levelThreeCapabilities = [
   "interrupt",
   "structured_events",
   "permission_events",
+  "approve",
+  "structured_tool_events",
+  "policy_hook",
+  "reliable_attach_recovery",
   "resume",
   "completion_receipt",
+  "durable_completion_receipt",
 ] as const;
 
 function capabilityReceipt(implementationId: string) {
   return CapabilityProbeReceiptSchema.parse({
-    schemaVersion: 1,
+    schemaVersion: 2,
     probeReceiptId: CapabilityProbeReceiptIdSchema.parse("cpr_00000001"),
     subject: {
       kind: "connector",
@@ -65,13 +70,25 @@ function capabilityReceipt(implementationId: string) {
       implementationVersion: "1.0.0",
     },
     platform: "windows",
-    observedAt: "2026-07-21T00:00:00.000Z",
+    executable: { status: "available" },
+    loginState: "authenticated",
+    productVersion: { observed: "1.0.0", supported: ["1.0.0"] },
+    protocol: {
+      kind: "contract",
+      observedVersion: "1",
+      supportedVersions: ["1"],
+      schemaVersion: 1,
+      supportedSchemaVersions: [1],
+      schemaDigest: "b".repeat(64),
+    },
+    probedAt: "2026-07-21T00:00:00.000Z",
     validUntil: "2026-07-22T00:00:00.000Z",
     results: levelThreeCapabilities.map((capability, index) => ({
       capability,
-      status: "SUPPORTED",
+      status: "supported",
       evidenceId: EvidenceIdSchema.parse(`evd_0000000${(index % 9) + 1}`),
-      evidenceHash: "a".repeat(64),
+      evidence: { source: "local_probe", digest: "a".repeat(64) },
+      probedAt: "2026-07-21T00:00:00.000Z",
     })),
   });
 }

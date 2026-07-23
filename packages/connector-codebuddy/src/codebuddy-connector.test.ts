@@ -1,16 +1,38 @@
 import { readFile } from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   AgentProfileIdSchema,
+  AttemptIdSchema,
+  ControllerLeaseIdSchema,
+  EvidenceIdSchema,
+  LeaseOwnerIdSchema,
+  NativeSessionIdSchema,
   OperationIdSchema,
+  ProjectIdSchema,
+  RunIdSchema,
+  WorkspaceIdSchema,
 } from "@hunter/domain";
-import { runtimeFactCanCompleteStep } from "@hunter/runtime-contracts";
+import {
+  computeCapabilityManifest,
+  createExternalOperation,
+  runtimeFactCanCompleteStep,
+  type ExternalOperation,
+} from "@hunter/runtime-contracts";
 import {
   SYNTHETIC_CODEBUDDY_LIMITS,
   type SyntheticCodeBuddyCandidateRequest,
   type SyntheticCodeBuddyCandidateTransport,
 } from "./synthetic-candidate-transport.js";
-import { CodeBuddyCandidateConnector } from "./codebuddy-connector.js";
+import {
+  CodeBuddyCandidateConnector,
+  CodeBuddyConnector,
+  type CodeBuddyOperationObservation,
+  type CodeBuddyOperationTransport,
+} from "./codebuddy-connector.js";
+import {
+  CodeBuddyCapabilityProbe,
+  type VerifiedCodeBuddyTransportSelection,
+} from "./codebuddy-probe.js";
 
 const launchOperationId = OperationIdSchema.parse("opn_codebuddylaunch01");
 const resumeOperationId = OperationIdSchema.parse("opn_codebuddyresume01");
@@ -632,7 +654,7 @@ describe("CodeBuddy synthetic lifecycle contract-only candidate", () => {
     ).rejects.toThrow(/^CODEBUDDY_RESPONSE_TOO_LARGE$/u);
   });
 
-  it("contains no production endpoint, fetch, capability manifest, or bypass switch", async () => {
+  it("keeps the synthetic candidate free of fixed network endpoints and bypass switches", async () => {
     const root = new URL("../../../", import.meta.url);
     const files = [
       "packages/connector-codebuddy/src/synthetic-candidate-transport.ts",
@@ -645,25 +667,282 @@ describe("CodeBuddy synthetic lifecycle contract-only candidate", () => {
     ).join("\n");
 
     expect(source).not.toMatch(
-      /\b(?:fetch|https?:|HttpAcpTransport|CapabilityManifest|localhost|127\.0\.0\.1|yolo|dangerously-bypass|auto-approve)\b/iu,
+      /\b(?:fetch|https?:|HttpAcpTransport|localhost|127\.0\.0\.1|yolo|dangerously-bypass|auto-approve)\b/iu,
     );
   });
 
   it("cannot expose the synthetic fixture as a verified generic ACP protocol", async () => {
     const root = new URL("../../../", import.meta.url);
-    const source = (
-      await Promise.all(
-        [
-          "packages/connector-codebuddy/src/synthetic-candidate-transport.ts",
-          "packages/connector-codebuddy/src/codebuddy-connector.ts",
-          "packages/connector-codebuddy/src/index.ts",
-        ].map((file) => readFile(new URL(file, root), "utf8")),
-      )
-    ).join("\n");
+    const source = await readFile(
+      new URL(
+        "packages/connector-codebuddy/src/synthetic-candidate-transport.ts",
+        root,
+      ),
+      "utf8",
+    );
 
     expect(source).not.toMatch(
       /\b(?:AcpRequestSchema|AcpTransport|protocolVersion|protocol_initialized)\b/u,
     );
     expect(source).toContain("hunter.codebuddy.synthetic_candidate_v1");
+  });
+});
+
+describe("CodeBuddy selected transport probe and durable operation adapter", () => {
+  const now = new Date("2026-07-24T00:00:00.000Z");
+  const schemaDigest = "d".repeat(64);
+  const sourceEvidenceDigest = "e".repeat(64);
+  const nativeSessionId = NativeSessionIdSchema.parse("ses_codebuddyrun01");
+  const common = {
+    schemaVersion: 1 as const,
+    projectId: ProjectIdSchema.parse("prj_codebuddyrun01"),
+    runId: RunIdSchema.parse("run_codebuddyrun01"),
+    attemptId: AttemptIdSchema.parse("att_codebuddyrun01"),
+  };
+
+  function probeSource(overrides: Record<string, unknown> = {}) {
+    return {
+      inspect: vi.fn(async () => ({
+        schemaVersion: 1,
+        executableStatus: "available",
+        loginState: "authenticated",
+        productVersion: "3.2.1",
+        supportedProductVersions: ["3.2.1"],
+        transportKind: "acp_stdio",
+        endpoint: "codebuddy",
+        protocolKind: "acp",
+        protocolVersion: "0.4",
+        supportedProtocolVersions: ["0.4"],
+        protocolSchemaVersion: 1,
+        supportedProtocolSchemaVersions: [1],
+        protocolSchemaDigest: schemaDigest,
+        sourceEvidenceDigest,
+        capabilities: [
+          "discover",
+          "workspace_targeting",
+          "launch",
+          "observe",
+          "structured_events",
+          "send",
+          "interrupt",
+          "resume",
+          "completion_receipt",
+        ].map((capability) => ({ capability, status: "supported" })),
+        ...overrides,
+      })),
+    };
+  }
+
+  it("persists the receipt and binds the exact selected transport without a fixed endpoint", async () => {
+    const save = vi.fn(async () => undefined);
+    const result = await new CodeBuddyCapabilityProbe(
+      probeSource(),
+      { save },
+      () => now,
+    ).probe();
+
+    expect(save).toHaveBeenCalledWith(result.receipt);
+    expect(result.selection).toMatchObject({
+      schemaVersion: 1,
+      transportKind: "acp_stdio",
+      endpoint: "codebuddy",
+      protocolKind: "acp",
+      protocolVersion: "0.4",
+      supportedProtocolVersions: ["0.4"],
+      protocolSchemaVersion: 1,
+      probeReceiptId: result.receipt.probeReceiptId,
+      receiptDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      selectionDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+    expect(computeCapabilityManifest(result.receipt, now).level).toBe("L2");
+  });
+
+  it("keeps the selected Phase 0 missing-executable and logged-out matrices at NONE", async () => {
+    const missing = await new CodeBuddyCapabilityProbe(
+      probeSource({
+        executableStatus: "unavailable",
+        productVersion: null,
+        protocolVersion: null,
+        protocolSchemaVersion: null,
+        protocolSchemaDigest: null,
+      }),
+      { save: async () => undefined },
+      () => now,
+    ).probe();
+    const loggedOut = await new CodeBuddyCapabilityProbe(
+      probeSource({ loginState: "unauthenticated" }),
+      { save: async () => undefined },
+      () => now,
+    ).probe();
+
+    expect(computeCapabilityManifest(missing.receipt, now).level).toBe("NONE");
+    expect(computeCapabilityManifest(loggedOut.receipt, now).level).toBe("NONE");
+  });
+
+  function operation(
+    operationType: "session.launch" | "session.send" | "session.resume" | "session.interrupt",
+    operationId: string,
+  ): ExternalOperation {
+    const base = {
+      ...common,
+      operationId: OperationIdSchema.parse(operationId),
+      requestedCapabilities: [
+        operationType === "session.launch"
+          ? "launch"
+          : operationType === "session.interrupt"
+            ? "interrupt"
+            : operationType === "session.resume"
+              ? "resume"
+              : "send",
+      ],
+    };
+    if (operationType === "session.launch") {
+      return createExternalOperation({
+        ...base,
+        operationVersion: 1,
+        operationType,
+        payload: {
+          agentProfileId: AgentProfileIdSchema.parse("apr_codebuddyrun01"),
+          workspaceId: WorkspaceIdSchema.parse("wsp_codebuddyrun01"),
+        },
+      });
+    }
+    const authority = {
+      controllerLeaseId: ControllerLeaseIdSchema.parse("ctl_codebuddyrun01"),
+      controllerLeaseOwnerId: LeaseOwnerIdSchema.parse("own_codebuddyrun01"),
+      controllerLeaseGeneration: 1,
+    };
+    return createExternalOperation({
+      ...base,
+      operationVersion: 2,
+      operationType,
+      payload: operationType === "session.send"
+        ? {
+            nativeSessionId,
+            inputEvidenceId: EvidenceIdSchema.parse("evd_codebuddyrun01"),
+            ...authority,
+          }
+        : operationType === "session.interrupt"
+          ? { nativeSessionId, reason: "bounded test", ...authority }
+          : { nativeSessionId, ...authority },
+    });
+  }
+
+  async function provenProbeResult() {
+    return new CodeBuddyCapabilityProbe(
+      probeSource(),
+      { save: async () => undefined },
+      () => now,
+    ).probe();
+  }
+
+  it("passes the exact verified selection and stable operationId for every durable action", async () => {
+    const calls: Array<{
+      operation: ExternalOperation;
+      selection: VerifiedCodeBuddyTransportSelection;
+    }> = [];
+    const transport: CodeBuddyOperationTransport = {
+      execute: vi.fn(async (input, selection) => {
+        calls.push({ operation: input, selection });
+        return {
+          operationId: input.operationId,
+          nativeSessionId,
+          state: input.operationType === "session.interrupt" ? "waiting_input" : "running",
+          evidenceDigest: sourceEvidenceDigest,
+        } satisfies CodeBuddyOperationObservation;
+      }),
+      reconcile: vi.fn(async () => ({ outcome: "unknown" })),
+    };
+    const selected = await provenProbeResult();
+    const connector = new CodeBuddyConnector(transport, selected, () => now);
+    const operations = [
+      operation("session.launch", "opn_codebuddydeep01"),
+      operation("session.send", "opn_codebuddydeep02"),
+      operation("session.resume", "opn_codebuddydeep03"),
+      operation("session.interrupt", "opn_codebuddydeep04"),
+    ];
+
+    for (const externalOperation of operations) {
+      const receipt = await connector.execute(externalOperation);
+      expect(receipt.operationId).toBe(externalOperation.operationId);
+      expect(receipt.nativeReferences).toContainEqual({
+        kind: "session",
+        referenceId: nativeSessionId,
+      });
+      expect(receipt.facts.every((fact) => !runtimeFactCanCompleteStep(fact))).toBe(true);
+    }
+    expect(calls.map(({ operation }) => operation.operationId)).toEqual(
+      operations.map(({ operationId }) => operationId),
+    );
+    expect(calls.every(({ selection }) =>
+      JSON.stringify(selection) === JSON.stringify(selected.selection))).toBe(true);
+  });
+
+  it.each([
+    ["endpoint", { endpoint: "changed-codebuddy" }],
+    ["transport", { transportKind: "acp_http" }],
+    ["protocol", { protocolVersion: "0.5" }],
+    ["receipt", { receiptDigest: "f".repeat(64) }],
+  ])("rejects a changed %s selection before network I/O", async (_name, change) => {
+    const selected = await provenProbeResult();
+    const transport: CodeBuddyOperationTransport = {
+      execute: vi.fn(),
+      reconcile: vi.fn(),
+    };
+
+    expect(
+      () => new CodeBuddyConnector(
+        transport,
+        {
+          receipt: selected.receipt,
+          selection: { ...selected.selection, ...change } as never,
+        },
+        () => now,
+      ),
+    ).toThrow(/^CODEBUDDY_TRANSPORT_SELECTION_MISMATCH$/u);
+    expect(transport.execute).not.toHaveBeenCalled();
+  });
+
+  it("reconciles crash-after-newSession from a fresh adapter without duplication", async () => {
+    const observed = new Map<string, CodeBuddyOperationObservation>();
+    let creates = 0;
+    const transport: CodeBuddyOperationTransport = {
+      execute: vi.fn(async (input) => {
+        creates += 1;
+        observed.set(input.operationId, {
+          operationId: input.operationId,
+          nativeSessionId,
+          state: "created",
+          evidenceDigest: sourceEvidenceDigest,
+        });
+        throw new Error("fixture crash after newSession");
+      }),
+      reconcile: vi.fn(async (input) => {
+        const result = observed.get(input.operationId);
+        return result === undefined
+          ? { outcome: "confirmed_absent" }
+          : { outcome: "attached", observation: result };
+      }),
+    };
+    const selected = await provenProbeResult();
+    const launch = operation("session.launch", "opn_codebuddycrash1");
+    await expect(
+      new CodeBuddyConnector(transport, selected, () => now).execute(launch),
+    ).rejects.toThrow(/^CODEBUDDY_TRANSPORT_FAILED$/u);
+
+    const recovered = await new CodeBuddyConnector(
+      transport,
+      selected,
+      () => now,
+    ).reconcile(launch);
+
+    expect(recovered).toMatchObject({
+      outcome: "attached",
+      receipt: {
+        operationId: launch.operationId,
+        nativeReferences: [{ kind: "session", referenceId: nativeSessionId }],
+      },
+    });
+    expect(creates).toBe(1);
   });
 });

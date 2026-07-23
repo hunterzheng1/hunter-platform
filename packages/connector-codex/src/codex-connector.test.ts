@@ -1,12 +1,32 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
-import { OperationIdSchema } from "@hunter/domain";
-import { runtimeFactCanCompleteStep } from "@hunter/runtime-contracts";
+import {
+  AgentProfileIdSchema,
+  AttemptIdSchema,
+  ControllerLeaseIdSchema,
+  EvidenceIdSchema,
+  LeaseOwnerIdSchema,
+  NativeSessionIdSchema,
+  OperationIdSchema,
+  ProjectIdSchema,
+  RunIdSchema,
+  WorkspaceIdSchema,
+} from "@hunter/domain";
+import {
+  computeCapabilityManifest,
+  createExternalOperation,
+  runtimeFactCanCompleteStep,
+  type ExternalOperation,
+} from "@hunter/runtime-contracts";
 import {
   CodexCandidateConnector,
+  CodexConnector,
   type CodexCandidateTransport,
+  type CodexOperationObservation,
+  type CodexOperationTransport,
 } from "./codex-connector.js";
+import { CodexCapabilityProbe } from "./codex-probe.js";
 import {
   CODEX_EVENT_LIMITS,
   parseCodexEventLines,
@@ -447,6 +467,283 @@ describe("bounded Codex 0.144.6 JSONL candidate parser", () => {
       },
       { kind: "turn_started" },
     ]);
+  });
+});
+
+describe("Codex capability probe and durable operation adapter", () => {
+  const now = new Date("2026-07-24T00:00:00.000Z");
+  const schemaDigest = "b".repeat(64);
+  const evidenceDigest = "c".repeat(64);
+  const nativeSessionId = NativeSessionIdSchema.parse("ses_codexruntime01");
+  const common = {
+    schemaVersion: 1 as const,
+    projectId: ProjectIdSchema.parse("prj_codexruntime01"),
+    runId: RunIdSchema.parse("run_codexruntime01"),
+    attemptId: AttemptIdSchema.parse("att_codexruntime01"),
+  };
+
+  function source(
+    overrides: Record<string, unknown> = {},
+  ) {
+    return {
+      inspect: vi.fn(async () => ({
+        schemaVersion: 1,
+        executableStatus: "available",
+        loginState: "authenticated",
+        productVersion: "0.144.6",
+        supportedProductVersions: ["0.144.6"],
+        protocolKind: "exec-jsonl",
+        protocolVersion: "0.144.6",
+        supportedProtocolVersions: ["0.144.6"],
+        protocolSchemaVersion: 1,
+        supportedProtocolSchemaVersions: [1],
+        protocolSchemaDigest: schemaDigest,
+        evidenceDigest,
+        capabilities: [
+          "discover",
+          "workspace_targeting",
+          "launch",
+          "observe",
+          "structured_events",
+          "send",
+          "resume",
+          "completion_receipt",
+          "headless",
+        ].map((capability) => ({ capability, status: "supported" })),
+        ...overrides,
+      })),
+    };
+  }
+
+  it("persists a versioned receipt and computes the fixed Phase 0 Codex matrix as L1", async () => {
+    const save = vi.fn(async () => undefined);
+    const probe = new CodexCapabilityProbe(source(), { save }, () => now);
+
+    const receipt = await probe.probe();
+
+    expect(receipt).toMatchObject({
+      schemaVersion: 2,
+      loginState: "authenticated",
+      productVersion: {
+        observed: "0.144.6",
+        supported: ["0.144.6"],
+      },
+      protocol: {
+        kind: "exec-jsonl",
+        observedVersion: "0.144.6",
+        schemaVersion: 1,
+        schemaDigest,
+      },
+    });
+    expect(save).toHaveBeenCalledWith(receipt);
+    expect(computeCapabilityManifest(receipt, now).level).toBe("L1");
+    expect(
+      computeCapabilityManifest(receipt, now).capabilities
+        .find(({ capability }) => capability === "interrupt"),
+    ).toMatchObject({ status: "unknown" });
+  });
+
+  it("fails closed for logged-out and unknown-version observations", async () => {
+    const loggedOut = await new CodexCapabilityProbe(
+      source({ loginState: "unauthenticated" }),
+      { save: async () => undefined },
+      () => now,
+    ).probe();
+    const unknownVersion = await new CodexCapabilityProbe(
+      source({ productVersion: null }),
+      { save: async () => undefined },
+      () => now,
+    ).probe();
+
+    expect(computeCapabilityManifest(loggedOut, now).level).toBe("NONE");
+    expect(computeCapabilityManifest(unknownVersion, now).level).toBe("NONE");
+  });
+
+  it("never advertises deep observe when the structured event stream is missing", async () => {
+    const receipt = await new CodexCapabilityProbe(
+      source({
+        capabilities: [
+          "discover",
+          "workspace_targeting",
+          "launch",
+          "observe",
+        ].map((capability) => ({ capability, status: "supported" })),
+      }),
+      { save: async () => undefined },
+      () => now,
+    ).probe();
+
+    expect(
+      computeCapabilityManifest(receipt, now).capabilities
+        .find(({ capability }) => capability === "observe"),
+    ).toMatchObject({ status: "unknown" });
+    expect(computeCapabilityManifest(receipt, now).level).toBe("L0");
+  });
+
+  function operation(
+    operationType: "session.launch" | "session.send" | "session.resume" | "session.interrupt",
+    operationId: string,
+  ): ExternalOperation {
+    const base = {
+      ...common,
+      operationId: OperationIdSchema.parse(operationId),
+      requestedCapabilities: [
+        operationType === "session.launch"
+          ? "launch"
+          : operationType === "session.interrupt"
+            ? "interrupt"
+            : operationType === "session.resume"
+              ? "resume"
+              : "send",
+      ],
+    };
+    if (operationType === "session.launch") {
+      return createExternalOperation({
+        ...base,
+        operationVersion: 1,
+        operationType,
+        payload: {
+          agentProfileId: AgentProfileIdSchema.parse("apr_codexruntime01"),
+          workspaceId: WorkspaceIdSchema.parse("wsp_codexruntime01"),
+        },
+      });
+    }
+    const authority = {
+      controllerLeaseId: ControllerLeaseIdSchema.parse("ctl_codexruntime01"),
+      controllerLeaseOwnerId: LeaseOwnerIdSchema.parse("own_codexruntime01"),
+      controllerLeaseGeneration: 1,
+    };
+    return createExternalOperation({
+      ...base,
+      operationVersion: 2,
+      operationType,
+      payload: operationType === "session.send"
+        ? {
+            nativeSessionId,
+            inputEvidenceId: EvidenceIdSchema.parse("evd_codexruntime01"),
+            ...authority,
+          }
+        : operationType === "session.interrupt"
+          ? { nativeSessionId, reason: "bounded test", ...authority }
+          : { nativeSessionId, ...authority },
+    });
+  }
+
+  async function provenReceipt() {
+    return new CodexCapabilityProbe(
+      source({
+        capabilities: [
+          "discover",
+          "workspace_targeting",
+          "launch",
+          "observe",
+          "structured_events",
+          "send",
+          "interrupt",
+          "resume",
+          "completion_receipt",
+        ].map((capability) => ({ capability, status: "supported" })),
+      }),
+      { save: async () => undefined },
+      () => now,
+    ).probe();
+  }
+
+  it("dispatches launch/send/resume/interrupt with the stable operationId and persists native refs in receipts", async () => {
+    const calls: ExternalOperation[] = [];
+    const transport: CodexOperationTransport = {
+      execute: vi.fn(async (input) => {
+        calls.push(input);
+        return {
+          operationId: input.operationId,
+          nativeSessionId,
+          state: input.operationType === "session.interrupt" ? "waiting_input" : "running",
+          evidenceDigest,
+        } satisfies CodexOperationObservation;
+      }),
+      reconcile: vi.fn(async () => ({ outcome: "unknown" })),
+    };
+    const connector = new CodexConnector(transport, await provenReceipt(), () => now);
+    const operations = [
+      operation("session.launch", "opn_codexdeep001"),
+      operation("session.send", "opn_codexdeep002"),
+      operation("session.resume", "opn_codexdeep003"),
+      operation("session.interrupt", "opn_codexdeep004"),
+    ];
+
+    for (const externalOperation of operations) {
+      const receipt = await connector.execute(externalOperation);
+      expect(receipt.operationId).toBe(externalOperation.operationId);
+      expect(receipt.fingerprint).toBe(externalOperation.fingerprint);
+      expect(receipt.nativeReferences).toContainEqual({
+        kind: "session",
+        referenceId: nativeSessionId,
+      });
+      expect(receipt.facts.every((fact) => !runtimeFactCanCompleteStep(fact))).toBe(true);
+    }
+    expect(calls.map(({ operationId }) => operationId)).toEqual(
+      operations.map(({ operationId }) => operationId),
+    );
+  });
+
+  it("rejects an unproven requested atom before transport I/O", async () => {
+    const transport: CodexOperationTransport = {
+      execute: vi.fn(),
+      reconcile: vi.fn(async () => ({ outcome: "unknown" })),
+    };
+    const connector = new CodexConnector(
+      transport,
+      await new CodexCapabilityProbe(source(), { save: async () => undefined }, () => now).probe(),
+      () => now,
+    );
+
+    await expect(
+      connector.execute(operation("session.interrupt", "opn_codexblocked01")),
+    ).rejects.toThrow(/^CODEX_CAPABILITY_NOT_PROVEN$/u);
+    expect(transport.execute).not.toHaveBeenCalled();
+  });
+
+  it("reconciles a crash-after-create from a new adapter without creating another session", async () => {
+    const created = new Map<string, CodexOperationObservation>();
+    let creates = 0;
+    const transport: CodexOperationTransport = {
+      execute: vi.fn(async (input) => {
+        creates += 1;
+        created.set(input.operationId, {
+          operationId: input.operationId,
+          nativeSessionId,
+          state: "created",
+          evidenceDigest,
+        });
+        throw new Error("fixture crash after native effect");
+      }),
+      reconcile: vi.fn(async (input) => {
+        const observation = created.get(input.operationId);
+        return observation === undefined
+          ? { outcome: "confirmed_absent" }
+          : { outcome: "attached", observation };
+      }),
+    };
+    const launch = operation("session.launch", "opn_codexcrash001");
+    const receipt = await provenReceipt();
+    await expect(
+      new CodexConnector(transport, receipt, () => now).execute(launch),
+    ).rejects.toThrow(/^CODEX_TRANSPORT_FAILED$/u);
+
+    const recovered = await new CodexConnector(
+      transport,
+      receipt,
+      () => now,
+    ).reconcile(launch);
+
+    expect(recovered).toMatchObject({
+      outcome: "attached",
+      receipt: {
+        operationId: launch.operationId,
+        nativeReferences: [{ kind: "session", referenceId: nativeSessionId }],
+      },
+    });
+    expect(creates).toBe(1);
   });
 });
 

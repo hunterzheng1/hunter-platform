@@ -5,6 +5,8 @@ import type { FlowCommandHandler, FlowCommandReceipt } from "@hunter/flow-engine
 import {
   ExternalOperationSchema,
   LeaseSchema,
+  capabilityManifestSupportsOperation,
+  computeCapabilityManifest,
   decodeCapabilityProbeReceipt,
   fingerprintExternalOperation,
   type CapabilityProbeReceipt,
@@ -73,13 +75,17 @@ export class RuntimeManager {
     if (authority.policyDecision !== "allow") throw new Error("POLICY_NOT_ALLOWED");
     const probe = decodeCapabilityProbeReceipt(authority.capabilityReceipt);
     const at = authority.now.getTime();
-    if (at < Date.parse(probe.observedAt) || at > Date.parse(probe.validUntil)) {
+    const receiptStart = probe.schemaVersion === 1
+      ? probe.observedAt
+      : probe.probedAt;
+    if (
+      at < Date.parse(receiptStart)
+      || at > Date.parse(probe.validUntil)
+    ) {
       throw new Error("CAPABILITY_RECEIPT_EXPIRED");
     }
-    const supported = new Set(
-      probe.results.filter(({ status }) => status === "SUPPORTED").map(({ capability }) => capability),
-    );
-    if (operation.requestedCapabilities.some((capability) => !supported.has(capability))) {
+    const manifest = computeCapabilityManifest(probe, authority.now);
+    if (!capabilityManifestSupportsOperation(manifest, operation)) {
       throw new Error("CAPABILITY_NOT_PROVEN");
     }
     const leaseKinds = new Set<string>();

@@ -9,9 +9,13 @@ import {
   RunIdSchema,
   WorkspaceIdSchema,
 } from "@hunter/domain";
-import { createExternalOperation, runtimeFactCanCompleteStep } from "@hunter/runtime-contracts";
+import {
+  computeCapabilityManifest,
+  createExternalOperation,
+  runtimeFactCanCompleteStep,
+} from "@hunter/runtime-contracts";
 import { OperationWorker, SqliteOperationJournal } from "@hunter/storage";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   CURSOR_SYNTHETIC_LIMITS,
   type CursorHandoffCandidateRequest,
@@ -20,6 +24,7 @@ import {
   type SyntheticCursorHandoffTransport,
 } from "./cursor-handoff.js";
 import { CursorHandoffCandidate } from "./cursor-handoff.js";
+import { CursorCapabilityProbe } from "./cursor-probe.js";
 import {
   CURSOR_TASK_PACK_LIMITS,
   renderTaskPack,
@@ -703,5 +708,100 @@ describe("Cursor contract-only synthetic handoff candidate", () => {
       /\b(?:node:fs|writeFile|mkdir|child_process|execFile|spawn|NativeSurfaceOpener|fetch|https?:|localhost|CapabilityManifest|manifest|level:\s*["']L1|yolo|dangerously-bypass|auto-approve)\b/iu,
     );
     expect(source).toContain("hunter.cursor.synthetic_handoff_v1");
+  });
+});
+
+describe("Cursor capability probe", () => {
+  const now = new Date("2026-07-24T00:00:00.000Z");
+  const schemaDigest = "8".repeat(64);
+  const evidenceDigest = "9".repeat(64);
+
+  function source(overrides: Record<string, unknown> = {}) {
+    return {
+      inspect: async () => ({
+        schemaVersion: 1,
+        executableStatus: "available",
+        loginState: "not_required",
+        productVersion: "1.7.0",
+        supportedProductVersions: ["1.7.0"],
+        protocolKind: "native-handoff",
+        protocolVersion: "1",
+        supportedProtocolVersions: ["1"],
+        protocolSchemaVersion: 1,
+        supportedProtocolSchemaVersions: [1],
+        protocolSchemaDigest: schemaDigest,
+        evidenceDigest,
+        discoveryStatus: "supported",
+        workspaceTargetingStatus: "supported",
+        handoffStatus: "supported",
+        nativeSurfaceStatus: "supported",
+        observerContract: "not_proven",
+        ...overrides,
+      }),
+    };
+  }
+
+  it("computes L0 by default and does not fabricate observe, completion, or approval", async () => {
+    const save = vi.fn(async () => undefined);
+    const receipt = await new CursorCapabilityProbe(
+      source(),
+      { save },
+      () => now,
+    ).probe();
+    const manifest = computeCapabilityManifest(receipt, now);
+
+    expect(save).toHaveBeenCalledWith(receipt);
+    expect(manifest.level).toBe("L0");
+    for (const capability of [
+      "observe",
+      "artifact_export",
+      "completion_receipt",
+      "approve",
+    ]) {
+      expect(
+        manifest.capabilities.find((item) => item.capability === capability),
+      ).toMatchObject({ status: "unknown" });
+    }
+  });
+
+  it("computes L1 only when the Git/artifact observer contract passes", async () => {
+    const notProven = await new CursorCapabilityProbe(
+      source({ observerContract: "not_proven" }),
+      { save: async () => undefined },
+      () => now,
+    ).probe();
+    const passed = await new CursorCapabilityProbe(
+      source({ observerContract: "passed" }),
+      { save: async () => undefined },
+      () => now,
+    ).probe();
+
+    expect(computeCapabilityManifest(notProven, now).level).toBe("L0");
+    expect(computeCapabilityManifest(passed, now).level).toBe("L1");
+    expect(
+      computeCapabilityManifest(passed, now).capabilities
+        .filter(({ capability }) =>
+          capability === "observe" || capability === "artifact_export")
+        .every(({ status }) => status === "supported"),
+    ).toBe(true);
+  });
+
+  it("fails closed for missing executable and protocol schema drift", async () => {
+    const missing = await new CursorCapabilityProbe(
+      source({ executableStatus: "unavailable", productVersion: null }),
+      { save: async () => undefined },
+      () => now,
+    ).probe();
+    const drift = await new CursorCapabilityProbe(
+      source({
+        protocolSchemaVersion: 2,
+        supportedProtocolSchemaVersions: [1],
+      }),
+      { save: async () => undefined },
+      () => now,
+    ).probe();
+
+    expect(computeCapabilityManifest(missing, now).level).toBe("NONE");
+    expect(computeCapabilityManifest(drift, now).level).toBe("NONE");
   });
 });
