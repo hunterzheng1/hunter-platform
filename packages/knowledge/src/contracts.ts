@@ -78,6 +78,22 @@ const AuthoritativeKnowledgeEntrySchema = KnowledgeBaseSchema.extend({
 
 const ExperientialKnowledgeEntrySchema = KnowledgeBaseSchema.extend({
   level: z.literal("experiential"),
+  confidence: z
+    .object({
+      level: z.enum(["low", "medium", "high"]),
+      rationale: z.string().trim().min(1).max(1_000),
+    })
+    .strict(),
+  invalidationConditions: z
+    .array(
+      z
+        .object({
+          condition: z.string().trim().min(1).max(1_000),
+        })
+        .strict(),
+    )
+    .min(1)
+    .max(32),
   source: z
     .object({
       type: z.literal("evidence"),

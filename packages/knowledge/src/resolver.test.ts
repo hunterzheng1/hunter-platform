@@ -46,6 +46,15 @@ function experiential(
     entryId: `kne_experiential_${suffix}`,
     level: "experiential",
     status,
+    confidence: {
+      level: "high",
+      rationale: "Supported by verification evidence.",
+    },
+    invalidationConditions: [
+      {
+        condition: "The supporting Evidence is withdrawn or superseded.",
+      },
+    ],
     source: {
       type: "evidence",
       projectId,

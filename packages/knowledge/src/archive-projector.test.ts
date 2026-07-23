@@ -10,6 +10,7 @@ import {
   ArchiveKnowledgeProjector,
   type ArchiveKnowledgeProjectionCommit,
   type ArchiveKnowledgeProjectionCommitResult,
+  type ArchiveKnowledgeProjectionJob,
   type DurableKnowledgeProjectionStore,
   type KnowledgeEntry,
   type VerifiedArchiveReceipt,
@@ -44,6 +45,7 @@ function leasedJob(
     jobId: OperationIdSchema.parse(`opn_${suffix}`),
     state: "leased" as const,
     attempt: 1,
+    leaseGeneration: 1,
     leaseTokenHash: "f".repeat(64),
     receipt: verifiedReceipt,
   };
@@ -55,10 +57,57 @@ class TestOnlyDurableKnowledgeProjectionStore
   readonly byId = new Map<KnowledgeEntryId, KnowledgeEntry>();
   readonly idBySource = new Map<string, KnowledgeEntryId>();
   readonly idByManifest = new Map<string, KnowledgeEntryId>();
+  readonly byJob = new Map<
+    string,
+    { readonly inputFingerprint: string; readonly entryId: KnowledgeEntryId }
+  >();
+  readonly currentLeases = new Map<
+    string,
+    {
+      readonly attempt: number;
+      readonly leaseGeneration: number;
+      readonly leaseTokenHash: string;
+    }
+  >();
+
+  setCurrentLease(job: ArchiveKnowledgeProjectionJob): void {
+    this.currentLeases.set(job.jobId, {
+      attempt: job.attempt,
+      leaseGeneration: job.leaseGeneration,
+      leaseTokenHash: job.leaseTokenHash,
+    });
+  }
 
   async commitArchiveProjection(
     commit: ArchiveKnowledgeProjectionCommit,
   ): Promise<ArchiveKnowledgeProjectionCommitResult> {
+    const currentLease = this.currentLeases.get(commit.jobId);
+    if (
+      currentLease === undefined ||
+      currentLease.attempt !== commit.attempt ||
+      currentLease.leaseGeneration !== commit.leaseGeneration ||
+      currentLease.leaseTokenHash !== commit.leaseTokenHash
+    ) {
+      throw new Error("KNOWLEDGE_PROJECTION_LEASE_NOT_CURRENT");
+    }
+
+    const jobBinding = this.byJob.get(commit.jobId);
+    if (jobBinding !== undefined) {
+      if (jobBinding.inputFingerprint !== commit.inputFingerprint) {
+        throw new Error("KNOWLEDGE_PROJECTION_INPUT_CONFLICT");
+      }
+      const existing = this.byId.get(jobBinding.entryId);
+      if (existing === undefined) {
+        throw new Error("KNOWLEDGE_PROJECTION_JOB_RECEIPT_MISSING");
+      }
+      return {
+        jobId: commit.jobId,
+        inputFingerprint: commit.inputFingerprint,
+        outcome: "existing",
+        entry: existing,
+      };
+    }
+
     const sourceEntryId = this.idBySource.get(commit.sourceKey);
     const manifestEntryId = this.idByManifest.get(commit.manifestKey);
     const existingId = sourceEntryId ?? manifestEntryId;
@@ -75,14 +124,41 @@ class TestOnlyDurableKnowledgeProjectionStore
       if (existing === undefined || existing.entryId !== commit.entry.entryId) {
         throw new Error("KNOWLEDGE_PROJECTION_SOURCE_CONFLICT");
       }
-      return { outcome: "existing", entry: existing };
+      this.byJob.set(commit.jobId, {
+        inputFingerprint: commit.inputFingerprint,
+        entryId: existing.entryId,
+      });
+      return {
+        jobId: commit.jobId,
+        inputFingerprint: commit.inputFingerprint,
+        outcome: "existing",
+        entry: existing,
+      };
     }
 
     this.byId.set(commit.entry.entryId, commit.entry);
     this.idBySource.set(commit.sourceKey, commit.entry.entryId);
     this.idByManifest.set(commit.manifestKey, commit.entry.entryId);
-    return { outcome: "inserted", entry: commit.entry };
+    this.byJob.set(commit.jobId, {
+      inputFingerprint: commit.inputFingerprint,
+      entryId: commit.entry.entryId,
+    });
+    return {
+      jobId: commit.jobId,
+      inputFingerprint: commit.inputFingerprint,
+      outcome: "inserted",
+      entry: commit.entry,
+    };
   }
+}
+
+async function projectWithCurrentLease(
+  store: TestOnlyDurableKnowledgeProjectionStore,
+  job: ArchiveKnowledgeProjectionJob,
+  projector = new ArchiveKnowledgeProjector(store),
+) {
+  store.setCurrentLease(job);
+  return projector.project(job);
 }
 
 describe("ArchiveKnowledgeProjector", () => {
@@ -90,7 +166,8 @@ describe("ArchiveKnowledgeProjector", () => {
     "projects a verified %s Run as historical knowledge",
     async (outcome) => {
       const store = new TestOnlyDurableKnowledgeProjectionStore();
-      const result = await new ArchiveKnowledgeProjector(store).project(
+      const result = await projectWithCurrentLease(
+        store,
         leasedJob(receipt({ outcome }), `projection_${outcome}`),
       );
 
@@ -112,13 +189,28 @@ describe("ArchiveKnowledgeProjector", () => {
     },
   );
 
-  it("returns the original entry for the same Project, source, and verified manifest", async () => {
+  it("returns the original entry when a reconstructed worker retries the same job and fingerprint", async () => {
     const store = new TestOnlyDurableKnowledgeProjectionStore();
+    const job = leasedJob(receipt());
     const firstProjector = new ArchiveKnowledgeProjector(store);
-    const first = await firstProjector.project(leasedJob(receipt()));
+    const first = await projectWithCurrentLease(store, job, firstProjector);
 
     const reconstructedProjector = new ArchiveKnowledgeProjector(store);
-    const duplicate = await reconstructedProjector.project(
+    const duplicate = await projectWithCurrentLease(
+      store,
+      job,
+      reconstructedProjector,
+    );
+
+    expect(duplicate).toEqual({ outcome: "existing", entry: first.entry });
+    expect(store.byId).toHaveLength(1);
+  });
+
+  it("returns the original source entry for a different valid job carrying the same manifest", async () => {
+    const store = new TestOnlyDurableKnowledgeProjectionStore();
+    const first = await projectWithCurrentLease(store, leasedJob(receipt()));
+    const duplicate = await projectWithCurrentLease(
+      store,
       leasedJob(
         receipt({ verifiedAt: "2026-07-23T02:03:04.000Z" }),
         "projection_retry",
@@ -129,14 +221,48 @@ describe("ArchiveKnowledgeProjector", () => {
     expect(store.byId).toHaveLength(1);
   });
 
+  it("fails closed when the same jobId carries a different verified payload", async () => {
+    const store = new TestOnlyDurableKnowledgeProjectionStore();
+    const originalJob = leasedJob(receipt());
+    await projectWithCurrentLease(store, originalJob);
+    const conflictingHash = "b".repeat(64);
+    const conflictingJob = leasedJob(
+      receipt({
+        manifestHash: conflictingHash,
+        manifestRef: `cas:sha256:${conflictingHash}`,
+      }),
+    );
+
+    await expect(
+      projectWithCurrentLease(store, conflictingJob),
+    ).rejects.toThrow("KNOWLEDGE_PROJECTION_INPUT_CONFLICT");
+    expect(store.byId).toHaveLength(1);
+  });
+
+  it.each([
+    ["attempt", { attempt: 2 }],
+    ["lease generation", { leaseGeneration: 2 }],
+    ["lease proof hash", { leaseTokenHash: "e".repeat(64) }],
+  ])("fails closed for a stale %s", async (_label, currentOverride) => {
+    const store = new TestOnlyDurableKnowledgeProjectionStore();
+    const submittedJob = leasedJob(receipt(), "projection_stale");
+    store.setCurrentLease({ ...submittedJob, ...currentOverride });
+
+    await expect(
+      new ArchiveKnowledgeProjector(store).project(submittedJob),
+    ).rejects.toThrow("KNOWLEDGE_PROJECTION_LEASE_NOT_CURRENT");
+    expect(store.byId).toHaveLength(0);
+  });
+
   it("fails closed when the same Project and source present a different manifest hash", async () => {
     const store = new TestOnlyDurableKnowledgeProjectionStore();
     const projector = new ArchiveKnowledgeProjector(store);
-    await projector.project(leasedJob(receipt()));
+    await projectWithCurrentLease(store, leasedJob(receipt()), projector);
 
     const conflictingHash = "b".repeat(64);
     await expect(
-      projector.project(
+      projectWithCurrentLease(
+        store,
         leasedJob(
           receipt({
             manifestHash: conflictingHash,
@@ -144,6 +270,7 @@ describe("ArchiveKnowledgeProjector", () => {
           }),
           "projection_conflict",
         ),
+        projector,
       ),
     ).rejects.toThrow("KNOWLEDGE_PROJECTION_SOURCE_CONFLICT");
   });
@@ -152,6 +279,8 @@ describe("ArchiveKnowledgeProjector", () => {
     const badStore: DurableKnowledgeProjectionStore = {
       async commitArchiveProjection(commit) {
         return {
+          jobId: commit.jobId,
+          inputFingerprint: commit.inputFingerprint,
           outcome: "existing",
           entry: {
             ...commit.entry,
@@ -169,7 +298,12 @@ describe("ArchiveKnowledgeProjector", () => {
   it("fails closed when a durable store returns an invalid commit receipt", async () => {
     const badStore = {
       async commitArchiveProjection(commit: ArchiveKnowledgeProjectionCommit) {
-        return { outcome: "upserted", entry: commit.entry };
+        return {
+          jobId: commit.jobId,
+          inputFingerprint: commit.inputFingerprint,
+          outcome: "upserted",
+          entry: commit.entry,
+        };
       },
     } as unknown as DurableKnowledgeProjectionStore;
 

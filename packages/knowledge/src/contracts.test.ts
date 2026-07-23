@@ -76,6 +76,15 @@ describe("KnowledgeEntry", () => {
       entryId: "kne_experiential_knowledge",
       level: "experiential",
       status: "active",
+      confidence: {
+        level: "high",
+        rationale: "Supported by verification evidence.",
+      },
+      invalidationConditions: [
+        {
+          condition: "The supporting Evidence is withdrawn or superseded.",
+        },
+      ],
       source: {
         type: "evidence",
         projectId,
@@ -156,6 +165,38 @@ describe("KnowledgeEntry", () => {
         scope: { projectId },
         summary: "Archived failed Run.",
         body: `Archived failed Run ${runId}.`,
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each([
+    ["structured Confidence", {}],
+    [
+      "invalidation conditions",
+      {
+        confidence: {
+          level: "high",
+          rationale: "Supported by verification evidence.",
+        },
+      },
+    ],
+  ])("rejects experiential knowledge missing %s", (_label, fields) => {
+    expect(
+      KnowledgeEntrySchema.safeParse({
+        schemaVersion: 1,
+        entryId: "kne_experiential_required_fields",
+        level: "experiential",
+        status: "active",
+        source: {
+          type: "evidence",
+          projectId,
+          evidenceId: EvidenceIdSchema.parse("evd_knowledge_required"),
+          contentHash: "e".repeat(64),
+        },
+        scope: { projectId },
+        summary: "Verified implementation constraint.",
+        body: "The repository requires an isolated writer.",
+        ...fields,
       }).success,
     ).toBe(false);
   });
