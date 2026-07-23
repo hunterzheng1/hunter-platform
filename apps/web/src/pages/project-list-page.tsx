@@ -5,6 +5,24 @@ import type { HunterApi } from "../api/client.js";
 type ProjectsApi = Pick<HunterApi, "listProjects" | "createProject">;
 type ListedProject = Awaited<ReturnType<ProjectsApi["listProjects"]>>["projects"][number];
 type ListedProjectId = ListedProject["projectId"];
+interface ProjectAuthorizationState {
+  readonly projects: readonly ListedProject[];
+  readonly pendingAuthorization: ReadonlySet<ListedProjectId>;
+}
+
+function mergeAuthorizedProjects(
+  current: ProjectAuthorizationState,
+  authorizedProjects: readonly ListedProject[],
+): ProjectAuthorizationState {
+  const authorizedIds = new Set(authorizedProjects.map((project) => project.projectId));
+  return {
+    projects: [
+      ...authorizedProjects,
+      ...current.projects.filter((project) => current.pendingAuthorization.has(project.projectId) && !authorizedIds.has(project.projectId)),
+    ],
+    pendingAuthorization: new Set([...current.pendingAuthorization].filter((projectId) => !authorizedIds.has(projectId))),
+  };
+}
 
 export function ProjectListPage({
   api,
@@ -13,19 +31,21 @@ export function ProjectListPage({
   readonly api: ProjectsApi;
   readonly onOpen: (projectId: string) => void;
 }) {
-  const [projects, setProjects] = useState<readonly ListedProject[]>([]);
+  const [{ projects, pendingAuthorization }, setProjectAuthorization] = useState<ProjectAuthorizationState>(() => ({
+    projects: [],
+    pendingAuthorization: new Set(),
+  }));
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [checkingAuthorization, setCheckingAuthorization] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
-  const [pendingAuthorization, setPendingAuthorization] = useState<ReadonlySet<ListedProjectId>>(() => new Set());
 
   useEffect(() => {
     let current = true;
     void api.listProjects()
-      .then((response) => { if (current) setProjects(response.projects); })
+      .then((response) => { if (current) setProjectAuthorization((state) => mergeAuthorizedProjects(state, response.projects)); })
       .catch(() => { if (current) setError("无法加载项目，请检查本地 Hunter 服务"); })
       .finally(() => { if (current) setLoading(false); });
     return () => { current = false; };
@@ -43,8 +63,10 @@ export function ProjectListPage({
     setNotice(undefined);
     try {
       const created = await api.createProject(normalized);
-      setProjects((current) => [...current, { projectId: created.projectId, name: created.name }]);
-      setPendingAuthorization((current) => new Set(current).add(created.projectId));
+      setProjectAuthorization((current) => ({
+        projects: [...current.projects, { projectId: created.projectId, name: created.name }],
+        pendingAuthorization: new Set(current.pendingAuthorization).add(created.projectId),
+      }));
       setNotice("项目已创建；可信宿主刷新安全会话后即可打开。");
       setName("");
     } catch {
@@ -58,15 +80,9 @@ export function ProjectListPage({
     setCheckingAuthorization(true);
     setError(undefined);
     setNotice(undefined);
-    const pendingAtStart = pendingAuthorization;
     try {
       const response = await api.listProjects();
-      const authorizedIds = new Set(response.projects.map((project) => project.projectId));
-      setProjects((current) => [
-        ...response.projects,
-        ...current.filter((project) => pendingAtStart.has(project.projectId) && !authorizedIds.has(project.projectId)),
-      ]);
-      setPendingAuthorization((current) => new Set([...current].filter((projectId) => !authorizedIds.has(projectId))));
+      setProjectAuthorization((current) => mergeAuthorizedProjects(current, response.projects));
       setNotice("授权状态已重新检查。");
     } catch {
       setError("无法检查授权，请重试");
@@ -94,9 +110,9 @@ export function ProjectListPage({
         <form className="inline-form" onSubmit={(event) => void submit(event)}>
           <label>
             项目名称
-            <input value={name} maxLength={120} disabled={busy} onChange={(event) => setName(event.target.value)} />
+            <input value={name} maxLength={120} disabled={busy || checkingAuthorization} onChange={(event) => setName(event.target.value)} />
           </label>
-          <button className="button button-primary" type="submit" disabled={busy}>
+          <button className="button button-primary" type="submit" disabled={busy || checkingAuthorization}>
             {busy ? "正在创建…" : "创建项目"}
           </button>
         </form>

@@ -7,6 +7,25 @@ import { ProjectListPage } from "./project-list-page.js";
 
 afterEach(cleanup);
 
+function deferred<T>() {
+  const handlers: { resolve?: (value: T) => void; reject?: (reason: unknown) => void } = {};
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    handlers.resolve = promiseResolve;
+    handlers.reject = promiseReject;
+  });
+  return {
+    promise,
+    resolve: (value: T) => {
+      if (handlers.resolve === undefined) throw new Error("DEFERRED_NOT_READY");
+      handlers.resolve(value);
+    },
+    reject: (reason: unknown) => {
+      if (handlers.reject === undefined) throw new Error("DEFERRED_NOT_READY");
+      handlers.reject(reason);
+    },
+  };
+}
+
 describe("ProjectListPage", () => {
   it("creates, lists, and opens a project with clear empty and busy states", async () => {
     const existingProjectId = ProjectIdSchema.parse("prj_task2000001");
@@ -83,5 +102,47 @@ describe("ProjectListPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "重新检查授权" }));
 
     expect(await screen.findByRole("button", { name: "等待授权 仍待授权" })).toHaveProperty("disabled", true);
+  });
+
+  it("keeps an in-flight creation visible and pending when an overlapping authorization recheck omits it", async () => {
+    const seedProjectId = ProjectIdSchema.parse("prj_task2000002");
+    const createdProjectId = ProjectIdSchema.parse("prj_task2000003");
+    const authorizationRefresh = deferred<{ projects: never[] }>();
+    const inFlightCreation = deferred<{
+      projectId: typeof createdProjectId;
+      name: string;
+      authorization: "host_session_reissue_required";
+    }>();
+    const api = {
+      listProjects: vi.fn()
+        .mockResolvedValueOnce({ projects: [] })
+        .mockReturnValueOnce(authorizationRefresh.promise),
+      createProject: vi.fn()
+        .mockResolvedValueOnce({ projectId: seedProjectId, name: "先前待授权", authorization: "host_session_reissue_required" as const })
+        .mockReturnValueOnce(inFlightCreation.promise),
+    };
+    render(<ProjectListPage api={api} onOpen={vi.fn()} />);
+
+    await screen.findByText("还没有项目");
+    fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "先前待授权" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建项目" }));
+    await screen.findByRole("button", { name: "等待授权 先前待授权" });
+
+    fireEvent.change(screen.getByLabelText("项目名称"), { target: { value: "并发项目" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建项目" }));
+    fireEvent.click(screen.getByRole("button", { name: "重新检查授权" }));
+    expect(api.listProjects).toHaveBeenCalledTimes(2);
+
+    inFlightCreation.resolve({
+      projectId: createdProjectId,
+      name: "并发项目",
+      authorization: "host_session_reissue_required",
+    });
+    expect(await screen.findByRole("button", { name: "等待授权 并发项目" })).toHaveProperty("disabled", true);
+
+    authorizationRefresh.resolve({ projects: [] });
+    expect(await screen.findByRole("button", { name: "重新检查授权" })).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", { name: "等待授权 并发项目" })).toHaveProperty("disabled", true);
+    expect(screen.queryByText("还没有项目")).toBeNull();
   });
 });
