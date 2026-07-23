@@ -89,7 +89,12 @@ export function registerChangeRoutes(app: FastifyInstance, services: ChangeRoute
     }
 
     for (const requirementRevisionId of body.data.requirementRevisionIds) {
-      const requirement = services.getRequirementRevision(requirementRevisionId);
+      let requirement: ChangeRequirementRevisionIdentity | null;
+      try {
+        requirement = services.getRequirementRevision(requirementRevisionId);
+      } catch {
+        return await reply.code(500).send({ code: "CHANGE_REQUIREMENT_LOOKUP_FAILED" });
+      }
       if (
         requirement === null
         || requirement.projectId !== params.data.projectId

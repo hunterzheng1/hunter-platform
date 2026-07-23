@@ -270,6 +270,26 @@ describe("Change routes", () => {
     await app.close();
   });
 
+  it("sanitizes RequirementRevision lookup failures before publish", async () => {
+    const sensitiveMarker = "credential-bearing-requirement-lookup-marker";
+    const getRequirementRevision = vi.fn(() => { throw new Error(sensitiveMarker); });
+    const publishChange = vi.fn();
+    const { app, headers } = buildTestApp({ changes: { getRequirementRevision, publishChange } });
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectA}/changes`,
+      headers,
+      payload: payload([task(ids.taskA, [])]),
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({ code: "CHANGE_REQUIREMENT_LOOKUP_FAILED" });
+    expect(response.body).not.toContain(sensitiveMarker);
+    expect(getRequirementRevision).toHaveBeenCalledWith(ids.requirement);
+    expect(publishChange).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it("distinguishes invalid Change content from TaskGraph failures", async () => {
     const publishChange = vi.fn();
     const { app, headers } = buildTestApp({ changes: { publishChange } });
