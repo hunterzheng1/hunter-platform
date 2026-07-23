@@ -509,7 +509,7 @@ describe("OrcaWorkspaceProvider candidate boundary", () => {
       },
     );
     return {
-      provider: new OrcaWorkspaceProvider(windowsClient(runner), boundary, {
+      provider: new OrcaWorkspaceProvider(new OrcaClient(runner), boundary, {
         repositoryPathFor: () => repositoryPath,
         observedAt: () => "2026-07-23T00:00:00.000Z",
       }),
@@ -663,7 +663,7 @@ describe("OrcaWorkspaceProvider candidate boundary", () => {
       ),
     ]);
     const provider = new OrcaWorkspaceProvider(
-      windowsClient(runner),
+      new OrcaClient(runner),
       createWorkspacePathBoundary(
         new Map([[repositoryId, fixtureRoot]]),
         {
@@ -734,7 +734,7 @@ describe("OrcaWorkspaceProvider candidate boundary", () => {
       },
     );
     const provider = new OrcaWorkspaceProvider(
-      windowsClient(runner),
+      new OrcaClient(runner),
       boundary,
       {
         repositoryPathFor: () => defaultRepositoryPath,
