@@ -69,7 +69,14 @@ describe("secure local app", () => {
     expect(response.statusCode).toBe(200);
     expect(startRun).toHaveBeenCalledOnce();
     expect(startRun.mock.calls[0]![1]).toMatchObject({ actorId: "desktop-user" });
-    expect(await app.inject({ method: "POST", url: "/pair", headers, payload: {} }).then((value) => value.statusCode)).toBe(404);
+    for (const path of [
+      "/pair",
+      "/api/v1/devices/pairing-code",
+      "/api/v1/devices/pair",
+      "/api/v1/mobile/commands",
+    ]) {
+      expect(await app.inject({ method: "POST", url: path, headers, payload: {} }).then((value) => value.statusCode)).toBe(404);
+    }
     await app.close();
 
     const forbidden = harness({ planProjectId: ProjectIdSchema.parse("prj_http000002") });

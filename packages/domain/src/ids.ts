@@ -45,6 +45,9 @@ export type StepId = z.infer<typeof StepIdSchema>;
 export const StepRunIdSchema = canonicalId("spr", "StepRunId").brand<"StepRunId">();
 export type StepRunId = z.infer<typeof StepRunIdSchema>;
 
+export const GateIdSchema = canonicalId("gat", "GateId").brand<"GateId">();
+export type GateId = z.infer<typeof GateIdSchema>;
+
 export const RouteIdSchema = canonicalId("rte", "RouteId").brand<"RouteId">();
 export type RouteId = z.infer<typeof RouteIdSchema>;
 

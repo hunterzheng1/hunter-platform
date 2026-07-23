@@ -6,8 +6,13 @@ import {
   HunterApi,
   type AuthenticatedHunterTransport,
 } from "./api/client.js";
+import { MobileUnavailablePage } from "./pages/mobile-cockpit.js";
 import { ProjectListPage } from "./pages/project-list-page.js";
 import { ProjectPage } from "./pages/project-page.js";
+import {
+  isMobileRoute,
+  registerMobileServiceWorker,
+} from "./pwa/register-mobile-service-worker.js";
 import "./styles.css";
 
 function routeProjectId(pathname: string): string | undefined {
@@ -49,7 +54,13 @@ function Workbench({ transport }: { readonly transport: AuthenticatedHunterTrans
 
 const root = document.getElementById("root");
 if (root === null) throw new Error("WORKBENCH_ROOT_MISSING");
-const transport = AuthenticatedHunterTransportSchema.safeParse(window.hunterAuthenticatedTransport);
-createRoot(root).render(transport.success
+const mobileRoute = isMobileRoute(window.location.pathname);
+const transport = mobileRoute
+  ? undefined
+  : AuthenticatedHunterTransportSchema.safeParse(window.hunterAuthenticatedTransport);
+if (mobileRoute) registerMobileServiceWorker();
+createRoot(root).render(mobileRoute
+  ? <MobileUnavailablePage />
+  : transport?.success === true
   ? <Workbench transport={transport.data} />
   : <main className="page-shell"><p role="alert" className="message error-message">安全连接尚未配置。请从受信任的 Hunter 桌面宿主打开工作台。</p></main>);
