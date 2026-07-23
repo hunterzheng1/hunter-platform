@@ -18,7 +18,7 @@ const OrcaRepoIdSchema = z
   .regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u)
   .refine((value) => !value.includes("::"), "ORCA_REPO_ID_INVALID")
   .brand<"OrcaRepoId">();
-const OrcaTerminalIdSchema = z
+export const OrcaTerminalIdSchema = z
   .string()
   .min(1)
   .max(256)
@@ -207,6 +207,7 @@ export class OrcaClient {
   ): Promise<{
     readonly worktreeId: OrcaWorktreeId;
     readonly reportedAbsolutePath: string;
+    readonly startupTerminalId: OrcaTerminalId | null;
   }> {
     const repoId = OrcaRepoIdSchema.parse(repoIdInput);
     const operationId = OperationIdSchema.parse(operationIdInput);
@@ -225,7 +226,10 @@ export class OrcaClient {
         "--json",
       ]),
     );
-    return splitWorktreeId(result.worktree.id, repoId, this.#pathFlavor);
+    return {
+      ...splitWorktreeId(result.worktree.id, repoId, this.#pathFlavor),
+      startupTerminalId: result.startupTerminal?.handle ?? null,
+    };
   }
 
   async createTerminal(

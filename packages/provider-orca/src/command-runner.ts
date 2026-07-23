@@ -106,7 +106,8 @@ function validateArguments(args: readonly string[]): string[] {
     ) {
       throw new OrcaAdapterError("ORCA_ARGUMENT_INVALID");
     }
-    if (FORBIDDEN_ARGUMENT.test(argument)) {
+    const flagName = argument.startsWith("-") ? argument.split("=", 1)[0] : undefined;
+    if (flagName !== undefined && FORBIDDEN_ARGUMENT.test(flagName)) {
       throw new OrcaAdapterError("ORCA_ARGUMENT_FORBIDDEN");
     }
     return argument;
@@ -134,7 +135,7 @@ export class OrcaCommandRunner implements JsonCommandRunner {
     );
     this.#execFile = options.execFile ?? defaultExecFile;
     this.#timeoutMs = options.timeoutMs ?? 15_000;
-    this.#maxBufferBytes = options.maxBufferBytes ?? 1024 * 1024;
+    this.#maxBufferBytes = options.maxBufferBytes ?? 10 * 1024 * 1024;
 
     if (
       !Number.isSafeInteger(this.#timeoutMs) ||

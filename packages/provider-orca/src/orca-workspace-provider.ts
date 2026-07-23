@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   OrcaAbsolutePathSchema,
   OrcaClient,
+  OrcaTerminalIdSchema,
   OrcaWorktreeIdSchema,
 } from "./orca-client.js";
 
@@ -33,6 +34,9 @@ export const OrcaWorkspaceCandidateReceiptSchema = z
     privateWorkspace: z.strictObject({
       worktreeId: OrcaWorktreeIdSchema,
       reportedAbsolutePath: AbsoluteReportedPathSchema,
+      // Provider-private native observation only. This is not a Hunter
+      // session, capability receipt, verifier result, or Step success.
+      startupTerminalId: OrcaTerminalIdSchema.nullable(),
     }),
   })
   .superRefine((receipt, context) => {

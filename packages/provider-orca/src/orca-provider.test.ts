@@ -7,6 +7,7 @@ import {
   OrcaWorkspaceCandidateReceiptSchema,
   OrcaWorkspaceProvider,
   resolveOrcaExecutable,
+  type ExecFileAdapter,
   type JsonCommandRunner,
 } from "./index.js";
 
@@ -60,6 +61,17 @@ describe("OrcaCommandRunner", () => {
     );
   });
 
+  it("uses a bounded default buffer with room for the terminal text envelope", async () => {
+    const execFile = vi.fn<ExecFileAdapter>(
+      async () => ({ stdout: JSON.stringify({ ok: true }) }),
+    );
+    const runner = new OrcaCommandRunner({ executable: "orca", execFile });
+
+    await runner.run(["status", "--json"]);
+
+    expect(execFile.mock.calls[0]?.[2].maxBuffer).toBe(10 * 1024 * 1024);
+  });
+
   it("uses the configured command before development and platform defaults", () => {
     expect(
       resolveOrcaExecutable({
@@ -106,6 +118,22 @@ describe("OrcaCommandRunner", () => {
       "ORCA_ARGUMENT_FORBIDDEN",
     );
     expect(execFile).not.toHaveBeenCalled();
+  });
+
+  it("allows ordinary path values that contain words used by bypass flags", async () => {
+    const execFile = vi.fn(async () => ({ stdout: JSON.stringify({ ok: true }) }));
+    const runner = new OrcaCommandRunner({ executable: "orca", execFile });
+
+    await expect(
+      runner.run([
+        "repo",
+        "add",
+        "--path",
+        "C:\\fixtures\\bypass-yolo-project",
+        "--json",
+      ]),
+    ).resolves.toEqual({ ok: true });
+    expect(execFile).toHaveBeenCalledOnce();
   });
 
   it("fails closed with constants that do not disclose command or output", async () => {
@@ -193,7 +221,28 @@ describe("OrcaClient contract fixtures", () => {
     expect(worktree).toEqual({
       worktreeId: fullWorktreeId,
       reportedAbsolutePath: "C:\\fixtures\\hunter-worktree",
+      startupTerminalId: null,
     });
+  });
+
+  it("normalizes a startup terminal handle from worktree creation", async () => {
+    const fullWorktreeId = "repo-01::C:\\fixtures\\hunter-worktree";
+    const withTerminal = new FixtureRunner([
+      success({
+        worktree: { id: fullWorktreeId },
+        startupTerminal: { handle: "terminal-startup-01" },
+      }),
+    ]);
+    const omittedTerminal = new FixtureRunner([
+      success({ worktree: { id: fullWorktreeId } }),
+    ]);
+
+    await expect(
+      windowsClient(withTerminal).createWorktree("repo-01", operationId),
+    ).resolves.toMatchObject({ startupTerminalId: "terminal-startup-01" });
+    await expect(
+      windowsClient(omittedTerminal).createWorktree("repo-01", operationId),
+    ).resolves.toMatchObject({ startupTerminalId: null });
   });
 
   it("preserves the full worktree selector and uses bounded terminal inputs", async () => {
@@ -447,6 +496,7 @@ describe("OrcaWorkspaceProvider candidate boundary", () => {
       privateWorkspace: {
         worktreeId: "repo-01::C:\\fixtures\\hunter-worktree",
         reportedAbsolutePath: "C:\\fixtures\\hunter-worktree",
+        startupTerminalId: null,
       },
     });
     expect(receipt).not.toHaveProperty("operationStatus");
@@ -455,8 +505,16 @@ describe("OrcaWorkspaceProvider candidate boundary", () => {
   });
 
   it.each([
-    { worktreeId: { arbitrary: true }, reportedAbsolutePath: "C:\\fixtures\\hunter-worktree" },
-    { worktreeId: "not-a-complete-selector", reportedAbsolutePath: "C:\\fixtures\\hunter-worktree" },
+    {
+      worktreeId: { arbitrary: true },
+      reportedAbsolutePath: "C:\\fixtures\\hunter-worktree",
+      startupTerminalId: null,
+    },
+    {
+      worktreeId: "not-a-complete-selector",
+      reportedAbsolutePath: "C:\\fixtures\\hunter-worktree",
+      startupTerminalId: null,
+    },
   ])("rejects an invalid private workspace receipt shape", (privateWorkspace) => {
     expect(
       OrcaWorkspaceCandidateReceiptSchema.safeParse({
@@ -485,9 +543,32 @@ describe("OrcaWorkspaceProvider candidate boundary", () => {
         privateWorkspace: {
           worktreeId: "repo-01::C:\\fixtures\\hunter-worktree",
           reportedAbsolutePath: "C:\\fixtures\\hunter-worktree",
+          startupTerminalId: null,
         },
       }).success,
     ).toBe(false);
+  });
+
+  it("rejects an invalid startup terminal handle before candidate receipt creation", async () => {
+    const runner = new FixtureRunner([
+      success({ repo: { id: "repo-01" } }, "request-repo"),
+      success(
+        {
+          worktree: { id: "repo-01::C:\\fixtures\\hunter-worktree" },
+          startupTerminal: { handle: "terminal\u0000-invalid" },
+        },
+        "request-worktree",
+      ),
+    ]);
+    const provider = new OrcaWorkspaceProvider(windowsClient(runner));
+
+    await expect(
+      provider.dispatchUnverifiedWorkspaceCandidateOnce({
+        operationId,
+        repositoryPath: "C:\\fixtures\\hunter",
+        mode: "write",
+      }),
+    ).rejects.toThrow("ORCA_OUTPUT_SCHEMA_MISMATCH");
   });
 
   it.each(["relative\\repository", "C:\\fixtures\\hunter\u0000escape"])(
