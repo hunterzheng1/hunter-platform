@@ -1,0 +1,54 @@
+{
+  "name": "@hunter/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -b",
+    "build:resources": "npm run build -w @hunter/web",
+    "typecheck": "tsc -b --pretty false",
+    "pack:win": "npm run build:resources && npm run build && electron-builder --win nsis --x64"
+  },
+  "devDependencies": {
+    "electron": "37.10.3",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "local.hunter.platform",
+    "productName": "Hunter Platform",
+    "asar": true,
+    "electronDist": "../../node_modules/electron/dist",
+    "directories": {
+      "output": "dist-installers"
+    },
+    "files": [
+      "dist/**/*.js",
+      "!dist/**/*.test.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../web/dist",
+        "to": "web",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
