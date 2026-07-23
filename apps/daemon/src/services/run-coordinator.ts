@@ -2,6 +2,7 @@ import {
   ExecutionPlanSchema,
   RunIdSchema,
   TaskIdSchema,
+  canonicalSha256,
   deepFreeze,
   type ExecutionPlan,
   type RunId,
@@ -145,6 +146,8 @@ export class RunCoordinator {
       plan.executionPlanId !== parent.binding.executionPlanId ||
       plan.projectId !== parent.binding.projectId ||
       plan.changeRevisionId !== parent.binding.changeRevisionId ||
+      canonicalSha256([...plan.requirementRevisionIds].sort()) !==
+        canonicalSha256([...parent.binding.requirementRevisionIds].sort()) ||
       plan.taskGraphFingerprint !== parent.binding.taskGraphFingerprint
     ) {
       throw new Error("PARENT_EXECUTION_PLAN_MISMATCH");

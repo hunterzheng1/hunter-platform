@@ -122,6 +122,7 @@ function harness(options: {
   const frozenPlan = options.planOverride ?? plan();
   const parent = parentState();
   const started = new Map<RunId, FlowCommand>();
+  const handled: FlowCommand[] = [];
   const receipts = new Map<string, { fingerprint: string; receipt: FlowCommandReceipt }>();
   let failed = false;
   let parentVersion = parent.version;
@@ -134,6 +135,7 @@ function harness(options: {
     maxLoopIterations: 1,
   };
   const handle = (command: FlowCommand): FlowCommandReceipt => {
+    handled.push(command);
     const commandId = `${command.type}:${command.idempotencyKey}`;
     const fingerprint = canonicalSha256(command);
     const replay = receipts.get(commandId);
@@ -201,6 +203,7 @@ function harness(options: {
   });
   return {
     coordinator,
+    handled,
     started,
     parent,
     plan: frozenPlan,
@@ -292,6 +295,23 @@ describe("RunCoordinator", () => {
     });
     expect(() => harness({ planOverride: mismatched }).coordinator.dispatch(dispatch))
       .toThrow(/PARENT_EXECUTION_PLAN_MISMATCH/u);
+  });
+
+  it("rejects a plan with a different frozen Requirement set before fan-out", () => {
+    const requirementMismatch = createExecutionPlan({
+      executionPlanId: "epl_coordinator_main",
+      projectId: "prj_coordinator_main",
+      changeRevisionId: "crv_coordinator_main",
+      requirementRevisionIds: ["rrv_coordinator_other"],
+      tasks: plan().tasks,
+      publishedAt: "2026-07-23T00:00:00.000Z",
+    });
+    const { coordinator, handled } = harness({
+      planOverride: requirementMismatch,
+    });
+    expect(() => coordinator.dispatch(dispatch))
+      .toThrow(/^PARENT_EXECUTION_PLAN_MISMATCH$/u);
+    expect(handled).toEqual([]);
   });
 
   it("rejects raw IDs and proxy input with fixed public errors", () => {
