@@ -1,0 +1,443 @@
+import { readFile } from "node:fs/promises";
+import { describe, expect, it, vi } from "vitest";
+import { OperationIdSchema } from "@hunter/domain";
+import {
+  OrcaClient,
+  OrcaCommandRunner,
+  OrcaWorkspaceCandidateReceiptSchema,
+  OrcaWorkspaceProvider,
+  resolveOrcaExecutable,
+  type JsonCommandRunner,
+} from "./index.js";
+
+const operationId = OperationIdSchema.parse("opn_orcacandidate01");
+
+class FixtureRunner implements JsonCommandRunner {
+  readonly calls: string[][] = [];
+  readonly #responses: unknown[];
+
+  constructor(responses: readonly unknown[]) {
+    this.#responses = [...responses];
+  }
+
+  async run(args: readonly string[]): Promise<unknown> {
+    this.calls.push([...args]);
+    const response = this.#responses.shift();
+    if (response === undefined) throw new Error("MISSING_FIXTURE_RESPONSE");
+    return response;
+  }
+}
+
+function success(result: unknown, id = "fixture-request") {
+  return { id, ok: true, result, _meta: { ignored: true } };
+}
+
+describe("OrcaCommandRunner", () => {
+  it("resolves only an executable and runs argv without a shell", async () => {
+    const execFile = vi.fn(async () => ({ stdout: JSON.stringify({ ok: true }) }));
+    const runner = new OrcaCommandRunner({
+      executable: "C:\\Program Files\\Orca\\orca.exe",
+      execFile,
+      timeoutMs: 12_000,
+      maxBufferBytes: 512_000,
+    });
+
+    await expect(runner.run(["status", "--json"])).resolves.toEqual({ ok: true });
+    expect(execFile).toHaveBeenCalledWith(
+      "C:\\Program Files\\Orca\\orca.exe",
+      ["status", "--json"],
+      {
+        encoding: "utf8",
+        maxBuffer: 512_000,
+        shell: false,
+        timeout: 12_000,
+        windowsHide: true,
+      },
+    );
+  });
+
+  it("uses the configured command before development and platform defaults", () => {
+    expect(
+      resolveOrcaExecutable({
+        configuredCommand: "D:\\Tools\\orca-custom.exe",
+        development: true,
+        platform: "win32",
+      }),
+    ).toBe("D:\\Tools\\orca-custom.exe");
+    expect(resolveOrcaExecutable({ development: true, platform: "win32" })).toBe("orca-dev");
+    expect(resolveOrcaExecutable({ development: false, platform: "win32" })).toBe("orca");
+    expect(resolveOrcaExecutable({ development: false, platform: "linux" })).toBe("orca-ide");
+    expect(resolveOrcaExecutable({ development: false, platform: "darwin" })).toBe("orca");
+  });
+
+  it.each([
+    "",
+    "   ",
+    "\"C:\\Program Files\\Orca\\orca.exe\"",
+    "orca status",
+    "C:\\Program Files\\Orca\\orca.exe --json",
+    "orca\u0000.exe",
+    "orca\nstatus",
+  ])("rejects a composite or unsafe configured executable %s", (configuredCommand) => {
+    expect(() =>
+      resolveOrcaExecutable({
+        configuredCommand,
+        development: false,
+        platform: "win32",
+      }),
+    ).toThrow("ORCA_EXECUTABLE_INVALID");
+  });
+
+  it.each([
+    "--dangerously-bypass",
+    "--yolo",
+    "--auto-approve",
+    "--auto_approve",
+    "--approve-all",
+  ])("rejects forbidden permission argument %s before process creation", async (argument) => {
+    const execFile = vi.fn(async () => ({ stdout: "{}" }));
+    const runner = new OrcaCommandRunner({ executable: "orca", execFile });
+
+    await expect(runner.run(["status", argument, "--json"])).rejects.toThrow(
+      "ORCA_ARGUMENT_FORBIDDEN",
+    );
+    expect(execFile).not.toHaveBeenCalled();
+  });
+
+  it("fails closed with constants that do not disclose command or output", async () => {
+    const invalidJson = new OrcaCommandRunner({
+      executable: "C:\\private\\orca.exe",
+      execFile: async () => ({ stdout: "token=secret-value" }),
+    });
+    const failedCommand = new OrcaCommandRunner({
+      executable: "C:\\private\\orca.exe",
+      execFile: async () => {
+        throw new Error("C:\\Users\\private token=secret-value");
+      },
+    });
+
+    await expect(invalidJson.run(["status", "--json"])).rejects.toThrow(/^ORCA_OUTPUT_INVALID$/u);
+    await expect(failedCommand.run(["status", "--json"])).rejects.toThrow(/^ORCA_COMMAND_FAILED$/u);
+  });
+
+  it.each([
+    { args: ["status"] },
+    { args: [] },
+    { args: ["status", ""] },
+    { args: ["status", "bad\u0000argument", "--json"] },
+  ])("rejects non-JSON or invalid argv before process creation", async ({ args }) => {
+    const execFile = vi.fn(async () => ({ stdout: "{}" }));
+    const runner = new OrcaCommandRunner({ executable: "orca", execFile });
+
+    await expect(runner.run(args)).rejects.toThrow("ORCA_ARGUMENT_INVALID");
+    expect(execFile).not.toHaveBeenCalled();
+  });
+});
+
+describe("OrcaClient contract fixtures", () => {
+  it("maps repository and worktree creation to the current public argv contract", async () => {
+    const fullWorktreeId = "repo-01::C:\\fixtures\\hunter-worktree";
+    const runner = new FixtureRunner([
+      success({ repo: { id: "repo-01" } }, "request-repo"),
+      success({ worktree: { id: fullWorktreeId }, startupTerminal: null }, "request-worktree"),
+    ]);
+    const client = new OrcaClient(runner);
+
+    const repository = await client.addRepository("C:\\fixtures\\hunter");
+    const worktree = await client.createWorktree(repository.repoId, operationId);
+
+    expect(runner.calls).toEqual([
+      ["repo", "add", "--path", "C:\\fixtures\\hunter", "--json"],
+      [
+        "worktree",
+        "create",
+        "--repo",
+        "id:repo-01",
+        "--name",
+        "hunter-opn_orcacandidate01",
+        "--setup",
+        "skip",
+        "--no-parent",
+        "--json",
+      ],
+    ]);
+    expect(runner.calls.flat(2).join(" ")).not.toMatch(
+      /--agent|--prompt|--activate|run-hooks|dangerously|bypass|yolo|auto.?approve/iu,
+    );
+    expect(worktree).toEqual({
+      worktreeId: fullWorktreeId,
+      reportedAbsolutePath: "C:\\fixtures\\hunter-worktree",
+    });
+  });
+
+  it("preserves the full worktree selector and uses bounded terminal inputs", async () => {
+    const fullWorktreeId = "repo-01::C:\\fixtures\\hunter-worktree";
+    const runner = new FixtureRunner([
+      success({ terminal: { handle: "terminal-01" } }, "request-terminal"),
+      success(
+        { text: "ready", nextCursor: 8, latestCursor: 8, limited: false },
+        "request-read",
+      ),
+    ]);
+    const client = new OrcaClient(runner);
+    const terminal = await client.createTerminal(fullWorktreeId, "pwsh.exe");
+    const observation = await client.readTerminal(terminal.terminalId, 7, 100);
+
+    expect(runner.calls).toEqual([
+      [
+        "terminal",
+        "create",
+        "--worktree",
+        `id:${fullWorktreeId}`,
+        "--title",
+        "hunter-managed",
+        "--command",
+        "pwsh.exe",
+        "--json",
+      ],
+      [
+        "terminal",
+        "read",
+        "--terminal",
+        "terminal-01",
+        "--cursor",
+        "7",
+        "--limit",
+        "100",
+        "--json",
+      ],
+    ]);
+    expect(observation.nextCursor).toBe(8);
+  });
+
+  it.each(["pwsh -Command whoami", "pwsh;whoami", "C:\\Windows\\pwsh.exe", "pwsh\nwhoami"])(
+    "rejects non-token terminal command %s before dispatch",
+    async (command) => {
+      const runner = new FixtureRunner([success({ terminal: { handle: "terminal-01" } })]);
+      const client = new OrcaClient(runner);
+
+      await expect(
+        client.createTerminal("repo-01::C:\\fixtures\\hunter-worktree", command),
+      ).rejects.toThrow("ORCA_TERMINAL_EXECUTABLE_INVALID");
+      expect(runner.calls).toHaveLength(0);
+    },
+  );
+
+  it("rejects unknown private repository result fields", async () => {
+    const runner = new FixtureRunner([success({ repo: { id: "repo-01", drift: true } })]);
+    const client = new OrcaClient(runner);
+
+    await expect(client.addRepository("C:\\fixtures\\hunter")).rejects.toThrow(
+      "ORCA_OUTPUT_SCHEMA_MISMATCH",
+    );
+  });
+
+  it.each([
+    "abcd",
+    "repo-01::relative\\worktree",
+    "other-repo::C:\\fixtures\\worktree",
+  ])("rejects malformed private worktree result %s", async (worktreeId) => {
+    const runner = new FixtureRunner([
+      success({ worktree: { id: worktreeId }, startupTerminal: null }),
+    ]);
+    const client = new OrcaClient(runner);
+
+    await expect(client.createWorktree("repo-01", operationId)).rejects.toThrow(
+      "ORCA_OUTPUT_SCHEMA_MISMATCH",
+    );
+  });
+
+  it("rejects unknown private terminal result fields", async () => {
+    const runner = new FixtureRunner([
+      success({ terminal: { handle: "terminal-01", secret: "not-accepted" } }),
+    ]);
+    const client = new OrcaClient(runner);
+
+    await expect(
+      client.createTerminal("repo-01::C:\\fixtures\\hunter-worktree", "pwsh"),
+    ).rejects.toThrow("ORCA_OUTPUT_SCHEMA_MISMATCH");
+  });
+
+  it("rejects control characters in provider-private identifiers", async () => {
+    const runner = new FixtureRunner([success({ repo: { id: "repo\u0000-01" } })]);
+    const client = new OrcaClient(runner);
+
+    await expect(client.addRepository("C:\\fixtures\\hunter")).rejects.toThrow(
+      "ORCA_OUTPUT_SCHEMA_MISMATCH",
+    );
+  });
+
+  it.each([
+    "relative\\repository",
+    "C:\\fixtures\\hunter\u0000escape",
+  ])("rejects unsafe repository path %s before client dispatch", async (repositoryPath) => {
+    const runner = new FixtureRunner([success({ repo: { id: "repo-01" } })]);
+    const client = new OrcaClient(runner);
+
+    await expect(client.addRepository(repositoryPath)).rejects.toThrow(
+      "ORCA_REPOSITORY_PATH_INVALID",
+    );
+    expect(runner.calls).toHaveLength(0);
+  });
+
+  it.each([
+    { cursor: 7, nextCursor: 9, latestCursor: 8 },
+    { cursor: 7, nextCursor: 6, latestCursor: 8 },
+  ])(
+    "rejects incoherent terminal cursor result next=$nextCursor latest=$latestCursor",
+    async ({ cursor, nextCursor, latestCursor }) => {
+      const runner = new FixtureRunner([
+        success({ text: "", nextCursor, latestCursor, limited: false }),
+      ]);
+      const client = new OrcaClient(runner);
+
+      await expect(client.readTerminal("terminal-01", cursor, 100)).rejects.toThrow(
+        "ORCA_OUTPUT_SCHEMA_MISMATCH",
+      );
+    },
+  );
+
+  it.each([
+    "repo-01::relative\\worktree",
+    "repo-01::C:\\fixtures\\hunter\u0000escape",
+  ])("rejects unsafe worktree selector %s before terminal dispatch", async (worktreeId) => {
+    const runner = new FixtureRunner([success({ terminal: { handle: "terminal-01" } })]);
+    const client = new OrcaClient(runner);
+
+    await expect(client.createTerminal(worktreeId, "pwsh")).rejects.toThrow(
+      "ORCA_WORKTREE_ID_INVALID",
+    );
+    expect(runner.calls).toHaveLength(0);
+  });
+
+  it.each([
+    [-1, 100],
+    [1.5, 100],
+    [0, 0],
+    [0, 1_001],
+  ])("rejects invalid terminal read cursor=%s limit=%s before dispatch", async (cursor, limit) => {
+    const runner = new FixtureRunner([
+      success({ text: "", nextCursor: 0, latestCursor: 0, limited: false }),
+    ]);
+    const client = new OrcaClient(runner);
+
+    await expect(client.readTerminal("terminal-01", cursor, limit)).rejects.toThrow(
+      /ORCA_(?:CURSOR|LIMIT)_INVALID/u,
+    );
+    expect(runner.calls).toHaveLength(0);
+  });
+});
+
+describe("OrcaWorkspaceProvider candidate boundary", () => {
+  function fixtureProvider(repositoryPath = "C:\\fixtures\\hunter") {
+    const fullWorktreeId = `repo-01::${repositoryPath}-worktree`;
+    const runner = new FixtureRunner([
+      success({ repo: { id: "repo-01" } }, "request-repo"),
+      success({ worktree: { id: fullWorktreeId }, startupTerminal: null }, "request-worktree"),
+    ]);
+    return { provider: new OrcaWorkspaceProvider(new OrcaClient(runner)), runner };
+  }
+
+  it("returns only an honest contract-only candidate receipt", async () => {
+    const { provider } = fixtureProvider();
+    const receipt = await provider.dispatchUnverifiedWorkspaceCandidateOnce({
+      operationId,
+      repositoryPath: "C:\\fixtures\\hunter",
+      mode: "write",
+    });
+
+    expect(receipt).toMatchObject({
+      schemaVersion: 1,
+      operationId,
+      operationLabel: "hunter-opn_orcacandidate01",
+      proofScope: "contract_only",
+      providerValidationStatus: "NOT_PROVEN",
+      retrySafety: "NOT_PROVEN",
+      privateWorkspace: {
+        worktreeId: "repo-01::C:\\fixtures\\hunter-worktree",
+        reportedAbsolutePath: "C:\\fixtures\\hunter-worktree",
+      },
+    });
+    expect(receipt).not.toHaveProperty("operationStatus");
+    expect(receipt).not.toHaveProperty("leaseId");
+    expect(receipt).not.toHaveProperty("evidence");
+  });
+
+  it.each([
+    { worktreeId: { arbitrary: true }, reportedAbsolutePath: "C:\\fixtures\\hunter-worktree" },
+    { worktreeId: "not-a-complete-selector", reportedAbsolutePath: "C:\\fixtures\\hunter-worktree" },
+  ])("rejects an invalid private workspace receipt shape", (privateWorkspace) => {
+    expect(
+      OrcaWorkspaceCandidateReceiptSchema.safeParse({
+        schemaVersion: 1,
+        operationId,
+        operationLabel: "hunter-opn_orcacandidate01",
+        fingerprint: "a".repeat(64),
+        proofScope: "contract_only",
+        providerValidationStatus: "NOT_PROVEN",
+        retrySafety: "NOT_PROVEN",
+        privateWorkspace,
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each(["relative\\repository", "C:\\fixtures\\hunter\u0000escape"])(
+    "rejects unsafe repository path %s before any candidate dispatch",
+    async (repositoryPath) => {
+      const { provider, runner } = fixtureProvider();
+
+      await expect(
+        provider.dispatchUnverifiedWorkspaceCandidateOnce({
+          operationId,
+          repositoryPath,
+          mode: "write",
+        }),
+      ).rejects.toThrow();
+      expect(runner.calls).toHaveLength(0);
+    },
+  );
+
+  it("derives deterministic fingerprints and argv without claiming replay safety", async () => {
+    const first = fixtureProvider();
+    const second = fixtureProvider();
+    const changed = fixtureProvider("C:\\fixtures\\other");
+
+    const firstReceipt = await first.provider.dispatchUnverifiedWorkspaceCandidateOnce({
+      operationId,
+      repositoryPath: "C:\\fixtures\\hunter",
+      mode: "write",
+    });
+    const secondReceipt = await second.provider.dispatchUnverifiedWorkspaceCandidateOnce({
+      operationId,
+      repositoryPath: "C:\\fixtures\\hunter",
+      mode: "write",
+    });
+    const changedReceipt = await changed.provider.dispatchUnverifiedWorkspaceCandidateOnce({
+      operationId,
+      repositoryPath: "C:\\fixtures\\other",
+      mode: "write",
+    });
+
+    expect(secondReceipt.fingerprint).toBe(firstReceipt.fingerprint);
+    expect(second.runner.calls).toEqual(first.runner.calls);
+    expect(changedReceipt.fingerprint).not.toBe(firstReceipt.fingerprint);
+  });
+
+  it("does not leak Orca-private vocabulary into shared domain/runtime contracts", async () => {
+    const root = new URL("../../../", import.meta.url);
+    const sharedFiles = [
+      "packages/domain/src/ids.ts",
+      "packages/runtime-contracts/src/external-boundary.ts",
+      "packages/runtime-contracts/src/operations.ts",
+      "packages/runtime-contracts/src/leases.ts",
+      "packages/runtime-contracts/src/manifest.ts",
+    ];
+    const source = (
+      await Promise.all(
+        sharedFiles.map((file) => readFile(new URL(file, root), "utf8")),
+      )
+    ).join("\n");
+
+    expect(source).not.toMatch(/\borca(?:Repo|Worktree|Terminal|Provider|Workspace)?\b/iu);
+  });
+});

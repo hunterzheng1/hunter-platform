@@ -9,6 +9,7 @@
     { "path": "./packages/flow-engine" },
     { "path": "./packages/knowledge" },
     { "path": "./packages/policy" },
+    { "path": "./packages/provider-orca" },
     { "path": "./packages/runtime-contracts" },
     { "path": "./packages/runtime-manager" },
     { "path": "./packages/storage" },
