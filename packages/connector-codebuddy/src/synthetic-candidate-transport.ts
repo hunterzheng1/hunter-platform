@@ -10,6 +10,7 @@ export const SYNTHETIC_CODEBUDDY_LIMITS = Object.freeze({
   maxDepth: 8,
   maxObjectKeys: 64,
   maxArrayItems: 64,
+  maxNodes: 2048,
 });
 
 export const CodeBuddyNativeSessionRefSchema = z
@@ -92,7 +93,7 @@ export const SyntheticCodeBuddyCancelRunResponseSchema = z.strictObject({
  * behavior only; they are not a claim about a CodeBuddy wire protocol.
  */
 export interface SyntheticCodeBuddyCandidateTransport {
-  request(message: SyntheticCodeBuddyCandidateRequest): Promise<unknown>;
+  request(message: SyntheticCodeBuddyCandidateRequest): Promise<string>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -101,9 +102,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function assertBoundedValue(
   value: unknown,
+  budget: { count: number },
   depth = 0,
-  ancestors: ReadonlySet<object> = new Set(),
 ): void {
+  budget.count += 1;
+  if (budget.count > SYNTHETIC_CODEBUDDY_LIMITS.maxNodes) {
+    throw new Error("CODEBUDDY_RESPONSE_TOO_LARGE");
+  }
   if (depth > SYNTHETIC_CODEBUDDY_LIMITS.maxDepth) {
     throw new Error("CODEBUDDY_RESPONSE_TOO_LARGE");
   }
@@ -117,27 +122,19 @@ function assertBoundedValue(
     return;
   }
   if (Array.isArray(value)) {
-    if (
-      ancestors.has(value) ||
-      value.length > SYNTHETIC_CODEBUDDY_LIMITS.maxArrayItems
-    ) {
+    if (value.length > SYNTHETIC_CODEBUDDY_LIMITS.maxArrayItems) {
       throw new Error("CODEBUDDY_RESPONSE_TOO_LARGE");
     }
-    const nextAncestors = new Set(ancestors).add(value);
     for (const item of value) {
-      assertBoundedValue(item, depth + 1, nextAncestors);
+      assertBoundedValue(item, budget, depth + 1);
     }
     return;
   }
   if (isRecord(value)) {
     const entries = Object.entries(value);
-    if (
-      ancestors.has(value) ||
-      entries.length > SYNTHETIC_CODEBUDDY_LIMITS.maxObjectKeys
-    ) {
+    if (entries.length > SYNTHETIC_CODEBUDDY_LIMITS.maxObjectKeys) {
       throw new Error("CODEBUDDY_RESPONSE_TOO_LARGE");
     }
-    const nextAncestors = new Set(ancestors).add(value);
     for (const [key, item] of entries) {
       if (
         Buffer.byteLength(key, "utf8") >
@@ -145,26 +142,29 @@ function assertBoundedValue(
       ) {
         throw new Error("CODEBUDDY_RESPONSE_TOO_LARGE");
       }
-      assertBoundedValue(item, depth + 1, nextAncestors);
+      assertBoundedValue(item, budget, depth + 1);
     }
   }
 }
 
-export function assertBoundedSyntheticCodeBuddyCandidateResponse(
-  value: unknown,
-): void {
-  assertBoundedValue(value);
-  let serialized: string;
-  try {
-    serialized = JSON.stringify(value);
-  } catch {
+export function parseSyntheticCodeBuddyCandidateResponseText(
+  rawText: unknown,
+): unknown {
+  if (typeof rawText !== "string") {
     throw new Error("CODEBUDDY_RESPONSE_INVALID");
   }
   if (
-    serialized === undefined ||
-    Buffer.byteLength(serialized, "utf8") >
-      SYNTHETIC_CODEBUDDY_LIMITS.maxResponseBytes
+    Buffer.byteLength(rawText, "utf8") >
+    SYNTHETIC_CODEBUDDY_LIMITS.maxResponseBytes
   ) {
     throw new Error("CODEBUDDY_RESPONSE_TOO_LARGE");
   }
+  let value: unknown;
+  try {
+    value = JSON.parse(rawText) as unknown;
+  } catch {
+    throw new Error("CODEBUDDY_RESPONSE_INVALID");
+  }
+  assertBoundedValue(value, { count: 0 });
+  return value;
 }

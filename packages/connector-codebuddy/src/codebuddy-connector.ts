@@ -13,7 +13,7 @@ import {
   SyntheticCodeBuddyInitializeResponseSchema,
   SyntheticCodeBuddyNewSessionResponseSchema,
   SyntheticCodeBuddyPromptResponseSchema,
-  assertBoundedSyntheticCodeBuddyCandidateResponse,
+  parseSyntheticCodeBuddyCandidateResponseText,
   type CodeBuddyNativeSessionRef,
   type SyntheticCodeBuddyCandidateRequest,
   type SyntheticCodeBuddyCandidateTransport,
@@ -204,7 +204,14 @@ export class CodeBuddyCandidateConnector {
     private readonly transport: SyntheticCodeBuddyCandidateTransport,
     optionsValue: CodeBuddyCandidateConnectorOptions,
   ) {
-    const options = CandidateOptionsSchema.safeParse(optionsValue);
+    let options: z.ZodSafeParseResult<
+      z.infer<typeof CandidateOptionsSchema>
+    >;
+    try {
+      options = CandidateOptionsSchema.safeParse(optionsValue);
+    } catch {
+      throw new Error("CODEBUDDY_OPTIONS_INVALID");
+    }
     if (!options.success) throw new Error("CODEBUDDY_OPTIONS_INVALID");
     this.options = deepFreeze(options.data);
   }
@@ -275,7 +282,12 @@ export class CodeBuddyCandidateConnector {
     operationIdValue: OperationId,
   ): Promise<CodeBuddyCandidateInterruptResult> {
     const sessionRef = this.parseSessionRef(sessionRefValue);
-    const operation = OperationIdSchema.safeParse(operationIdValue);
+    let operation: z.ZodSafeParseResult<OperationId>;
+    try {
+      operation = OperationIdSchema.safeParse(operationIdValue);
+    } catch {
+      throw new Error("CODEBUDDY_OPERATION_ID_INVALID");
+    }
     if (!operation.success) throw new Error("CODEBUDDY_OPERATION_ID_INVALID");
     const responseValue = await this.call({
       fixtureKind: "hunter.codebuddy.synthetic_candidate_v1",
@@ -328,7 +340,14 @@ export class CodeBuddyCandidateConnector {
     readonly workspacePath: string;
     readonly prompt: string;
   } {
-    const parsed = CandidateRequestSchema.safeParse(requestValue);
+    let parsed: z.ZodSafeParseResult<
+      z.infer<typeof CandidateRequestSchema>
+    >;
+    try {
+      parsed = CandidateRequestSchema.safeParse(requestValue);
+    } catch {
+      throw new Error("CODEBUDDY_REQUEST_INVALID");
+    }
     if (!parsed.success) throw new Error("CODEBUDDY_REQUEST_INVALID");
     return {
       operationId: parsed.data.operationId,
@@ -342,7 +361,12 @@ export class CodeBuddyCandidateConnector {
   }
 
   private parseSessionRef(value: string): CodeBuddyNativeSessionRef {
-    const parsed = CodeBuddyNativeSessionRefSchema.safeParse(value);
+    let parsed: z.ZodSafeParseResult<CodeBuddyNativeSessionRef>;
+    try {
+      parsed = CodeBuddyNativeSessionRefSchema.safeParse(value);
+    } catch {
+      throw new Error("CODEBUDDY_SESSION_ID_INVALID");
+    }
     if (!parsed.success) throw new Error("CODEBUDDY_SESSION_ID_INVALID");
     return parsed.data;
   }
@@ -362,9 +386,10 @@ export class CodeBuddyCandidateConnector {
 
   private parseResponse<T>(
     schema: z.ZodType<T>,
-    value: unknown,
+    rawText: unknown,
   ): T {
-    assertBoundedSyntheticCodeBuddyCandidateResponse(value);
+    const value =
+      parseSyntheticCodeBuddyCandidateResponseText(rawText);
     const parsed = schema.safeParse(value);
     if (!parsed.success) throw new Error("CODEBUDDY_RESPONSE_INVALID");
     return parsed.data;

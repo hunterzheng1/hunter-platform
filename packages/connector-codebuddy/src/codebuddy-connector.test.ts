@@ -34,11 +34,13 @@ class FixtureTransport implements SyntheticCodeBuddyCandidateTransport {
 
   constructor(private readonly responses: readonly SyntheticCandidateResponse[]) {}
 
-  async request(message: SyntheticCodeBuddyCandidateRequest): Promise<unknown> {
+  async request(message: SyntheticCodeBuddyCandidateRequest): Promise<string> {
     this.calls.push(message);
     const response = this.responses[this.calls.length - 1];
     if (response === undefined) throw new Error("private token=CREDENTIAL");
-    return response;
+    const serialized = JSON.stringify(response);
+    if (serialized === undefined) throw new Error("invalid trusted fixture");
+    return serialized;
   }
 }
 
@@ -502,6 +504,132 @@ describe("CodeBuddy synthetic lifecycle contract-only candidate", () => {
         prompt,
       }),
     ).rejects.toThrow(/^CODEBUDDY_TRANSPORT_FAILED$/u);
+  });
+
+  it("sanitizes proxy and getter failures at public request boundaries", async () => {
+    const privateOptionsError = new Error("private options secret");
+    const optionsProxy = new Proxy(
+      {},
+      {
+        get() {
+          throw privateOptionsError;
+        },
+      },
+    );
+    expect(
+      () =>
+        new CodeBuddyCandidateConnector(
+          new FixtureTransport([]),
+          optionsProxy as never,
+        ),
+    ).toThrow(/^CODEBUDDY_OPTIONS_INVALID$/u);
+
+    const privateRequestError = new Error("private request secret");
+    const requestProxy = new Proxy(
+      {},
+      {
+        get() {
+          throw privateRequestError;
+        },
+      },
+    );
+    const transport = new FixtureTransport([]);
+    const connector = new CodeBuddyCandidateConnector(transport, {
+      pathFlavor: "windows",
+    });
+    await expect(connector.launch(requestProxy as never)).rejects.toThrow(
+      /^CODEBUDDY_REQUEST_INVALID$/u,
+    );
+    expect(transport.calls).toHaveLength(0);
+  });
+
+  it("rejects an object response without reading its getters", async () => {
+    let getterReads = 0;
+    const response = Object.defineProperty({}, "private", {
+      enumerable: true,
+      get() {
+        getterReads += 1;
+        throw new Error("private response secret");
+      },
+    });
+    const transport = {
+      request: async () => response,
+    } as unknown as SyntheticCodeBuddyCandidateTransport;
+    const connector = new CodeBuddyCandidateConnector(transport, {
+      pathFlavor: "windows",
+    });
+
+    await expect(
+      connector.launch({
+        operationId: launchOperationId,
+        profileId,
+        workspacePath,
+        prompt,
+      }),
+    ).rejects.toThrow(/^CODEBUDDY_RESPONSE_INVALID$/u);
+    expect(getterReads).toBe(0);
+  });
+
+  it("sanitizes proxy failures for interrupt operation and session identities", async () => {
+    const privateIdentity = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("private identity secret");
+        },
+      },
+    );
+    const transport = new FixtureTransport([]);
+    const connector = new CodeBuddyCandidateConnector(transport, {
+      pathFlavor: "windows",
+    });
+
+    await expect(
+      connector.interrupt(sessionRef, privateIdentity as never),
+    ).rejects.toThrow(/^CODEBUDDY_OPERATION_ID_INVALID$/u);
+    await expect(
+      connector.interrupt(privateIdentity as never, interruptOperationId),
+    ).rejects.toThrow(/^CODEBUDDY_SESSION_ID_INVALID$/u);
+    expect(transport.calls).toHaveLength(0);
+  });
+
+  it("applies JSON text size and cumulative node budgets before strict decoding", async () => {
+    const connectorFor = (response: string) =>
+      new CodeBuddyCandidateConnector(
+        {
+          request: async () => response,
+        },
+        { pathFlavor: "windows" },
+      );
+    const request = {
+      operationId: launchOperationId,
+      profileId,
+      workspacePath,
+      prompt,
+    };
+
+    await expect(
+      connectorFor(`{"broken":"${"x".repeat(20_000)}`).launch(request),
+    ).rejects.toThrow(/^CODEBUDDY_RESPONSE_INVALID$/u);
+    await expect(
+      connectorFor(
+        `{"broken":"${"x".repeat(
+          SYNTHETIC_CODEBUDDY_LIMITS.maxResponseBytes,
+        )}`,
+      ).launch(request),
+    ).rejects.toThrow(/^CODEBUDDY_RESPONSE_TOO_LARGE$/u);
+
+    const tooManyNodes = JSON.stringify(
+      Array.from({ length: 64 }, () =>
+        Array.from({ length: 32 }, () => 0),
+      ),
+    );
+    expect(Buffer.byteLength(tooManyNodes, "utf8")).toBeLessThan(
+      SYNTHETIC_CODEBUDDY_LIMITS.maxResponseBytes,
+    );
+    await expect(
+      connectorFor(tooManyNodes).launch(request),
+    ).rejects.toThrow(/^CODEBUDDY_RESPONSE_TOO_LARGE$/u);
   });
 
   it("contains no production endpoint, fetch, capability manifest, or bypass switch", async () => {
