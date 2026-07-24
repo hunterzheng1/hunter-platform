@@ -25,6 +25,9 @@ export default defineConfig({
       "@hunter/flow-engine": fileURLToPath(
         new URL("./packages/flow-engine/src/index.ts", import.meta.url),
       ),
+      "@hunter/knowledge": fileURLToPath(
+        new URL("./packages/knowledge/src/index.ts", import.meta.url),
+      ),
       "@hunter/policy": fileURLToPath(
         new URL("./packages/policy/src/index.ts", import.meta.url),
       ),
