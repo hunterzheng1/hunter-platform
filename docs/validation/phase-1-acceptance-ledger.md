@@ -27,6 +27,9 @@
 - 根门禁：`npm run verify:foundation` PASS，102 test files / 878 tests；
 - Task 2 基线的 `npm install` 报告 4 个 high severity 摘要；Task 3 精确升级
   Electron 后当前锁文件报告 3 个，未运行 registry audit。
+- Task 4：在线 SQLite snapshot、版本化 manifest、CAS/path/hash 负例与隔离恢复
+  演练 19/19 通过；根门禁 106 files / 932 tests 通过。该结果仍为
+  `CONTRACT_ONLY`，未在真实用户数据或灾备介质上运行。
 
 ## 逐项台账
 
@@ -53,7 +56,7 @@
 | O-01 | NOT_PROVEN | discover_runtime 通过，其余不足 | [Orca preflight](orca-windows-provider.md) | 等公开 fixture confinement、cleanup 与 restart 接口后重测 | Runtime |
 | S-01 | CONTRACT_ONLY | Durable operation/Fake | [Runtime reliability](runtime-reliability.md) | Gate R 在真实 Provider 启动前后注入崩溃 | Storage |
 | S-02 | CONTRACT_ONLY | Startup recovery/Fake | [PR #5 readiness](first-vertical-slice-pr5-readiness.md) | Gate R 重连真实 session 或保持 needs_attention | Storage |
-| S-03 | CONTRACT_ONLY | Archive/Evidence | [PR #5 readiness](first-vertical-slice-pr5-readiness.md) | H1 增加 CAS 缺失、hash 不符和恢复演练 | Storage |
+| S-03 | CONTRACT_ONLY | 临时 SQLite/文件/CAS fixture | [Task 4 backup/restore](phase-1-backup-restore.md) | Gate R 用脱敏真实规模数据重跑隔离恢复 | Storage |
 | K-01 | CONTRACT_ONLY | Archive worker | [Vertical slice acceptance](vertical-slice-acceptance.md) | H4 覆盖所有终态 outcome 和 crash resume | Knowledge |
 | K-02 | CONTRACT_ONLY | Knowledge resolver | [Vertical slice acceptance](vertical-slice-acceptance.md) | H2 加入冲突降级和 Prompt injection 语料 | Knowledge |
 | M-01 | NOT_PROVEN | PWA contract/viewport only | [Task 17 evidence](first-vertical-slice-task17.md) | Gate R 在真实手机验证查看、锁屏、弱网和缓存时间 | Device |
@@ -69,13 +72,13 @@
 | GOLDEN-06 | NOT_PROVEN | Fake device only | [Task 17 evidence](first-vertical-slice-task17.md) | Gate R 在真实手机执行普通/高风险 Gate 与断网重放 | Device |
 | NFR-REL-01 | CONTRACT_ONLY | Event actor/correlation | [Foundation gate](foundation-local-gate.md) | H4 对所有命令投影做覆盖检查 | Storage |
 | NFR-REL-02 | CONTRACT_ONLY | Fault injection/Fake | [Runtime reliability](runtime-reliability.md) | Gate R 对真实 side effect 重复同一矩阵 | Runtime |
-| NFR-REL-03 | NOT_PROVEN | 局部 fail-closed | [PR #5 readiness](first-vertical-slice-pr5-readiness.md) | H1 实现文件/CAS 一致性 manifest 与恢复拒绝 | Storage |
+| NFR-REL-03 | CONTRACT_ONLY | 一致性 manifest/隔离恢复 fixture | [Task 4 backup/restore](phase-1-backup-restore.md) | Gate R 验证真实规模、介质故障和保留策略 | Storage |
 | NFR-REL-04 | NOT_RUN | 尚无 24h 证据 | [Phase 1 plan](../plans/2026-07-24-phase-1-product-hardening.md) | H3 固定 seed 运行 24h soak 并保留全部 attempt | Testkit |
 | NFR-PERF-01 | NOT_RUN | Project/Run 页面未测量 | [Acceptance source](../08-user-stories-and-acceptance.md) | H3 冻结 dataset 并测量 1 秒可交互目标 | Performance |
 | NFR-PERF-02 | NOT_RUN | Event 到 UI 未测量 | [Acceptance source](../08-user-stories-and-acceptance.md) | H3 测量本机 p50/p95 与小于 500ms 目标 | Performance |
 | NFR-PERF-03 | NOT_RUN | 10 read + 4 active 未测量 | [Acceptance source](../08-user-stories-and-acceptance.md) | H3 运行固定并发 load fixture | Performance |
 | NFR-PERF-04 | NOT_PROVEN | SSE 有界，日志分页未完成 | [Vertical slice acceptance](vertical-slice-acceptance.md) | H2/H3 实现大日志分页、配额与背压 | Storage/UI |
-| NFR-PORT-01 | CONTRACT_ONLY | Archive 可读文件 | [Vertical slice acceptance](vertical-slice-acceptance.md) | H1 用恢复演练确认无需 Hunter 可读取 | Knowledge |
+| NFR-PORT-01 | CONTRACT_ONLY | 可读文件 + manifest 恢复 | [Task 4 backup/restore](phase-1-backup-restore.md) | Gate R 在独立安装环境验证读取与迁移 | Knowledge |
 | NFR-PORT-02 | NOT_RUN | Export/Import 未产品化 | [Roadmap](../09-migration-and-roadmap.md) | 保持 Phase 2，除非 H1 备份恢复直接需要 | Product |
 | NFR-PORT-03 | CONTRACT_ONLY | Provider-neutral Fake | [Foundation gate](foundation-local-gate.md) | Gate R 用第二个真实 Provider swap 验证 | Architecture |
 | NFR-PORT-04 | CONTRACT_ONLY | 公共 schema/path 边界 | [Foundation gate](foundation-local-gate.md) | H4 重跑 Windows 路径中立性扫描 | Architecture |
@@ -91,7 +94,7 @@
 | BLOCK-06 | NOT_PROVEN | Cursor 仅候选 | [Phase 0 decision](phase-0-decision.md) | 真实 receipt 前禁止宣传可控 Session | Product |
 | BLOCK-07 | NOT_PROVEN | 未完成全输出 canary | [Phase 1 plan](../plans/2026-07-24-phase-1-product-hardening.md) | H2 完成 Secret scan 才可解除 | Security |
 | BLOCK-08 | CONTRACT_ONLY | device scope/policy | [Task 17 evidence](first-vertical-slice-task17.md) | Gate R 用真实设备验证不能绕过高危策略 | Device |
-| BLOCK-09 | CONTRACT_ONLY | Archive provenance | [PR #5 readiness](first-vertical-slice-pr5-readiness.md) | H1 增加缺失/hash 不符 fail-closed | Knowledge |
+| BLOCK-09 | CONTRACT_ONLY | Archive/Knowledge/CAS 对账 | [Task 4 backup/restore](phase-1-backup-restore.md) | Gate R 用真实归档重跑 hash/缺失故障矩阵 | Knowledge |
 | BLOCK-10 | CONTRACT_ONLY | active/verified policy | [Vertical slice acceptance](vertical-slice-acceptance.md) | H2 增加 superseded/withdrawn、冲突和 injection 测试 | Knowledge |
 | SUP-01 | NOT_PROVEN | 当前 npm install 摘要为 3 high | [Task 3 migration evidence](phase-1-versioned-migrations.md) | 分类 production reachability、修复版本和破坏性升级风险 | Security |
 | SUP-02 | NOT_RUN | registry audit 未授权 | [Phase 1 baseline](phase-1-hardening-baseline.md) | 用户明确授权发送依赖元数据后运行并保存脱敏摘要 | Owner/Security |
