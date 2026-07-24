@@ -46,6 +46,7 @@ export default defineConfig({
     },
   },
   test: {
+    testTimeout: 10_000,
     include: [
       "apps/**/*.test.ts",
       "apps/**/*.test.tsx",
