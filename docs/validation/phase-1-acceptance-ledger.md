@@ -30,6 +30,9 @@
 - Task 4：在线 SQLite snapshot、版本化 manifest、CAS/path/hash 负例与隔离恢复
   演练 19/19 通过；根门禁 106 files / 932 tests 通过。该结果仍为
   `CONTRACT_ONLY`，未在真实用户数据或灾备介质上运行。
+- Task 5：版本化 redaction、allowlist diagnostic bundle 与五输出 Secret canary
+  精确测试 23/23 通过；根门禁 108 files / 955 tests 通过。该结果为
+  `CONTRACT_ONLY`，不代表真实生产数据库、Agent 日志或用户 Prompt 已全量扫描。
 
 ## 逐项台账
 
@@ -61,7 +64,7 @@
 | K-02 | CONTRACT_ONLY | Knowledge resolver | [Vertical slice acceptance](vertical-slice-acceptance.md) | H2 加入冲突降级和 Prompt injection 语料 | Knowledge |
 | M-01 | NOT_PROVEN | PWA contract/viewport only | [Task 17 evidence](first-vertical-slice-task17.md) | Gate R 在真实手机验证查看、锁屏、弱网和缓存时间 | Device |
 | M-02 | CONTRACT_ONLY | Fake device security E2E | [Task 17 evidence](first-vertical-slice-task17.md) | Gate R 用真实设备验证审批、撤销和离线重复请求 | Device |
-| SEC-01 | NOT_PROVEN | 局部安全测试 | [PR #5 readiness](first-vertical-slice-pr5-readiness.md) | H2 用 canary 扫描数据库、日志、导出、Prompt 和诊断包 | Security |
+| SEC-01 | CONTRACT_ONLY | 临时 database/log/export/prompt/diagnostic fixture | [Task 5 diagnostics](phase-1-diagnostic-bundle.md) | Gate R 对真实生产输出逐字节重跑 canary | Security |
 | SEC-02 | CONTRACT_ONLY | Policy/negative scan | [Foundation gate](foundation-local-gate.md) | Gate R 检查真实 Provider 默认权限和高危 Gate | Security |
 | LNX-01 | PASS | `54f5d90` Ubuntu CI | [Phase 1 baseline](phase-1-hardening-baseline.md) | 每个后续 HEAD 继续运行 Ubuntu quality/vertical-slice | CI |
 | GOLDEN-01 | CONTRACT_ONLY | Fake vertical slice | [Vertical slice acceptance](vertical-slice-acceptance.md) | Gate R 用真实 Codex/CodeBuddy 和非玩具 Change 验收 | Product |
@@ -83,7 +86,7 @@
 | NFR-PORT-03 | CONTRACT_ONLY | Provider-neutral Fake | [Foundation gate](foundation-local-gate.md) | Gate R 用第二个真实 Provider swap 验证 | Architecture |
 | NFR-PORT-04 | CONTRACT_ONLY | 公共 schema/path 边界 | [Foundation gate](foundation-local-gate.md) | H4 重跑 Windows 路径中立性扫描 | Architecture |
 | NFR-OBS-01 | CONTRACT_ONLY | Correlation ID | [Foundation gate](foundation-local-gate.md) | H4 从 Run 到 Archive 全链对账 | Observability |
-| NFR-OBS-02 | NOT_PROVEN | 无产品化诊断包 | [Phase 1 plan](../plans/2026-07-24-phase-1-product-hardening.md) | H2 实现 allowlist + canary 脱敏诊断包 | Security |
+| NFR-OBS-02 | CONTRACT_ONLY | schema v1 allowlist diagnostic bundle | [Task 5 diagnostics](phase-1-diagnostic-bundle.md) | H2 增加用户预览；Gate R 验证真实故障数据 | Security |
 | NFR-OBS-03 | CONTRACT_ONLY | Run/Attempt/证据 UI | [Vertical slice acceptance](vertical-slice-acceptance.md) | H2 增加 why waiting/failed、actor、input revision 和 action | Workbench |
 | NFR-OBS-04 | CONTRACT_ONLY | 规范事件优先 | [PR #5 readiness](first-vertical-slice-pr5-readiness.md) | Gate R 关联真实原始事件 hash 而不暴露协议噪音 | Runtime |
 | BLOCK-01 | CONTRACT_ONLY | verifier 才能成功 | [PR #5 readiness](first-vertical-slice-pr5-readiness.md) | Gate R 用真实 Agent return 重测 | Flow |
@@ -92,7 +95,7 @@
 | BLOCK-04 | CONTRACT_ONLY | durable operation recovery | [Runtime reliability](runtime-reliability.md) | Gate R 在真实 Session 启动边界注入崩溃 | Storage |
 | BLOCK-05 | CONTRACT_ONLY | canonical Hunter state | [ADR-0005](../adr/0005-orca-runtime-integration.md) | 持续扫描公共类型和持久层 Provider 私有字段 | Architecture |
 | BLOCK-06 | NOT_PROVEN | Cursor 仅候选 | [Phase 0 decision](phase-0-decision.md) | 真实 receipt 前禁止宣传可控 Session | Product |
-| BLOCK-07 | NOT_PROVEN | 未完成全输出 canary | [Phase 1 plan](../plans/2026-07-24-phase-1-product-hardening.md) | H2 完成 Secret scan 才可解除 | Security |
+| BLOCK-07 | CONTRACT_ONLY | 五类临时输出逐字节 canary | [Task 5 diagnostics](phase-1-diagnostic-bundle.md) | Gate R 扫描真实数据库、日志、导出和 Prompt 路径 | Security |
 | BLOCK-08 | CONTRACT_ONLY | device scope/policy | [Task 17 evidence](first-vertical-slice-task17.md) | Gate R 用真实设备验证不能绕过高危策略 | Device |
 | BLOCK-09 | CONTRACT_ONLY | Archive/Knowledge/CAS 对账 | [Task 4 backup/restore](phase-1-backup-restore.md) | Gate R 用真实归档重跑 hash/缺失故障矩阵 | Knowledge |
 | BLOCK-10 | CONTRACT_ONLY | active/verified policy | [Vertical slice acceptance](vertical-slice-acceptance.md) | H2 增加 superseded/withdrawn、冲突和 injection 测试 | Knowledge |
