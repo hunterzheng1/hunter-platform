@@ -1,4 +1,6 @@
 import {
+  AttentionActionHttpRequestSchema,
+  AttentionActionHttpResponseSchema,
   ApproveRequirementHttpRequestSchema,
   CreateProjectHttpRequestSchema,
   CreateProjectHttpResponseSchema,
@@ -14,6 +16,8 @@ import {
   RunIdParamsSchema,
   RunViewHttpResponseSchema,
   type ProjectDetailHttpResponse,
+  type AttentionActionHttpRequest,
+  type AttentionActionHttpResponse,
   type ProjectListHttpResponse,
   type PublishChangeHttpRequest,
   type PublishChangeHttpResponse,
@@ -67,6 +71,12 @@ export interface CreateRequirementDraftInput {
 export type KnowledgeResponse = KnowledgeHttpResponse;
 
 export type PublishChangeDraftInput = Omit<PublishChangeHttpRequest, "expectedVersion" | "idempotencyKey">;
+export type AttentionActionInput =
+  AttentionActionHttpRequest extends infer Command
+    ? Command extends AttentionActionHttpRequest
+      ? Omit<Command, "idempotencyKey">
+      : never
+    : never;
 
 export class HunterApi {
   private readonly pendingCommands = new Map<string, PendingCommandEnvelope>();
@@ -195,6 +205,39 @@ export class HunterApi {
     );
     if (response.runId !== params.runId) throw new Error("RUN_RESPONSE_SCOPE_MISMATCH");
     return response;
+  }
+
+  public async executeAttentionAction(
+    runId: string,
+    input: AttentionActionInput,
+  ): Promise<AttentionActionHttpResponse> {
+    const params = RunIdParamsSchema.parse({ runId });
+    const logicalKey =
+      `attention-action:${JSON.stringify([params.runId, input])}`;
+    return await this.sendPending(
+      logicalKey,
+      () => {
+        const command = AttentionActionHttpRequestSchema.parse({
+          ...input,
+          idempotencyKey: this.ids.idempotencyKey("attention-action"),
+        });
+        return this.jsonCommand(
+          `/api/v1/runs/${params.runId}/attention-actions`,
+          command,
+        );
+      },
+      (rawResponse) => {
+        const response = AttentionActionHttpResponseSchema.parse(rawResponse);
+        if (
+          response.runId !== params.runId
+          || response.attemptId !== input.attemptId
+          || response.action !== input.action
+        ) {
+          throw new Error("ATTENTION_ACTION_RESPONSE_SCOPE_MISMATCH");
+        }
+        return response;
+      },
+    );
   }
 
   public async getKnowledge(

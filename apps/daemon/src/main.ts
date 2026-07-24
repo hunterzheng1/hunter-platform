@@ -268,6 +268,9 @@ export async function startDaemon(options: DaemonStartOptions) {
             ? null
             : { projectId: run.binding.projectId, runId: run.binding.runId };
         },
+        executeAttentionAction: async (runId, command, actor) =>
+          await services.attentionActions.execute(runId, command, actor),
+        getRun: (runId) => services.runViews.get(runId),
         startRun: async (command, actor) => composition.startRun.execute(command, actor),
         ...(composition.knowledge === undefined
           ? {}

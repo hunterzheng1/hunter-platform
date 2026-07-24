@@ -8,8 +8,8 @@ const EXECUTION_TRANSITIONS: Readonly<Record<ExecutionStatus, readonly Execution
   returned: [],
   failed: [],
   canceled: [],
-  stale: ["running", "needs_attention"],
-  needs_attention: [],
+  stale: ["running", "returned", "needs_attention"],
+  needs_attention: ["running", "returned", "stale"],
 };
 
 export function canTransitionExecution(from: ExecutionStatus, to: ExecutionStatus): boolean {

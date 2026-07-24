@@ -12,6 +12,8 @@ import {
   RunIdSchema,
   StepRunIdSchema,
   AttemptIdSchema,
+  CapabilityProbeReceiptIdSchema,
+  EventIdSchema,
   EvidenceIdSchema,
   NativeSessionIdSchema,
   TaskIdSchema,
@@ -66,9 +68,159 @@ export const RunStatusHttpSchema = z.enum([
   "needs_attention",
 ]);
 
+export const AttentionReasonCodeHttpSchema = z.enum([
+  "input_required",
+  "human_verification_required",
+  "verifier_failed",
+  "verifier_error",
+  "runtime_session_stale",
+  "recovery_attention_required",
+  "external_operation_indeterminate",
+]);
+export const AttentionActionKindHttpSchema = z.enum([
+  "submit_input",
+  "record_human_receipt",
+  "confirm_external_result",
+  "retry_external_check",
+  "create_new_attempt",
+]);
+export type AttentionActionKindHttp = z.infer<
+  typeof AttentionActionKindHttpSchema
+>;
+const AttentionActionCapabilityHttpSchema = z.strictObject({
+  probeReceiptId: CapabilityProbeReceiptIdSchema,
+  status: z.enum(["supported", "unsupported", "not_proven"]),
+  reasonCode: z.enum([
+    "capability_supported",
+    "capability_unsupported",
+    "capability_receipt_missing",
+    "observe_not_proven",
+    "retry_not_proven",
+  ]),
+});
+export const AttentionActionAvailabilityHttpSchema = z.strictObject({
+  action: AttentionActionKindHttpSchema,
+  enabled: z.boolean(),
+  capability: AttentionActionCapabilityHttpSchema.optional(),
+  disabledReasonCode: z.enum([
+    "attempt_limit_reached",
+    "run_budget_exhausted",
+    "action_not_available",
+  ]).optional(),
+}).superRefine((action, context) => {
+  if (
+    action.action === "retry_external_check"
+    && action.capability === undefined
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["capability"],
+      message: "retry_external_check requires receipt-derived observe capability evidence",
+    });
+  }
+  if (
+    action.action !== "retry_external_check"
+    && action.capability !== undefined
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["capability"],
+      message: "capability evidence is only valid for retry_external_check",
+    });
+  }
+  if (
+    action.enabled
+    && action.capability !== undefined
+    && action.capability.status !== "supported"
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["enabled"],
+      message: "an enabled capability action requires supported receipt evidence",
+    });
+  }
+  if (
+    !action.enabled
+    && (
+      (
+        action.capability === undefined
+        || action.capability.status === "supported"
+      )
+      && action.disabledReasonCode === undefined
+    )
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["capability"],
+      message: "a disabled action requires a fixed reason or unsupported/not-proven receipt evidence",
+    });
+  }
+  if (action.enabled && action.disabledReasonCode !== undefined) {
+    context.addIssue({
+      code: "custom",
+      path: ["disabledReasonCode"],
+      message: "an enabled action cannot carry a disabled reason",
+    });
+  }
+});
+const ContentHashSchema = z.string().regex(/^[a-f0-9]{64}$/u);
+export const AttentionEvidenceRefHttpSchema = z.union([
+  z.strictObject({
+    evidenceId: EvidenceIdSchema,
+    contentHash: ContentHashSchema,
+  }),
+  z.strictObject({
+    source: z.literal("flow_event"),
+    eventId: EventIdSchema,
+    contentHash: ContentHashSchema,
+  }),
+]);
+export type AttentionEvidenceRefHttp = z.infer<
+  typeof AttentionEvidenceRefHttpSchema
+>;
+export const AttentionItemHttpSchema = z.strictObject({
+  reasonCode: AttentionReasonCodeHttpSchema,
+  requiredActor: z.enum([
+    "human_operator",
+    "hunter_runtime",
+    "hunter_verifier",
+  ]),
+  inputRevision: z.strictObject({
+    changeRevisionId: ChangeRevisionIdSchema,
+    workflowRevisionId: WorkflowRevisionIdSchema,
+    requirementRevisionIds: z.array(RequirementRevisionIdSchema).min(1).max(50),
+    fixedContentHash: z.string().regex(/^[a-f0-9]{64}$/u),
+  }),
+  evidence: z.array(AttentionEvidenceRefHttpSchema).min(1).max(100),
+  actions: z.array(AttentionActionAvailabilityHttpSchema).min(1).max(5),
+}).superRefine((attention, context) => {
+  const evidenceKeys = attention.evidence.map((reference) =>
+    "evidenceId" in reference
+      ? `evidence:${reference.evidenceId}`
+      : `flow-event:${reference.eventId}`
+  );
+  if (new Set(evidenceKeys).size !== evidenceKeys.length) {
+    context.addIssue({
+      code: "custom",
+      path: ["evidence"],
+      message: "attention evidence references must be unique",
+    });
+  }
+  const actionKinds = attention.actions.map(({ action }) => action);
+  if (new Set(actionKinds).size !== actionKinds.length) {
+    context.addIssue({
+      code: "custom",
+      path: ["actions"],
+      message: "attention actions must be unique",
+    });
+  }
+});
+export type AttentionItemHttp = z.infer<typeof AttentionItemHttpSchema>;
+
 export const StepAttemptHttpViewSchema = z.strictObject({
   attemptId: AttemptIdSchema,
   attemptNumber: z.number().int().positive(),
+  isCurrent: z.boolean().optional(),
   executionStatus: ExecutionStatusHttpSchema,
   verificationStatus: VerificationStatusHttpSchema,
   agentProfileId: AgentProfileIdSchema.optional(),
@@ -83,6 +235,7 @@ export const StepAttemptHttpViewSchema = z.strictObject({
       "external_operation_indeterminate",
     ]),
   }).optional(),
+  attention: AttentionItemHttpSchema.optional(),
 }).superRefine((attempt, context) => {
   if (new Set(attempt.artifactIds).size !== attempt.artifactIds.length) {
     context.addIssue({ code: "custom", path: ["artifactIds"], message: "artifactIds must be unique" });
@@ -98,6 +251,27 @@ export const StepAttemptHttpViewSchema = z.strictObject({
   }
   if (!isWaiting && attempt.waitingReason !== undefined) {
     context.addIssue({ code: "custom", path: ["waitingReason"], message: "waitingReason is only valid for a waiting status" });
+  }
+  const requiresAttention = [
+    "waiting_input",
+    "failed",
+    "stale",
+    "needs_attention",
+  ].includes(attempt.executionStatus)
+    || ["failed", "error", "needs_human"].includes(attempt.verificationStatus);
+  if (requiresAttention && attempt.attention === undefined) {
+    context.addIssue({
+      code: "custom",
+      path: ["attention"],
+      message: "attention is required for an actionable Attempt state",
+    });
+  }
+  if (!requiresAttention && attempt.attention !== undefined) {
+    context.addIssue({
+      code: "custom",
+      path: ["attention"],
+      message: "attention is only valid for an actionable Attempt state",
+    });
   }
 });
 export type StepAttemptHttpView = z.infer<typeof StepAttemptHttpViewSchema>;
@@ -132,17 +306,20 @@ export type RunStepHttpView = z.infer<typeof RunStepHttpViewSchema>;
 export const RunViewHttpResponseSchema = z.strictObject({
   runId: RunIdSchema,
   projectionPosition: z.number().int().nonnegative(),
+  aggregateVersion: z.number().int().nonnegative(),
   status: RunStatusHttpSchema,
   steps: z.array(RunStepHttpViewSchema).max(500),
 }).superRefine((run, context) => {
   const stepRunIds = new Set<string>();
   const attemptIds = new Set<string>();
+  let currentAttemptCount = 0;
   run.steps.forEach((step, index) => {
     if (stepRunIds.has(step.stepRunId)) {
       context.addIssue({ code: "custom", path: ["steps", index, "stepRunId"], message: "stepRunId must be unique within a Run" });
     }
     stepRunIds.add(step.stepRunId);
     step.attempts.forEach((attempt, attemptIndex) => {
+      if (attempt.isCurrent === true) currentAttemptCount += 1;
       if (attemptIds.has(attempt.attemptId)) {
         context.addIssue({
           code: "custom",
@@ -153,8 +330,112 @@ export const RunViewHttpResponseSchema = z.strictObject({
       attemptIds.add(attempt.attemptId);
     });
   });
+  if (currentAttemptCount > 1) {
+    context.addIssue({
+      code: "custom",
+      path: ["steps"],
+      message: "a Run view can identify at most one current Attempt",
+    });
+  }
 });
 export type RunViewHttpResponse = z.infer<typeof RunViewHttpResponseSchema>;
+
+const AttentionActionCommandBase = {
+  attemptId: AttemptIdSchema,
+  expectedVersion: CommandMetadataSchema.shape.expectedVersion,
+  idempotencyKey: CommandMetadataSchema.shape.idempotencyKey,
+};
+export const AttentionActionHttpRequestSchema = z.discriminatedUnion("action", [
+  z.strictObject({
+    ...AttentionActionCommandBase,
+    action: z.literal("submit_input"),
+    input: z.strictObject({
+      text: z.string().trim().min(1).max(4_000),
+      contentHash: z.string().regex(/^[a-f0-9]{64}$/u),
+    }),
+  }),
+  z.strictObject({
+    ...AttentionActionCommandBase,
+    action: z.literal("record_human_receipt"),
+    receipt: z.strictObject({
+      evidenceRef: AttentionEvidenceRefHttpSchema,
+      acknowledgedInputHash: z.string().regex(/^[a-f0-9]{64}$/u),
+    }),
+  }),
+  z.strictObject({
+    ...AttentionActionCommandBase,
+    action: z.literal("confirm_external_result"),
+    observation: z.strictObject({
+      fact: z.enum([
+        "session_running",
+        "session_missing",
+        "agent_returned",
+        "structured_process_exit",
+      ]),
+      evidenceId: EvidenceIdSchema,
+      contentHash: z.string().regex(/^[a-f0-9]{64}$/u),
+    }),
+  }),
+  z.strictObject({
+    ...AttentionActionCommandBase,
+    action: z.literal("retry_external_check"),
+    capabilityProbeReceiptId: CapabilityProbeReceiptIdSchema,
+  }),
+  z.strictObject({
+    ...AttentionActionCommandBase,
+    action: z.literal("create_new_attempt"),
+  }),
+]);
+export type AttentionActionHttpRequest = z.infer<
+  typeof AttentionActionHttpRequestSchema
+>;
+const AttentionActionResponseBase = {
+  runId: RunIdSchema,
+  attemptId: AttemptIdSchema,
+};
+export const AttentionActionHttpResponseSchema = z.discriminatedUnion(
+  "action",
+  [
+    z.strictObject({
+      ...AttentionActionResponseBase,
+      action: z.literal("submit_input"),
+      status: z.literal("accepted"),
+      effect: z.literal("input_recorded"),
+      stepCompletion: z.literal("unchanged"),
+    }),
+    z.strictObject({
+      ...AttentionActionResponseBase,
+      action: z.literal("record_human_receipt"),
+      status: z.literal("recorded"),
+      effect: z.literal("human_receipt_recorded"),
+      stepCompletion: z.literal("human_verified"),
+    }),
+    z.strictObject({
+      ...AttentionActionResponseBase,
+      action: z.literal("confirm_external_result"),
+      status: z.literal("recorded"),
+      effect: z.literal("observation_recorded"),
+      stepCompletion: z.enum(["unchanged", "verifier_required"]),
+    }),
+    z.strictObject({
+      ...AttentionActionResponseBase,
+      action: z.literal("retry_external_check"),
+      status: z.literal("recorded"),
+      effect: z.literal("recheck_requested"),
+      stepCompletion: z.enum(["unchanged", "verifier_required"]),
+    }),
+    z.strictObject({
+      ...AttentionActionResponseBase,
+      action: z.literal("create_new_attempt"),
+      status: z.literal("accepted"),
+      effect: z.literal("new_attempt_requested"),
+      stepCompletion: z.literal("unchanged"),
+    }),
+  ],
+);
+export type AttentionActionHttpResponse = z.infer<
+  typeof AttentionActionHttpResponseSchema
+>;
 
 export const RunEventEnvelopeHttpSchema = z.strictObject({
   schemaVersion: z.literal(1),

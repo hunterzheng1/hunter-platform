@@ -1,4 +1,13 @@
-import type { AttemptId, RequirementRevisionId, RunId, StepId, StepRunId, TaskId } from "@hunter/domain";
+import type {
+  AttemptId,
+  EvidenceId,
+  EventId,
+  RequirementRevisionId,
+  RunId,
+  StepId,
+  StepRunId,
+  TaskId,
+} from "@hunter/domain";
 
 import type {
   ExecutionStatus,
@@ -39,7 +48,24 @@ export interface WorkflowRunState {
   readonly status: RunStatus;
   readonly budgetUsage: RunBudgetUsage;
   readonly steps: readonly StepRunState[];
+  readonly lastActivatedAttemptId?: AttemptId | undefined;
   readonly recoveryFacts: readonly { readonly kind: string; readonly status: "observed" | "indeterminate" | "needs_attention"; readonly reason: string }[];
+  readonly externalObservationReceipts: readonly {
+    readonly attemptId: AttemptId;
+    readonly fact: import("./commands.js").ExternalObservation;
+    readonly evidenceId: EvidenceId;
+    readonly contentHash: string;
+    readonly actorId: string;
+    readonly capabilityProbeReceiptId?: string | undefined;
+  }[];
+  readonly humanVerificationReceipts: readonly {
+    readonly attemptId: AttemptId;
+    readonly evidenceId?: EvidenceId | undefined;
+    readonly sourceEventId?: EventId | undefined;
+    readonly evidenceContentHash: string;
+    readonly acknowledgedInputHash: string;
+    readonly actorId: string;
+  }[];
   readonly scheduledChildren: readonly { readonly taskId: TaskId; readonly childRunId: RunId; readonly budget: import("./run-budget.js").RunBudgetLimit }[];
   readonly cancellationRequestedChildRunIds: readonly RunId[];
   readonly attemptCancellation: { readonly attemptId: AttemptId; readonly assignmentOperationId: string } | null;
@@ -93,6 +119,8 @@ function applyEvent(current: WorkflowRunState | null, event: FlowEvent): Workflo
       budgetUsage: { ...EMPTY_RUN_BUDGET_USAGE },
       steps: [],
       recoveryFacts: [],
+      externalObservationReceipts: [],
+      humanVerificationReceipts: [],
       scheduledChildren: [],
       cancellationRequestedChildRunIds: [],
       attemptCancellation: null,
@@ -161,6 +189,10 @@ function applyEvent(current: WorkflowRunState | null, event: FlowEvent): Workflo
               conclusion: "active",
               attempts: [...step.attempts, attempt],
             }));
+      state = {
+        ...state,
+        lastActivatedAttemptId: event.attemptId,
+      };
       if (state.scheduledRetry?.nextAttemptId === event.attemptId) state = { ...state, scheduledRetry: null };
       break;
     }
@@ -174,6 +206,19 @@ function applyEvent(current: WorkflowRunState | null, event: FlowEvent): Workflo
             : attempt,
         ),
       }));
+      if (event.humanReceipt !== undefined) {
+        state = {
+          ...state,
+          externalObservationReceipts: [
+            ...state.externalObservationReceipts,
+            {
+              attemptId: event.attemptId,
+              fact: event.fact,
+              ...event.humanReceipt,
+            },
+          ],
+        };
+      }
       break;
     case "VerificationChanged":
       state = updateStep(state, event.stepRunId, (step) => ({
@@ -190,6 +235,18 @@ function applyEvent(current: WorkflowRunState | null, event: FlowEvent): Workflo
             : attempt,
         ),
       }));
+      if (event.humanReceipt !== undefined) {
+        state = {
+          ...state,
+          humanVerificationReceipts: [
+            ...state.humanVerificationReceipts,
+            {
+              attemptId: event.attemptId,
+              ...event.humanReceipt,
+            },
+          ],
+        };
+      }
       break;
     case "StepConcluded":
       state = updateStep(state, event.stepRunId, (step) => ({ ...step, conclusion: event.conclusion }));

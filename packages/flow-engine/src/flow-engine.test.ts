@@ -1,4 +1,5 @@
 import {
+  EvidenceIdSchema,
   ExecutionPlanIdSchema,
   OperationIdSchema,
   ProjectIdSchema,
@@ -23,6 +24,7 @@ import type { FlowCommit, FlowStore } from "./flow-engine.js";
 import { FlowEngine } from "./flow-engine.js";
 import { reduceFlowEvents, type WorkflowRunState } from "./state.js";
 import { createWorkflowRunBinding } from "./run-binding.js";
+import { recoveryAttemptBlockReason } from "./recovery-guard.js";
 import { remainingRunBudget } from "./run-budget.js";
 import { MAX_EXECUTION_PLAN_TASKS } from "./task-scheduler.js";
 import { validWorkflowInput } from "../../domain/src/workflow-test-fixtures.js";
@@ -521,6 +523,179 @@ describe("authoritative FlowEngine", () => {
     expect(current(exited.store)).toMatchObject({ status: "running", steps: [{ executionStatus: "returned", verificationStatus: "pending", conclusion: "active" }] });
   });
 
+  it("audits a human-confirmed observation and creates a recovery Attempt without rewriting history", () => {
+    const { store, engine, actor, runId } = engineHarness();
+    const priorAttempt = current(store).steps[0]!.attempts[0]!;
+    engine.handle({
+      type: "RecordExternalObservation",
+      runId,
+      fact: "session_missing",
+      humanReceipt: {
+        evidenceId: EvidenceIdSchema.parse("evd_attentionflow01"),
+        contentHash: "a".repeat(64),
+        actorId: actor.actorId,
+      },
+      expectedVersion: current(store).version,
+      idempotencyKey: "attention-human-observation",
+      actor,
+    });
+    expect(current(store).externalObservationReceipts).toEqual([{
+      attemptId: priorAttempt.attemptId,
+      fact: "session_missing",
+      evidenceId: "evd_attentionflow01",
+      contentHash: "a".repeat(64),
+      actorId: actor.actorId,
+    }]);
+    expect(current(store).steps[0]).toMatchObject({
+      conclusion: "active",
+      verificationStatus: "pending",
+      attempts: [{
+        attemptId: priorAttempt.attemptId,
+        executionStatus: "stale",
+      }],
+    });
+    const recoveryVersion = current(store).version;
+    const first = engine.handle({
+      type: "CreateRecoveryAttempt",
+      runId,
+      priorAttemptId: priorAttempt.attemptId,
+      expectedVersion: recoveryVersion,
+      idempotencyKey: "attention-create-attempt",
+      actor,
+    });
+    const replay = engine.handle({
+      type: "CreateRecoveryAttempt",
+      runId,
+      priorAttemptId: priorAttempt.attemptId,
+      expectedVersion: recoveryVersion,
+      idempotencyKey: "attention-create-attempt",
+      actor,
+    });
+    expect(replay).toEqual(first);
+    expect(current(store)).toMatchObject({
+      status: "running",
+      steps: [{
+        conclusion: "active",
+        attempts: [
+          {
+            attemptId: priorAttempt.attemptId,
+            executionStatus: "stale",
+            verificationStatus: "pending",
+          },
+          {
+            attemptNumber: 2,
+            executionStatus: "assigned",
+            verificationStatus: "pending",
+          },
+        ],
+      }],
+    });
+  });
+
+  it("reopens a failed terminal Run only by appending a new recovery Attempt", () => {
+    const { store, engine, actor, runId } = engineHarness();
+    const priorAttempt = current(store).steps[0]!.attempts[0]!;
+    engine.handle({
+      type: "RecordExecutionFailure",
+      runId,
+      errorClass: "fatal",
+      expectedVersion: current(store).version,
+      idempotencyKey: "attention-terminal-failure",
+      actor,
+    });
+    expect(current(store)).toMatchObject({
+      status: "failed",
+      steps: [{ conclusion: "failed" }],
+    });
+    engine.handle({
+      type: "CreateRecoveryAttempt",
+      runId,
+      priorAttemptId: priorAttempt.attemptId,
+      expectedVersion: current(store).version,
+      idempotencyKey: "attention-terminal-recovery",
+      actor,
+    });
+    expect(current(store)).toMatchObject({
+      status: "running",
+      steps: [{
+        conclusion: "active",
+        attempts: [
+          {
+            attemptId: priorAttempt.attemptId,
+            executionStatus: "failed",
+          },
+          {
+            attemptNumber: 2,
+            executionStatus: "assigned",
+          },
+        ],
+      }],
+    });
+  });
+
+  it("uses the same recovery budget guard for reserved children and all budget dimensions", () => {
+    const { store } = engineHarness();
+    const state = current(store);
+    const definition = singleStepWorkflow().steps[0]!;
+    expect(recoveryAttemptBlockReason({
+      ...state,
+      scheduledChildren: [{
+        taskId: ids.task,
+        childRunId: ids.childRun,
+        budget: {
+          maxAttempts: state.binding.initialBudget.maxAttempts,
+          maxElapsedMs: 1,
+          maxCost: 0,
+          maxTokens: 0,
+          maxLoopIterations: 0,
+        },
+      }],
+    }, definition, 1)).toBe("run_budget_exhausted");
+    expect(recoveryAttemptBlockReason({
+      ...state,
+      budgetUsage: {
+        ...state.budgetUsage,
+        tokens: state.binding.initialBudget.maxTokens + 1,
+      },
+    }, definition, 1)).toBe("run_budget_exhausted");
+    expect(recoveryAttemptBlockReason(
+      state,
+      definition,
+      definition.retryPolicy.maxAttempts,
+    )).toBe("attempt_limit_reached");
+  });
+
+  it("can confirm that a stale external operation returned without concluding Step success", () => {
+    const { store, engine, actor, runId } = engineHarness();
+    engine.handle({
+      type: "RecordExternalObservation",
+      runId,
+      fact: "session_missing",
+      expectedVersion: current(store).version,
+      idempotencyKey: "attention-stale-before-return",
+      actor,
+    });
+    engine.handle({
+      type: "RecordExternalObservation",
+      runId,
+      fact: "agent_returned",
+      humanReceipt: {
+        evidenceId: EvidenceIdSchema.parse("evd_attentionflow02"),
+        contentHash: "b".repeat(64),
+        actorId: actor.actorId,
+      },
+      expectedVersion: current(store).version,
+      idempotencyKey: "attention-human-returned",
+      actor,
+    });
+    expect(current(store).steps[0]).toMatchObject({
+      conclusion: "active",
+      executionStatus: "returned",
+      verificationStatus: "pending",
+    });
+    expect(current(store).status).toBe("running");
+  });
+
   it("allows success only after evidence-based verification", () => {
     const { store, engine, actor, runId } = engineHarness();
     engine.handle({
@@ -690,6 +865,100 @@ describe("authoritative FlowEngine", () => {
     expect(current(store).loopUsage[workflow.loops[0]!.loopId]?.iterations).toBe(2);
     expect(current(store).steps.filter(({ conclusion }) => conclusion === "active")).toHaveLength(1);
     expect(current(store).steps.find(({ stepId }) => stepId === implement.stepId)?.attempts).toHaveLength(3);
+
+  });
+
+  it("creates recovery on an earlier Step reactivated by a Loop back-edge", () => {
+    const input = validWorkflowInput();
+    const implement = {
+      ...input.steps[0]!,
+      retryPolicy: {
+        ...input.steps[0]!.retryPolicy,
+        maxAttempts: 4,
+      },
+    };
+    const test = input.steps[1]!;
+    input.steps = [implement, test];
+    input.entryStepId = implement.stepId;
+    input.routes = [
+      {
+        routeId: RouteIdSchema.parse("rte_recovery_impl_pass"),
+        fromStepId: implement.stepId,
+        outcome: "passed",
+        priority: 0,
+        toStepId: test.stepId,
+      },
+      {
+        routeId: RouteIdSchema.parse("rte_recovery_test_pass"),
+        fromStepId: test.stepId,
+        outcome: "passed",
+        priority: 0,
+        toStepId: null,
+      },
+      {
+        routeId: RouteIdSchema.parse("rte_recovery_test_loop"),
+        fromStepId: test.stepId,
+        outcome: "failed",
+        priority: 0,
+        toStepId: implement.stepId,
+      },
+    ];
+    input.loops = [{
+      ...input.loops[0]!,
+      routeId: RouteIdSchema.parse("rte_recovery_test_loop"),
+      fromStepId: test.stepId,
+      toStepId: implement.stepId,
+      maxIterations: 2,
+      maxElapsedMs: 30_000,
+      progressPredicate: {
+        kind: "diff_present",
+        source: "workspace.diff",
+      },
+    }];
+    const { store, engine, actor, runId } = engineHarness(
+      createWorkflowRevision(input),
+    );
+    engine.handle({ type: "RecordExternalObservation", runId, fact: "agent_returned", expectedVersion: current(store).version, idempotencyKey: "recovery-loop-implement-return", actor });
+    engine.handle({ type: "RecordVerifierResult", runId, outcome: "passed", evidenceFingerprint: "5".repeat(64), expectedVersion: current(store).version, idempotencyKey: "recovery-loop-implement-pass", actor });
+    engine.handle({ type: "RecordExternalObservation", runId, fact: "agent_returned", expectedVersion: current(store).version, idempotencyKey: "recovery-loop-test-return", actor });
+    engine.handle({ type: "RecordVerifierResult", runId, outcome: "failed", evidenceFingerprint: "6".repeat(64), failureFingerprint: "recovery-loop-failure", diffFingerprint: "recovery-loop-diff", expectedVersion: current(store).version, idempotencyKey: "recovery-loop-test-fail", actor });
+    const activeImplement = current(store).steps.find(
+      ({ stepId }) => stepId === implement.stepId,
+    )!;
+    const activeAttempt = activeImplement.attempts.at(-1)!;
+    engine.handle({
+      type: "RecordExecutionFailure",
+      runId,
+      errorClass: "fatal",
+      expectedVersion: current(store).version,
+      idempotencyKey: "recovery-loop-implement-fatal",
+      actor,
+    });
+    expect(current(store)).toMatchObject({
+      status: "failed",
+      steps: expect.arrayContaining([expect.objectContaining({
+        stepId: implement.stepId,
+        conclusion: "failed",
+      })]),
+    });
+    expect(() => engine.handle({
+      type: "CreateRecoveryAttempt",
+      runId,
+      priorAttemptId: activeAttempt.attemptId,
+      expectedVersion: current(store).version,
+      idempotencyKey: "recovery-loop-create-attempt",
+      actor,
+    })).not.toThrow();
+    expect(current(store).steps.find(
+      ({ stepId }) => stepId === implement.stepId,
+    )).toMatchObject({
+      conclusion: "active",
+      attempts: [
+        { attemptNumber: 1 },
+        { attemptNumber: 2 },
+        { attemptNumber: 3, executionStatus: "assigned" },
+      ],
+    });
   });
 
   it("derives retry/backoff from the frozen Step and creates a new bounded Attempt", () => {
@@ -749,7 +1018,11 @@ describe("authoritative FlowEngine", () => {
         runId,
         outcome: "passed",
         evidenceFingerprint: "d".repeat(64),
-        humanReceipt: { contentHash: "0".repeat(64), actorId: "reviewer-1" },
+        humanReceipt: {
+          evidenceContentHash: "d".repeat(64),
+          acknowledgedInputHash: "0".repeat(64),
+          actorId: "reviewer-1",
+        },
         expectedVersion: current(store).version,
         idempotencyKey: "gate-wrong-content",
         actor,
@@ -761,7 +1034,8 @@ describe("authoritative FlowEngine", () => {
       outcome: "passed",
       evidenceFingerprint: "d".repeat(64),
       humanReceipt: {
-        contentHash: current(store).steps[0]!.fixedContentHash,
+        evidenceContentHash: "d".repeat(64),
+        acknowledgedInputHash: current(store).steps[0]!.fixedContentHash,
         actorId: actor.actorId,
       },
       expectedVersion: current(store).version,
@@ -788,7 +1062,8 @@ describe("authoritative FlowEngine", () => {
       outcome: "canceled",
       evidenceFingerprint: "c".repeat(64),
       humanReceipt: {
-        contentHash: current(store).steps[0]!.fixedContentHash,
+        evidenceContentHash: "e".repeat(64),
+        acknowledgedInputHash: current(store).steps[0]!.fixedContentHash,
         actorId: actor.actorId,
       },
       expectedVersion: current(store).version,
@@ -921,7 +1196,11 @@ describe("authoritative FlowEngine", () => {
 
   it.each([
     ["missing", undefined],
-    ["wrong", { contentHash: "0".repeat(64), actorId: "flow-test" }],
+    ["wrong", {
+      evidenceContentHash: "c".repeat(64),
+      acknowledgedInputHash: "0".repeat(64),
+      actorId: "flow-test",
+    }],
   ] as const)("rejects a Human Gate cancellation with a %s receipt", (_label, humanReceipt) => {
     const { store, engine, actor, runId } = engineHarness(humanGateCanceledWorkflow());
     engine.handle({

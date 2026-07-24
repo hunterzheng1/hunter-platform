@@ -1,4 +1,14 @@
-import type { RunStepHttpView, StepAttemptHttpView } from "@hunter/api-contracts";
+import type {
+  AttentionActionHttpResponse,
+  RunStepHttpView,
+  StepAttemptHttpView,
+} from "@hunter/api-contracts";
+import type { AttemptId } from "@hunter/domain";
+
+import {
+  AttentionPanel,
+  type AttentionActionDraft,
+} from "./attention-panel.js";
 
 const EXECUTION_LABELS: { readonly [Status in StepAttemptHttpView["executionStatus"]]: string } = {
   assigned: "已分配",
@@ -28,7 +38,16 @@ const WAITING_REASON_LABELS: { readonly [Code in NonNullable<StepAttemptHttpView
   external_operation_indeterminate: "外部操作状态待确认",
 };
 
-export function StepDetail({ step }: { readonly step: RunStepHttpView }) {
+export function StepDetail({
+  step,
+  onAttentionAction,
+}: {
+  readonly step: RunStepHttpView;
+  readonly onAttentionAction?: (
+    attemptId: AttemptId,
+    action: AttentionActionDraft,
+  ) => Promise<AttentionActionHttpResponse>;
+}) {
   return (
     <section className="step-detail panel" aria-labelledby={`step-detail-${step.stepRunId}`}>
       <div className="section-heading">
@@ -41,7 +60,7 @@ export function StepDetail({ step }: { readonly step: RunStepHttpView }) {
         <div className="empty-state compact-empty"><strong>还没有 Attempt 记录</strong></div>
       ) : (
         <div className="attempt-list">
-          {step.attempts.map((attempt) => (
+          {step.attempts.map((attempt, attemptIndex) => (
             <article className="attempt-card" key={attempt.attemptId}>
               <h3>第 {attempt.attemptNumber} 次尝试 · {EXECUTION_LABELS[attempt.executionStatus]}</h3>
               <p>执行：{EXECUTION_LABELS[attempt.executionStatus]} · 验证：{VERIFICATION_LABELS[attempt.verificationStatus]}</p>
@@ -52,6 +71,24 @@ export function StepDetail({ step }: { readonly step: RunStepHttpView }) {
               )}
               {attempt.artifactIds.length === 0 ? <p>产物：无</p> : <div><h4>产物</h4><ul>{attempt.artifactIds.map((artifactId) => <li key={artifactId}><code>{artifactId}</code></li>)}</ul></div>}
               {attempt.evidenceIds.length === 0 ? <p>证据：无</p> : <div><h4>证据</h4><ul>{attempt.evidenceIds.map((evidenceId) => <li key={evidenceId}><code>{evidenceId}</code></li>)}</ul></div>}
+              {attempt.attention === undefined ? null : (
+                <AttentionPanel
+                  attemptId={attempt.attemptId}
+                  attention={attempt.attention}
+                  {...(onAttentionAction === undefined
+                    || attempt.isCurrent !== true
+                    || attemptIndex !== step.attempts.length - 1
+                    ? {}
+                    : {
+                        onAction: (action: AttentionActionDraft) =>
+                          onAttentionAction(attempt.attemptId, action),
+                      })}
+                  {...(attempt.isCurrent === true
+                    && attemptIndex === step.attempts.length - 1
+                    ? {}
+                    : { interactionDisabledReason: "历史 Attempt 只读，恢复动作只能作用于当前 Attempt。" })}
+                />
+              )}
             </article>
           ))}
         </div>

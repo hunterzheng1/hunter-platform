@@ -18,6 +18,8 @@ import { DurableEventStream } from "../events/durable-event-stream.js";
 import { StartupRecoveryCoordinator, type RecoveryFact } from "../startup/startup-recovery-coordinator.js";
 import { SqliteDefinitionRepository } from "./sqlite-definition-repository.js";
 import { SqliteAttemptObservation } from "./sqlite-attempt-observation.js";
+import { createSqliteAttentionActionService } from "./sqlite-attention-actions.js";
+import { createSqliteRunViewService } from "./sqlite-run-view.js";
 import { RunCoordinator } from "./run-coordinator.js";
 
 interface ReceiptRow {
@@ -615,6 +617,24 @@ export function createSqliteApplicationServices(input: {
     input.capabilityReceiptFor,
     now,
   );
+  const attentionActions = createSqliteAttentionActionService({
+    database: input.database,
+    flowStore,
+    flowEngine,
+    definitions: repositories,
+    journal,
+    attemptObservation,
+    capabilityReceiptFor: input.capabilityReceiptFor,
+    now,
+  });
+  const runViews = createSqliteRunViewService({
+    database: input.database,
+    flowStore,
+    definitions: repositories,
+    journal,
+    capabilityReceiptFor: input.capabilityReceiptFor,
+    now,
+  });
   const authenticator = new LocalAuthenticator(input.installSecret, () => false, input.resolveAuthorizedProjectIds ?? defaultAuthorizationResolver);
   const eventStream = new DurableEventStream(eventReader, undefined, undefined, (authorizedProjectIds) => {
     projectionRunner.runIncremental();
@@ -904,6 +924,8 @@ export function createSqliteApplicationServices(input: {
     runtimeManager,
     operationWorker,
     attemptObservation,
+    attentionActions,
+    runViews,
     authenticator,
     setPrincipalProjectAuthorization,
     recovery,

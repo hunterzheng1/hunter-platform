@@ -33,6 +33,10 @@
 - Task 5：版本化 redaction、allowlist diagnostic bundle 与五输出 Secret canary
   精确测试 23/23 通过；根门禁 108 files / 955 tests 通过。该结果为
   `CONTRACT_ONLY`，不代表真实生产数据库、Agent 日志或用户 Prompt 已全量扫描。
+- Task 6：provider-neutral Attention/EvidenceRef、生产 SQLite RunView、
+  receipt-bound action、人工观察/人工 verifier 审计、真实 ledger 幂等重放和
+  append-only recovery Attempt 已通过本机全量 114 files / 1004 tests。该结果为
+  `CONTRACT_ONLY`，不代表真实 Provider 的 observe/retry 已通过。
 
 ## 逐项台账
 
@@ -87,12 +91,12 @@
 | NFR-PORT-04 | CONTRACT_ONLY | 公共 schema/path 边界 | [Foundation gate](foundation-local-gate.md) | H4 重跑 Windows 路径中立性扫描 | Architecture |
 | NFR-OBS-01 | CONTRACT_ONLY | Correlation ID | [Foundation gate](foundation-local-gate.md) | H4 从 Run 到 Archive 全链对账 | Observability |
 | NFR-OBS-02 | CONTRACT_ONLY | schema v1 allowlist diagnostic bundle | [Task 5 diagnostics](phase-1-diagnostic-bundle.md) | H2 增加用户预览；Gate R 验证真实故障数据 | Security |
-| NFR-OBS-03 | CONTRACT_ONLY | Run/Attempt/证据 UI | [Vertical slice acceptance](vertical-slice-acceptance.md) | H2 增加 why waiting/failed、actor、input revision 和 action | Workbench |
+| NFR-OBS-03 | CONTRACT_ONLY | Run/Attempt/Attention/Evidence UI | [Task 6 Attention actions](phase-1-attention-actions.md) | Gate R 用真实 Provider receipt 验证 action 可用性和恢复结果 | Workbench |
 | NFR-OBS-04 | CONTRACT_ONLY | 规范事件优先 | [PR #5 readiness](first-vertical-slice-pr5-readiness.md) | Gate R 关联真实原始事件 hash 而不暴露协议噪音 | Runtime |
 | BLOCK-01 | CONTRACT_ONLY | verifier 才能成功 | [PR #5 readiness](first-vertical-slice-pr5-readiness.md) | Gate R 用真实 Agent return 重测 | Flow |
 | BLOCK-02 | CONTRACT_ONLY | revision immutable | [Foundation gate](foundation-local-gate.md) | H4 保留覆盖负例 | Domain |
 | BLOCK-03 | CONTRACT_ONLY | isolated worktree lease | [Vertical slice acceptance](vertical-slice-acceptance.md) | H4 执行并行 writer 冲突场景 | Runtime |
-| BLOCK-04 | CONTRACT_ONLY | durable operation recovery | [Runtime reliability](runtime-reliability.md) | Gate R 在真实 Session 启动边界注入崩溃 | Storage |
+| BLOCK-04 | CONTRACT_ONLY | durable operation recovery + append-only recovery Attempt | [Task 6 Attention actions](phase-1-attention-actions.md) | Gate R 在真实 Session 启动边界注入崩溃并执行恢复 action | Storage |
 | BLOCK-05 | CONTRACT_ONLY | canonical Hunter state | [ADR-0005](../adr/0005-orca-runtime-integration.md) | 持续扫描公共类型和持久层 Provider 私有字段 | Architecture |
 | BLOCK-06 | NOT_PROVEN | Cursor 仅候选 | [Phase 0 decision](phase-0-decision.md) | 真实 receipt 前禁止宣传可控 Session | Product |
 | BLOCK-07 | CONTRACT_ONLY | 五类临时输出逐字节 canary | [Task 5 diagnostics](phase-1-diagnostic-bundle.md) | Gate R 扫描真实数据库、日志、导出和 Prompt 路径 | Security |

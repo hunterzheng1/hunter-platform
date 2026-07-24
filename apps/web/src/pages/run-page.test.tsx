@@ -13,6 +13,7 @@ const runB = RunIdSchema.parse("run_task400002");
 const runView = RunViewHttpResponseSchema.parse({
   runId: runA,
   projectionPosition: 3,
+  aggregateVersion: 4,
   status: "running",
   steps: [
     {
@@ -42,15 +43,46 @@ const runView = RunViewHttpResponseSchema.parse({
         nativeSessionId: "ses_task400001",
         artifactIds: ["art_task400001"],
         evidenceIds: ["evd_task400002"],
+        attention: {
+          reasonCode: "verifier_failed",
+          requiredActor: "hunter_verifier",
+          inputRevision: {
+            changeRevisionId: "crv_task400001",
+            workflowRevisionId: "wfr_task400001",
+            requirementRevisionIds: ["rrv_task400001"],
+            fixedContentHash: "b".repeat(64),
+          },
+          evidence: [{
+            evidenceId: "evd_task400002",
+            contentHash: "b".repeat(64),
+          }],
+          actions: [{ action: "create_new_attempt", enabled: true }],
+        },
         },
         {
           attemptId: "att_task400003",
           attemptNumber: 2,
+          isCurrent: true,
           executionStatus: "running",
           verificationStatus: "needs_human",
           waitingReason: { code: "human_verification_required" },
           artifactIds: [],
-          evidenceIds: [],
+          evidenceIds: ["evd_task400003"],
+          attention: {
+            reasonCode: "human_verification_required",
+            requiredActor: "human_operator",
+            inputRevision: {
+              changeRevisionId: "crv_task400001",
+              workflowRevisionId: "wfr_task400001",
+              requirementRevisionIds: ["rrv_task400001"],
+              fixedContentHash: "c".repeat(64),
+            },
+            evidence: [{
+              evidenceId: "evd_task400003",
+              contentHash: "c".repeat(64),
+            }],
+            actions: [{ action: "record_human_receipt", enabled: true }],
+          },
         },
       ],
     },
@@ -103,12 +135,201 @@ describe("RunPage", () => {
     expect(screen.getByText("执行：已返回 · 验证：失败")).not.toBeNull();
     expect(screen.getByRole("heading", { name: "第 2 次尝试 · 执行中" })).not.toBeNull();
     expect(screen.getByText("执行：执行中 · 验证：等待人工确认")).not.toBeNull();
-    expect(screen.getByText("等待人工验证")).not.toBeNull();
+    expect(screen.getAllByText("等待人工验证")).toHaveLength(2);
     expect(screen.getByText(failedAgentProfileId).closest("p")?.textContent)
       .toBe(`Agent Profile：${failedAgentProfileId}`);
     expect(screen.getByText("ses_task400001")).not.toBeNull();
     expect(screen.getByText("art_task400001")).not.toBeNull();
-    expect(screen.getByText("evd_task400002")).not.toBeNull();
+    expect(screen.getAllByText("evd_task400002")).toHaveLength(3);
+    expect(
+      (screen.getByRole("button", {
+        name: "创建新的 Attempt",
+      }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(screen.getByText(/历史 Attempt 只读/)).not.toBeNull();
+  });
+
+  it("executes a receipt-derived recovery action with the current aggregate version without claiming Step success", async () => {
+    const planStep = runView.steps[0];
+    const testStep = runView.steps[1];
+    const priorAttempt = testStep?.attempts[0];
+    if (
+      planStep === undefined
+      || testStep === undefined
+      || priorAttempt === undefined
+      || priorAttempt.attention === undefined
+    ) {
+      throw new Error("RUN_VIEW_ATTENTION_FIXTURE_MISSING");
+    }
+    const actionableRun = RunViewHttpResponseSchema.parse({
+      ...runView,
+      steps: [
+        planStep,
+        {
+          ...testStep,
+          attempts: [
+            {
+              ...priorAttempt,
+              isCurrent: true,
+              executionStatus: "stale",
+              verificationStatus: "pending",
+              attention: {
+                ...priorAttempt.attention,
+                reasonCode: "external_operation_indeterminate",
+                requiredActor: "human_operator",
+                actions: [{
+                  action: "retry_external_check",
+                  enabled: true,
+                  capability: {
+                    probeReceiptId: "cpr_task400001",
+                    status: "supported",
+                    reasonCode: "capability_supported",
+                  },
+                }],
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const actionableAttempt = actionableRun.steps[1]?.attempts[0];
+    if (actionableAttempt === undefined) {
+      throw new Error("RUN_VIEW_ACTIONABLE_ATTEMPT_MISSING");
+    }
+    const executeAttentionAction = vi.fn(async () => ({
+      runId: runA,
+      attemptId: actionableAttempt.attemptId,
+      action: "retry_external_check" as const,
+      status: "recorded" as const,
+      effect: "recheck_requested" as const,
+      stepCompletion: "verifier_required" as const,
+    }));
+    const api = {
+      getRun: vi.fn(async () => actionableRun),
+      executeAttentionAction,
+    };
+    render(<RunPage runId={runA} api={api} />);
+    await screen.findByRole("heading", { name: `Run ${runA}` });
+    fireEvent.click(screen.getByRole("button", { name: "测试 · 进行中" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "重新检查外部状态" }),
+    );
+
+    await waitFor(() => expect(executeAttentionAction).toHaveBeenCalledWith(
+      runA,
+      {
+        attemptId: actionableAttempt.attemptId,
+        action: "retry_external_check",
+        capabilityProbeReceiptId: "cpr_task400001",
+        expectedVersion: actionableRun.aggregateVersion,
+      },
+    ));
+    expect(await screen.findByRole("status")).not.toBeNull();
+    expect(screen.getByText(/Step 仍需 verifier 结果/)).not.toBeNull();
+    expect(screen.queryByText(/Step 已成功/)).toBeNull();
+  });
+
+  it("keeps the last Attempt of a concluded prior Step read-only", async () => {
+    const planStep = runView.steps[0];
+    const testStep = runView.steps[1];
+    const recoveryAttention = testStep?.attempts[0]?.attention;
+    if (
+      planStep === undefined
+      || testStep === undefined
+      || recoveryAttention === undefined
+    ) {
+      throw new Error("RUN_VIEW_HISTORICAL_STEP_FIXTURE_MISSING");
+    }
+    const historicalRun = RunViewHttpResponseSchema.parse({
+      ...runView,
+      steps: [{
+        ...planStep,
+        conclusion: "failed",
+        attempts: [{
+          ...planStep.attempts[0],
+          executionStatus: "failed",
+          verificationStatus: "pending",
+          attention: {
+            ...recoveryAttention,
+            reasonCode: "recovery_attention_required",
+            requiredActor: "hunter_runtime",
+            actions: [{
+              action: "create_new_attempt",
+              enabled: true,
+            }],
+          },
+        }],
+      }, testStep],
+    });
+    render(
+      <RunPage
+        runId={runA}
+        api={{
+          getRun: vi.fn(async () => historicalRun),
+          executeAttentionAction: vi.fn(),
+        }}
+      />,
+    );
+    await screen.findByRole("heading", { name: `Run ${runA}` });
+    fireEvent.click(screen.getByRole("button", { name: "计划 · 失败" }));
+    expect(
+      (screen.getByRole("button", {
+        name: "创建新的 Attempt",
+      }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(screen.getByText(/历史 Attempt 只读/)).not.toBeNull();
+  });
+
+  it("allows append-only recovery on the current concluded Step of a failed Run", async () => {
+    const testStep = runView.steps[1];
+    const recoveryAttention = testStep?.attempts[0]?.attention;
+    if (testStep === undefined || recoveryAttention === undefined) {
+      throw new Error("RUN_VIEW_FAILED_RECOVERY_FIXTURE_MISSING");
+    }
+    const failedRun = RunViewHttpResponseSchema.parse({
+      ...runView,
+      status: "failed",
+      steps: [{
+        ...testStep,
+        conclusion: "failed",
+        attempts: [{
+          ...testStep.attempts[0],
+          isCurrent: true,
+          executionStatus: "failed",
+          verificationStatus: "pending",
+          attention: {
+            ...recoveryAttention,
+            reasonCode: "recovery_attention_required",
+            requiredActor: "hunter_runtime",
+            actions: [{
+              action: "create_new_attempt",
+              enabled: true,
+            }],
+          },
+        }],
+      }],
+    });
+    const executeAttentionAction = vi.fn(async () => ({
+      runId: runA,
+      attemptId: failedRun.steps[0]!.attempts[0]!.attemptId,
+      action: "create_new_attempt" as const,
+      status: "accepted" as const,
+      effect: "new_attempt_requested" as const,
+      stepCompletion: "unchanged" as const,
+    }));
+    render(
+      <RunPage
+        runId={runA}
+        api={{ getRun: vi.fn(async () => failedRun), executeAttentionAction }}
+      />,
+    );
+    await screen.findByRole("heading", { name: `Run ${runA}` });
+    const button = screen.getByRole("button", {
+      name: "创建新的 Attempt",
+    }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    await waitFor(() => expect(executeAttentionAction).toHaveBeenCalledOnce());
   });
 
   it("announces loading, empty, and failure states without inventing a successful conclusion", async () => {
@@ -118,7 +339,7 @@ describe("RunPage", () => {
     first.unmount();
     pending.resolve(runView);
 
-    const empty = RunViewHttpResponseSchema.parse({ runId: runA, projectionPosition: 0, status: "created", steps: [] });
+    const empty = RunViewHttpResponseSchema.parse({ runId: runA, projectionPosition: 0, aggregateVersion: 0, status: "created", steps: [] });
     const second = render(<RunPage runId={runA} api={{ getRun: async () => empty }} />);
     expect(await screen.findByText("还没有 Step 运行记录")).not.toBeNull();
     second.unmount();

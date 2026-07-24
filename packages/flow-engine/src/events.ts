@@ -1,4 +1,13 @@
-import type { AttemptId, RequirementRevisionId, RunId, StepId, StepRunId, TaskId } from "@hunter/domain";
+import type {
+  AttemptId,
+  EvidenceId,
+  EventId,
+  RequirementRevisionId,
+  RunId,
+  StepId,
+  StepRunId,
+  TaskId,
+} from "@hunter/domain";
 
 import type { ExternalObservation } from "./commands.js";
 import type { WorkflowRunBinding } from "./run-binding.js";
@@ -53,6 +62,12 @@ export type FlowEvent =
       readonly attemptId: AttemptId;
       readonly fact: ExternalObservation;
       readonly executionStatus: ExecutionStatus;
+      readonly humanReceipt?: {
+        readonly evidenceId: EvidenceId;
+        readonly contentHash: string;
+        readonly actorId: string;
+      } | undefined;
+      readonly capabilityProbeReceiptId?: string | undefined;
     }
   | {
       readonly type: "VerificationChanged";
@@ -60,6 +75,13 @@ export type FlowEvent =
       readonly attemptId: AttemptId;
       readonly status: VerificationStatus;
       readonly evidenceFingerprint: string;
+      readonly humanReceipt?: {
+        readonly evidenceId?: EvidenceId | undefined;
+        readonly sourceEventId?: EventId | undefined;
+        readonly evidenceContentHash: string;
+        readonly acknowledgedInputHash: string;
+        readonly actorId: string;
+      } | undefined;
     }
   | {
       readonly type: "StepConcluded";

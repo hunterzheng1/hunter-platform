@@ -1,7 +1,9 @@
 import {
+  CapabilityProbeReceiptIdSchema,
   NativeSessionIdSchema,
   OperationIdSchema,
   canonicalSha256,
+  type EvidenceId,
 } from "@hunter/domain";
 import {
   ExternalOperationSchema,
@@ -36,6 +38,58 @@ export class SqliteAttemptObservation implements AttemptObservationPort {
   public async observe(
     input: Parameters<AttemptObservationPort["observe"]>[0],
   ): Promise<AttemptObservation> {
+    return this.toAttemptObservation(await this.observeReceipt(input));
+  }
+
+  public async observeForAttention(
+    input: Parameters<AttemptObservationPort["observe"]>[0] & {
+      readonly recheckId: string;
+      readonly probeReceiptId: string;
+    },
+  ): Promise<{
+    readonly fact:
+      | "agent_returned"
+      | "session_missing"
+      | "session_running"
+      | "structured_process_exit";
+    readonly evidenceId: EvidenceId;
+    readonly evidenceHash: string;
+  }> {
+    const receipt = await this.observeReceipt(
+      input,
+      input.recheckId,
+      CapabilityProbeReceiptIdSchema.parse(input.probeReceiptId),
+    );
+    const sessionState = receipt.facts.find(
+      (fact) => fact.kind === "session_observed",
+    )?.state;
+    const fact = receipt.facts.some(({ kind }) => kind === "agent_returned")
+      || sessionState === "returned"
+      ? "agent_returned"
+      : receipt.facts.some(({ kind }) => kind === "process_exited")
+        ? "structured_process_exit"
+        : sessionState === "missing"
+          ? "session_missing"
+          : sessionState === "running"
+            || sessionState === "created"
+            || sessionState === "waiting_input"
+            ? "session_running"
+            : null;
+    if (fact === null) throw new Error("ATTENTION_OBSERVATION_NOT_PROVEN");
+    return {
+      fact,
+      evidenceId: receipt.evidence.evidenceId,
+      evidenceHash: receipt.evidence.evidenceHash,
+    };
+  }
+
+  private async observeReceipt(
+    input: Parameters<AttemptObservationPort["observe"]>[0],
+    recheckId?: string,
+    expectedProbeReceiptId?: ReturnType<
+      typeof CapabilityProbeReceiptIdSchema.parse
+    >,
+  ) {
     const launch = this.operation(input.operationId);
     if (
       launch.operationType !== "session.launch"
@@ -53,7 +107,8 @@ export class SqliteAttemptObservation implements AttemptObservationPort {
       `opn_${canonicalSha256({
         launchOperationId: launch.operationId,
         attemptId: input.attemptId,
-        action: "settlement-observe",
+        action: recheckId === undefined ? "settlement-observe" : "attention-recheck",
+        ...(recheckId === undefined ? {} : { recheckId }),
       }).slice(0, 24)}`,
     );
     const recoveryObservationId = OperationIdSchema.parse(
@@ -64,10 +119,11 @@ export class SqliteAttemptObservation implements AttemptObservationPort {
         action: "recovery-observe",
       }).slice(0, 24)}`,
     );
-    const existingObservations = [
-      observationId,
-      recoveryObservationId,
-    ].map((operationId) => this.journal.findOperation(operationId))
+    const candidateObservationIds = recheckId === undefined
+      ? [observationId, recoveryObservationId]
+      : [observationId];
+    const existingObservations = candidateObservationIds
+      .map((operationId) => this.journal.findOperation(operationId))
       .filter((candidate) => candidate !== null)
       .map((candidate) =>
         ExternalOperationSchema.parse(candidate.operation)
@@ -86,15 +142,11 @@ export class SqliteAttemptObservation implements AttemptObservationPort {
       this.worker.resolveReceipt(operation)?.operationStatus === "completed"
     );
     if (completedObservation !== undefined) {
-      return this.toAttemptObservation(
-        await this.deliver(completedObservation),
-      );
+      return await this.deliver(completedObservation);
     }
     const existingObservation = existingObservations[0];
     if (existingObservation !== undefined) {
-      return this.toAttemptObservation(
-        await this.deliver(existingObservation),
-      );
+      return await this.deliver(existingObservation);
     }
     const controller = await this.leases.findActiveController(
       launch.projectId,
@@ -117,23 +169,29 @@ export class SqliteAttemptObservation implements AttemptObservationPort {
         controllerLeaseGeneration: controller.generation,
       },
     });
-    this.assertObserveCapability(observation);
+    this.assertObserveCapability(observation, expectedProbeReceiptId);
     this.journal.commitCommand({
-      commandId: `settlement-observe:${input.attemptId}`,
+      commandId: recheckId === undefined
+        ? `settlement-observe:${input.attemptId}`
+        : `attention-recheck:${recheckId}`,
       requestFingerprint: observation.fingerprint,
       projectId: observation.projectId,
       aggregateId: `attempt-observation:${input.attemptId}`,
       expectedVersion: 0,
       actor: {
-        actorId: "attempt-settlement",
-        correlationId: `settle:${input.runId}:${input.attemptId}`,
+        actorId: recheckId === undefined
+          ? "attempt-settlement"
+          : "attention-recheck",
+        correlationId: recheckId === undefined
+          ? `settle:${input.runId}:${input.attemptId}`
+          : `attention:${input.runId}:${input.attemptId}:${recheckId}`,
       },
       events: [],
       operations: [observation],
       response: { operationId: observation.operationId },
     });
     const receipt = await this.deliver(observation);
-    return this.toAttemptObservation(receipt);
+    return receipt;
   }
 
   private toAttemptObservation(
@@ -180,12 +238,23 @@ export class SqliteAttemptObservation implements AttemptObservationPort {
     throw new Error("OPERATION_DELIVERY_LIMIT_EXCEEDED");
   }
 
-  private assertObserveCapability(operation: ExternalOperation): void {
+  private assertObserveCapability(
+    operation: ExternalOperation,
+    expectedProbeReceiptId?: ReturnType<
+      typeof CapabilityProbeReceiptIdSchema.parse
+    >,
+  ): void {
     const receipt = this.capabilityReceiptFor?.(operation);
     if (receipt === undefined || receipt === null) {
       throw new Error("SESSION_OBSERVE_CAPABILITY_NOT_CONFIGURED");
     }
     const probe = decodeCapabilityProbeReceipt(receipt);
+    if (
+      expectedProbeReceiptId !== undefined
+      && probe.probeReceiptId !== expectedProbeReceiptId
+    ) {
+      throw new Error("SESSION_OBSERVE_CAPABILITY_RECEIPT_MISMATCH");
+    }
     const manifest = computeCapabilityManifest(probe, this.now());
     if (!manifest.capabilities.some(
       ({ capability, status }) =>
