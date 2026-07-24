@@ -62,6 +62,19 @@ ACL 允许 sandbox user 修改；同一时段单独的 `npm test`、rebuild 和 
 通过。随后使用相同 worktree、相同源码和相同命令在宿主 Windows 权限边界运行，
 完整门禁通过。两次沙箱失败保留为真实执行历史，不追溯改写为 PASS。
 
+## 远端 CI
+
+PR #6 的计划 head `54f5d90` 因 push 与 pull request 事件产生两组门禁，实际结果
+共 8/8 PASS：
+
+- run `30079919557`：Windows/Ubuntu quality 与 vertical-slice 全部通过；
+- run `30079942556`：Windows/Ubuntu quality 与 vertical-slice 全部通过；
+- Ubuntu 的 Windows packaging step 按 workflow 条件真实 `SKIPPED`；
+- Windows vertical-slice 实际完成 Chromium E2E 与未签名 NSIS 打包。
+
+本节只证明 `54f5d90`。包含本节的后续 evidence commit 在创建记录时 CI 为
+`NOT_RUN`，推送后必须重新观察，不能继承前一 SHA 的 PASS。
+
 ## 供应链与权限边界
 
 `npm install` 的摘要只证明 npm 报告了 4 个 high severity 项，尚未证明它们是否进入
@@ -85,6 +98,6 @@ ACL 允许 sandbox user 修改；同一时段单独的 `npm test`、rebuild 和 
 
 ## 尚未运行
 
-- 本分支最终 SHA 的 GitHub Windows/Ubuntu CI；
+- 包含本 evidence 更新的下一 HEAD 的 GitHub Windows/Ubuntu CI；
 - Phase 1 迁移、备份恢复、诊断包、资源配额、24h soak；
 - 真实 Provider、真实手机、真实项目体验、代码签名和生产发布。
