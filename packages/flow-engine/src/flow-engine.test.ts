@@ -1131,10 +1131,6 @@ describe("authoritative FlowEngine", () => {
     const child = createWorkflowRunBinding({ runId: childRunId, projectId: parent.projectId, changeRevisionId: parent.changeRevisionId, requirementRevisionIds: parent.requirementRevisionIds, workflowRevisionId: ids.workflow, policySnapshot: parent.policySnapshot, initialBudget: childBudget, subjectKind: "task", parentRunId: runId, taskId: ids.task, executionPlanId: parent.executionPlanId }, { parent, executionPlan: executionPlan(), activeTaskIds: [], parentTerminal: false, childBudgetAllocation: childBudget });
     engine.handle({ type: "StartRun", binding: child, expectedVersion: 0, idempotencyKey: "start-rollup-child", actor });
 
-    engine.handle({ type: "RecordExternalObservation", runId, fact: "agent_returned", expectedVersion: current(store).version, idempotencyKey: "root-return-fanin", actor });
-    engine.handle({ type: "RecordVerifierResult", runId, outcome: "passed", evidenceFingerprint: "a".repeat(64), expectedVersion: current(store).version, idempotencyKey: "root-verify-fanin", actor });
-    expect(current(store).status).toBe("paused");
-
     const childState = () => store.loadRun(childRunId)!;
     engine.handle({ type: "RecordExternalObservation", runId: childRunId, fact: "agent_returned", expectedVersion: childState().version, idempotencyKey: "child-return-fanin", actor });
     engine.handle({ type: "RecordVerifierResult", runId: childRunId, outcome: "passed", evidenceFingerprint: "b".repeat(64), expectedVersion: childState().version, idempotencyKey: "child-verify-fanin", actor });
@@ -1198,7 +1194,7 @@ describe("authoritative FlowEngine", () => {
 
   it.each([
     ["block", "paused"],
-    ["skip", "running"],
+    ["skip", "succeeded"],
     ["terminate", "canceled"],
   ] as const)("records the server-derived %s dependency-failure rule", (policy, expectedStatus) => {
     const { store, engine, actor, childRunId } = dependencyFailureHarness({ policy });
@@ -1269,10 +1265,8 @@ describe("authoritative FlowEngine", () => {
     }).response).toEqual({ children: [] });
   });
 
-  it("can finish an already verified parent after an accepted failed dependency is explicitly skipped", () => {
+  it("can finish a parent after an accepted failed dependency is explicitly skipped", () => {
     const { store, engine, actor } = dependencyFailureHarness({ policy: "skip" });
-    engine.handle({ type: "RecordExternalObservation", runId: ids.rootRun, fact: "agent_returned", expectedVersion: store.loadRun(ids.rootRun)!.version, idempotencyKey: "dependency-root-return", actor });
-    engine.handle({ type: "RecordVerifierResult", runId: ids.rootRun, outcome: "passed", evidenceFingerprint: "e".repeat(64), expectedVersion: store.loadRun(ids.rootRun)!.version, idempotencyKey: "dependency-root-verify", actor });
     expect(store.loadRun(ids.rootRun)).toMatchObject({ status: "needs_attention", acceptedChildRunIds: [expect.any(String)] });
     engine.handle({ type: "ResolveTaskDependencyFailure", runId: ids.rootRun, taskId: ids.dependent, expectedVersion: store.loadRun(ids.rootRun)!.version, idempotencyKey: "dependency-skip-finish", actor } as never);
     expect(store.loadRun(ids.rootRun)!.status).toBe("succeeded");
@@ -1298,8 +1292,6 @@ describe("authoritative FlowEngine", () => {
     engine.handle({ type: "StartRun", binding: child, expectedVersion: 0, idempotencyKey: `start-${policy}`, actor });
     engine.handle({ type: "RecordExternalObservation", runId: child.runId, fact: "agent_returned", expectedVersion: store.loadRun(child.runId)!.version, idempotencyKey: `return-${policy}`, actor });
     engine.handle({ type: "RecordVerifierResult", runId: child.runId, outcome: "passed", evidenceFingerprint: "7".repeat(64), expectedVersion: store.loadRun(child.runId)!.version, idempotencyKey: `verify-${policy}`, actor });
-    engine.handle({ type: "RecordExternalObservation", runId: ids.rootRun, fact: "agent_returned", expectedVersion: store.loadRun(ids.rootRun)!.version, idempotencyKey: `root-return-${policy}`, actor });
-    engine.handle({ type: "RecordVerifierResult", runId: ids.rootRun, outcome: "passed", evidenceFingerprint: "8".repeat(64), expectedVersion: store.loadRun(ids.rootRun)!.version, idempotencyKey: `root-verify-${policy}`, actor });
     engine.handle({ type: "ReconcileTaskChildren", runId: ids.rootRun, expectedVersion: store.loadRun(ids.rootRun)!.version, idempotencyKey: `reconcile-${policy}`, actor });
     expect(store.loadRun(ids.rootRun)!.status).toBe("succeeded");
   });

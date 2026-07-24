@@ -59,8 +59,11 @@ const FIXED_TIME = "2026-07-23T00:00:00.000Z";
 const repositoryId = RepositoryIdSchema.parse("rep_e2econtract01");
 const workflowRevisionId =
   WorkflowRevisionIdSchema.parse("wfr_e2econtract01");
+const rootWorkflowRevisionId =
+  WorkflowRevisionIdSchema.parse("wfr_e2eroot000001");
 const agentProfileId = AgentProfileIdSchema.parse("apr_e2econtract01");
 const stepId = StepIdSchema.parse("stp_e2econtract01");
+const rootStepId = StepIdSchema.parse("stp_e2eroot000001");
 
 // Task 13A presentation-only state: the approved revision is canonical in the
 // SQLite ledger; Task 19 replaces this transient draft/view shell with the full
@@ -148,6 +151,60 @@ function e2eWorkflow() {
       reuse: { profile: true, session: false, workspace: false },
       exhaustion: { target: "needs_attention", notify: true },
     }],
+    publishedAt: FIXED_TIME,
+  });
+}
+
+function e2eRootWorkflow() {
+  return createWorkflowRevision({
+    workflowRevisionId: rootWorkflowRevisionId,
+    title: "E2E root Task dispatch",
+    status: "published",
+    entryStepId: rootStepId,
+    steps: [{
+      stepId: rootStepId,
+      kind: "subflow",
+      executor: { kind: "subflow", selector: workflowRevisionId },
+      inputContract: { schemaId: "hunter.execution-plan", version: 1 },
+      outputContract: { schemaId: "hunter.task-run-summary", version: 1 },
+      requiredCapabilities: ["workspace_isolation"],
+      permissionPolicy: {
+        decision: "allow",
+        permissions: ["workflow.dispatch-task"],
+      },
+      verifier: {
+        kind: "automated",
+        verifierId: "e2e-task-run-verdicts",
+        outputContract: { schemaId: "hunter.task-run-summary", version: 1 },
+      },
+      retryPolicy: {
+        maxAttempts: 1,
+        retryableErrorClasses: [],
+        backoff: {
+          kind: "fixed",
+          initialDelayMs: 1,
+          maxDelayMs: 1,
+        },
+        jitter: "none",
+        waitingBudgetCost: 1,
+      },
+      timeoutPolicy: { timeoutMs: 30_000, onTimeout: "needs_attention" },
+      budgetCost: { units: 1, elapsedMs: 30_000, cost: 0 },
+      sessionPolicy: "new",
+      workspacePolicy: {
+        mode: "write",
+        isolation: "worktree",
+        reuse: false,
+      },
+    }],
+    routes: [{
+      routeId: RouteIdSchema.parse("rte_e2erootpass01"),
+      fromStepId: rootStepId,
+      outcome: "passed",
+      priority: 0,
+      toStepId: null,
+    }],
+    loops: [],
     publishedAt: FIXED_TIME,
   });
 }
@@ -340,6 +397,7 @@ export function createE2eDaemonComposition(input: {
   const composition = createApplicationComposition({
     database: input.database,
     externalHandler: input.fixture.runtime,
+    verifier: input.fixture.verifier,
     installSecret: input.installSecret,
     allowedHosts: input.allowedHosts,
     allowedOrigins: input.allowedOrigins,
@@ -379,7 +437,7 @@ export function createE2eDaemonComposition(input: {
     },
   });
   serviceReference.current = composition.services;
-  const { services } = composition;
+  const { services, attemptSettlement } = composition;
   const requirementViews = new Map<
     RequirementRevisionId,
     StoredRequirementView
@@ -389,6 +447,7 @@ export function createE2eDaemonComposition(input: {
     fixture: input.fixture.proofScope,
   });
   const workflow = e2eWorkflow();
+  const rootWorkflow = e2eRootWorkflow();
 
   const commitProject = (
     command: CreateProjectHttpRequest,
@@ -432,6 +491,16 @@ export function createE2eDaemonComposition(input: {
           eventData: {
             workflowRevisionId: workflow.workflowRevisionId,
             workflowRevision: workflow,
+          },
+          schemaVersion: 1,
+          occurredAt: FIXED_TIME,
+        },
+        {
+          eventId: `evt_e2e_root_workflow_${suffix}`,
+          eventType: "WorkflowRevisionPublished",
+          eventData: {
+            workflowRevisionId: rootWorkflow.workflowRevisionId,
+            workflowRevision: rootWorkflow,
           },
           schemaVersion: 1,
           occurredAt: FIXED_TIME,
@@ -758,7 +827,7 @@ export function createE2eDaemonComposition(input: {
         );
         if (
           plan === null
-          || command.workflowRevisionId !== workflowRevisionId
+          || command.workflowRevisionId !== rootWorkflowRevisionId
           || services.repositories.getProject(plan.projectId) === null
         ) {
           throw new Error("E2E_RUN_BINDING_INVALID");
@@ -907,42 +976,8 @@ export function createE2eDaemonComposition(input: {
     return { attempt, workspaceLease, writerLease, operation };
   };
 
-  const completeRootIntegration = (rootRunId: RunId): void => {
-    let root = services.flowStore.loadRun(rootRunId);
-    if (root === null) throw new Error("E2E_ROOT_RUN_MISSING");
-    if (root.steps.some(({ conclusion }) => conclusion === "succeeded")) return;
-    const actor = {
-      actorId: "e2e-composition",
-      correlationId: `e2e:${root.binding.runId}`,
-    };
-    services.flowEngine.handle({
-      type: "RecordExternalObservation",
-      runId: root.binding.runId,
-      fact: "agent_returned",
-      expectedVersion: root.version,
-      idempotencyKey: `e2e-root-return:${root.binding.runId}`,
-      actor,
-    });
-    root = services.flowStore.loadRun(rootRunId);
-    if (root === null) throw new Error("E2E_ROOT_RUN_MISSING");
-    services.flowEngine.handle({
-      type: "RecordVerifierResult",
-      runId: root.binding.runId,
-      outcome: "passed",
-      evidenceFingerprint: canonicalSha256({
-        runId: root.binding.runId,
-        executionPlanId: root.binding.executionPlanId,
-        result: "integrated",
-      }),
-      expectedVersion: root.version,
-      idempotencyKey: `e2e-root-verify:${root.binding.runId}`,
-      actor,
-    });
-  };
-
   const runUntilLaunchReceipt = async () => {
     const root = requireActiveRoot();
-    completeRootIntegration(root.binding.runId);
     const currentRoot = services.flowStore.loadRun(root.binding.runId);
     if (currentRoot === null) throw new Error("E2E_ROOT_RUN_MISSING");
     const actor = {
@@ -1033,48 +1068,12 @@ export function createE2eDaemonComposition(input: {
       correlationId: `e2e:${root.binding.runId}`,
     };
     const executeAttempt = async (childRunId: RunId) => {
-      const { attempt, workspaceLease, writerLease } =
+      const { workspaceLease, writerLease } =
         await ensureAttemptLaunched(childRunId);
-      let current = services.flowStore.loadRun(childRunId);
-      if (current === null) throw new Error("E2E_CHILD_RUN_MISSING");
-      if (attempt.executionStatus !== "returned") {
-        services.flowEngine.handle({
-          type: "RecordExternalObservation",
-          runId: childRunId,
-          fact: "agent_returned",
-          expectedVersion: current.version,
-          idempotencyKey: `e2e-return:${attempt.attemptId}`,
-          actor,
-        });
-      }
-      const verification = await input.fixture.verifier.verify();
-      current = services.flowStore.loadRun(childRunId);
-      if (current === null) throw new Error("E2E_CHILD_RUN_MISSING");
-      services.flowEngine.handle({
-        type: "RecordVerifierResult",
-        runId: childRunId,
-        outcome: verification.status,
-        evidenceFingerprint: canonicalSha256(verification.evidence),
-        ...(verification.status === "failed"
-          ? {
-              failureFingerprint: canonicalSha256({
-                attemptId: attempt.attemptId,
-                status: verification.status,
-              }),
-              diffFingerprint: canonicalSha256({
-                attemptId: attempt.attemptId,
-                diff: "fixture",
-              }),
-            }
-          : {}),
-        expectedVersion: current.version,
-        idempotencyKey: `e2e-verify:${attempt.attemptId}`,
-        actor,
-      });
+      await attemptSettlement.settle(childRunId);
       return { workspaceLease, writerLease };
     };
 
-    completeRootIntegration(root.binding.runId);
     let currentRoot = services.flowStore.loadRun(root.binding.runId);
     if (currentRoot === null) throw new Error("E2E_ROOT_RUN_MISSING");
 
@@ -1136,7 +1135,12 @@ export function createE2eDaemonComposition(input: {
     app,
     services,
     daemonCsrf,
-    catalog: { repositoryId, workflowRevisionId, agentProfileId },
+    catalog: {
+      repositoryId,
+      workflowRevisionId,
+      rootWorkflowRevisionId,
+      agentProfileId,
+    },
     drainArchiveAndKnowledge,
     runUntilLaunchReceipt,
     runUntilSettled,

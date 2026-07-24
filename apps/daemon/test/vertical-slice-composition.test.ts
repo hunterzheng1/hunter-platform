@@ -232,7 +232,7 @@ describe("production vertical-slice composition", () => {
         payload: {
           runId: rootRunId,
           executionPlanId,
-          workflowRevisionId,
+          workflowRevisionId: composition.catalog.rootWorkflowRevisionId,
           expectedVersion: 0,
           idempotencyKey: "vertical-run",
         },
@@ -307,7 +307,7 @@ describe("production vertical-slice composition", () => {
       );
       expect(database.prepare(
         "SELECT COUNT(*) AS count FROM side_effect_receipts",
-      ).get()).toEqual({ count: 4 });
+      ).get()).toEqual({ count: 6 });
       expect(database.prepare(
         "SELECT COUNT(*) AS count FROM archive_jobs WHERE archive_receipt_json IS NOT NULL",
       ).get()).toEqual({ count: 1 });
@@ -345,7 +345,7 @@ describe("production vertical-slice composition", () => {
           "SELECT COUNT(*) AS count FROM outbox WHERE json_extract(operation_json, '$.operationType') = 'session.launch'",
         ).get(),
       ).toEqual({ count: 3 });
-      expect(fixtures[1]?.runtime.nativeEffectCount).toBe(3);
+      expect(fixtures[1]?.runtime.nativeEffectCount).toBe(5);
       expect(database.prepare(
         "SELECT COUNT(*) AS count FROM archive_jobs WHERE status = 'completed'",
       ).get()).toEqual({ count: 3 });

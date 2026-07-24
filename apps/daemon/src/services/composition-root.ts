@@ -1,11 +1,18 @@
 import { KnowledgeResolver } from "@hunter/knowledge";
 
+import {
+  AttemptSettlementRunner,
+} from "./attempt-settlement-runner.js";
+import type { CompletionVerifierPort } from "./application-services.js";
 import { ApplicationStartRunService } from "./start-run.js";
 import { createSqliteApplicationServices } from "./sqlite-application-services.js";
 
-export type ApplicationCompositionInput = Parameters<
+type SqliteApplicationCompositionInput = Parameters<
   typeof createSqliteApplicationServices
 >[0];
+export type ApplicationCompositionInput = SqliteApplicationCompositionInput & {
+  readonly verifier: CompletionVerifierPort;
+};
 
 /**
  * Production application composition boundary.
@@ -26,10 +33,17 @@ export function createApplicationComposition(
   const knowledge = services.knowledgeCatalog === undefined
     ? undefined
     : new KnowledgeResolver(services.knowledgeCatalog);
+  const attemptSettlement = new AttemptSettlementRunner(
+    services.flowStore,
+    services.flowEngine,
+    services.attemptObservation,
+    input.verifier,
+  );
 
   return {
     services,
     startRun,
     knowledge,
+    attemptSettlement,
   };
 }

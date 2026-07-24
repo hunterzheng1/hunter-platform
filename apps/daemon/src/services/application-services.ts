@@ -1,4 +1,5 @@
 import type { ExternalOperationHandler } from "@hunter/runtime-contracts";
+import type { AttemptId, RunId } from "@hunter/domain";
 
 export interface VerificationEvidence {
   readonly kind: string;
@@ -13,7 +14,11 @@ export interface VerificationResult {
 }
 
 export interface CompletionVerifierPort {
-  verify(): Promise<VerificationResult>;
+  verify(input: {
+    readonly runId: RunId;
+    readonly attemptId: AttemptId;
+    readonly runtimeEvidenceHash: string;
+  }): Promise<VerificationResult>;
 }
 
 /**

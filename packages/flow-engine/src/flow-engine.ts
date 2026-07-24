@@ -379,9 +379,22 @@ export class FlowEngine {
       const accepted = new Set([...state.acceptedChildRunIds, ...terminal.map(({ child }) => child.binding.runId)]);
       const allScheduledAccepted = state.scheduledChildren.length > 0 && state.scheduledChildren.every(({ childRunId }) => accepted.has(childRunId));
       const allResolved = this.taskGraphResolved(state, plan, accepted);
-      const integrationSucceeded = state.steps.some(({ conclusion }) => conclusion === "succeeded");
-      if (allScheduledAccepted && allResolved && integrationSucceeded) events.push({ type: "RunConcluded", status: "succeeded" });
-      else if (terminal.some(({ status }) => status !== "succeeded")) events.push({ type: "RunStatusChanged", status: "needs_attention" });
+      if (allScheduledAccepted && allResolved) {
+        events.push(...this.concludePassedTaskSubflow(state, {
+          ...state,
+          budgetUsage: {
+            ...state.budgetUsage,
+            attempts: state.budgetUsage.attempts + rolled.attempts,
+            elapsedMs: state.budgetUsage.elapsedMs + rolled.elapsedMs,
+            cost: state.budgetUsage.cost + rolled.cost,
+            tokens: state.budgetUsage.tokens + rolled.tokens,
+            loopIterations:
+              state.budgetUsage.loopIterations + rolled.loopIterations,
+          },
+        }));
+      } else if (terminal.some(({ status }) => status !== "succeeded")) {
+        events.push({ type: "RunStatusChanged", status: "needs_attention" });
+      }
     }
     return this.commitExisting(command, commandId, requestFingerprint, events, { acceptedChildRunIds: terminal.map(({ child }) => child.binding.runId) });
   }
@@ -574,10 +587,16 @@ export class FlowEngine {
     }
     if (decision.action === "blocked") events.push({ type: "RunStatusChanged", status: "paused" });
     if (decision.action === "skipped") {
-      const integrationSucceeded = state.steps.some(({ conclusion }) => conclusion === "succeeded");
-      events.push(integrationSucceeded && this.taskGraphResolved(state, plan, new Set(state.acceptedChildRunIds), recordedDecision)
-        ? { type: "RunConcluded", status: "succeeded" }
-        : { type: "RunStatusChanged", status: "running" });
+      if (this.taskGraphResolved(
+        state,
+        plan,
+        new Set(state.acceptedChildRunIds),
+        recordedDecision,
+      )) {
+        events.push(...this.concludePassedTaskSubflow(state, state));
+      } else {
+        events.push({ type: "RunStatusChanged", status: "running" });
+      }
     }
     if (decision.action === "compensate" || decision.action === "waived") events.push({ type: "RunStatusChanged", status: "running" });
     if (decision.action === "terminate") {
@@ -985,6 +1004,80 @@ export class FlowEngine {
       const dependents = plan.tasks.filter(({ dependsOn }) => dependsOn.includes(task.taskId));
       return dependents.length > 0 && dependents.every(({ taskId }) => dependentAcceptsFailure(taskId));
     });
+  }
+
+  private concludePassedTaskSubflow(
+    state: WorkflowRunState,
+    budgetState: WorkflowRunState,
+  ): FlowEvent[] {
+    const workflow = this.requireWorkflow(state.binding.workflowRevisionId);
+    const { step } = activeStep(state);
+    const definition = workflow.steps.find(({ stepId }) => stepId === step.stepId);
+    if (definition?.kind !== "subflow") {
+      throw new Error("TASK_FANIN_REQUIRES_ACTIVE_SUBFLOW");
+    }
+    const selected = selectRoute(workflow, step.stepId, "passed", {
+      childStatus: "succeeded",
+    });
+    if (selected === null || selected.loop !== null) {
+      throw new Error("TASK_FANIN_ROUTE_REQUIRED");
+    }
+    const events: FlowEvent[] = [
+      {
+        type: "StepConcluded",
+        stepRunId: step.stepRunId,
+        conclusion: "succeeded",
+      },
+      {
+        type: "RouteSelected",
+        routeId: selected.route.routeId,
+        fromStepId: selected.route.fromStepId,
+        toStepId: selected.route.toStepId,
+        outcome: "passed",
+      },
+    ];
+    if (selected.route.toStepId === null) {
+      events.push({ type: "RunConcluded", status: "succeeded" });
+      return events;
+    }
+    const target = workflow.steps.find(
+      ({ stepId }) => stepId === selected.route.toStepId,
+    );
+    if (target === undefined) throw new Error("ROUTE_TARGET_STEP_MISSING");
+    if (!this.budgetAvailable(budgetState, target)) {
+      events.push({ type: "RunStatusChanged", status: "needs_attention" });
+      return events;
+    }
+    const stepRunId = StepRunIdSchema.parse(
+      derivedId("spr", `${state.binding.runId}:${target.stepId}`),
+    );
+    const attemptId = AttemptIdSchema.parse(
+      derivedId("att", `${state.binding.runId}:${target.stepId}:1`),
+    );
+    events.push({
+      type: "BudgetConsumed",
+      attempts: 1,
+      elapsedMs: target.budgetCost.elapsedMs,
+      cost: target.budgetCost.cost,
+      tokens: 0,
+      loopIterations: 0,
+      progressFingerprint: null,
+      failureFingerprint: null,
+      noDiff: false,
+      verifierError: false,
+    });
+    events.push({
+      type: "StepActivated",
+      stepRunId,
+      stepId: target.stepId,
+      attemptId,
+      attemptNumber: 1,
+      fixedContentHash: canonicalSha256({
+        bindingFingerprint: state.binding.bindingFingerprint,
+        stepId: target.stepId,
+      }),
+    });
+    return events;
   }
 
   private budgetAvailable(state: WorkflowRunState, step: WorkflowRevision["steps"][number]): boolean {

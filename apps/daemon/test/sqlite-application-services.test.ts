@@ -14,6 +14,17 @@ import { createSqliteApplicationServices } from "../src/services/sqlite-applicat
 import { startDaemon } from "../src/main.js";
 
 const temporaryFixtures = new Set<string>();
+const passingVerifier = {
+  verify: async () => ({
+    status: "passed" as const,
+    evidence: [{
+      kind: "test",
+      command: "npm test",
+      exitCode: 0,
+      proofScope: "hunter_contract_only" as const,
+    }],
+  }),
+};
 
 afterEach(() => {
   for (const fixture of temporaryFixtures) {
@@ -567,6 +578,7 @@ describe("createSqliteApplicationServices", () => {
       secretRef: "os-credential://hunter/install",
       secretStore: { resolveSecret: async (secretRef) => { resolved.push(secretRef); return "resolved-install-secret-tests"; } },
       externalHandler: { execute: async () => { throw new Error("not dispatched"); } },
+      verifier: passingVerifier,
       allowedHost: "hunter-test.localhost",
       allowedOrigin: "app://hunter",
       publishPort: async () => undefined,
@@ -590,6 +602,7 @@ describe("createSqliteApplicationServices", () => {
       secretRef: "raw-install-secret",
       secretStore: { resolveSecret: async () => { resolved = true; return "must-not-resolve"; } },
       externalHandler: { execute: async () => { throw new Error("not dispatched"); } },
+      verifier: passingVerifier,
       allowedHost: "hunter-test.localhost",
       allowedOrigin: "app://hunter",
       publishPort: async () => undefined,
@@ -613,6 +626,7 @@ describe("createSqliteApplicationServices", () => {
           },
         },
         externalHandler: { execute: async () => { throw new Error("not dispatched"); } },
+        verifier: passingVerifier,
         allowedHost: "hunter-test.localhost",
         allowedOrigin: "app://hunter",
         publishPort: async () => undefined,

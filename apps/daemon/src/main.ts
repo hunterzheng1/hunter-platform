@@ -21,6 +21,7 @@ import {
   createApplicationComposition,
   type ApplicationCompositionInput,
 } from "./services/composition-root.js";
+import type { CompletionVerifierPort } from "./services/application-services.js";
 import type { SqliteServiceRepositories } from "./services/sqlite-application-services.js";
 
 export type RemoteDaemonOptions =
@@ -43,6 +44,7 @@ export interface DaemonStartOptions {
   readonly secretStore: { resolveSecret(secretRef: string): Promise<string> };
   readonly repositories?: SqliteServiceRepositories | undefined;
   readonly externalHandler: ExternalOperationHandler;
+  readonly verifier: CompletionVerifierPort;
   readonly allowedHost: string;
   readonly allowedOrigin: string;
   readonly publishPort: (port: number) => Promise<void>;
@@ -75,6 +77,7 @@ export async function startDaemon(options: DaemonStartOptions) {
       database,
       repositories: options.repositories,
       externalHandler: options.externalHandler,
+      verifier: options.verifier,
       installSecret,
       allowedHosts: [options.allowedHost],
       allowedOrigins: [options.allowedOrigin],
