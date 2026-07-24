@@ -11,7 +11,7 @@ import { ArchiveJobWorker, ArchiveWriter, SqliteArchiveJobStore, SqliteKnowledge
 import { computeCapabilityManifest, createExternalOperation, createWorkspacePathBoundary, decodeCapabilityProbeReceipt, decodeExternalOperationReceipt, type CapabilityProbeReceipt, type ExternalOperation, type ExternalOperationHandler, type Lease, type VerifiedWorkspacePath } from "@hunter/runtime-contracts";
 import { deriveStepPolicy } from "@hunter/policy";
 import { LeaseService, RuntimeManager, RuntimeOperationHandler } from "@hunter/runtime-manager";
-import { EventLedgerReader, HunterProjection, OperationWorker, ProjectionRunner, SqliteOperationJournal } from "@hunter/storage";
+import { EventLedgerReader, HunterProjection, OperationWorker, ProjectionRunner, SqliteOperationJournal, validateStorageHealth } from "@hunter/storage";
 
 import { LocalAuthenticator } from "../auth/local-authenticator.js";
 import { DurableEventStream } from "../events/durable-event-stream.js";
@@ -171,11 +171,6 @@ export function createSqliteApplicationServices(input: {
           ? {}
           : { fault: input.archive.fault }),
       });
-  input.database.exec(`CREATE TABLE IF NOT EXISTS principal_project_authorizations (
-    principal_id TEXT PRIMARY KEY,
-    project_ids_json TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  ) STRICT`);
   const defaultAuthorizationResolver = (principalId: string): readonly ProjectId[] | undefined => {
     const row = input.database.prepare("SELECT project_ids_json FROM principal_project_authorizations WHERE principal_id = ?").get(principalId) as { project_ids_json: string } | undefined;
     return row === undefined ? undefined : ProjectIdSchema.array().parse(JSON.parse(row.project_ids_json));
@@ -631,14 +626,10 @@ export function createSqliteApplicationServices(input: {
   const publishChange = new PublishChangeService(repositories, journal, now);
   const recovery = new StartupRecoveryCoordinator({
     validateStorage: async () => {
-      const integrity = input.database.prepare("PRAGMA integrity_check").get() as { integrity_check?: string };
-      if (integrity.integrity_check !== "ok") throw new Error("STORAGE_INTEGRITY_FAILED");
-      const foreignKeys = input.database.prepare("PRAGMA foreign_keys").get() as { foreign_keys?: number };
-      if (foreignKeys.foreign_keys !== 1) throw new Error("STORAGE_FOREIGN_KEYS_DISABLED");
-      const journalMode = input.database.prepare("PRAGMA journal_mode").get() as { journal_mode?: string };
-      if (journalMode.journal_mode?.toLowerCase() !== "wal" && journalMode.journal_mode?.toLowerCase() !== "memory") throw new Error("STORAGE_WAL_DISABLED");
-      const schema = input.database.prepare("SELECT metadata_value FROM storage_metadata WHERE metadata_key = 'schema_version'").get() as { metadata_value?: string } | undefined;
-      if (schema?.metadata_value !== "1") throw new Error("STORAGE_SCHEMA_VERSION_UNSUPPORTED");
+      validateStorageHealth(
+        input.database,
+        journal.migrationReceipt.schemaVersion,
+      );
       if (input.contentDirectory !== undefined) accessSync(input.contentDirectory, constants.R_OK | constants.W_OK);
       return [];
     },
@@ -654,9 +645,18 @@ export function createSqliteApplicationServices(input: {
           input.database.exec("ROLLBACK");
           throw error;
         }
-        return [{ kind: "migration", status: "rolled_back", schemaVersion: 1 }];
+        return [{
+          kind: "migration",
+          status: "rolled_back",
+          schemaVersion: journal.migrationReceipt.schemaVersion,
+        }];
       }
-      return [{ kind: "migration", status: "complete", schemaVersion: 1 }];
+      const recovered = journal.migrationReceipt.recoveredMigration;
+      return [{
+        kind: "migration",
+        status: recovered?.status ?? "complete",
+        schemaVersion: journal.migrationReceipt.schemaVersion,
+      }];
     },
     reconcileOutbox: async () => {
       journal.reconcileObservedOperations(now());
