@@ -69,6 +69,14 @@ worker 的 `task_pack.write` 使用同一 bundle 和 digest。该 fixture 仍明
 8. 独立审查发现最终 envelope 未纳入预算、conflict receipt 可语义矛盾、bundle
    未绑定完整 receipt 三个 Important；分别补充真实 RED 后修复。复审结论 `READY`，
    无剩余 Critical、Important 或 Minor。
+9. PR #13 首轮 push/PR CI 的 4 个 Node 24 job 通过，但 4 个 Vertical slice job
+   真实失败：`e2e/vertical-slice.spec.ts` 仍查找 Task 8 已替换的
+   `authoritative · active` 等旧协议文案。本机先因 sandbox `.hunter-e2e` 建目录
+   `EPERM` 未到目标断言；沙箱外同命令复现与 CI 相同的 locator 失败。只更新四条
+   Playwright 用户文案/来源断言后，精确 E2E 1/1 转绿。
+10. Windows 打包门禁首次在 sandbox 内因 Vite `.vite-temp` 写入 `EPERM` 被阻断；
+    使用正常本机权限重跑同一命令后，Web build、desktop build、sidecar/preload
+    smoke 与 NSIS x64 installer 全部成功。
 
 失败历史未改写为成功。
 
@@ -86,6 +94,10 @@ worker 的 `task_pack.write` 使用同一 bundle 和 digest。该 fixture 仍明
 | bundle/receipt unknown-field、hash、count 和正文篡改拒绝 | PASS |
 | `npm run verify:foundation`（沙箱内首轮） | BLOCKED；typecheck 写 Knowledge dist 时 Windows `EPERM` |
 | `npm run verify:foundation`（审查修正后、同命令沙箱外重跑） | PASS；123 files / 1051 tests，rebuild/recovery/backup-restore/diagnostics/resources/build 全部 PASS |
+| PR #13 首轮远端 CI | FAIL；4/4 Node 24 PASS，4/4 Vertical slice 因旧 UI 文案断言 FAIL；失败历史保留 |
+| `npx playwright test e2e/vertical-slice.spec.ts --project=chromium`（修正后） | PASS；1/1 |
+| `npm run pack:win -w @hunter/desktop`（sandbox） | BLOCKED；Vite `.vite-temp` 写入触发 Windows `EPERM` |
+| `npm run pack:win -w @hunter/desktop`（同命令、正常本机权限） | PASS；NSIS x64 installer 与 block map 已生成 |
 
 ## 证明边界
 
