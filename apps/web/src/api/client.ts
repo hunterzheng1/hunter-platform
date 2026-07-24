@@ -1,4 +1,7 @@
 import {
+  ArtifactIdParamsSchema,
+  ArtifactPageHttpQuerySchema,
+  ArtifactPageHttpResponseSchema,
   AttentionActionHttpRequestSchema,
   AttentionActionHttpResponseSchema,
   ApproveRequirementHttpRequestSchema,
@@ -18,6 +21,8 @@ import {
   type ProjectDetailHttpResponse,
   type AttentionActionHttpRequest,
   type AttentionActionHttpResponse,
+  type ArtifactPageHttpQuery,
+  type ArtifactPageHttpResponse,
   type ProjectListHttpResponse,
   type PublishChangeHttpRequest,
   type PublishChangeHttpResponse,
@@ -204,6 +209,26 @@ export class HunterApi {
       await this.transport.request(`/api/v1/runs/${params.runId}`),
     );
     if (response.runId !== params.runId) throw new Error("RUN_RESPONSE_SCOPE_MISMATCH");
+    return response;
+  }
+
+  public async getArtifactPage(
+    artifactId: string,
+    query: ArtifactPageHttpQuery,
+  ): Promise<ArtifactPageHttpResponse> {
+    const params = ArtifactIdParamsSchema.parse({ artifactId });
+    const parsedQuery = ArtifactPageHttpQuerySchema.parse(query);
+    const response = ArtifactPageHttpResponseSchema.parse(
+      await this.transport.request(
+        `/api/v1/artifacts/${params.artifactId}/pages?cursor=${parsedQuery.cursor}&limit=${parsedQuery.limit}`,
+      ),
+    );
+    const responseArtifactId = response.status === "ok"
+      ? response.artifact.artifactId
+      : response.artifactId;
+    if (responseArtifactId !== params.artifactId) {
+      throw new Error("ARTIFACT_RESPONSE_SCOPE_MISMATCH");
+    }
     return response;
   }
 

@@ -136,6 +136,11 @@ function fixture(state: WorkflowRunState) {
       evidence_hash TEXT NOT NULL,
       observed_at TEXT NOT NULL
     );
+    CREATE TABLE artifact_catalog (
+      artifact_id TEXT PRIMARY KEY,
+      attempt_id TEXT,
+      created_at TEXT NOT NULL
+    );
   `);
   let position = 8;
   for (const step of state.steps) {
@@ -292,6 +297,25 @@ describe("SQLite production RunView", () => {
       eventId: "evt_runview_state_0009",
       contentHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
     }]);
+    fixtureValue.database.close();
+    openDatabase = undefined;
+  });
+
+  it("projects durable Artifact identifiers for their owning Attempt", () => {
+    const fixtureValue = fixture(runState("waiting_input", "pending"));
+    openDatabase = fixtureValue.database;
+    fixtureValue.database.prepare(
+      `INSERT INTO artifact_catalog(artifact_id, attempt_id, created_at)
+       VALUES (?, ?, ?)`,
+    ).run(
+      "art_runviewprod01",
+      ids.attempt,
+      "2026-07-24T00:00:00.000Z",
+    );
+
+    expect(
+      fixtureValue.service.get(ids.run)?.steps[0]?.attempts[0]?.artifactIds,
+    ).toEqual(["art_runviewprod01"]);
     fixtureValue.database.close();
     openDatabase = undefined;
   });

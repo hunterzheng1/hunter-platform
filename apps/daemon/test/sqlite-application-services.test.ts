@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { AgentProfileIdSchema, AttemptIdSchema, ControllerLeaseIdSchema, DeviceBindingIdSchema, DeviceIdSchema, EvidenceIdSchema, LeaseOwnerIdSchema, NativeSessionIdSchema, OperationIdSchema, ProjectIdSchema, RepositoryIdSchema, RunIdSchema, RuntimeProviderIdSchema, WorkspaceIdSchema, WorktreeIdSchema, createProject } from "@hunter/domain";
+import { AgentProfileIdSchema, ArtifactIdSchema, AttemptIdSchema, ControllerLeaseIdSchema, DeviceBindingIdSchema, DeviceIdSchema, EvidenceIdSchema, LeaseOwnerIdSchema, NativeSessionIdSchema, OperationIdSchema, ProjectIdSchema, RepositoryIdSchema, RunIdSchema, RuntimeProviderIdSchema, WorkspaceIdSchema, WorktreeIdSchema, createProject } from "@hunter/domain";
 import { CanonicalWorkspaceKeySchema, ControllerLeaseSchema, ExternalOperationReceiptSchema, LeaseSchema, WorkspaceRefSchema, createExternalOperation, createWorkspacePathBoundary, type ExternalOperationHandler } from "@hunter/runtime-contracts";
 import { FakeRuntime } from "@hunter/testkit";
 import { afterEach, describe, expect, it } from "vitest";
@@ -49,12 +49,12 @@ describe("createSqliteApplicationServices", () => {
     database.close();
   });
 
-  it("clears the legacy version 1 marker after upgrading storage to version 2", async () => {
+  it("clears the legacy version 1 marker after upgrading storage to version 3", async () => {
     const database = new DatabaseSync(":memory:");
     const services = createSqliteApplicationServices({ database, externalHandler: { execute: async () => { throw new Error("not dispatched"); } }, installSecret: "migration-secret-tests", allowedHosts: ["hunter-test.localhost"], allowedOrigins: ["app://hunter"] });
     database.prepare("INSERT INTO storage_metadata(metadata_key, metadata_value, updated_at) VALUES ('migration_in_progress', 'target_schema_version:1', ?)").run(new Date().toISOString());
     const report = await services.recovery.run();
-    expect(report.conclusions).toContainEqual({ kind: "migration", status: "rolled_back", schemaVersion: 2 });
+    expect(report.conclusions).toContainEqual({ kind: "migration", status: "rolled_back", schemaVersion: 3 });
     expect(database.prepare("SELECT metadata_value FROM storage_metadata WHERE metadata_key = 'migration_in_progress'").get()).toBeUndefined();
     database.close();
   });
@@ -372,6 +372,7 @@ describe("createSqliteApplicationServices", () => {
       allowedHosts: ["hunter-test.localhost"],
       allowedOrigins: ["app://hunter"],
       now: () => new Date("2026-07-22T10:00:00.000Z"),
+      contentDirectory: fixture,
     });
     const common = {
       schemaVersion: 1 as const,
@@ -446,6 +447,40 @@ describe("createSqliteApplicationServices", () => {
     commit(authorizedPrepare);
     await expect(services.operationWorker.runOnce()).resolves.toBe("completed");
     expect((database.prepare("SELECT COUNT(*) AS count FROM lease_records WHERE lease_kind = 'writer'").get() as { count: number }).count).toBe(1);
+    expect(database.prepare(
+      `SELECT retention_class, attempt_id
+         FROM artifact_catalog`,
+    ).all()).toEqual([{
+      retention_class: "core_receipt",
+      attempt_id: common.attemptId,
+    }]);
+    expect(database.prepare(
+      "SELECT COUNT(*) AS count FROM artifact_entries",
+    ).get()).toEqual({ count: 1 });
+    expect(database.prepare(
+      `SELECT reference_kind, reference_id
+         FROM artifact_references`,
+    ).all()).toEqual([{
+      reference_kind: "evidence",
+      reference_id: expect.stringMatching(/^evd_/u),
+    }]);
+    const receiptArtifact = database.prepare(
+      "SELECT artifact_id FROM artifact_catalog",
+    ).get() as { artifact_id: string };
+    const receiptPage = services.artifactCatalog?.readPage({
+      artifactId: ArtifactIdSchema.parse(receiptArtifact.artifact_id),
+      cursor: 0,
+      limit: 1,
+    });
+    expect(receiptPage?.status).toBe("ok");
+    if (receiptPage?.status !== "ok") {
+      throw new Error("RECEIPT_ARTIFACT_PAGE_MISSING");
+    }
+    expect(receiptPage.entries[0]?.content).not.toContain(repositoryPath);
+    expect(receiptPage.entries[0]?.content).not.toContain(worktreePath);
+    expect(receiptPage.entries[0]?.content).not.toContain(
+      "reportedWorkspacePath",
+    );
     expect(runtimes[0]!.nativeEffectCount).toBe(1);
 
     database.close();
@@ -457,6 +492,7 @@ describe("createSqliteApplicationServices", () => {
       allowedHosts: ["hunter-test.localhost"],
       allowedOrigins: ["app://hunter"],
       now: () => new Date("2026-07-22T10:00:00.000Z"),
+      contentDirectory: fixture,
     });
     expect(services.operationWorker.resolveReceipt(authorizedPrepare)).toMatchObject({
       operationId: authorizedPrepare.operationId,

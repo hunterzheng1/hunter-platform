@@ -1,3 +1,4 @@
+export * from "./artifact-catalog.js";
 export * from "./backup-manifest.js";
 export * from "./backup-service.js";
 export * from "./event-ledger-reader.js";

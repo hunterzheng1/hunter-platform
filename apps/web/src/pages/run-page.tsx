@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   AttentionActionHttpResponse,
+  ArtifactPageHttpResponse,
   RunViewHttpResponse,
 } from "@hunter/api-contracts";
+import { ARTIFACT_HTTP_LIMITS } from "@hunter/api-contracts";
 import {
   RunIdSchema,
+  type ArtifactId,
   type AttemptId,
   type RunId,
   type StepRunId,
@@ -22,7 +25,7 @@ import {
 
 type RunApi =
   & Pick<HunterApi, "getRun">
-  & Partial<Pick<HunterApi, "executeAttentionAction">>;
+  & Partial<Pick<HunterApi, "executeAttentionAction" | "getArtifactPage">>;
 
 const RUN_STATUS_LABELS: { readonly [Status in RunViewHttpResponse["status"]]: string } = {
   created: "已创建",
@@ -112,6 +115,21 @@ function ValidatedRunPage({
     },
     [api, run, runId],
   );
+  const loadArtifactPage = useCallback(
+    async (
+      artifactId: ArtifactId,
+      cursor: number,
+    ): Promise<ArtifactPageHttpResponse> => {
+      if (api.getArtifactPage === undefined) {
+        throw new Error("ARTIFACT_PAGE_UNAVAILABLE");
+      }
+      return api.getArtifactPage(artifactId, {
+        cursor,
+        limit: ARTIFACT_HTTP_LIMITS.defaultPageItems,
+      });
+    },
+    [api],
+  );
 
   useEffect(() => {
     setRun(undefined);
@@ -154,6 +172,9 @@ function ValidatedRunPage({
             <StepDetail
               step={selectedStep}
               onAttentionAction={executeAttentionAction}
+              {...(api.getArtifactPage === undefined
+                ? {}
+                : { loadArtifactPage })}
             />
           )}
         </div>

@@ -5,6 +5,10 @@
 | Term | Canonical meaning |
 |---|---|
 | `Artifact` | 执行产生或引用的文件、Diff、报告、日志、截图或构建结果。 |
+| `ArtifactPage` | 按有界 cursor、条目数和 UTF-8 字节预算读取的 Artifact 内容窗口；客户端只保留当前页。 |
+| `ArtifactRetentionFloor` | 当前仍可重放的最早 cursor；请求低于该位置时必须返回显式 resync receipt。 |
+| `ArtifactQuotaReceipt` | 由逻辑字节水位计算的 normal、soft-limit 或 hard-limit 决策；硬限制拒绝非关键写入，同时为核心 receipt 保留独立额度。 |
+| `ArtifactBackpressureReceipt` | 慢消费者超过有界队列时产生的断开并重放指令；持久化 writer 不等待客户端消费。 |
 | `Evidence` | 支持某个执行或验证结论的可追溯事实，例如测试结果、哈希、审批或协议事件。 |
 | `Archive` | 某个成功、失败或取消 Run 的冻结成果包及其清单。 |
 | `KnowledgeSource` | 对 RequirementRevision、ChangeRevision、Run、Attempt、Artifact、Evidence 或 Archive 的来源引用。 |
@@ -29,3 +33,5 @@
 | 删除已被替代的知识 | 标记 `superseded` 或 `withdrawn` |
 | 让低置信经验覆盖批准需求 | `AuthoritativeKnowledge` 优先并触发冲突处理 |
 | 只归档成功 Run | 成功、失败和取消 Run 都可归档并形成历史知识 |
+| 浏览器加载或累积完整日志 | `ArtifactPage`、当前页替换与 cursor 重放 |
+| 在 Artifact HTTP 响应暴露绝对路径或 CAS 内部路径 | 路径无关的摘要、内容哈希和有界页 |

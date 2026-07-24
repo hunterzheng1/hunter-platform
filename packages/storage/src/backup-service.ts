@@ -160,6 +160,13 @@ interface EvidenceReferenceRow {
   readonly evidence_hash: string;
 }
 
+interface ArtifactContentReferenceRow {
+  readonly content_hash: string;
+  readonly content_ref: string;
+  readonly relative_path: string;
+  readonly byte_length: number;
+}
+
 interface SourceFile {
   readonly scope: typeof SCOPES[number];
   readonly sourcePath: string;
@@ -642,6 +649,35 @@ function reconcileReferences(
         }
       }
     }
+  }
+  const artifactContentRows = database.prepare(
+    `SELECT content_hash, content_ref, relative_path, byte_length
+       FROM artifact_entries
+      ORDER BY artifact_id, cursor`,
+  ).all() as unknown as readonly ArtifactContentReferenceRow[];
+  for (const row of artifactContentRows) {
+    const portableRelativePath = row.relative_path.replaceAll("\\", "/");
+    const expectedRelativePath =
+      `sha256/${row.content_hash.slice(0, 2)}/${row.content_hash}`;
+    const candidates = manifest.files.filter(
+      ({ scope, relativePath }) =>
+        scope === "content"
+        && relativePath === `content/${portableRelativePath}`,
+    );
+    const candidate = candidates[0];
+    if (
+      !/^[a-f0-9]{64}$/u.test(row.content_hash)
+      || row.content_ref !== `cas:sha256:${row.content_hash}`
+      || portableRelativePath !== expectedRelativePath
+      || candidates.length !== 1
+      || candidate === undefined
+      || candidate.sha256 !== row.content_hash
+      || candidate.size !== row.byte_length
+    ) {
+      throw new Error("BACKUP_ORPHAN_ARTIFACT_CONTENT");
+    }
+    artifactReferences.add(row.content_hash);
+    contentReferences.add(row.content_hash);
   }
   for (const hash of contentReferences) {
     if (!contentHashes.has(hash)) {

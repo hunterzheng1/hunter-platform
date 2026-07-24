@@ -6,6 +6,7 @@ import { assertProtectedLoopbackListen } from "./auth/http-boundary.js";
 import { registerDurableEventRoutes, type DurableEventStream } from "./events/durable-event-stream.js";
 import { installSecurityHooks } from "./http/security-hooks.js";
 import type { LocalPrincipalSource } from "./http/security-hooks.js";
+import { registerArtifactRoutes, type ArtifactRoutesServices } from "./routes/artifacts.js";
 import { registerChangeRoutes, type ChangeRoutesServices } from "./routes/changes.js";
 import { registerDeviceRoutes, type DeviceRoutesServices } from "./routes/devices.js";
 import { registerProjectRoutes, type ProjectRoutesServices } from "./routes/projects.js";
@@ -19,6 +20,7 @@ export interface BuildAppOptions {
   readonly allowedOrigins: readonly string[];
   readonly services: RunRoutesServices & ProjectRoutesServices & {
     readonly changes?: ChangeRoutesServices | undefined;
+    readonly artifacts?: ArtifactRoutesServices | undefined;
     readonly requirements?: RequirementRoutesServices | undefined;
     readonly knowledge?: KnowledgeRoutesServices | undefined;
   };
@@ -38,6 +40,9 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
   installSecurityHooks(app, options);
   app.get("/health", async () => ({ status: "ok" }));
   registerProjectRoutes(app, options.services);
+  if (options.services.artifacts !== undefined) {
+    registerArtifactRoutes(app, options.services.artifacts);
+  }
   if (options.services.changes !== undefined) {
     assertChangeRoutesServices(options.services.changes);
     registerChangeRoutes(app, options.services.changes);

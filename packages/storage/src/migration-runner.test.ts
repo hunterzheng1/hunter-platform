@@ -615,13 +615,14 @@ describe("repository storage migrations", () => {
     ).toThrowError("MIGRATION_MANIFEST_FILENAME_INVALID");
   });
 
-  it("loads ordered SQL files and applies the version 2 project event index", () => {
+  it("loads ordered SQL files and applies the version 3 artifact catalog", () => {
     const db = database();
     const migrations = loadStorageMigrations();
 
     expect(migrations.map(({ version, name }) => ({ version, name }))).toEqual([
       { version: 1, name: "core" },
       { version: 2, name: "events-project-position" },
+      { version: 3, name: "artifact-catalog" },
     ]);
     for (const candidate of migrations) {
       expect(candidate.sql).not.toMatch(
@@ -629,8 +630,8 @@ describe("repository storage migrations", () => {
       );
     }
     expect(runStorageMigrations(db, migrations)).toMatchObject({
-      schemaVersion: 2,
-      appliedVersions: [1, 2],
+      schemaVersion: 3,
+      appliedVersions: [1, 2, 3],
     });
     expect(
       db.prepare(
@@ -639,6 +640,13 @@ describe("repository storage migrations", () => {
           WHERE type = 'index' AND name = 'events_project_position'`,
       ).get(),
     ).toEqual({ name: "events_project_position" });
+    expect(
+      db.prepare(
+        `SELECT name
+           FROM sqlite_master
+          WHERE type = 'table' AND name = 'artifact_catalog'`,
+      ).get(),
+    ).toEqual({ name: "artifact_catalog" });
   });
 
   it("adopts an existing schema version 1 database without losing its events", () => {
@@ -681,12 +689,12 @@ describe("repository storage migrations", () => {
       db.prepare(
         "SELECT version FROM storage_migrations ORDER BY version",
       ).all(),
-    ).toEqual([{ version: 1 }, { version: 2 }]);
+    ).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
     expect(
       db.prepare(
         "SELECT metadata_value FROM storage_metadata WHERE metadata_key = 'schema_version'",
       ).get(),
-    ).toEqual({ metadata_value: "2" });
+    ).toEqual({ metadata_value: "3" });
   });
 
   it("rejects an unknown legacy marker before applying a pending migration", () => {
@@ -745,8 +753,8 @@ describe("repository storage migrations", () => {
     const journal = new SqliteOperationJournal(db);
 
     expect(journal.migrationReceipt).toMatchObject({
-      schemaVersion: 2,
-      appliedVersions: [2],
+      schemaVersion: 3,
+      appliedVersions: [2, 3],
       recoveredMigration: { targetVersion: 1, status: "rolled_back" },
     });
     expect(

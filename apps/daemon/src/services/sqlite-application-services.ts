@@ -5,13 +5,13 @@ import { isAbsolute, join } from "node:path";
 
 import { PublishChangeService, StartRunService, type PublishChangeRepositories, type StartRunRepositories } from "@hunter/application";
 import type { ExecutionPlan, NativeSessionId, ProjectId, TaskId, WorkflowRevision, WorktreeId } from "@hunter/domain";
-import { ControllerLeaseIdSchema, LeaseOwnerIdSchema, OperationIdSchema, ProjectIdSchema, WorkspaceLeaseIdSchema, WriterLeaseIdSchema, canonicalSha256, createProject } from "@hunter/domain";
+import { ArtifactIdSchema, ControllerLeaseIdSchema, LeaseOwnerIdSchema, OperationIdSchema, ProjectIdSchema, WorkspaceLeaseIdSchema, WriterLeaseIdSchema, canonicalSha256, createProject } from "@hunter/domain";
 import { FlowEngine, reduceFlowEvents, type FlowCommandReceipt, type FlowCommit, type FlowDefinitions, type FlowEvent, type FlowStore, type WorkflowRunState } from "@hunter/flow-engine";
-import { ArchiveJobWorker, ArchiveWriter, SqliteArchiveJobStore, SqliteKnowledgeCatalog, type ArchiveJobFaultPoint, type ArchiveManifestSource } from "@hunter/knowledge";
+import { ArchiveJobWorker, ArchiveWriter, SqliteArchiveJobStore, SqliteKnowledgeCatalog, type ArchiveJobFaultPoint, type ArchiveManifestSource, type LeasedArchiveJob } from "@hunter/knowledge";
 import { computeCapabilityManifest, createExternalOperation, createWorkspacePathBoundary, decodeCapabilityProbeReceipt, decodeExternalOperationReceipt, type CapabilityProbeReceipt, type ExternalOperation, type ExternalOperationHandler, type Lease, type VerifiedWorkspacePath } from "@hunter/runtime-contracts";
 import { deriveStepPolicy } from "@hunter/policy";
 import { LeaseService, RuntimeManager, RuntimeOperationHandler } from "@hunter/runtime-manager";
-import { EventLedgerReader, HunterProjection, OperationWorker, ProjectionRunner, SqliteOperationJournal, validateStorageHealth } from "@hunter/storage";
+import { EventLedgerReader, HunterProjection, OperationWorker, PHASE1_ARTIFACT_QUOTA, ProjectionRunner, SqliteArtifactCatalog, SqliteOperationJournal, validateStorageHealth } from "@hunter/storage";
 
 import { LocalAuthenticator } from "../auth/local-authenticator.js";
 import { DurableEventStream } from "../events/durable-event-stream.js";
@@ -154,25 +154,16 @@ export function createSqliteApplicationServices(input: {
           archiveJobStore.schedule(schedule);
         },
   });
+  const artifactCatalog = input.contentDirectory === undefined
+    ? undefined
+    : new SqliteArtifactCatalog(input.database, {
+        contentRoot: join(input.contentDirectory, "content"),
+        quota: PHASE1_ARTIFACT_QUOTA,
+        now,
+      });
   const knowledgeCatalog = input.archive === undefined
     ? undefined
     : new SqliteKnowledgeCatalog(input.database, now);
-  const archiveWorker = input.archive === undefined || archiveJobStore === undefined || knowledgeCatalog === undefined
-    ? undefined
-    : new ArchiveJobWorker({
-        store: archiveJobStore,
-        writer: new ArchiveWriter(join(input.archive.root, "archives")),
-        catalog: knowledgeCatalog,
-        source: input.archive.source,
-        ownerId: input.archive.ownerId,
-        now,
-        ...(input.archive.leaseDurationMs === undefined
-          ? {}
-          : { leaseDurationMs: input.archive.leaseDurationMs }),
-        ...(input.archive.fault === undefined
-          ? {}
-          : { fault: input.archive.fault }),
-      });
   const defaultAuthorizationResolver = (principalId: string): readonly ProjectId[] | undefined => {
     const row = input.database.prepare("SELECT project_ids_json FROM principal_project_authorizations WHERE principal_id = ?").get(principalId) as { project_ids_json: string } | undefined;
     return row === undefined ? undefined : ProjectIdSchema.array().parse(JSON.parse(row.project_ids_json));
@@ -188,6 +179,64 @@ export function createSqliteApplicationServices(input: {
   };
   const repositories: SqliteServiceRepositories = input.repositories ?? new SqliteDefinitionRepository(input.database);
   const flowStore = new SqliteFlowStore(input.database, journal, now);
+  const archiveWorker = input.archive === undefined
+      || archiveJobStore === undefined
+      || knowledgeCatalog === undefined
+    ? undefined
+    : new ArchiveJobWorker({
+        store: archiveJobStore,
+        writer: new ArchiveWriter(join(input.archive.root, "archives")),
+        catalog: knowledgeCatalog,
+        source: input.archive.source,
+        ownerId: input.archive.ownerId,
+        now,
+        ...(artifactCatalog === undefined
+          ? {}
+          : {
+              recordReceiptReferences: (job: LeasedArchiveJob) => {
+                const root = flowStore.loadRun(job.runId);
+                if (root === null) throw new Error("ARCHIVE_RUN_MISSING");
+                if (root.binding.projectId !== job.projectId) {
+                  throw new Error("ARCHIVE_RUN_PROJECT_MISMATCH");
+                }
+                const runs = [root];
+                for (let index = 0; index < runs.length; index += 1) {
+                  for (const child of flowStore.childRuns(
+                    runs[index]!.binding.runId,
+                  )) {
+                    if (!runs.some(({ binding }) =>
+                      binding.runId === child.binding.runId
+                    )) {
+                      runs.push(child);
+                    }
+                  }
+                }
+                const artifactIds = new Set(runs.flatMap((run) =>
+                  run.steps.flatMap((step) =>
+                    step.attempts.flatMap((attempt) =>
+                      artifactCatalog.listForAttempt(attempt.attemptId)
+                        .map(({ artifactId }) => artifactId)
+                    )
+                  )
+                ));
+                for (const artifactId of artifactIds) {
+                  artifactCatalog.protect({
+                    artifactId,
+                    reference: {
+                      kind: "archive",
+                      referenceId: job.jobId,
+                    },
+                  });
+                }
+              },
+            }),
+        ...(input.archive.leaseDurationMs === undefined
+          ? {}
+          : { leaseDurationMs: input.archive.leaseDurationMs }),
+        ...(input.archive.fault === undefined
+          ? {}
+          : { fault: input.archive.fault }),
+      });
   const flowEngine = new FlowEngine(flowStore, repositories, now);
   const runCoordinator = new RunCoordinator({
     store: flowStore,
@@ -524,7 +573,60 @@ export function createSqliteApplicationServices(input: {
       ) {
         throw new Error("OPERATION_RECEIPT_IDENTITY_MISMATCH");
       }
-      if (receipt.operationStatus !== "completed") return;
+      const mutations: (() => void)[] = [];
+      if (artifactCatalog !== undefined && operation.attemptId !== null) {
+        const artifactId = ArtifactIdSchema.parse(
+          `art_${canonicalSha256({
+            kind: "external-operation-receipt",
+            operationId: operation.operationId,
+          }).slice(0, 24)}`,
+        );
+        const safeReceipt = JSON.stringify({
+          schemaVersion: 1,
+          operationId: receipt.operationId,
+          fingerprint: receipt.fingerprint,
+          operationType: operation.operationType,
+          operationStatus: receipt.operationStatus,
+          subject: receipt.subject,
+          nativeReferences: receipt.nativeReferences,
+          facts: receipt.facts,
+          evidence: receipt.evidence,
+          observedAt: receipt.observedAt,
+        });
+        mutations.push(() => {
+          artifactCatalog.register({
+            artifactId,
+            projectId: operation.projectId,
+            attemptId: operation.attemptId ?? undefined,
+            kind: "receipt",
+            retentionClass: "core_receipt",
+            summary: `External operation receipt: ${operation.operationType}`,
+          });
+          const appended = artifactCatalog.append({
+            artifactId,
+            stream: "system",
+            content: safeReceipt,
+            transaction: "existing",
+          });
+          if (appended.status !== "accepted") {
+            throw new Error(appended.code);
+          }
+          artifactCatalog.protect({
+            artifactId,
+            reference: {
+              kind: "evidence",
+              referenceId: receipt.evidence.evidenceId,
+            },
+          });
+        });
+      }
+      if (receipt.operationStatus !== "completed") {
+        return mutations.length === 0
+          ? undefined
+          : () => {
+              for (const mutation of mutations) mutation();
+            };
+      }
       if (operation.operationType === "workspace.prepare" && operation.payload.mode === "write") {
         const prepared = receipt.workspaceResult;
         if (prepared === undefined) {
@@ -558,7 +660,7 @@ export function createSqliteApplicationServices(input: {
           ["branch", "--show-current"],
         );
         const canonicalWorkspaceKey = boundary.canonicalKey(verifiedTopLevel);
-        return () => {
+        mutations.push(() => {
           const workspace = activeLeasesFor(operation).find((lease) =>
             lease.kind === "workspace"
             && lease.scope.workspaceId === operation.payload.workspaceId
@@ -582,12 +684,12 @@ export function createSqliteApplicationServices(input: {
               worktreeId: prepared.worktreeId,
             },
           }, { transaction: "existing" });
-        };
+        });
       }
       if (operation.operationType === "session.launch") {
         const session = receipt.nativeReferences.find((reference) => reference.kind === "session");
         if (session === undefined) throw new Error("NATIVE_SESSION_RECEIPT_REQUIRED");
-        return () => {
+        mutations.push(() => {
           const writer = activeLeasesFor(operation)
             .flatMap((lease) => lease.kind === "writer" ? [lease] : [])
             .find((lease) => lease.scope.workspaceId === operation.payload.workspaceId);
@@ -605,9 +707,13 @@ export function createSqliteApplicationServices(input: {
               nativeSessionId: session.referenceId,
             },
           }, { transaction: "existing" });
-        };
+        });
       }
-      return;
+      return mutations.length === 0
+        ? undefined
+        : () => {
+            for (const mutation of mutations) mutation();
+          };
     },
   });
   const attemptObservation = new SqliteAttemptObservation(
@@ -913,6 +1019,7 @@ export function createSqliteApplicationServices(input: {
     archiveJobStore,
     archiveWorker,
     knowledgeCatalog,
+    artifactCatalog,
     flowStore,
     flowEngine,
     runCoordinator,

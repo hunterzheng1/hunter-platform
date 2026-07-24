@@ -1,9 +1,11 @@
 import type {
+  ArtifactPageHttpResponse,
   AttentionActionHttpResponse,
   RunStepHttpView,
   StepAttemptHttpView,
 } from "@hunter/api-contracts";
-import type { AttemptId } from "@hunter/domain";
+import type { ArtifactId, AttemptId } from "@hunter/domain";
+import { useRef, useState } from "react";
 
 import {
   AttentionPanel,
@@ -38,16 +40,116 @@ const WAITING_REASON_LABELS: { readonly [Code in NonNullable<StepAttemptHttpView
   external_operation_indeterminate: "外部操作状态待确认",
 };
 
+type ArtifactPageState =
+  | {
+      readonly artifactId: ArtifactId;
+      readonly status: "loading";
+    }
+  | {
+      readonly artifactId: ArtifactId;
+      readonly status: "loaded";
+      readonly response: ArtifactPageHttpResponse;
+    }
+  | {
+      readonly artifactId: ArtifactId;
+      readonly status: "error";
+      readonly message: string;
+    };
+
 export function StepDetail({
   step,
   onAttentionAction,
+  loadArtifactPage,
 }: {
   readonly step: RunStepHttpView;
   readonly onAttentionAction?: (
     attemptId: AttemptId,
     action: AttentionActionDraft,
   ) => Promise<AttentionActionHttpResponse>;
+  readonly loadArtifactPage?: (
+    artifactId: ArtifactId,
+    cursor: number,
+  ) => Promise<ArtifactPageHttpResponse>;
 }) {
+  const [artifactPage, setArtifactPage] = useState<ArtifactPageState>();
+  const artifactRequestSequence = useRef(0);
+
+  async function loadPage(artifactId: ArtifactId, cursor: number): Promise<void> {
+    if (loadArtifactPage === undefined) {
+      return;
+    }
+    const requestSequence = artifactRequestSequence.current + 1;
+    artifactRequestSequence.current = requestSequence;
+    setArtifactPage({ artifactId, status: "loading" });
+    try {
+      const response = await loadArtifactPage(artifactId, cursor);
+      if (artifactRequestSequence.current === requestSequence) {
+        setArtifactPage({ artifactId, status: "loaded", response });
+      }
+    } catch (error) {
+      if (artifactRequestSequence.current === requestSequence) {
+        setArtifactPage({
+          artifactId,
+          status: "error",
+          message: error instanceof Error ? error.message : "无法读取产物分页。",
+        });
+      }
+    }
+  }
+
+  function renderArtifactPage(artifactId: ArtifactId) {
+    if (artifactPage?.artifactId !== artifactId) {
+      return null;
+    }
+    if (artifactPage.status === "loading") {
+      return <p role="status">正在读取当前页…</p>;
+    }
+    if (artifactPage.status === "error") {
+      return <p role="alert">读取失败：{artifactPage.message}</p>;
+    }
+    if (artifactPage.response.status === "resync_required") {
+      return (
+        <div role="alert">
+          <p>较早日志已按保留策略清理；当前保留点为 {artifactPage.response.retentionFloor}。</p>
+          <button
+            type="button"
+            onClick={() => void loadPage(
+              artifactId,
+              artifactPage.response.retentionFloor,
+            )}
+          >
+            从保留点重新同步
+          </button>
+        </div>
+      );
+    }
+
+    const page = artifactPage.response;
+    return (
+      <div className="artifact-page">
+        <p>
+          {page.artifact.summary} · 游标 {page.cursor}–{page.nextCursor}
+          {" "}· 保留点 {page.retentionFloor} · 高水位 {page.highWaterCursor}
+        </p>
+        {page.entries.length === 0
+          ? <p>当前页没有日志条目。</p>
+          : page.entries.map((entry) => (
+              <pre key={entry.cursor}>{entry.content}</pre>
+            ))}
+        {page.complete
+          ? null
+          : (
+              <button
+                type="button"
+                onClick={() => void loadPage(artifactId, page.nextCursor)}
+              >
+                加载下一页
+              </button>
+            )}
+      </div>
+    );
+  }
+
   return (
     <section className="step-detail panel" aria-labelledby={`step-detail-${step.stepRunId}`}>
       <div className="section-heading">
@@ -69,7 +171,28 @@ export function StepDetail({
               {attempt.waitingReason === undefined ? null : (
                 <p className="waiting-reason"><strong>{WAITING_REASON_LABELS[attempt.waitingReason.code]}</strong></p>
               )}
-              {attempt.artifactIds.length === 0 ? <p>产物：无</p> : <div><h4>产物</h4><ul>{attempt.artifactIds.map((artifactId) => <li key={artifactId}><code>{artifactId}</code></li>)}</ul></div>}
+              {attempt.artifactIds.length === 0 ? <p>产物：无</p> : (
+                <div>
+                  <h4>产物</h4>
+                  <ul>
+                    {attempt.artifactIds.map((artifactId) => (
+                      <li key={artifactId}>
+                        <code>{artifactId}</code>
+                        {loadArtifactPage === undefined ? null : (
+                          <button
+                            type="button"
+                            aria-label={`加载产物 ${artifactId}`}
+                            onClick={() => void loadPage(artifactId, 0)}
+                          >
+                            加载分页
+                          </button>
+                        )}
+                        {renderArtifactPage(artifactId)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               {attempt.evidenceIds.length === 0 ? <p>证据：无</p> : <div><h4>证据</h4><ul>{attempt.evidenceIds.map((evidenceId) => <li key={evidenceId}><code>{evidenceId}</code></li>)}</ul></div>}
               {attempt.attention === undefined ? null : (
                 <AttentionPanel

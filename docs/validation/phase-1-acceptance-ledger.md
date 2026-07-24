@@ -83,8 +83,8 @@
 | NFR-REL-04 | NOT_RUN | 尚无 24h 证据 | [Phase 1 plan](../plans/2026-07-24-phase-1-product-hardening.md) | H3 固定 seed 运行 24h soak 并保留全部 attempt | Testkit |
 | NFR-PERF-01 | NOT_RUN | Project/Run 页面未测量 | [Acceptance source](../08-user-stories-and-acceptance.md) | H3 冻结 dataset 并测量 1 秒可交互目标 | Performance |
 | NFR-PERF-02 | NOT_RUN | Event 到 UI 未测量 | [Acceptance source](../08-user-stories-and-acceptance.md) | H3 测量本机 p50/p95 与小于 500ms 目标 | Performance |
-| NFR-PERF-03 | NOT_RUN | 10 read + 4 active 未测量 | [Acceptance source](../08-user-stories-and-acceptance.md) | H3 运行固定并发 load fixture | Performance |
-| NFR-PERF-04 | NOT_PROVEN | SSE 有界，日志分页未完成 | [Vertical slice acceptance](vertical-slice-acceptance.md) | H2/H3 实现大日志分页、配额与背压 | Storage/UI |
+| NFR-PERF-03 | NOT_RUN | 10 read-only + 4 active Fake 仅验证有界资源契约，未测吞吐或延迟 | [Task 7 resource bounds](phase-1-resource-bounds.md) | H3 以冻结数据集运行并发 load fixture 并记录 p50/p95 | Performance |
+| NFR-PERF-04 | CONTRACT_ONLY | 大日志有界分页、逻辑配额、保留点和慢客户端背压 | [Task 7 resource bounds](phase-1-resource-bounds.md) | Gate R 验证真实规模、磁盘水位和长时慢客户端恢复 | Storage/UI |
 | NFR-PORT-01 | CONTRACT_ONLY | 可读文件 + manifest 恢复 | [Task 4 backup/restore](phase-1-backup-restore.md) | Gate R 在独立安装环境验证读取与迁移 | Knowledge |
 | NFR-PORT-02 | NOT_RUN | Export/Import 未产品化 | [Roadmap](../09-migration-and-roadmap.md) | 保持 Phase 2，除非 H1 备份恢复直接需要 | Product |
 | NFR-PORT-03 | CONTRACT_ONLY | Provider-neutral Fake | [Foundation gate](foundation-local-gate.md) | Gate R 用第二个真实 Provider swap 验证 | Architecture |
