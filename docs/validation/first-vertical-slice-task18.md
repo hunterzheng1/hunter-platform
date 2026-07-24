@@ -24,6 +24,8 @@
 | `npm run build` | PASS |
 | `npm test` | PASS；90 files、837 tests |
 | `git diff --check` | PASS |
+| GitHub Actions push（run `30056133465`） | PASS；Ubuntu 1:03、Windows 1:59 |
+| GitHub Actions PR（run `30056135436`） | PASS；Ubuntu 1:05、Windows 2:05 |
 
 ## 真实失败历史
 
@@ -43,6 +45,6 @@
 
 ## 尚未证明
 
-- 当前提交的 GitHub Actions Windows/Ubuntu：PENDING，尚未运行。
+- Task 18 实现与测试时间盒提交的 GitHub Actions Windows/Ubuntu：PASS；仅证明上述提交和工作流。
 - 真实 Orca、Codex、CodeBuddy、Cursor Provider 能力：NOT_PROVEN。
 - 生产凭据、公网链路、真实移动设备、签名、商店和生产发布：NOT_PROVEN，且不在本任务范围内。
