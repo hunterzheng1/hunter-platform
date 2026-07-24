@@ -1,17 +1,28 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { RunViewHttpResponse } from "@hunter/api-contracts";
-import { RunIdSchema, type RunId, type StepRunId } from "@hunter/domain/ids";
+import type {
+  AttentionActionHttpResponse,
+  RunViewHttpResponse,
+} from "@hunter/api-contracts";
+import {
+  RunIdSchema,
+  type AttemptId,
+  type RunId,
+  type StepRunId,
+} from "@hunter/domain/ids";
 
 import type { HunterApi } from "../api/client.js";
 import { RunLine } from "../components/run-line.js";
 import { StepDetail } from "../components/step-detail.js";
+import type { AttentionActionDraft } from "../components/attention-panel.js";
 import {
   useRunEvents,
   type AuthorizedRunEventStream,
   type RunEventConnection,
 } from "../hooks/use-run-events.js";
 
-type RunApi = Pick<HunterApi, "getRun">;
+type RunApi =
+  & Pick<HunterApi, "getRun">
+  & Partial<Pick<HunterApi, "executeAttentionAction">>;
 
 const RUN_STATUS_LABELS: { readonly [Status in RunViewHttpResponse["status"]]: string } = {
   created: "已创建",
@@ -85,6 +96,22 @@ function ValidatedRunPage({
   }, [api, runId]);
   const authorizedEventStream = !loading && run?.runId === runId ? eventStream : undefined;
   const connection = useRunEvents(runId, run?.projectionPosition ?? 0, refresh, authorizedEventStream);
+  const executeAttentionAction = useCallback(
+    async (
+      attemptId: AttemptId,
+      action: AttentionActionDraft,
+    ): Promise<AttentionActionHttpResponse> => {
+      if (api.executeAttentionAction === undefined || run === undefined) {
+        throw new Error("ATTENTION_ACTION_UNAVAILABLE");
+      }
+      return api.executeAttentionAction(runId, {
+        attemptId,
+        ...action,
+        expectedVersion: run.aggregateVersion,
+      });
+    },
+    [api, run, runId],
+  );
 
   useEffect(() => {
     setRun(undefined);
@@ -123,7 +150,12 @@ function ValidatedRunPage({
           <nav className="panel run-navigation" aria-label="Run Step 导航">
             <RunLine steps={run.steps} selected={selectedStep?.stepRunId} onSelect={setSelected} />
           </nav>
-          {selectedStep === undefined ? null : <StepDetail step={selectedStep} />}
+          {selectedStep === undefined ? null : (
+            <StepDetail
+              step={selectedStep}
+              onAttentionAction={executeAttentionAction}
+            />
+          )}
         </div>
       )}
     </main>

@@ -122,20 +122,24 @@ function observeCapability() {
 function observationWith(
   statusFor: (operation: ExternalOperation) =>
     ExternalOperationReceipt["operationStatus"],
+  observedFacts: readonly RuntimeFact[] = [{ kind: "agent_returned" }],
 ) {
   const launch = launchOperation();
-  let observedOperation: ExternalOperation | undefined;
+  const observedOperations = new Map<string, ExternalOperation>();
   const journal = {
     findOperation: vi.fn((operationId: string) => {
       const operation = operationId === launch.operationId
         ? launch
-        : observedOperation;
+        : observedOperations.get(operationId);
       return operation === undefined
         ? null
         : { operation, status: "pending" };
     }),
     commitCommand: vi.fn((command: { operations: readonly ExternalOperation[] }) => {
-      observedOperation = command.operations[0];
+      const operation = command.operations[0];
+      if (operation !== undefined) {
+        observedOperations.set(operation.operationId, operation);
+      }
       return { commandId: "settlement-observe", response: {} };
     }),
   };
@@ -145,7 +149,7 @@ function observationWith(
         operation,
         statusFor(operation),
         operation.operationType === "session.observe"
-          ? [{ kind: "agent_returned" }]
+          ? observedFacts
           : [{ kind: "operation_accepted" }],
       )),
     runOnce: vi.fn(async () => "idle"),
@@ -167,6 +171,7 @@ function observationWith(
       () => new Date("2026-07-24T01:00:00.000Z"),
     ),
     leases,
+    journal,
   };
 }
 
@@ -221,6 +226,57 @@ describe("SQLite attempt observation", () => {
       evidenceHash: "b".repeat(64),
     });
     expect(leases.findActiveController).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["running", "session_running"],
+    ["missing", "session_missing"],
+    ["returned", "agent_returned"],
+  ] as const)(
+    "returns the provider-neutral %s attention observation with its durable evidence",
+    async (state, fact) => {
+      const { observation } = observationWith(
+        () => "completed",
+        [{ kind: "session_observed", state }],
+      );
+
+      await expect(observation.observeForAttention({
+        runId: ids.run,
+        attemptId: ids.attempt,
+        operationId: ids.launch,
+        recheckId: `check-${state}`,
+        probeReceiptId: "cpr_observe0001",
+      })).resolves.toEqual({
+        fact,
+        evidenceId: EvidenceIdSchema.parse("evd_observereturn"),
+        evidenceHash: "b".repeat(64),
+      });
+    },
+  );
+
+  it("replays the same recheck generation but creates a fresh observe for a new action key", async () => {
+    const { observation, journal } = observationWith(
+      () => "completed",
+      [{ kind: "session_observed", state: "running" }],
+    );
+    const command = {
+      runId: ids.run,
+      attemptId: ids.attempt,
+      operationId: ids.launch,
+      recheckId: "attention-check-1",
+      probeReceiptId: "cpr_observe0001",
+    } as const;
+    await observation.observeForAttention(command);
+    await observation.observeForAttention(command);
+    await observation.observeForAttention({
+      ...command,
+      recheckId: "attention-check-2",
+    });
+    expect(journal.commitCommand).toHaveBeenCalledTimes(2);
+    const operationIds = journal.commitCommand.mock.calls.map(
+      ([entry]) => entry.operations[0]?.operationId,
+    );
+    expect(new Set(operationIds).size).toBe(2);
   });
 
   it("prefers a completed recovery receipt over a pending settlement observation", async () => {

@@ -1,4 +1,7 @@
 import type {
+  AttemptId,
+  EvidenceId,
+  EventId,
   GateId,
   ProjectId,
   RequirementRevisionId,
@@ -44,6 +47,17 @@ export type ExternalObservation =
 export interface RecordExternalObservationCommand extends ExistingRunCommand {
   readonly type: "RecordExternalObservation";
   readonly fact: ExternalObservation;
+  readonly humanReceipt?: {
+    readonly evidenceId: EvidenceId;
+    readonly contentHash: string;
+    readonly actorId: string;
+  } | undefined;
+  readonly capabilityProbeReceiptId?: string | undefined;
+}
+
+export interface CreateRecoveryAttemptCommand extends ExistingRunCommand {
+  readonly type: "CreateRecoveryAttempt";
+  readonly priorAttemptId: AttemptId;
 }
 
 export interface RecordVerifierResultCommand extends ExistingRunCommand {
@@ -54,8 +68,11 @@ export interface RecordVerifierResultCommand extends ExistingRunCommand {
   readonly diffFingerprint?: string | undefined;
   readonly humanReceipt?:
     | {
-        readonly contentHash: string;
+        readonly evidenceContentHash: string;
+        readonly acknowledgedInputHash: string;
         readonly actorId: string;
+        readonly evidenceId?: EvidenceId | undefined;
+        readonly sourceEventId?: EventId | undefined;
       }
     | undefined;
 }
@@ -116,7 +133,25 @@ type RunControlTarget =
   | { readonly kind: "gate"; readonly gateId: GateId };
 
 type RunControlIntent =
-  | { readonly action: "approve"; readonly target: Extract<RunControlTarget, { kind: "gate" }>; readonly payload: Readonly<Record<string, never>> }
+  | {
+      readonly action: "approve";
+      readonly target: Extract<RunControlTarget, { kind: "gate" }>;
+      readonly payload: {
+        readonly humanReceipt?: {
+          readonly evidenceId: EvidenceId;
+          readonly sourceEventId?: never;
+          readonly evidenceContentHash: string;
+          readonly acknowledgedInputHash: string;
+        }
+        | {
+          readonly evidenceId?: never;
+          readonly sourceEventId: EventId;
+          readonly evidenceContentHash: string;
+          readonly acknowledgedInputHash: string;
+        }
+        | undefined;
+      };
+    }
   | { readonly action: "reject"; readonly target: Extract<RunControlTarget, { kind: "gate" }>; readonly payload: { readonly reason?: string | undefined } }
   | { readonly action: "supplement"; readonly target: Extract<RunControlTarget, { kind: "step" }>; readonly payload: { readonly text: string } }
   | { readonly action: "pause" | "resume" | "terminate"; readonly target: Extract<RunControlTarget, { kind: "step" }>; readonly payload: Readonly<Record<string, never>> };
@@ -129,6 +164,7 @@ export type ApplyRunControlCommand = ExistingRunCommand & {
 export type FlowCommand =
   | StartRunCommand
   | RecordExternalObservationCommand
+  | CreateRecoveryAttemptCommand
   | RecordVerifierResultCommand
   | RecordTimeoutCommand
   | CancelRunCommand

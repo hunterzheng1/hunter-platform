@@ -28,6 +28,10 @@ import type {
 import type { FlowEvent } from "./events.js";
 import { evaluateLoopGuard } from "./loop-guard.js";
 import { resolveDependencyFailure, resolveResumeFailure, resolveSupersedingRequirement, selectRoute, type FrozenDependencyFailureRule } from "./router.js";
+import {
+  currentRecoveryStep,
+  recoveryAttemptBlockReason,
+} from "./recovery-guard.js";
 import { createWorkflowRunBinding } from "./run-binding.js";
 import type { PolicySnapshot } from "./run-binding.js";
 import type { WorkflowRunState } from "./state.js";
@@ -93,6 +97,12 @@ export class FlowEngine {
         return this.startRun(command, commandId, requestFingerprint);
       case "RecordExternalObservation":
         return this.recordObservation(command, commandId, requestFingerprint);
+      case "CreateRecoveryAttempt":
+        return this.createRecoveryAttempt(
+          command,
+          commandId,
+          requestFingerprint,
+        );
       case "RecordVerifierResult":
         return this.recordVerifier(command, commandId, requestFingerprint);
       case "RecordTimeout":
@@ -171,16 +181,37 @@ export class FlowEngine {
       if (deriveHumanGateId(command.runId, step.stepRunId) !== command.target.gateId) {
         throw new Error("COMMAND_TARGET_SCOPE_MISMATCH");
       }
+      const humanReceipt = command.action === "approve"
+        ? {
+            evidenceContentHash:
+              command.payload.humanReceipt?.evidenceContentHash
+              ?? requestFingerprint,
+            acknowledgedInputHash:
+              command.payload.humanReceipt?.acknowledgedInputHash
+              ?? step.fixedContentHash,
+            actorId: command.actor.actorId,
+            ...(command.payload.humanReceipt === undefined
+              ? {}
+              : {
+                  ...("evidenceId" in command.payload.humanReceipt
+                    ? {
+                        evidenceId:
+                          command.payload.humanReceipt.evidenceId,
+                      }
+                    : {
+                        sourceEventId:
+                          command.payload.humanReceipt.sourceEventId,
+                      }),
+                }),
+          }
+        : undefined;
       return this.recordVerifier(
         {
           type: "RecordVerifierResult",
           runId: command.runId,
           outcome: command.action === "approve" ? "passed" : "canceled",
           evidenceFingerprint: requestFingerprint,
-          humanReceipt: {
-            contentHash: step.fixedContentHash,
-            actorId: command.actor.actorId,
-          },
+          ...(humanReceipt === undefined ? {} : { humanReceipt }),
           expectedVersion: command.expectedVersion,
           idempotencyKey: command.idempotencyKey,
           actor: {
@@ -696,6 +727,14 @@ export class FlowEngine {
   ) {
     const state = this.requireActiveRun(command.runId);
     const { step, attempt } = activeStep(state);
+    if (command.humanReceipt !== undefined) {
+      if (!/^[a-f0-9]{64}$/u.test(command.humanReceipt.contentHash)) {
+        throw new Error("HUMAN_OBSERVATION_CONTENT_HASH_INVALID");
+      }
+      if (command.humanReceipt.actorId !== command.actor.actorId) {
+        throw new Error("HUMAN_OBSERVATION_ACTOR_MISMATCH");
+      }
+    }
     const executionStatus = command.fact === "agent_returned" || command.fact === "structured_process_exit"
       ? "returned"
       : command.fact === "session_running"
@@ -713,6 +752,15 @@ export class FlowEngine {
         attemptId: attempt.attemptId,
         fact: command.fact,
         executionStatus,
+        ...(command.humanReceipt === undefined
+          ? {}
+          : { humanReceipt: command.humanReceipt }),
+        ...(command.capabilityProbeReceiptId === undefined
+          ? {}
+          : {
+              capabilityProbeReceiptId:
+                command.capabilityProbeReceiptId,
+            }),
       },
     ];
     return this.store.commit({
@@ -722,6 +770,82 @@ export class FlowEngine {
       expectedVersion: command.expectedVersion,
       events,
       response: { executionStatus, verificationStatus: step.verificationStatus },
+    });
+  }
+
+  private createRecoveryAttempt(
+    command: Extract<FlowCommand, { type: "CreateRecoveryAttempt" }>,
+    commandId: string,
+    requestFingerprint: string,
+  ) {
+    const state = this.store.loadRun(command.runId);
+    if (state === null) throw new Error("RUN_NOT_FOUND");
+    if (state.status === "succeeded" || state.status === "canceled") {
+      throw new Error("RUN_TERMINAL");
+    }
+    const workflow = this.requireWorkflow(state.binding.workflowRevisionId);
+    const step = currentRecoveryStep(state);
+    const attempt = step?.attempts.at(-1);
+    if (step === undefined || attempt === undefined) {
+      throw new Error("RECOVERY_ATTEMPT_NOT_FOUND");
+    }
+    if (attempt.attemptId !== command.priorAttemptId) {
+      throw new Error("RECOVERY_ATTEMPT_NOT_CURRENT");
+    }
+    const recoverable =
+      ["failed", "stale", "needs_attention"].includes(attempt.executionStatus)
+      || ["failed", "error", "needs_human"].includes(
+        attempt.verificationStatus,
+      );
+    if (!recoverable) throw new Error("RECOVERY_ATTEMPT_NOT_ACTIONABLE");
+    const definition = workflow.steps.find(({ stepId }) =>
+      stepId === step.stepId
+    );
+    if (definition === undefined) throw new Error("WORKFLOW_STEP_NOT_FOUND");
+    const blocked = recoveryAttemptBlockReason(
+      state,
+      definition,
+      attempt.attemptNumber,
+    );
+    if (blocked === "attempt_limit_reached") {
+      throw new Error("RECOVERY_ATTEMPT_LIMIT_REACHED");
+    }
+    if (blocked === "run_budget_exhausted") {
+      throw new Error("RUN_BUDGET_EXHAUSTED");
+    }
+    const nextAttemptNumber = attempt.attemptNumber + 1;
+    const nextAttemptId = AttemptIdSchema.parse(
+      derivedId(
+        "att",
+        `${state.binding.runId}:${step.stepId}:${nextAttemptNumber}`,
+      ),
+    );
+    return this.commitExisting(command, commandId, requestFingerprint, [
+      {
+        type: "BudgetConsumed",
+        attempts: 1,
+        elapsedMs: definition.budgetCost.elapsedMs,
+        cost: definition.budgetCost.cost,
+        tokens: 0,
+        loopIterations: 0,
+        progressFingerprint: null,
+        failureFingerprint: null,
+        noDiff: false,
+        verifierError: false,
+      },
+      {
+        type: "StepActivated",
+        stepRunId: step.stepRunId,
+        stepId: step.stepId,
+        attemptId: nextAttemptId,
+        attemptNumber: nextAttemptNumber,
+        fixedContentHash: step.fixedContentHash,
+      },
+      { type: "RunStatusChanged", status: "running" },
+    ], {
+      priorAttemptId: attempt.attemptId,
+      attemptId: nextAttemptId,
+      activated: true,
     });
   }
 
@@ -743,8 +867,18 @@ export class FlowEngine {
       throw new Error("CANCELED_OUTCOME_REQUIRES_HUMAN_RECEIPT_VERIFIER");
     }
     if (definition.verifier.kind === "human_receipt" && (command.outcome === "passed" || command.outcome === "canceled")) {
-      if (command.humanReceipt?.contentHash !== step.fixedContentHash) {
+      if (
+        command.humanReceipt?.acknowledgedInputHash
+        !== step.fixedContentHash
+      ) {
         throw new Error("HUMAN_RECEIPT_CONTENT_HASH_MISMATCH");
+      }
+      if (
+        !/^[a-f0-9]{64}$/u.test(
+          command.humanReceipt.evidenceContentHash,
+        )
+      ) {
+        throw new Error("HUMAN_RECEIPT_EVIDENCE_HASH_INVALID");
       }
       if (command.humanReceipt.actorId !== command.actor.actorId) throw new Error("HUMAN_RECEIPT_ACTOR_MISMATCH");
       if (!command.actor.roles?.includes(definition.verifier.requiredRole)) throw new Error("HUMAN_RECEIPT_ROLE_REQUIRED");
@@ -763,6 +897,9 @@ export class FlowEngine {
         attemptId: attempt.attemptId,
         status: command.outcome,
         evidenceFingerprint: command.evidenceFingerprint,
+        ...(command.humanReceipt === undefined
+          ? {}
+          : { humanReceipt: command.humanReceipt }),
       },
     ];
     if (command.outcome === "needs_human") {

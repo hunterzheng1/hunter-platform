@@ -6,9 +6,26 @@ import {
   RunViewHttpResponseSchema,
 } from "./http.js";
 
+const attention = {
+  reasonCode: "verifier_failed",
+  requiredActor: "hunter_verifier",
+  inputRevision: {
+    changeRevisionId: "crv_task400001",
+    workflowRevisionId: "wfr_task400001",
+    requirementRevisionIds: ["rrv_task400001"],
+    fixedContentHash: "a".repeat(64),
+  },
+  evidence: [{
+    evidenceId: "evd_task400001",
+    contentHash: "a".repeat(64),
+  }],
+  actions: [{ action: "create_new_attempt", enabled: true }],
+} as const;
+
 const validRun = {
   runId: "run_task400001",
   projectionPosition: 3,
+  aggregateVersion: 4,
   status: "running",
   steps: [
     {
@@ -25,6 +42,7 @@ const validRun = {
           nativeSessionId: "ses_task400001",
           artifactIds: ["art_task400001"],
           evidenceIds: ["evd_task400001"],
+          attention,
         },
         {
           attemptId: "att_task400002",
@@ -68,11 +86,32 @@ describe("Run HTTP view contracts", () => {
         : executionStatus === "needs_attention"
           ? { code: "recovery_attention_required" as const }
           : undefined;
+      const requiresAttention = [
+        "waiting_input",
+        "failed",
+        "stale",
+        "needs_attention",
+      ].includes(executionStatus);
       expect(RunViewHttpResponseSchema.safeParse({
         ...validRun,
         steps: [{
           ...validRun.steps[0],
-          attempts: [{ ...validRun.steps[0].attempts[0], executionStatus, waitingReason }],
+          attempts: [{
+            ...validRun.steps[0].attempts[0],
+            executionStatus,
+            verificationStatus: "pending",
+            waitingReason,
+            attention: requiresAttention
+              ? {
+                  ...attention,
+                  reasonCode: executionStatus === "waiting_input"
+                    ? "input_required"
+                    : executionStatus === "stale"
+                      ? "runtime_session_stale"
+                      : "recovery_attention_required",
+                }
+              : undefined,
+          }],
         }],
       }).success).toBe(true);
     }
@@ -84,7 +123,24 @@ describe("Run HTTP view contracts", () => {
         ...validRun,
         steps: [{
           ...validRun.steps[0],
-          attempts: [{ ...validRun.steps[0].attempts[0], verificationStatus, waitingReason }],
+          attempts: [{
+            ...validRun.steps[0].attempts[0],
+            executionStatus: "returned",
+            verificationStatus,
+            waitingReason,
+            attention: ["failed", "error", "needs_human"].includes(
+                verificationStatus,
+              )
+              ? {
+                  ...attention,
+                  reasonCode: verificationStatus === "needs_human"
+                    ? "human_verification_required"
+                    : verificationStatus === "error"
+                      ? "verifier_error"
+                      : "verifier_failed",
+                }
+              : undefined,
+          }],
         }],
       }).success).toBe(true);
     }
@@ -151,6 +207,7 @@ describe("Run HTTP view contracts", () => {
           ...validRun.steps[0].attempts[0],
           executionStatus: "returned",
           verificationStatus: "passed",
+          attention: undefined,
         }],
       }],
     }).success).toBe(true);
@@ -257,6 +314,7 @@ describe("Run HTTP view contracts", () => {
           ...validRun.steps[0].attempts[0],
           executionStatus: "waiting_input",
           waitingReason: { code: "input_required" },
+          attention: { ...attention, reasonCode: "input_required" },
         }],
       }],
     }).success).toBe(true);

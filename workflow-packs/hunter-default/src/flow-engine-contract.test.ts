@@ -256,7 +256,11 @@ function verifyActive(
     diffFingerprint: options.diffFingerprint,
     humanReceipt:
       active.stepId === "stp_change_approve_plan_v1"
-        ? { contentHash: active.fixedContentHash, actorId: actor.actorId }
+        ? {
+            evidenceContentHash: canonicalSha256(key),
+            acknowledgedInputHash: active.fixedContentHash,
+            actorId: actor.actorId,
+          }
         : undefined,
     expectedVersion: returned.version,
     idempotencyKey: `${key}-verified`,
@@ -359,7 +363,11 @@ describe("default pack as a FlowEngine consumer", () => {
       runId: ids.rootRun,
       outcome: "canceled",
       evidenceFingerprint: canonicalSha256("approve-canceled"),
-      humanReceipt: { contentHash: gate.fixedContentHash, actorId: actor.actorId },
+      humanReceipt: {
+        evidenceContentHash: canonicalSha256("approve-canceled"),
+        acknowledgedInputHash: gate.fixedContentHash,
+        actorId: actor.actorId,
+      },
       expectedVersion: returned.version,
       idempotencyKey: "approve-canceled",
       actor,

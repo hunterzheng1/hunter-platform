@@ -93,6 +93,8 @@ function parentState(): WorkflowRunState {
     },
     steps: [],
     recoveryFacts: [],
+    externalObservationReceipts: [],
+    humanVerificationReceipts: [],
     scheduledChildren: [],
     cancellationRequestedChildRunIds: [],
     attemptCancellation: null,

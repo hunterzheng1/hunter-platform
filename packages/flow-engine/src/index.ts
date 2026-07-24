@@ -3,6 +3,7 @@ export * from "./events.js";
 export * from "./flow-engine.js";
 export * from "./loop-guard.js";
 export * from "./router.js";
+export * from "./recovery-guard.js";
 export * from "./run-binding.js";
 export * from "./run-budget.js";
 export * from "./state.js";

@@ -26,7 +26,7 @@
     "verify:recovery": "tsx scripts/verify-recovery.ts",
     "verify:backup-restore": "tsx scripts/verify-backup-restore.ts",
     "verify:diagnostics": "tsc -b packages/policy --pretty false && tsx scripts/verify-diagnostic-bundle.ts",
-    "verify:foundation": "npm run lint && npm run typecheck && npm test && npm run verify:rebuild && npm run verify:recovery && npm run verify:backup-restore && npm run verify:diagnostics && npm run build"
+    "verify:foundation": "npm run lint && npm run typecheck && npm test -- --configLoader native --no-file-parallelism && npm run verify:rebuild && npm run verify:recovery && npm run verify:backup-restore && npm run verify:diagnostics && npm run build"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
