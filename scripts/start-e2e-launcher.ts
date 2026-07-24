@@ -412,7 +412,11 @@ export async function runE2eLauncher(options: {
           securityHeaders(response);
           response.statusCode = 200;
           response.setHeader("content-type", "text/javascript; charset=utf-8");
-          response.end(renderBrowserBootstrap());
+          response.end(
+            renderBrowserBootstrap(
+              activeComposition.catalog.rootWorkflowRevisionId,
+            ),
+          );
           return;
         }
         if (url.pathname === "/__e2e_shutdown") {

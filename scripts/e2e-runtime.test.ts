@@ -96,10 +96,14 @@ describe("E2E runtime security boundary", () => {
   });
 
   it("renders a same-origin transport that never embeds a bearer token", () => {
-    const script = renderBrowserBootstrap();
+    const script = renderBrowserBootstrap("wfr_e2eroot0001");
 
     expect(script).toContain("/__e2e_api");
     expect(script).toContain(E2E_CSRF_HEADER);
+    expect(script).toContain(
+      'const rootWorkflowRevisionId = "wfr_e2eroot0001";',
+    );
+    expect(script).not.toContain("command.tasks[0].workflowRevisionId");
     expect(script).toContain("启动工作流（测试契约）");
     expect(script).toContain("E2E_CONTRACT_HOST_NOT_FOUND");
     expect(script).toContain("attempt < 200");

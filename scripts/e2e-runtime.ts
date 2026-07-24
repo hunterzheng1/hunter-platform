@@ -10,6 +10,8 @@ import {
 import { dirname, posix, win32 } from "node:path";
 import { promisify } from "node:util";
 
+import { WorkflowRevisionIdSchema } from "@hunter/domain";
+
 export const E2E_SESSION_COOKIE = "hunter_e2e_session";
 export const E2E_CSRF_HEADER = "hunter-e2e-csrf";
 const E2E_ORIGIN = "http://127.0.0.1:4173";
@@ -396,11 +398,15 @@ export async function closeOwnedHttpServer(server: {
   });
 }
 
-export function renderBrowserBootstrap(): string {
+export function renderBrowserBootstrap(rootWorkflowRevisionIdInput: unknown): string {
+  const rootWorkflowRevisionId = JSON.stringify(
+    WorkflowRevisionIdSchema.parse(rootWorkflowRevisionIdInput),
+  );
   return String.raw`(() => {
   "use strict";
   const csrfStorageKey = "${E2E_CSRF_HEADER}";
   const csrfRequestHeader = "x-hunter-e2e-csrf";
+  const rootWorkflowRevisionId = ${rootWorkflowRevisionId};
   class E2eResponseError extends Error {
     constructor(payload) {
       super(typeof payload?.code === "string" ? payload.code : "E2E_REQUEST_FAILED");
@@ -419,10 +425,9 @@ export function renderBrowserBootstrap(): string {
       const payload = await response.json();
       if (!response.ok) throw new E2eResponseError(payload);
       if (path.endsWith("/changes") && init.method === "POST") {
-        const command = JSON.parse(String(init.body));
         installRunContract({
           executionPlanId: payload.executionPlanId,
-          workflowRevisionId: command.tasks[0].workflowRevisionId,
+          workflowRevisionId: rootWorkflowRevisionId,
         });
       }
       return payload;
