@@ -32,13 +32,21 @@ async function verifyPreload() {
     stage = "evaluating-bridge";
     const result = await window.webContents.executeJavaScript(`(() => {
       const api = window.hunter;
-      if (api === undefined || !Object.isFrozen(api)) return { passed: false };
+      const transport = window.hunterAuthenticatedTransport;
+      if (
+        api === undefined
+        || !Object.isFrozen(api)
+        || transport === undefined
+        || !Object.isFrozen(transport)
+        || typeof transport.request !== "function"
+      ) return { passed: false };
       return {
         passed: true,
         groups: Object.keys(api).sort(),
         frozen: Object.values(api).every((value) => Object.isFrozen(value)),
+        transportKeys: Object.keys(transport).sort(),
         forbidden: ["fetch", "shell", "filesystem", "ipcRenderer", "apiOrigin", "token"]
-          .filter((key) => key in api),
+          .filter((key) => key in api || key in transport),
       };
     })()`);
     stage = "validating-bridge";
@@ -46,6 +54,7 @@ async function verifyPreload() {
       result?.passed !== true
       || result?.frozen !== true
       || result?.forbidden?.length !== 0
+      || JSON.stringify(result.transportKeys) !== JSON.stringify(["request"])
       || JSON.stringify(result.groups) !== JSON.stringify([
         "changes",
         "devices",

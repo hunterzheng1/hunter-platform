@@ -1,5 +1,9 @@
 import { contextBridge, ipcRenderer } from "electron";
-import { createDesktopPreloadApi, type DesktopInvoke } from "./ipc.js";
+import {
+  createDesktopAuthenticatedTransport,
+  createDesktopPreloadApi,
+  type DesktopInvoke,
+} from "./ipc.js";
 import { z } from "zod";
 
 const EventSubscriptionReceiptSchema = z.strictObject({
@@ -11,6 +15,10 @@ const invoke: DesktopInvoke = (channel, request) => {
   switch (channel) {
     case "projects.list":
       return ipcRenderer.invoke("hunter:projects.list", request);
+    case "projects.create":
+      return ipcRenderer.invoke("hunter:projects.create", request);
+    case "projects.get":
+      return ipcRenderer.invoke("hunter:projects.get", request);
     case "requirements.create":
       return ipcRenderer.invoke("hunter:requirements.create", request);
     case "requirements.approve":
@@ -65,3 +73,7 @@ const api = createDesktopPreloadApi(
 );
 
 contextBridge.exposeInMainWorld("hunter", api);
+contextBridge.exposeInMainWorld(
+  "hunterAuthenticatedTransport",
+  createDesktopAuthenticatedTransport(api),
+);

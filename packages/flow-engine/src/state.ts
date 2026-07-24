@@ -15,6 +15,7 @@ export interface StepAttemptState {
   readonly attemptNumber: number;
   readonly executionStatus: ExecutionStatus;
   readonly verificationStatus: VerificationStatus;
+  readonly verificationEvidenceFingerprint?: string | undefined;
   readonly assignment?: {
     readonly operationId: string;
     readonly capabilityProbeReceiptId: string;
@@ -180,7 +181,12 @@ function applyEvent(current: WorkflowRunState | null, event: FlowEvent): Workflo
         verificationStatus: event.status,
         attempts: step.attempts.map((attempt) =>
           attempt.attemptId === event.attemptId
-            ? { ...attempt, verificationStatus: event.status }
+            ? {
+                ...attempt,
+                verificationStatus: event.status,
+                verificationEvidenceFingerprint:
+                  event.evidenceFingerprint,
+              }
             : attempt,
         ),
       }));

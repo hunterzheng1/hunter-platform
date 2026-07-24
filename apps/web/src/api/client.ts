@@ -3,6 +3,7 @@ import {
   CreateProjectHttpRequestSchema,
   CreateProjectHttpResponseSchema,
   CreateRequirementHttpRequestSchema,
+  KnowledgeHttpResponseSchema,
   ProjectDetailHttpResponseSchema,
   ProjectIdParamsSchema,
   ProjectListHttpResponseSchema,
@@ -17,16 +18,14 @@ import {
   type PublishChangeHttpRequest,
   type PublishChangeHttpResponse,
   type CreateProjectHttpResponse,
+  type KnowledgeHttpResponse,
   type RequirementRevisionHttpResponse,
   type RunViewHttpResponse,
 } from "@hunter/api-contracts";
 import {
-  EvidenceIdSchema,
-  KnowledgeEntryIdSchema,
   ProjectIdSchema,
   RequirementIdSchema,
   RequirementRevisionIdSchema,
-  RunIdSchema,
 } from "@hunter/domain/ids";
 import { z } from "zod";
 
@@ -65,81 +64,7 @@ export interface CreateRequirementDraftInput {
   readonly constraints: readonly string[];
 }
 
-const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
-const KnowledgeBaseSchema = z.object({
-  schemaVersion: z.literal(1),
-  entryId: KnowledgeEntryIdSchema,
-  status: z.enum(["active", "superseded", "withdrawn"]),
-  scope: z.object({ projectId: ProjectIdSchema }).strict(),
-  summary: z.string().trim().min(1).max(500),
-  body: z.string().trim().min(1).max(10_000),
-});
-const KnowledgeEntrySchema = z.discriminatedUnion("level", [
-  KnowledgeBaseSchema.extend({
-    level: z.literal("authoritative"),
-    source: z.object({
-      type: z.literal("requirement_revision"),
-      projectId: ProjectIdSchema,
-      requirementRevisionId: RequirementRevisionIdSchema,
-    }).strict(),
-  }).strict(),
-  KnowledgeBaseSchema.extend({
-    level: z.literal("experiential"),
-    confidence: z.object({
-      level: z.enum(["low", "medium", "high"]),
-      rationale: z.string().trim().min(1).max(1_000),
-    }).strict(),
-    invalidationConditions: z.array(z.object({
-      condition: z.string().trim().min(1).max(1_000),
-    }).strict()).min(1).max(32),
-    source: z.object({
-      type: z.literal("evidence"),
-      projectId: ProjectIdSchema,
-      evidenceId: EvidenceIdSchema,
-      contentHash: Sha256Schema,
-    }).strict(),
-  }).strict(),
-  KnowledgeBaseSchema.extend({
-    level: z.literal("historical"),
-    source: z.object({
-      type: z.literal("archive"),
-      projectId: ProjectIdSchema,
-      runId: RunIdSchema,
-      outcome: z.enum(["succeeded", "failed", "canceled"]),
-      manifestSchemaVersion: z.literal(2),
-      manifestHash: Sha256Schema,
-      manifestRef: z.string().regex(/^cas:sha256:[a-f0-9]{64}$/u),
-    }).strict(),
-  }).strict(),
-]);
-const KnowledgeResponseSchema = z.object({
-  projectId: ProjectIdSchema,
-  entries: z.array(KnowledgeEntrySchema),
-}).strict().superRefine((response, context) => {
-  response.entries.forEach((entry, index) => {
-    if (
-      entry.scope.projectId !== response.projectId
-      || entry.source.projectId !== response.projectId
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["entries", index, "scope"],
-        message: "Knowledge entry must remain within the response Project",
-      });
-    }
-    if (
-      entry.level === "historical"
-      && entry.source.manifestRef !== `cas:sha256:${entry.source.manifestHash}`
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["entries", index, "source", "manifestRef"],
-        message: "manifest reference digest must match manifest hash",
-      });
-    }
-  });
-});
-export type KnowledgeResponse = z.infer<typeof KnowledgeResponseSchema>;
+export type KnowledgeResponse = KnowledgeHttpResponse;
 
 export type PublishChangeDraftInput = Omit<PublishChangeHttpRequest, "expectedVersion" | "idempotencyKey">;
 
@@ -277,7 +202,7 @@ export class HunterApi {
     includeHistorical = false,
   ): Promise<KnowledgeResponse> {
     const params = ProjectIdParamsSchema.parse({ projectId });
-    const response = KnowledgeResponseSchema.parse(
+    const response = KnowledgeHttpResponseSchema.parse(
       await this.transport.request(
         `/api/v1/projects/${params.projectId}/knowledge?includeHistorical=${includeHistorical}`,
       ),

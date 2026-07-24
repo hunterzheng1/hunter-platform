@@ -1,6 +1,10 @@
 import {
   ApproveRequirementHttpRequestSchema,
+  CreateProjectHttpRequestSchema,
+  CreateProjectHttpResponseSchema,
   CreateRequirementHttpRequestSchema,
+  KnowledgeHttpResponseSchema,
+  ProjectDetailHttpResponseSchema,
   ProjectListHttpResponseSchema,
   PublishChangeHttpRequestSchema,
   PublishChangeHttpResponseSchema,
@@ -9,7 +13,6 @@ import {
 } from "@hunter/api-contracts";
 import {
   DeviceIdSchema,
-  KnowledgeEntryIdSchema,
   ProjectIdSchema,
   RequirementRevisionIdSchema,
   RunIdSchema,
@@ -19,6 +22,8 @@ import { z } from "zod";
 
 export const DESKTOP_IPC_CHANNELS = Object.freeze([
   "projects.list",
+  "projects.create",
+  "projects.get",
   "requirements.create",
   "requirements.approve",
   "changes.publish",
@@ -43,12 +48,6 @@ const RunCommandResponseSchema = z.strictObject({
   runId: RunIdSchema,
   status: z.string().min(1).max(64),
   aggregateVersion: z.number().int().nonnegative(),
-});
-const KnowledgeListResponseSchema = z.strictObject({
-  entries: z.array(z.strictObject({
-    knowledgeEntryId: KnowledgeEntryIdSchema,
-    title: z.string().min(1).max(200),
-  })).max(1_000),
 });
 const PairingIdSchema = z.string().regex(/^pair_[a-f0-9]{24}$/u);
 const PairingChallengeResponseSchema = z.strictObject({
@@ -129,6 +128,10 @@ const EventUnsubscribeResponseSchema = z.strictObject({
 
 const requestSchemas = {
   "projects.list": EmptySchema,
+  "projects.create": z.strictObject({
+    command: CreateProjectHttpRequestSchema,
+  }),
+  "projects.get": z.strictObject({ projectId: ProjectIdSchema }),
   "requirements.create": z.strictObject({
     projectId: ProjectIdSchema,
     command: CreateRequirementHttpRequestSchema,
@@ -144,7 +147,10 @@ const requestSchemas = {
   }),
   "runs.get": z.strictObject({ runId: RunIdSchema }),
   "runs.command": RunCommandSchema,
-  "knowledge.list": z.strictObject({ projectId: ProjectIdSchema }),
+  "knowledge.list": z.strictObject({
+    projectId: ProjectIdSchema,
+    includeHistorical: z.boolean(),
+  }),
   "devices.pairing.create": EmptySchema,
   "devices.pairing.confirm": PairingConfirmationRequestSchema,
   "devices.revoke": DeviceRevokeRequestSchema,
@@ -153,12 +159,14 @@ const requestSchemas = {
 
 const responseSchemas = {
   "projects.list": ProjectListHttpResponseSchema,
+  "projects.create": CreateProjectHttpResponseSchema,
+  "projects.get": ProjectDetailHttpResponseSchema,
   "requirements.create": RequirementRevisionHttpResponseSchema,
   "requirements.approve": RequirementRevisionHttpResponseSchema,
   "changes.publish": PublishChangeHttpResponseSchema,
   "runs.get": RunViewHttpResponseSchema,
   "runs.command": RunCommandResponseSchema,
-  "knowledge.list": KnowledgeListResponseSchema,
+  "knowledge.list": KnowledgeHttpResponseSchema,
   "devices.pairing.create": PairingChallengeResponseSchema,
   "devices.pairing.confirm": PairingConfirmationResponseSchema,
   "devices.revoke": DeviceRevokeResponseSchema,
@@ -306,12 +314,17 @@ function daemonRoute(
 ): { readonly method: "GET" | "POST"; readonly path: string; readonly body?: unknown } {
   switch (channel) {
     case "projects.list": return { method: "GET", path: "/api/v1/projects" };
+    case "projects.create": return { method: "POST", path: "/api/v1/projects", body: request.command };
+    case "projects.get": return { method: "GET", path: `/api/v1/projects/${String(request.projectId)}` };
     case "requirements.create": return { method: "POST", path: `/api/v1/projects/${String(request.projectId)}/requirements`, body: request.command };
     case "requirements.approve": return { method: "POST", path: `/api/v1/projects/${String(request.projectId)}/requirement-revisions/${String(request.revisionId)}/approve`, body: request.command };
     case "changes.publish": return { method: "POST", path: `/api/v1/projects/${String(request.projectId)}/changes`, body: request.command };
     case "runs.get": return { method: "GET", path: `/api/v1/runs/${String(request.runId)}` };
     case "runs.command": return { method: "POST", path: `/api/v1/runs/${String(request.runId)}/commands`, body: request };
-    case "knowledge.list": return { method: "GET", path: `/api/v1/projects/${String(request.projectId)}/knowledge` };
+    case "knowledge.list": return {
+      method: "GET",
+      path: `/api/v1/projects/${String(request.projectId)}/knowledge?includeHistorical=${String(request.includeHistorical)}`,
+    };
     case "devices.pairing.create": return { method: "POST", path: "/api/v1/devices/pairing-challenges", body: {} };
     case "devices.pairing.confirm": {
       const { pairingId, ...body } = request;
@@ -520,6 +533,8 @@ export function createDesktopPreloadApi(
   const api = {
     projects: Object.freeze({
       list: (request: unknown) => invokeValidated(invoke, "projects.list", request),
+      create: (request: unknown) => invokeValidated(invoke, "projects.create", request),
+      get: (request: unknown) => invokeValidated(invoke, "projects.get", request),
     }),
     requirements: Object.freeze({
       create: (request: unknown) => invokeValidated(invoke, "requirements.create", request),
@@ -551,4 +566,81 @@ export function createDesktopPreloadApi(
     }),
   };
   return Object.freeze(api);
+}
+
+type DesktopPreloadApi = ReturnType<typeof createDesktopPreloadApi>;
+
+function parseDesktopCommandBody(init: RequestInit | undefined): unknown {
+  if (
+    init === undefined
+    || init.method?.toUpperCase() !== "POST"
+    || typeof init.body !== "string"
+    || Object.keys(init).some((key) =>
+      !["method", "headers", "body"].includes(key)
+    )
+  ) {
+    throw new Error("DESKTOP_TRANSPORT_REQUEST_INVALID");
+  }
+  const headers = new Headers(init.headers);
+  if (
+    [...headers.keys()].some((key) => key !== "content-type")
+    || headers.get("content-type") !== "application/json"
+  ) {
+    throw new Error("DESKTOP_TRANSPORT_HEADERS_INVALID");
+  }
+  try {
+    return JSON.parse(init.body) as unknown;
+  } catch {
+    throw new Error("DESKTOP_TRANSPORT_BODY_INVALID");
+  }
+}
+
+export function createDesktopAuthenticatedTransport(api: DesktopPreloadApi) {
+  const request = async (path: string, init?: RequestInit): Promise<unknown> => {
+    if (init === undefined) {
+      if (path === "/api/v1/projects") return await api.projects.list({});
+      const project = /^\/api\/v1\/projects\/(prj_[A-Za-z0-9_-]+)$/u.exec(path);
+      if (project !== null) {
+        return await api.projects.get({ projectId: project[1] });
+      }
+      const run = /^\/api\/v1\/runs\/(run_[A-Za-z0-9_-]+)$/u.exec(path);
+      if (run !== null) return await api.runs.get({ runId: run[1] });
+      const knowledge = /^\/api\/v1\/projects\/(prj_[A-Za-z0-9_-]+)\/knowledge\?includeHistorical=(true|false)$/u.exec(path);
+      if (knowledge !== null) {
+        return await api.knowledge.list({
+          projectId: knowledge[1],
+          includeHistorical: knowledge[2] === "true",
+        });
+      }
+      throw new Error("DESKTOP_TRANSPORT_ROUTE_NOT_ALLOWED");
+    }
+    const command = parseDesktopCommandBody(init);
+    if (path === "/api/v1/projects") {
+      return await api.projects.create({ command });
+    }
+    const requirement = /^\/api\/v1\/projects\/(prj_[A-Za-z0-9_-]+)\/requirements$/u.exec(path);
+    if (requirement !== null) {
+      return await api.requirements.create({
+        projectId: requirement[1],
+        command,
+      });
+    }
+    const approval = /^\/api\/v1\/projects\/(prj_[A-Za-z0-9_-]+)\/requirement-revisions\/(rrv_[A-Za-z0-9_-]+)\/approve$/u.exec(path);
+    if (approval !== null) {
+      return await api.requirements.approve({
+        projectId: approval[1],
+        revisionId: approval[2],
+        command,
+      });
+    }
+    const change = /^\/api\/v1\/projects\/(prj_[A-Za-z0-9_-]+)\/changes$/u.exec(path);
+    if (change !== null) {
+      return await api.changes.publish({
+        projectId: change[1],
+        command,
+      });
+    }
+    throw new Error("DESKTOP_TRANSPORT_ROUTE_NOT_ALLOWED");
+  };
+  return Object.freeze({ request });
 }

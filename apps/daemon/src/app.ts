@@ -2,10 +2,10 @@ import Fastify, { type FastifyInstance } from "fastify";
 
 import type { LocalAuthenticator } from "./auth/local-authenticator.js";
 import type { LocalCapabilityVerifier } from "./auth/local-capability.js";
-import type { LocalPrincipal } from "./auth/local-authenticator.js";
 import { assertProtectedLoopbackListen } from "./auth/http-boundary.js";
 import { registerDurableEventRoutes, type DurableEventStream } from "./events/durable-event-stream.js";
 import { installSecurityHooks } from "./http/security-hooks.js";
+import type { LocalPrincipalSource } from "./http/security-hooks.js";
 import { registerChangeRoutes, type ChangeRoutesServices } from "./routes/changes.js";
 import { registerDeviceRoutes, type DeviceRoutesServices } from "./routes/devices.js";
 import { registerProjectRoutes, type ProjectRoutesServices } from "./routes/projects.js";
@@ -29,7 +29,7 @@ export interface BuildAppOptions {
   readonly devices?: DeviceRoutesServices | undefined;
   readonly localCapability?: {
     readonly verifier: LocalCapabilityVerifier;
-    readonly principal: LocalPrincipal;
+    readonly principal: LocalPrincipalSource;
   } | undefined;
 }
 

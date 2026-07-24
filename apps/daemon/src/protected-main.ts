@@ -8,6 +8,7 @@ import {
   serializeDaemonReadiness,
 } from "./auth/http-boundary.js";
 import { startDaemon } from "./main.js";
+import { shutdownProtectedDaemon } from "./protected-shutdown.js";
 import type { CompletionVerifierPort } from "./services/application-services.js";
 
 const DATA_DIRECTORY_ENVIRONMENT_KEY = "HUNTER_DESKTOP_DATA_DIRECTORY";
@@ -67,11 +68,6 @@ async function bootstrap(): Promise<void> {
       verifier: unavailableVerifier,
       archive: {
         root: join(dataDirectory, "archives"),
-        source: {
-          async build() {
-            throw new Error("PRODUCTION_ARCHIVE_SOURCE_NOT_CONFIGURED");
-          },
-        },
         ownerId: LeaseOwnerIdSchema.parse("own_desktop_archive"),
       },
       allowedOrigin: "app://hunter",
@@ -84,6 +80,7 @@ async function bootstrap(): Promise<void> {
           csrf: "local-capability",
           sessionId: "0".repeat(32),
         },
+        authorizeAllProjects: true,
       },
       publishPort: async (port) => {
         process.stdout.write(serializeDaemonReadiness({
@@ -97,8 +94,11 @@ async function bootstrap(): Promise<void> {
     const shutdown = () => {
       if (closing) return;
       closing = true;
-      void daemon.shutdown().finally(() => {
-        process.exitCode = 0;
+      void shutdownProtectedDaemon(
+        daemon,
+        (message) => process.stderr.write(message),
+      ).then((exitCode) => {
+        process.exitCode = exitCode;
       });
     };
     process.once("SIGINT", shutdown);

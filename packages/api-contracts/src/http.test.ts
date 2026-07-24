@@ -7,6 +7,7 @@ import {
   CreateProjectHttpRequestSchema,
   CreateProjectHttpResponseSchema,
   CreateRequirementHttpRequestSchema,
+  KnowledgeHttpResponseSchema,
   ProjectDetailHttpResponseSchema,
   ProjectIdParamsSchema,
   PublishChangeHttpRequestSchema,
@@ -93,6 +94,39 @@ describe("Workbench HTTP schemas", () => {
     expect(ProjectDetailHttpResponseSchema.parse({ projectId, name: "Hunter", requirements: [revision] })).toMatchObject({ projectId, name: "Hunter" });
     expect(() => ProjectDetailHttpResponseSchema.parse({ projectId, name: "Hunter", requirements: [], extra: true })).toThrow();
     expect(CreateProjectHttpResponseSchema.parse({ projectId, name: "Hunter", authorization: "host_session_reissue_required" })).toMatchObject({ projectId });
+  });
+
+  it("keeps Knowledge responses inside the requested Project", () => {
+    const hash = "a".repeat(64);
+    const response = {
+      projectId,
+      entries: [{
+        schemaVersion: 1,
+        entryId: "kne_task2000001",
+        status: "active",
+        scope: { projectId },
+        summary: "Archived run",
+        body: "Verified outcome",
+        level: "historical",
+        source: {
+          type: "archive",
+          projectId,
+          runId: "run_task2000001",
+          outcome: "succeeded",
+          manifestSchemaVersion: 2,
+          manifestHash: hash,
+          manifestRef: `cas:sha256:${hash}`,
+        },
+      }],
+    };
+    expect(KnowledgeHttpResponseSchema.parse(response)).toEqual(response);
+    expect(() => KnowledgeHttpResponseSchema.parse({
+      ...response,
+      entries: [{
+        ...response.entries[0],
+        scope: { projectId: "prj_task2000002" },
+      }],
+    })).toThrow();
   });
 
   it("owns the complete provider-neutral Change planning request and response", () => {

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   DesktopDaemonClient,
   DESKTOP_IPC_CHANNELS,
+  createDesktopAuthenticatedTransport,
   createDesktopPreloadApi,
   installDesktopIpcHandlers,
   type DesktopIpcRegistrar,
@@ -12,6 +13,8 @@ describe("desktop narrow IPC", () => {
   it("exposes only the named product methods", () => {
     expect(DESKTOP_IPC_CHANNELS).toEqual([
       "projects.list",
+      "projects.create",
+      "projects.get",
       "requirements.create",
       "requirements.approve",
       "changes.publish",
@@ -64,6 +67,57 @@ describe("desktop narrow IPC", () => {
     await expect(api.projects.list({})).rejects.toThrow();
   });
 
+  it("adapts only the Workbench route allowlist to named IPC", async () => {
+    const invoke = vi.fn(async (channel: string): Promise<unknown> => {
+      if (channel === "projects.create") {
+        return {
+          projectId: "prj_ipcsecure01",
+          name: "Hunter",
+          authorization: "host_session_reissue_required",
+        };
+      }
+      if (channel === "projects.get") {
+        return {
+          projectId: "prj_ipcsecure01",
+          name: "Hunter",
+          requirements: [],
+        };
+      }
+      throw new Error(`unexpected ${channel}`);
+    });
+    const transport = createDesktopAuthenticatedTransport(
+      createDesktopPreloadApi(invoke, () => () => undefined),
+    );
+    const command = {
+      projectId: "prj_ipcsecure01",
+      name: "Hunter",
+      expectedVersion: 0,
+      idempotencyKey: "create-ipc-project",
+    };
+
+    await expect(transport.request("/api/v1/projects", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(command),
+    })).resolves.toMatchObject({ projectId: command.projectId });
+    await expect(
+      transport.request(`/api/v1/projects/${command.projectId}`),
+    ).resolves.toMatchObject({ projectId: command.projectId });
+    await expect(
+      transport.request("http://127.0.0.1:43123/health"),
+    ).rejects.toThrow("DESKTOP_TRANSPORT_ROUTE_NOT_ALLOWED");
+    await expect(transport.request("/api/v1/projects", {
+      method: "POST",
+      headers: { authorization: "private" },
+      body: JSON.stringify(command),
+    })).rejects.toThrow("DESKTOP_TRANSPORT_HEADERS_INVALID");
+
+    expect(invoke.mock.calls).toEqual([
+      ["projects.create", { command }],
+      ["projects.get", { projectId: command.projectId }],
+    ]);
+  });
+
   it("freezes the bridge and keeps origin, token, fetch, filesystem, shell, and arbitrary IPC out of preload", async () => {
     const api = createDesktopPreloadApi(
       async () => ({ projects: [] }),
@@ -74,6 +128,9 @@ describe("desktop narrow IPC", () => {
     const source = await readFile(new URL("./preload.ts", import.meta.url), "utf8");
     expect(source).not.toMatch(
       /\b(?:apiOrigin|token|authorization|fetch|node:fs|child_process|shell|ipcRenderer\.send|ipcRenderer\.invoke\([^)]*channel)\b/iu,
+    );
+    expect(source).toContain(
+      'exposeInMainWorld(\n  "hunterAuthenticatedTransport"',
     );
   });
 

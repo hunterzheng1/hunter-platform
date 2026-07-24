@@ -41,7 +41,11 @@ describe("production Runtime and verifier composition", () => {
     expect(compositionSource).toContain("AttemptSettlementRunner");
     expect(compositionSource).toContain("attemptSettlement");
     expect(mainSource).toContain("attemptSettlement.settle");
+    expect(mainSource).toContain("SqliteArchiveManifestSource");
     expect(packagedMainSource).toContain("startDaemon");
+    expect(packagedMainSource).not.toContain(
+      "PRODUCTION_ARCHIVE_SOURCE_NOT_CONFIGURED",
+    );
     expect(packagedMainSource).not.toContain(
       "startProtectedBoundaryDaemon",
     );

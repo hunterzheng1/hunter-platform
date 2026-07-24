@@ -9,6 +9,7 @@ import { clearTimeout, setTimeout } from "node:timers";
 import { fileURLToPath, URL } from "node:url";
 
 import electronExecutable from "electron";
+import { withOwnedConcurrentStarts } from "../dist/sidecar-smoke-lifecycle.js";
 
 const desktopDirectory = join(fileURLToPath(new URL("..", import.meta.url)));
 const daemonEntry = join(desktopDirectory, "dist-sidecar", "main.cjs");
@@ -124,38 +125,146 @@ async function start(index) {
     child.stdin.end(`${capability}\n`, "utf8");
     const readiness = await waitForReadiness(child, capability);
     const host = `127.0.0.1:${readiness.port}`;
-    const timestamp = Date.now();
-    const nonce = `sidecar-smoke-nonce-${index}`;
-    const bodyDigest = createHash("sha256").update("").digest("hex");
-    const canonical = [
-      "GET",
-      "/health",
-      host,
-      "app://hunter",
-      String(timestamp),
-      nonce,
-      "",
-      bodyDigest,
-    ].join("\n");
-    const signature = createHmac(
-      "sha256",
-      Buffer.from(capability, "base64url"),
-    ).update(canonical).digest("base64url");
-    const response = await globalThis.fetch(`http://${host}/health`, {
-      headers: {
+    let requestNumber = 0;
+    const request = async (method, path, body) => {
+      requestNumber += 1;
+      const timestamp = Date.now();
+      const nonce = `sidecar-smoke-${index}-${requestNumber}`;
+      const encodedBody = body === undefined ? "" : JSON.stringify(body);
+      const bodyDigest = createHash("sha256").update(encodedBody).digest("hex");
+      const canonical = [
+        method,
+        path,
         host,
-        origin: "app://hunter",
-        "x-hunter-local-timestamp": String(timestamp),
-        "x-hunter-local-nonce": nonce,
-        "x-hunter-local-body-sha256": bodyDigest,
-        "x-hunter-local-signature": signature,
-      },
+        "app://hunter",
+        String(timestamp),
+        nonce,
+        "",
+        bodyDigest,
+      ].join("\n");
+      const signature = createHmac(
+        "sha256",
+        Buffer.from(capability, "base64url"),
+      ).update(canonical).digest("base64url");
+      const response = await globalThis.fetch(`http://${host}${path}`, {
+        method,
+        headers: {
+          host,
+          origin: "app://hunter",
+          ...(body === undefined
+            ? {}
+            : { "content-type": "application/json" }),
+          "x-hunter-local-timestamp": String(timestamp),
+          "x-hunter-local-nonce": nonce,
+          "x-hunter-local-body-sha256": bodyDigest,
+          "x-hunter-local-signature": signature,
+        },
+        ...(body === undefined ? {} : { body: encodedBody }),
+      });
+      const text = await response.text();
+      if (!response.ok) {
+        throw new Error(`SIDECAR_REQUEST_FAILED_${response.status}`);
+      }
+      return text === "" ? {} : JSON.parse(text);
+    };
+    await request("GET", "/health");
+    const projectId = `prj_sidecarsmoke${index}`;
+    const project = await request("POST", "/api/v1/projects", {
+      projectId,
+      name: `Sidecar smoke ${index}`,
+      expectedVersion: 0,
+      idempotencyKey: `sidecar-project-${index}`,
     });
-    if (response.status !== 200) {
-      throw new Error("SIDECAR_AUTHENTICATED_HEALTH_FAILED");
+    if (
+      project.projectId !== projectId
+      || project.authorization !== "host_session_reissue_required"
+    ) {
+      throw new Error("SIDECAR_PROJECT_CREATE_INVALID");
     }
-    await response.body?.cancel();
-    return { child, dataDirectory, port: readiness.port };
+    const listed = await request("GET", "/api/v1/projects");
+    if (
+      !Array.isArray(listed.projects)
+      || !listed.projects.some((candidate) =>
+        candidate?.projectId === projectId
+      )
+    ) {
+      throw new Error("SIDECAR_PROJECT_AUTHORIZATION_REFRESH_FAILED");
+    }
+    const detail = await request("GET", `/api/v1/projects/${projectId}`);
+    const requirement = await request(
+      "POST",
+      `/api/v1/projects/${projectId}/requirements`,
+      {
+        requirementId: `req_sidecarsmoke${index}`,
+        revisionId: `rrv_sidecarsmoke${index}`,
+        title: "Verify bundled sidecar",
+        body: "Exercise the Hunter-owned definition services.",
+        acceptanceCriteria: ["Published Change is persisted"],
+        constraints: ["No production Provider calls"],
+        expectedVersion: 0,
+        idempotencyKey: `sidecar-requirement-${index}`,
+      },
+    );
+    const approved = await request(
+      "POST",
+      `/api/v1/projects/${projectId}/requirement-revisions/${requirement.revisionId}/approve`,
+      {
+        expectedVersion: requirement.aggregateVersion,
+        idempotencyKey: `sidecar-approve-${index}`,
+      },
+    );
+    const defaults = detail.planningDefaults;
+    if (
+      !Array.isArray(defaults?.repositoryIds)
+      || defaults.repositoryIds.length === 0
+    ) {
+      throw new Error("SIDECAR_PLANNING_DEFAULTS_MISSING");
+    }
+    const published = await request(
+      "POST",
+      `/api/v1/projects/${projectId}/changes`,
+      {
+        changeId: `chg_sidecarsmoke${index}`,
+        changeRevisionId: `crv_sidecarsmoke${index}`,
+        executionPlanId: `epl_sidecarsmoke${index}`,
+        title: "Bundled sidecar composition",
+        goal: "Prove the packaged Hunter-owned definition chain.",
+        nonGoals: ["Call a production Provider"],
+        requirementRevisionIds: [approved.revisionId],
+        repositoryIds: defaults.repositoryIds,
+        acceptanceCriteria: ["Definition chain returns a published plan"],
+        constraints: ["Provider-neutral"],
+        risks: ["Runtime remains unavailable"],
+        dependsOnChangeRevisionIds: [],
+        tasks: [{
+          taskId: `tsk_sidecarsmoke${index}`,
+          title: "Verify composition",
+          objective: "Exercise persisted definitions.",
+          acceptanceCriteria: ["Contract validation passes"],
+          repositoryIds: defaults.repositoryIds,
+          moduleScopes: ["apps"],
+          dependsOn: [],
+          readSet: ["apps"],
+          writeSet: ["apps"],
+          access: "write",
+          workflowRevisionId: defaults.workflowRevisionId,
+          defaultAgentProfileId: defaults.defaultAgentProfileId,
+          sessionPolicy: defaults.sessionPolicy,
+          workspacePolicy: defaults.workspacePolicy,
+        }],
+        expectedVersion: 0,
+        idempotencyKey: `sidecar-change-${index}`,
+      },
+    );
+    if (published.status !== "published") {
+      throw new Error("SIDECAR_CHANGE_PUBLISH_INVALID");
+    }
+    return {
+      child,
+      dataDirectory,
+      port: readiness.port,
+      definitionChain: "passed",
+    };
   } catch (error) {
     if (child.exitCode === null) {
       const closed = new Promise((resolveClose) =>
@@ -168,28 +277,38 @@ async function start(index) {
   }
 }
 
-const running = await Promise.all([start(17), start(23)]);
-try {
-  if (running[0].port === running[1].port) {
-    throw new Error("SIDECAR_PORT_REUSE");
+async function cleanup({ child, dataDirectory }) {
+  if (child.exitCode === null) {
+    const closed = new Promise((resolveClose) =>
+      child.once("close", resolveClose));
+    child.kill("SIGTERM");
+    await closed;
   }
-  process.stdout.write(
-    `${JSON.stringify({
+  await rm(dataDirectory, { recursive: true, force: true });
+}
+
+const report = await withOwnedConcurrentStarts(
+  [() => start(17), () => start(23)],
+  async (running) => {
+    if (running.length !== 2) throw new Error("SIDECAR_START_COUNT_INVALID");
+    if (running[0].port === running[1].port) {
+      throw new Error("SIDECAR_PORT_REUSE");
+    }
+    if (running.some(({ definitionChain }) =>
+      definitionChain !== "passed"
+    )) {
+      throw new Error("SIDECAR_DEFINITION_CHAIN_FAILED");
+    }
+    return {
       schemaVersion: 1,
       starts: [
         { readiness: "validated", port: "<ephemeral:1>", auth: "passed" },
         { readiness: "validated", port: "<ephemeral:2>", auth: "passed" },
       ],
       portsDistinct: true,
-    })}\n`,
-  );
-} finally {
-  await Promise.all(running.map(async ({ child, dataDirectory }) => {
-    if (child.exitCode === null) {
-      const closed = new Promise((resolve) => child.once("close", resolve));
-      child.kill("SIGTERM");
-      await closed;
-    }
-    await rm(dataDirectory, { recursive: true, force: true });
-  }));
-}
+      definitionChains: "passed",
+    };
+  },
+  cleanup,
+);
+process.stdout.write(`${JSON.stringify(report)}\n`);

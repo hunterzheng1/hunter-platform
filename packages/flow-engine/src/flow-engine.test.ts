@@ -544,6 +544,7 @@ describe("authoritative FlowEngine", () => {
       executionStatus: "returned",
       verificationStatus: "passed",
       conclusion: "succeeded",
+      attempts: [{ verificationEvidenceFingerprint: "e".repeat(64) }],
     });
     expect(current(store).status).toBe("paused");
   });

@@ -1,6 +1,8 @@
-import { ProjectIdParamsSchema } from "@hunter/api-contracts";
+import {
+  KnowledgeHttpResponseSchema,
+  ProjectIdParamsSchema,
+} from "@hunter/api-contracts";
 import type { ProjectId } from "@hunter/domain";
-import { KnowledgeEntrySchema } from "@hunter/knowledge";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
@@ -31,12 +33,12 @@ export function registerKnowledgeRoutes(
     if (!principal.authorizedProjectIds.includes(params.data.projectId)) {
       return await reply.code(403).send({ code: "PROJECT_FORBIDDEN" });
     }
-    return {
+    return KnowledgeHttpResponseSchema.parse({
       projectId: params.data.projectId,
-      entries: z.array(KnowledgeEntrySchema).parse(await services.resolve({
+      entries: await services.resolve({
         projectId: params.data.projectId,
         includeHistorical: query.data.includeHistorical === "true",
-      })),
-    };
+      }),
+    });
   });
 }

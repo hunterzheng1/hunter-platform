@@ -23,8 +23,10 @@ import {
   createApplicationComposition,
   type ApplicationCompositionInput,
 } from "./services/composition-root.js";
+import { createDesktopDefinitionServices } from "./services/desktop-definition-services.js";
 import type { CompletionVerifierPort } from "./services/application-services.js";
 import type { SqliteServiceRepositories } from "./services/sqlite-application-services.js";
+import { SqliteArchiveManifestSource } from "./services/sqlite-archive-manifest-source.js";
 
 export type RemoteDaemonOptions =
   | { readonly enabled?: false }
@@ -52,10 +54,18 @@ export interface DaemonStartOptions {
   readonly localCapability?: {
     readonly capability: string;
     readonly principal: LocalPrincipal;
+    readonly authorizeAllProjects?: boolean | undefined;
   } | undefined;
   readonly publishPort: (port: number) => Promise<void>;
   readonly remote?: RemoteDaemonOptions | undefined;
-  readonly archive?: ApplicationCompositionInput["archive"] | undefined;
+  readonly archive?: (
+    Omit<NonNullable<ApplicationCompositionInput["archive"]>, "source">
+    & {
+      readonly source?:
+        NonNullable<ApplicationCompositionInput["archive"]>["source"]
+        | undefined;
+    }
+  ) | undefined;
 }
 
 function assertSecretRef(reference: string): void {
@@ -82,6 +92,22 @@ export async function startDaemon(options: DaemonStartOptions) {
     const allowedHosts = options.allowedHost === undefined
       ? []
       : [options.allowedHost];
+    let ownedArchiveSource:
+      | SqliteArchiveManifestSource
+      | undefined;
+    const archive = options.archive === undefined
+      ? undefined
+      : {
+          ...options.archive,
+          source: options.archive.source ?? {
+            build: (job) => {
+              if (ownedArchiveSource === undefined) {
+                throw new Error("ARCHIVE_SOURCE_NOT_READY");
+              }
+              return ownedArchiveSource.build(job);
+            },
+          },
+        };
     const composition = createApplicationComposition({
       database,
       repositories: options.repositories,
@@ -91,9 +117,12 @@ export async function startDaemon(options: DaemonStartOptions) {
       allowedHosts,
       allowedOrigins: [options.allowedOrigin],
       contentDirectory: options.dataDirectory,
-      ...(options.archive === undefined ? {} : { archive: options.archive }),
+      ...(archive === undefined ? {} : { archive }),
     });
     const { services } = composition;
+    if (options.archive !== undefined && options.archive.source === undefined) {
+      ownedArchiveSource = new SqliteArchiveManifestSource(services);
+    }
     const remoteEnabled = options.remote?.enabled === true;
     const deviceStore = remoteEnabled ? new DeviceStore(database) : undefined;
     const pairing = deviceStore === undefined
@@ -124,6 +153,11 @@ export async function startDaemon(options: DaemonStartOptions) {
        ON CONFLICT(metadata_key) DO UPDATE SET metadata_value = excluded.metadata_value, updated_at = excluded.updated_at`,
     ).run(options.secretRef, new Date().toISOString());
     await services.recovery.run();
+    const definitions = createDesktopDefinitionServices({
+      database,
+      services,
+      dataDirectory: options.dataDirectory,
+    });
     const settlementPending = (error: unknown) =>
       error instanceof Error
       && /^(?:ATTEMPT_RETURN_NOT_OBSERVED|CONTROLLER_LEASE_REQUIRED|NATIVE_SESSION_RECEIPT_REQUIRED|OPERATION_(?:DELIVERY|RECEIPT)_)/u.test(
@@ -174,7 +208,12 @@ export async function startDaemon(options: DaemonStartOptions) {
               verifier: new LocalCapabilityVerifier(
                 options.localCapability.capability,
               ),
-              principal: options.localCapability.principal,
+              principal: options.localCapability.authorizeAllProjects === true
+                ? () => ({
+                    ...options.localCapability!.principal,
+                    authorizedProjectIds: definitions.listProjectIds(),
+                  })
+                : options.localCapability.principal,
             },
           }),
       devices: pairing === undefined || tokens === undefined || deviceStore === undefined
@@ -186,6 +225,38 @@ export async function startDaemon(options: DaemonStartOptions) {
             const project = services.repositories.getProject(projectId);
             return project === null ? [] : [{ projectId: project.projectId, name: project.name }];
           });
+        },
+        createProject: async (command, actor) =>
+          definitions.createProject(command, actor),
+        getProject: async (projectId) => definitions.getProject(projectId),
+        requirements: {
+          createRequirement: async (projectId, command, actor) =>
+            definitions.requirements.createRequirement(
+              projectId,
+              command,
+              actor,
+            ),
+          getRequirementRevision:
+            definitions.requirements.getRequirementRevision,
+          approveRequirement: async (
+            projectId,
+            revisionId,
+            command,
+            actor,
+          ) => definitions.requirements.approveRequirement(
+            projectId,
+            revisionId,
+            command,
+            actor,
+          ),
+        },
+        changes: {
+          getChangeExecutionPlanRelation:
+            definitions.changes.getChangeExecutionPlanRelation,
+          getRequirementRevision:
+            definitions.changes.getRequirementRevision,
+          publishChange: async (projectId, command, actor) =>
+            definitions.changes.publishChange(projectId, command, actor),
         },
         projectForExecutionPlan: (executionPlanId) => {
           const plan = services.repositories.getExecutionPlan(executionPlanId);

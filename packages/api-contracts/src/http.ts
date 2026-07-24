@@ -4,6 +4,7 @@ import {
   ChangeIdSchema,
   ChangeRevisionIdSchema,
   ExecutionPlanIdSchema,
+  KnowledgeEntryIdSchema,
   ProjectIdSchema,
   RepositoryIdSchema,
   RequirementIdSchema,
@@ -358,3 +359,79 @@ export const ProjectDetailHttpResponseSchema = ProjectSummaryHttpResponseSchema.
   planningDefaults: ChangePlanningDefaultsHttpSchema.optional(),
 }).strict();
 export type ProjectDetailHttpResponse = z.infer<typeof ProjectDetailHttpResponseSchema>;
+
+const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
+const KnowledgeEntryBaseHttpSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  entryId: KnowledgeEntryIdSchema,
+  status: z.enum(["active", "superseded", "withdrawn"]),
+  scope: z.strictObject({ projectId: ProjectIdSchema }),
+  summary: z.string().trim().min(1).max(500),
+  body: z.string().trim().min(1).max(10_000),
+});
+export const KnowledgeEntryHttpSchema = z.discriminatedUnion("level", [
+  KnowledgeEntryBaseHttpSchema.extend({
+    level: z.literal("authoritative"),
+    source: z.strictObject({
+      type: z.literal("requirement_revision"),
+      projectId: ProjectIdSchema,
+      requirementRevisionId: RequirementRevisionIdSchema,
+    }),
+  }).strict(),
+  KnowledgeEntryBaseHttpSchema.extend({
+    level: z.literal("experiential"),
+    confidence: z.strictObject({
+      level: z.enum(["low", "medium", "high"]),
+      rationale: z.string().trim().min(1).max(1_000),
+    }),
+    invalidationConditions: z.array(z.strictObject({
+      condition: z.string().trim().min(1).max(1_000),
+    })).min(1).max(32),
+    source: z.strictObject({
+      type: z.literal("evidence"),
+      projectId: ProjectIdSchema,
+      evidenceId: EvidenceIdSchema,
+      contentHash: Sha256Schema,
+    }),
+  }).strict(),
+  KnowledgeEntryBaseHttpSchema.extend({
+    level: z.literal("historical"),
+    source: z.strictObject({
+      type: z.literal("archive"),
+      projectId: ProjectIdSchema,
+      runId: RunIdSchema,
+      outcome: z.enum(["succeeded", "failed", "canceled"]),
+      manifestSchemaVersion: z.literal(2),
+      manifestHash: Sha256Schema,
+      manifestRef: z.string().regex(/^cas:sha256:[a-f0-9]{64}$/u),
+    }),
+  }).strict(),
+]);
+export const KnowledgeHttpResponseSchema = z.strictObject({
+  projectId: ProjectIdSchema,
+  entries: z.array(KnowledgeEntryHttpSchema),
+}).superRefine((response, context) => {
+  response.entries.forEach((entry, index) => {
+    if (
+      entry.scope.projectId !== response.projectId
+      || entry.source.projectId !== response.projectId
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["entries", index, "scope"],
+        message: "Knowledge entry must remain within the response Project",
+      });
+    }
+    if (
+      entry.level === "historical"
+      && entry.source.manifestRef !== `cas:sha256:${entry.source.manifestHash}`
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["entries", index, "source", "manifestRef"],
+        message: "manifest reference digest must match manifest hash",
+      });
+    }
+  });
+});
+export type KnowledgeHttpResponse = z.infer<typeof KnowledgeHttpResponseSchema>;

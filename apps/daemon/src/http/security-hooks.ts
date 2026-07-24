@@ -5,8 +5,9 @@ import type { LocalCapabilityVerifier } from "../auth/local-capability.js";
 
 export type AuthenticatedRequest = FastifyRequest & { hunterPrincipal?: LocalPrincipal };
 type LimitedRequest = AuthenticatedRequest & { hunterConcurrencySlot?: boolean };
+export type LocalPrincipalSource = LocalPrincipal | (() => LocalPrincipal);
 
-export function installSecurityHooks(app: FastifyInstance, input: { readonly authenticator?: LocalAuthenticator | undefined; readonly allowedHosts: readonly string[]; readonly allowedOrigins: readonly string[]; readonly localCapability?: { readonly verifier: LocalCapabilityVerifier; readonly principal: LocalPrincipal } | undefined; readonly limits?: { readonly maxConcurrentRequests?: number; readonly maxRequestsPerWindow?: number; readonly rateWindowMs?: number } | undefined }): void {
+export function installSecurityHooks(app: FastifyInstance, input: { readonly authenticator?: LocalAuthenticator | undefined; readonly allowedHosts: readonly string[]; readonly allowedOrigins: readonly string[]; readonly localCapability?: { readonly verifier: LocalCapabilityVerifier; readonly principal: LocalPrincipalSource } | undefined; readonly limits?: { readonly maxConcurrentRequests?: number; readonly maxRequestsPerWindow?: number; readonly rateWindowMs?: number } | undefined }): void {
   if (input.authenticator === undefined && input.localCapability === undefined) {
     throw new Error("AUTHENTICATION_BOUNDARY_MISSING");
   }
@@ -53,7 +54,9 @@ export function installSecurityHooks(app: FastifyInstance, input: { readonly aut
           body: request.body,
           headers: request.headers,
         });
-        principal = input.localCapability.principal;
+        principal = typeof input.localCapability.principal === "function"
+          ? input.localCapability.principal()
+          : input.localCapability.principal;
       } catch {
         return await reply.code(401).send({ code: "LOCAL_CAPABILITY_INVALID" });
       }
