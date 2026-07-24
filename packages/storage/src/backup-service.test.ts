@@ -16,14 +16,7 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { afterEach, describe, expect, it } from "vitest";
-
-import {
-  createArchiveManifest,
-  historicalKnowledgeEntryFor,
-  KnowledgeEntrySchema,
-  VerifiedArchiveReceiptSchema,
-  verifyArchiveManifest,
-} from "@hunter/knowledge";
+import { z } from "zod";
 
 import {
   BackupManifestSchema,
@@ -32,6 +25,7 @@ import {
 } from "./backup-manifest.js";
 import {
   type BackupFaultPoint,
+  type BackupReferenceValidators,
   createConsistentBackup,
   type RestoreConsistentBackupInput,
   restoreConsistentBackup as restoreConsistentBackupWithValidators,
@@ -45,11 +39,53 @@ import {
 const roots = new Set<string>();
 const NOW = "2026-07-24T12:00:00.000Z";
 const BACKUP_ID = "bkp_20260724t120000000z_0123456789abcdef";
-const referenceValidators = {
-  parseArchiveManifest: verifyArchiveManifest,
-  parseArchiveReceipt: (input: unknown) =>
-    VerifiedArchiveReceiptSchema.parse(input),
-  parseKnowledgeEntry: (input: unknown) => KnowledgeEntrySchema.parse(input),
+const ArchiveReconciliationSchema = z.object({
+  schemaVersion: z.literal(2),
+  manifestHash: z.string().regex(/^[a-f0-9]{64}$/u),
+  projectId: z.string(),
+  outcome: z.enum(["succeeded", "failed", "canceled"]),
+  ledger: z.object({
+    firstPosition: z.number().int().nonnegative(),
+    lastPosition: z.number().int().nonnegative(),
+  }),
+  runGraph: z.object({
+    rootRunId: z.string(),
+    runs: z.array(z.object({
+      steps: z.array(z.object({
+        attempts: z.array(z.object({
+          artifacts: z.array(z.object({ contentHash: z.string() })),
+          evidence: z.array(z.object({ contentHash: z.string() })),
+        })),
+      })),
+    })),
+  }),
+});
+const ArchiveReceiptReconciliationSchema = z.object({
+  projectId: z.string(),
+  runId: z.string(),
+  outcome: z.enum(["succeeded", "failed", "canceled"]),
+  manifestSchemaVersion: z.number().int(),
+  manifestHash: z.string(),
+  manifestRef: z.string(),
+});
+const KnowledgeReconciliationSchema = z.object({
+  entryId: z.string(),
+  level: z.string(),
+  scope: z.object({ projectId: z.string() }),
+  source: z.object({
+    projectId: z.string().optional(),
+    runId: z.string().optional(),
+    outcome: z.string().optional(),
+    manifestSchemaVersion: z.number().int().optional(),
+    manifestHash: z.string().optional(),
+    manifestRef: z.string().optional(),
+  }),
+});
+const referenceValidators: BackupReferenceValidators = {
+  parseArchiveManifest: (input) => ArchiveReconciliationSchema.parse(input),
+  parseArchiveReceipt: (input) =>
+    ArchiveReceiptReconciliationSchema.parse(input),
+  parseKnowledgeEntry: (input) => KnowledgeReconciliationSchema.parse(input),
 };
 
 function restoreConsistentBackup(
@@ -78,123 +114,54 @@ function write(root: string, path: string, content: string): void {
 }
 
 function archiveFixture(contentHash: string) {
-  const commonLease = {
+  const manifestHash = sha256(`archive:${contentHash}`);
+  const manifest = ArchiveReconciliationSchema.parse({
     schemaVersion: 2,
+    manifestHash,
     projectId: "prj_backup001",
-    repositoryId: "rep_backup001",
-    deviceBindingId: "dev_backup001",
-    canonicalWorkspaceKey: "win32:c:\\hunter\\backup",
-    gitHead: "a".repeat(40),
-    branch: "codex/backup",
-    ownerRunId: "run_backup001",
-    ownerAttemptId: "att_backup001",
-    ownerId: "own_backup001",
-    generation: 1,
-    acquiredAt: NOW,
-    expiresAt: "2026-07-24T13:00:00.000Z",
-    revokedAt: null,
-    revocationReason: null,
-  };
-  const manifest = createArchiveManifest({
-    schemaVersion: 2,
-    projectId: "prj_backup001",
-    repositories: [{
-      repositoryId: "rep_backup001",
-      deviceBindingId: "dev_backup001",
-      gitHead: "a".repeat(40),
-    }],
-    requirementRevisionIds: ["rrv_backup001"],
-    change: {
-      changeId: "chg_backup001",
-      changeRevisionId: "crv_backup001",
-    },
-    executionPlanId: "epl_backup001",
-    workflowId: "wfl_backup001",
-    workflowRevisionId: "wfr_backup001",
     runGraph: {
       rootRunId: "run_backup001",
       runs: [{
-        runId: "run_backup001",
-        parentRunId: null,
-        taskId: null,
-        outcome: "succeeded",
         steps: [{
-          stepRunId: "spr_backup001",
-          stepId: "stp_backup001",
           attempts: [{
-            attemptId: "att_backup001",
-            agentProfileId: "apr_backup001",
-            capabilityProbeDigest: "1".repeat(64),
-            nativeSessionReferenceHash: "2".repeat(64),
             artifacts: [{
-              artifactId: "art_backup001",
-              contentRef: `cas:sha256:${contentHash}`,
               contentHash,
             }],
             evidence: [{
-              evidenceId: "evd_backup001",
-              contentRef: `cas:sha256:${contentHash}`,
               contentHash,
             }],
           }],
         }],
       }],
     },
-    leases: {
-      workspace: [{
-        ...commonLease,
-        kind: "workspace",
-        leaseId: "wsl_backup001",
-        mode: "read_only",
-        scope: { workspaceId: "wsp_backup001" },
-        receiptHash: "3".repeat(64),
-      }],
-      writer: [{
-        ...commonLease,
-        kind: "writer",
-        leaseId: "wrl_backup001",
-        mode: "write",
-        scope: {
-          workspaceId: "wsp_backup001",
-          worktreeId: "wtr_backup001",
-        },
-        receiptHash: "4".repeat(64),
-      }],
-      controller: [{
-        ...commonLease,
-        kind: "controller",
-        leaseId: "ctl_backup001",
-        mode: "write",
-        scope: {
-          workspaceId: "wsp_backup001",
-          worktreeId: "wtr_backup001",
-          nativeSessionId: "ses_backup001",
-        },
-        receiptHash: "5".repeat(64),
-      }],
-    },
     ledger: { firstPosition: 1, lastPosition: 1 },
-    actor: {
-      actorId: "backup-test",
-      correlationId: "backup-test",
-    },
-    timestamps: { occurredAt: NOW, archivedAt: NOW },
     outcome: "succeeded",
   });
-  const receipt = VerifiedArchiveReceiptSchema.parse({
-    receiptSchemaVersion: 1,
+  const receipt = ArchiveReceiptReconciliationSchema.parse({
     projectId: manifest.projectId,
     runId: manifest.runGraph.rootRunId,
     outcome: manifest.outcome,
     manifestSchemaVersion: manifest.schemaVersion,
     manifestHash: manifest.manifestHash,
     manifestRef: `cas:sha256:${manifest.manifestHash}`,
-    verifiedAt: NOW,
+  });
+  const knowledge = KnowledgeReconciliationSchema.parse({
+    entryId: "kne_backup001",
+    level: "historical",
+    scope: { projectId: manifest.projectId },
+    source: {
+      projectId: manifest.projectId,
+      runId: manifest.runGraph.rootRunId,
+      outcome: manifest.outcome,
+      manifestSchemaVersion: manifest.schemaVersion,
+      manifestHash: manifest.manifestHash,
+      manifestRef: `cas:sha256:${manifest.manifestHash}`,
+    },
   });
   return {
     manifest,
     receipt,
-    knowledge: historicalKnowledgeEntryFor(receipt),
+    knowledge,
   };
 }
 

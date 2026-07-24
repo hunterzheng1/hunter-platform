@@ -83,6 +83,12 @@
     `dist` 曾掩盖问题。将 canonical validators 改为恢复组合层的必填依赖并移除
     storage → knowledge 后，无旧产物的根 typecheck、22 项定向测试、lint、
     build 和恢复演练全部通过；失败 run 仍保留，不改写为 PASS。
+12. 新 head `31b5839` 的 Ubuntu typecheck 再次真实失败，错误转为
+    storage 单元测试仍直接导入 `@hunter/knowledge`，并令同一环在反方向出现。
+    storage 单元测试改用严格的本地 reconciliation contract validators；实际
+    canonical schemas 的组合验证继续由 `verify:backup-restore` 承担。再次
+    `npx tsc -b --clean` 后根 typecheck、22 项定向测试、lint 和实际 canonical
+    恢复演练均通过。该失败 run 同样保留。
 
 失败历史未重写为 PASS；每次重试都有新的原始错误或边界证据。
 
