@@ -5,6 +5,7 @@ import {
   KnowledgeEntryIdSchema,
   ProjectIdSchema,
   RequirementRevisionIdSchema,
+  createRequirementRevision,
 } from "@hunter/domain";
 import { z } from "zod";
 
@@ -48,7 +49,20 @@ function authoritativeEntry(
   if (record.requirementRevisionId !== requirementRevisionId) {
     throw new Error("KNOWLEDGE_REQUIREMENT_VIEW_ID_MISMATCH");
   }
-  const rawStatus = record.status;
+  const nested = record.requirementRevision;
+  const revision = nested === undefined
+    ? undefined
+    : createRequirementRevision(nested);
+  if (
+    revision !== undefined
+    && (
+      revision.revisionId !== requirementRevisionId
+      || revision.projectId !== projectId
+    )
+  ) {
+    throw new Error("KNOWLEDGE_REQUIREMENT_VIEW_SCOPE_MISMATCH");
+  }
+  const rawStatus = revision?.status ?? record.status;
   const status = rawStatus === "active" || rawStatus === "approved"
     ? "active"
     : rawStatus === "superseded" || rawStatus === "withdrawn"
@@ -57,13 +71,15 @@ function authoritativeEntry(
   if (status === null) {
     throw new Error("KNOWLEDGE_REQUIREMENT_STATUS_INVALID");
   }
+  const rawTitle = revision?.title ?? record.title;
+  const rawBody = revision?.body ?? record.body;
   const title =
-    typeof record.title === "string" && record.title.trim().length > 0
-      ? record.title.trim()
+    typeof rawTitle === "string" && rawTitle.trim().length > 0
+      ? rawTitle.trim()
       : `Requirement ${requirementRevisionId}`;
   const body =
-    typeof record.body === "string" && record.body.trim().length > 0
-      ? record.body.trim()
+    typeof rawBody === "string" && rawBody.trim().length > 0
+      ? rawBody.trim()
       : JSON.stringify(record);
   return KnowledgeEntrySchema.parse({
     schemaVersion: 1,

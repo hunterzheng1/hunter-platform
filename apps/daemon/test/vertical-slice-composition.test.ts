@@ -351,21 +351,27 @@ describe("production vertical-slice composition", () => {
       ).get()).toEqual({ count: 3 });
       expect(database.prepare(
         "SELECT COUNT(*) AS count FROM knowledge_entries WHERE project_id = ?",
-      ).get(projectId)).toEqual({ count: 3 });
+      ).get(projectId)).toEqual({ count: 4 });
       const knowledge = await composition.app.inject({
         method: "GET",
         url: `/api/v1/projects/${projectId}/knowledge?includeHistorical=true`,
         headers: resumedHeaders,
       });
       expect(knowledge.statusCode).toBe(200);
-      expect(knowledge.json()).toMatchObject({
-        projectId,
-        entries: [
-          { level: "historical" },
-          { level: "historical" },
-          { level: "historical" },
-        ],
-      });
+      expect(knowledge.json()).toMatchObject({ projectId });
+      expect(knowledge.json().entries).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          level: "authoritative",
+          source: expect.objectContaining({
+            type: "requirement_revision",
+            requirementRevisionId: revisionId,
+          }),
+        }),
+        expect.objectContaining({
+          level: "historical",
+          source: expect.objectContaining({ type: "archive" }),
+        }),
+      ]));
 
       const replay = await composition.app.inject({
         method: "GET",

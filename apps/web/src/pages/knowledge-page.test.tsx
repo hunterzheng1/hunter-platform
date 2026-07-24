@@ -3,6 +3,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import {
   KnowledgeEntryIdSchema,
   ProjectIdSchema,
+  RequirementRevisionIdSchema,
   RunIdSchema,
 } from "@hunter/domain";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +18,21 @@ describe("KnowledgePage", () => {
       getKnowledge: vi.fn(async () => ({
         projectId: ProjectIdSchema.parse("prj_knowledge_page"),
         entries: [{
+          schemaVersion: 1 as const,
+          entryId: KnowledgeEntryIdSchema.parse("kne_requirement_page"),
+          level: "authoritative" as const,
+          status: "active" as const,
+          scope: { projectId: ProjectIdSchema.parse("prj_knowledge_page") },
+          summary: "Mobile approval",
+          body: "Resume the same Run after approval.",
+          source: {
+            type: "requirement_revision" as const,
+            projectId: ProjectIdSchema.parse("prj_knowledge_page"),
+            requirementRevisionId: RequirementRevisionIdSchema.parse(
+              "rrv_knowledge_page",
+            ),
+          },
+        }, {
           schemaVersion: 1 as const,
           entryId: KnowledgeEntryIdSchema.parse("kne_knowledge_page"),
           level: "historical" as const,
@@ -46,6 +62,8 @@ describe("KnowledgePage", () => {
     );
 
     expect(await screen.findByRole("heading", { name: "Knowledge" })).not.toBeNull();
+    expect(screen.getByText("authoritative · active")).not.toBeNull();
+    expect(screen.getByText("requirement_revision · rrv_knowledge_page")).not.toBeNull();
     expect(screen.getByText("Archived succeeded Run.")).not.toBeNull();
     expect(screen.getByText("historical · active")).not.toBeNull();
     expect(screen.getByText("archive · run_knowledge_page")).not.toBeNull();

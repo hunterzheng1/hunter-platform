@@ -48,6 +48,7 @@ async function verifyPreload() {
       || result?.forbidden?.length !== 0
       || JSON.stringify(result.groups) !== JSON.stringify([
         "changes",
+        "devices",
         "events",
         "knowledge",
         "projects",

@@ -44,6 +44,8 @@ test("认证的需求到归档知识纵向切片达到 GREEN", async ({
 
   await page.getByRole("button", { name: "查看 Knowledge" }).click();
   await expect(page.getByRole("heading", { name: "Knowledge" })).toBeVisible();
+  await expect(page.getByText("authoritative · active").first()).toBeVisible();
+  await expect(page.getByText(/requirement_revision · rrv_/u).first()).toBeVisible();
   await expect(page.getByText("historical · active").first()).toBeVisible();
   await expect(page.getByText(/archive · run_/u).first()).toBeVisible();
   await expect(page.getByText(/^sha256:[a-f0-9]{64}$/u).first()).toBeVisible();

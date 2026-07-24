@@ -19,6 +19,8 @@ record should retain a hash and a safe summary.
 
 Current records:
 
+- [`vertical-slice-acceptance.md`](vertical-slice-acceptance.md) — Fake-only 首个产品纵向切片、双来源 Knowledge、移动安全与未签名 Windows 打包验收；真实 Provider 仍为 NOT_PROVEN。
+- [`first-vertical-slice-task19.md`](first-vertical-slice-task19.md) — 生产 composition root、两次重启、认证启动器与 Chromium 证据。
 - [`first-vertical-slice-task17.md`](first-vertical-slice-task17.md) — Task 17 本机设备身份、TLS、幂等命令与 PWA 安全验证；不代表真实 Provider 或公网生产验证。
 - [`codex-app-server-runtime.md`](codex-app-server-runtime.md) — bounded Windows Codex app-server approval/interrupt verdict; experimental surface, not production adoption.
 - [`evidence/codex/app-server-runtime.json`](evidence/codex/app-server-runtime.json) — versioned, redacted ephemeral stdio protocol receipts.

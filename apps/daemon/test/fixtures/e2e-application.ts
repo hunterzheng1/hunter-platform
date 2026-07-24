@@ -17,6 +17,7 @@ import {
   LeaseOwnerIdSchema,
   LoopIdSchema,
   OperationIdSchema,
+  ProjectIdSchema,
   RepositoryIdSchema,
   RouteIdSchema,
   StepIdSchema,
@@ -46,7 +47,11 @@ import {
   createWorkspacePathBoundary,
 } from "@hunter/runtime-contracts";
 import { buildApp } from "../../src/app.js";
-import { type ArchiveJobFaultPoint, type LeasedArchiveJob } from "@hunter/knowledge";
+import {
+  rebuildKnowledge,
+  type ArchiveJobFaultPoint,
+  type LeasedArchiveJob,
+} from "@hunter/knowledge";
 import type { VerticalSliceRuntimeFixture } from "../../src/services/application-services.js";
 import { createApplicationComposition } from "../../src/services/composition-root.js";
 
@@ -979,9 +984,13 @@ export function createE2eDaemonComposition(input: {
     if (services.archiveWorker === undefined) {
       throw new Error("E2E_ARCHIVE_WORKER_NOT_WIRED");
     }
+    let idle = false;
     for (let index = 0; index < 100; index += 1) {
       const result = await services.archiveWorker.runOnce();
-      if (result === "idle") return;
+      if (result === "idle") {
+        idle = true;
+        break;
+      }
       if (result !== "completed") {
         const row = input.database.prepare(
           "SELECT last_error FROM archive_jobs WHERE status = 'needs_attention' ORDER BY updated_at DESC LIMIT 1",
@@ -989,7 +998,18 @@ export function createE2eDaemonComposition(input: {
         throw new Error(`E2E_ARCHIVE_NOT_COMPLETED:${row?.last_error ?? "unknown"}`);
       }
     }
-    throw new Error("E2E_ARCHIVE_DRAIN_LIMIT");
+    if (!idle) throw new Error("E2E_ARCHIVE_DRAIN_LIMIT");
+    services.projectionRunner.runIncremental();
+    const projectRows = input.database.prepare(
+      "SELECT DISTINCT project_id FROM archive_jobs WHERE status = 'completed' ORDER BY project_id",
+    ).all() as unknown as Array<{ readonly project_id: string }>;
+    for (const row of projectRows) {
+      await rebuildKnowledge({
+        database: input.database,
+        projectId: ProjectIdSchema.parse(row.project_id),
+        now: input.now ?? (() => new Date(FIXED_TIME)),
+      });
+    }
   };
 
   const releaseCurrentLease = async (leaseId: string): Promise<void> => {

@@ -4,6 +4,27 @@ import type { HunterApi, KnowledgeResponse } from "../api/client.js";
 
 type KnowledgeApi = Pick<HunterApi, "getKnowledge">;
 
+function provenanceFor(
+  entry: KnowledgeResponse["entries"][number],
+): { readonly label: string; readonly digest?: string } {
+  switch (entry.level) {
+    case "authoritative":
+      return {
+        label: `requirement_revision · ${entry.source.requirementRevisionId}`,
+      };
+    case "experiential":
+      return {
+        label: `evidence · ${entry.source.evidenceId}`,
+        digest: `sha256:${entry.source.contentHash}`,
+      };
+    case "historical":
+      return {
+        label: `archive · ${entry.source.runId}`,
+        digest: `sha256:${entry.source.manifestHash}`,
+      };
+  }
+}
+
 export function KnowledgePage({
   projectId,
   api,
@@ -50,21 +71,19 @@ export function KnowledgePage({
         {knowledge?.entries.length === 0 ? <p>No Knowledge entries yet.</p> : null}
         <ul className="project-list">
           {knowledge?.entries.map((entry) => {
-            const provenance = entry.level === "historical"
-              ? entry.source
-              : undefined;
+            const provenance = provenanceFor(entry);
             return (
               <li className="project-row" key={entry.entryId}>
                 <div>
                   <strong>{entry.summary}</strong>
                   <span>{entry.level} · {entry.status}</span>
                   <p>{entry.body}</p>
-                  {provenance === undefined ? null : (
-                    <footer>
-                      <span>archive · {provenance.runId}</span>
-                      <code>sha256:{provenance.manifestHash}</code>
-                    </footer>
-                  )}
+                  <footer>
+                    <span>{provenance.label}</span>
+                    {provenance.digest === undefined
+                      ? null
+                      : <code>{provenance.digest}</code>}
+                  </footer>
                 </div>
               </li>
             );

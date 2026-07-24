@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/readiness-test.js";
 
 test.afterEach(async ({ page }) => {
   if (page.isClosed()) return;
