@@ -3,11 +3,13 @@ import {
   ProjectIdSchema,
   RequirementRevisionIdSchema,
   RunIdSchema,
+  canonicalSha256,
 } from "@hunter/domain";
 import { describe, expect, it } from "vitest";
 
 import {
   KnowledgeEntrySchema,
+  KnowledgeSelectionReceiptSchema,
   VerifiedArchiveReceiptSchema,
 } from "./index.js";
 
@@ -199,5 +201,114 @@ describe("KnowledgeEntry", () => {
         ...fields,
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("KnowledgeSelectionReceipt", () => {
+  it("exports a strict runtime schema for persisted Handoff selection receipts", async () => {
+    const knowledgeModule = await import("./index.js") as Record<string, unknown>;
+
+    expect(knowledgeModule.KnowledgeSelectionReceiptSchema).toBeDefined();
+  });
+
+  it("accepts only a canonical hash-bound provider-neutral receipt", () => {
+    const receiptBase = {
+      schemaVersion: 1 as const,
+      projectId,
+      selectedEntryIds: ["kne_receipt_selected"],
+      candidates: [{
+        entryId: "kne_receipt_selected",
+        scope: { projectId },
+        source: {
+          type: "requirement_revision" as const,
+          referenceId: "rrv_receipt_selected",
+        },
+        decision: "selected" as const,
+        reason: "selected_by_policy" as const,
+        authority: "authoritative" as const,
+        confidence: null,
+        validity: "active" as const,
+        contentHash: "f".repeat(64),
+      }],
+      requiresExplicitSelection: false,
+      conflicts: [],
+      budget: {
+        maxItems: 4,
+        maxBytes: 16_384,
+        maxTokens: 16_384,
+        usedItems: 1,
+        usedBytes: 64,
+        usedTokens: 64,
+        truncated: false,
+        omittedEntryIds: [],
+      },
+    };
+    const candidate = {
+      ...receiptBase,
+      selectionHash: canonicalSha256(receiptBase),
+    };
+
+    expect(KnowledgeSelectionReceiptSchema.parse(candidate)).toEqual(candidate);
+    expect(KnowledgeSelectionReceiptSchema.safeParse({
+      ...candidate,
+      selectionHash: "0".repeat(64),
+    }).success).toBe(false);
+    expect(KnowledgeSelectionReceiptSchema.safeParse({
+      ...candidate,
+      runtimeProviderId: "private",
+    }).success).toBe(false);
+    for (const invalidBase of [
+      {
+        ...receiptBase,
+        candidates: receiptBase.candidates.map((item) => ({
+          ...item,
+          scope: { projectId: otherProjectId },
+        })),
+      },
+      {
+        ...receiptBase,
+        selectedEntryIds: [],
+      },
+      {
+        ...receiptBase,
+        budget: {
+          ...receiptBase.budget,
+          usedItems: 0,
+        },
+      },
+    ]) {
+      expect(KnowledgeSelectionReceiptSchema.safeParse({
+        ...invalidBase,
+        selectionHash: canonicalSha256(invalidBase),
+      }).success).toBe(false);
+    }
+
+    const contradictoryConflictBase = {
+      ...receiptBase,
+      candidates: [{
+        ...receiptBase.candidates[0]!,
+        reason: "explicit_conflict_selection" as const,
+      }, {
+        ...receiptBase.candidates[0]!,
+        entryId: "kne_receipt_other",
+        source: {
+          type: "requirement_revision" as const,
+          referenceId: "rrv_receipt_other",
+        },
+        decision: "excluded" as const,
+        reason: "conflict_not_selected" as const,
+        contentHash: "e".repeat(64),
+      }],
+      conflicts: [{
+        claimHash: "d".repeat(64),
+        entryIds: ["kne_receipt_selected", "kne_receipt_other"],
+        resolution: "explicit_selection" as const,
+        selectedEntryId: "kne_receipt_other",
+      }],
+    };
+    expect(KnowledgeSelectionReceiptSchema.safeParse({
+      ...contradictoryConflictBase,
+      selectionHash: canonicalSha256(contradictoryConflictBase),
+    }).success).toBe(false);
   });
 });
