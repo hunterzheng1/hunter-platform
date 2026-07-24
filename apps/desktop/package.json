@@ -19,7 +19,7 @@
     "pack:win": "npm run build:resources && npm run build && npm run smoke:sidecar && npm run smoke:preload && electron-builder --win nsis --x64"
   },
   "devDependencies": {
-    "electron": "37.10.3",
+    "electron": "41.10.2",
     "electron-builder": "^26.0.12",
     "esbuild": "0.28.1"
   },
@@ -27,7 +27,6 @@
     "appId": "local.hunter.platform",
     "productName": "Hunter Platform",
     "asar": true,
-    "electronDist": "../../node_modules/electron/dist",
     "directories": {
       "output": "dist-installers"
     },

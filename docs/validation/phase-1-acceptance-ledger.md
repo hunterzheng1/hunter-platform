@@ -25,7 +25,8 @@
 - 测试夹具修正：首版 parser 误把 Markdown 表头 `ID` 当作验收项，1/3 失败；
 - GREEN：修正 parser 后精确测试 3/3 通过；
 - 根门禁：`npm run verify:foundation` PASS，102 test files / 878 tests；
-- `npm install` 仍只报告 4 个 high severity 摘要，未运行 registry audit。
+- Task 2 基线的 `npm install` 报告 4 个 high severity 摘要；Task 3 精确升级
+  Electron 后当前锁文件报告 3 个，未运行 registry audit。
 
 ## 逐项台账
 
@@ -92,7 +93,7 @@
 | BLOCK-08 | CONTRACT_ONLY | device scope/policy | [Task 17 evidence](first-vertical-slice-task17.md) | Gate R 用真实设备验证不能绕过高危策略 | Device |
 | BLOCK-09 | CONTRACT_ONLY | Archive provenance | [PR #5 readiness](first-vertical-slice-pr5-readiness.md) | H1 增加缺失/hash 不符 fail-closed | Knowledge |
 | BLOCK-10 | CONTRACT_ONLY | active/verified policy | [Vertical slice acceptance](vertical-slice-acceptance.md) | H2 增加 superseded/withdrawn、冲突和 injection 测试 | Knowledge |
-| SUP-01 | NOT_PROVEN | npm install 摘要为 4 high | [Phase 1 baseline](phase-1-hardening-baseline.md) | 分类 production reachability、修复版本和破坏性升级风险 | Security |
+| SUP-01 | NOT_PROVEN | 当前 npm install 摘要为 3 high | [Task 3 migration evidence](phase-1-versioned-migrations.md) | 分类 production reachability、修复版本和破坏性升级风险 | Security |
 | SUP-02 | NOT_RUN | registry audit 未授权 | [Phase 1 baseline](phase-1-hardening-baseline.md) | 用户明确授权发送依赖元数据后运行并保存脱敏摘要 | Owner/Security |
 
 ## 当前结论
@@ -101,5 +102,5 @@
 - 其余产品链路最高为 `CONTRACT_ONLY`；
 - Orca 只有 runtime discovery 原子项通过，Provider 采用仍为 `NOT_PROVEN`；
 - Codex、CodeBuddy、Cursor 和真实移动设备均没有完整 Phase 1 通过证据；
-- 4 个 high severity 依赖项尚未分类，不能写成已修复或可利用；
+- 3 个 high severity 依赖项尚未分类，不能写成已修复或可利用；
 - 生产 Provider、代码签名、分发和发布保持阻断。

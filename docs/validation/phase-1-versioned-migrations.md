@@ -25,6 +25,8 @@
   fail closed；
 - desktop sidecar 动态复制完整且连续的 SQL migration 集合，不再硬编码
   `001-core.sql`；
+- desktop 精确锁定 Electron 41.10.2；其内嵌 Node 24.18.0，并提供 migration
+  runner 所需的 SQLite authorizer，避免宿主 Node 24 与 sidecar Node 22 的能力漂移；
 - 本批 002 不是破坏性迁移，因此没有生成 backup receipt；runner 已冻结显式
   receipt gate，实际备份服务与恢复演练属于 Task 4。
 
@@ -87,19 +89,34 @@
 16. 最终审阅分别用 `CREATE TABLE IF NOT EXISTS` + replace 和只改变 DEFAULT
     字面量空白复现 authorizer/指纹边界；执行前 table snapshot 与 token-aware SQL
     规范化完成后，精确 runner 29/29 通过。
+17. PR #8 首轮 GitHub Actions 的 6 项 Linux/Windows quality 与 Linux vertical
+    slice 通过，但两次 Windows vertical slice 均在 `smoke:sidecar` 真实失败。
+    同一 HEAD 在本机稳定复现；探针证明宿主 Node 24.14.0 提供
+    `DatabaseSync.setAuthorizer`，原 Electron 37.10.3 内嵌 Node 22.21.1 且该 API
+    不存在。精确锁定仍带 `postinstall` 的 Electron 41.10.2 后，实际运行时报告
+    Node 24.18.0、authorizer 可用，desktop build 与双 sidecar smoke 转为 GREEN。
+18. 修复后的首次 `pack:win` 已通过 sidecar/preload smoke，但在 electron-builder
+    解析固定 `../../node_modules/electron/dist` 时真实失败；Electron 41 被 npm
+    合法放在 workspace 内，证明配置错误依赖 hoist 布局。新增配置测试先得到该
+    固定路径并 RED；移除 `electronDist`、交由 electron-builder 按依赖解析后，
+    测试与完整 NSIS 打包均 GREEN。
 
 ## 本机验证
 
 | 命令 | 结果 |
 |---|---|
+| `npm install` | PASS；锁文件同步；报告 3 个 high severity 汇总，未据此推断生产影响 |
 | `npx vitest run packages/storage/src/migration-runner.test.ts` | PASS；1 file / 29 tests |
 | `npx vitest run packages/storage/src apps/daemon/test/sqlite-application-services.test.ts apps/desktop/src/migration-resources.test.ts` | PASS；7 files / 72 tests |
+| `npx vitest run packages/storage/src/migration-runner.test.ts apps/desktop/src/migration-resources.test.ts apps/desktop/src/daemon-supervisor.test.ts apps/desktop/src/packaging-config.test.ts` | PASS；4 files / 42 tests |
 | `npm run build -w @hunter/desktop` | PASS；sidecar 含 001、002 |
+| `npm run smoke:sidecar -w @hunter/desktop` | PASS；2 个并发 sidecar readiness/auth/definition chain 通过且端口不同 |
+| `npm run pack:win -w @hunter/desktop` | PASS；sidecar/preload smoke 与 Windows NSIS 打包通过；安装器 `NotSigned` |
 | `npm run lint` | PASS |
 | `npm run typecheck` | PASS |
-| `npm test` | PASS；104 files / 912 tests |
+| `npm test` | PASS；105 files / 913 tests |
 | `npm run build` | PASS |
-| `npm run verify:foundation` | PASS；在宿主 Windows 权限边界运行，含 lint、typecheck、104 files / 912 tests、rebuild、recovery、build |
+| `npm run verify:foundation` | PASS；在宿主 Windows 权限边界运行，含 lint、typecheck、105 files / 913 tests、rebuild、recovery、build |
 | `git diff --check` | PASS |
 
 desktop 构建产物检查只观察到：
@@ -111,9 +128,9 @@ desktop 构建产物检查只观察到：
 
 ## 远端与产品状态
 
-- 本分支 GitHub Actions 尚未运行，状态为 `PENDING`；
-- Ubuntu checkout 的 checksum 可移植性有自动测试，但 Ubuntu CI 尚未实际验证本
-  HEAD；
+- PR #8 首轮两次 GitHub Actions 共 8 项检查：6 项 PASS，两项 Windows
+  vertical slice 因 Electron 37 内嵌 Node 22 不支持 SQLite authorizer 而 FAIL；
+- Electron 41.10.2 修复尚未推送，修复 HEAD 的远端 CI 状态为 `PENDING`；
 - Fake Runtime、真实 Provider、真实设备和代码签名状态不因本任务改变；
 - Provider 仍为 `NOT_PROVEN`，Fake 仍为 `CONTRACT_ONLY`；
 - 未发布、未签名、未部署，未运行生产升级或真实用户数据迁移。
