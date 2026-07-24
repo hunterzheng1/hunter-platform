@@ -101,8 +101,20 @@ readiness 只包含 schema version、loopback origin 和相对 storage-state 路
 | Chromium vertical slice | PASS，1 test |
 | `git diff --check` | PASS |
 
-## 待远端验证
+## 远端 CI
 
-本文件创建时 Task 19 尚未推送，因此 Windows/Ubuntu GitHub Actions 均为
-`PENDING`，不能声明通过。真实 Provider、真实凭据、生产签名、商店发布和远端
-部署均未运行。
+本文件初次创建时 Task 19 尚未推送，Windows/Ubuntu GitHub Actions 如实记录为
+`PENDING`。推送提交 `75882c07fed0cd91d238a07694080eaea5cae136`
+后，两类触发均已核对为 `PASS`：
+
+| 触发 | Run | Ubuntu | Windows |
+| --- | --- | --- | --- |
+| push | `30062362687` | PASS（1m02s） | PASS（1m50s） |
+| pull_request | `30062364290` | PASS（59s） | PASS（2m04s） |
+
+四个 job 的 `npm ci`、lint、typecheck、unit、rebuild、recovery 和 build
+步骤均成功。GitHub 对 `actions/checkout@v4`、`actions/setup-node@v4`
+给出 Node 20 deprecation 注释，同时明确这些 action 已被强制在 Node 24
+执行；该注释不是失败，但后续应在 action 发布兼容版本时升级。
+
+真实 Provider、真实凭据、生产签名、商店发布和远端部署均未运行。
