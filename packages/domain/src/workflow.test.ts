@@ -1,9 +1,19 @@
 import { describe, expect, it } from "vitest";
 
+import { WorkflowIdSchema } from "./ids.js";
 import { LoopIdSchema, RouteIdSchema, StepIdSchema, createWorkflowRevision } from "./index.js";
 import { stepIds, validWorkflowInput } from "./workflow-test-fixtures.js";
 
 describe("WorkflowRevision", () => {
+  it("binds every published revision to a stable Workflow identity", () => {
+    const workflowId = WorkflowIdSchema.parse("wfl_workflow0001");
+
+    expect(createWorkflowRevision({
+      ...validWorkflowInput(),
+      workflowId,
+    }).workflowId).toBe(workflowId);
+  });
+
   it("freezes an executable graph covering gate, timeout, cancel, verifier error, terminal, subflow, and a declared Loop", () => {
     const workflow = createWorkflowRevision(validWorkflowInput());
 

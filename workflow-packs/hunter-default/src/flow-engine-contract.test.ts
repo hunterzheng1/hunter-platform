@@ -6,6 +6,7 @@ import {
   RouteIdSchema,
   RunIdSchema,
   TaskIdSchema,
+  WorkflowIdSchema,
   WorkflowRevisionIdSchema,
   canonicalSha256,
   createExecutionPlan,
@@ -92,7 +93,7 @@ class ConsumerFlowStore implements FlowStore {
 }
 
 function workflow(workflowId: HunterDefaultWorkflowId) {
-  return loadHunterDefaultPack().workflows.find((candidate) => candidate.workflowId === workflowId)!;
+  return loadHunterDefaultPack().workflows.find((candidate) => candidate.workflowKey === workflowId)!;
 }
 
 function executionPlan(taskWorkflowRevisionId: string) {
@@ -141,6 +142,7 @@ function terminalChildWorkflow(): WorkflowRevision {
   const source = workflow("hunter.task-delivery");
   const complete = source.steps.find(({ stepId }) => stepId === "stp_task_complete_v1")!;
   return createWorkflowRevision({
+    workflowId: WorkflowIdSchema.parse("wfl_pack_terminal_child"),
     workflowRevisionId: WorkflowRevisionIdSchema.parse("wfr_pack_terminal_child"),
     title: "Pack test terminal child",
     status: "published",
@@ -168,11 +170,11 @@ function terminalChildWorkflow(): WorkflowRevision {
 }
 
 function isolateLoopCost(
-  workflowRevision: WorkflowRevision & { readonly workflowId?: unknown },
+  workflowRevision: WorkflowRevision & { readonly workflowKey?: unknown },
 ): WorkflowRevision {
-  const { workflowFingerprint, workflowId, ...revision } = workflowRevision;
+  const { workflowFingerprint, workflowKey, ...revision } = workflowRevision;
   void workflowFingerprint;
-  void workflowId;
+  void workflowKey;
   return createWorkflowRevision({
     ...revision,
     loops: revision.loops.map((loop) => ({

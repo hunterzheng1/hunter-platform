@@ -9,9 +9,9 @@ import {
 
 function validWorkflowAsset() {
   const workflow = loadHunterDefaultPack().workflows[0]!;
-  const { workflowId, workflowFingerprint, ...revision } = workflow;
+  const { workflowKey, workflowFingerprint, ...revision } = workflow;
   void workflowFingerprint;
-  return { workflowId, revision };
+  return { workflowId: workflowKey, revision };
 }
 
 describe("hunter-default workflow pack", () => {
@@ -21,17 +21,20 @@ describe("hunter-default workflow pack", () => {
     expect(pack.packId).toBe("hunter-default");
     expect(pack.version).toBe("1.0.0");
     expect(
-      pack.workflows.map(({ workflowId, workflowRevisionId }) => ({
+      pack.workflows.map(({ workflowKey, workflowId, workflowRevisionId }) => ({
+        workflowKey,
         workflowId,
         workflowRevisionId,
       })),
     ).toEqual([
       {
-        workflowId: "hunter.change-delivery",
+        workflowKey: "hunter.change-delivery",
+        workflowId: "wfl_hunter_change_delivery",
         workflowRevisionId: "wfr_hunter_change_delivery_v1",
       },
       {
-        workflowId: "hunter.task-delivery",
+        workflowKey: "hunter.task-delivery",
+        workflowId: "wfl_hunter_task_delivery",
         workflowRevisionId: "wfr_hunter_task_delivery_v1",
       },
     ]);
@@ -39,7 +42,7 @@ describe("hunter-default workflow pack", () => {
 
   it("routes the root Change workflow through approval, Task dispatch, integration, and knowledge", () => {
     const root = loadHunterDefaultPack().workflows.find(
-      ({ workflowId }) => workflowId === "hunter.change-delivery",
+      ({ workflowKey }) => workflowKey === "hunter.change-delivery",
     )!;
     const routes = root.routes.map(({ fromStepId, outcome, toStepId }) => ({
       fromStepId,
@@ -137,7 +140,7 @@ describe("hunter-default workflow pack", () => {
 
   it("routes Task delivery through two bounded feedback loops and an independent review session", () => {
     const task = loadHunterDefaultPack().workflows.find(
-      ({ workflowId }) => workflowId === "hunter.task-delivery",
+      ({ workflowKey }) => workflowKey === "hunter.task-delivery",
     )!;
     const loopsBySource = Object.fromEntries(task.loops.map((loop) => [loop.fromStepId, loop]));
 
@@ -269,7 +272,7 @@ describe("hunter-default workflow pack", () => {
   it("normalizes accepted workflow permutations to root then task", () => {
     const [root, task] = loadHunterDefaultPack().workflows;
 
-    expect(createHunterDefaultPack([task!, root!]).workflows.map(({ workflowId }) => workflowId)).toEqual([
+    expect(createHunterDefaultPack([task!, root!]).workflows.map(({ workflowKey }) => workflowKey)).toEqual([
       "hunter.change-delivery",
       "hunter.task-delivery",
     ]);

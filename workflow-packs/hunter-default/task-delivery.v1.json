@@ -1,6 +1,7 @@
 {
   "workflowId": "hunter.task-delivery",
   "revision": {
+    "workflowId": "wfl_hunter_task_delivery",
     "workflowRevisionId": "wfr_hunter_task_delivery_v1",
     "title": "Hunter Task delivery",
     "status": "published",

@@ -5,9 +5,16 @@ import {
   LoopIdSchema,
   RouteIdSchema,
   StepIdSchema,
+  WorkflowIdSchema,
   WorkflowRevisionIdSchema,
 } from "./ids.js";
-import type { LoopId, RouteId, StepId, WorkflowRevisionId } from "./ids.js";
+import type {
+  LoopId,
+  RouteId,
+  StepId,
+  WorkflowId,
+  WorkflowRevisionId,
+} from "./ids.js";
 import {
   assertUnique,
   canonicalJson,
@@ -269,6 +276,7 @@ export const LoopPolicySchema = z
   .strict();
 
 export interface WorkflowRevision {
+  readonly workflowId: WorkflowId;
   readonly workflowRevisionId: WorkflowRevisionId;
   readonly title: string;
   readonly status: "published";
@@ -282,6 +290,7 @@ export interface WorkflowRevision {
 
 const WorkflowRevisionInputSchema = z
   .object({
+    workflowId: WorkflowIdSchema,
     workflowRevisionId: WorkflowRevisionIdSchema,
     title: z.string().trim().min(1),
     status: z.literal("published"),
@@ -459,6 +468,7 @@ export function createWorkflowRevision(input: unknown): Readonly<WorkflowRevisio
   const routes = [...parsed.routes].sort((left, right) => compareCanonicalText(left.routeId, right.routeId));
   const loops = [...parsed.loops].sort((left, right) => compareCanonicalText(left.loopId, right.loopId));
   const common = {
+    workflowId: parsed.workflowId,
     workflowRevisionId: parsed.workflowRevisionId,
     title: parsed.title,
     status: parsed.status,

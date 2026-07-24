@@ -58,6 +58,7 @@ import { createApplicationComposition } from "../../src/services/composition-roo
 
 const FIXED_TIME = "2026-07-23T00:00:00.000Z";
 const repositoryId = RepositoryIdSchema.parse("rep_e2econtract01");
+const workflowId = WorkflowIdSchema.parse("wfl_e2econtract01");
 const workflowRevisionId =
   WorkflowRevisionIdSchema.parse("wfr_e2econtract01");
 const rootWorkflowRevisionId =
@@ -74,6 +75,7 @@ type StoredRequirementView = RequirementRevisionHttpResponse;
 
 function e2eWorkflow() {
   return createWorkflowRevision({
+    workflowId,
     workflowRevisionId,
     title: "E2E contract workflow",
     status: "published",
@@ -159,6 +161,7 @@ function e2eWorkflow() {
 
 function e2eRootWorkflow() {
   return createWorkflowRevision({
+    workflowId: rootWorkflowId,
     workflowRevisionId: rootWorkflowRevisionId,
     title: "E2E root Task dispatch",
     status: "published",
@@ -297,6 +300,10 @@ function archiveInputFor(
     root.binding.changeRevisionId,
   );
   if (change === null) throw new Error("E2E_ARCHIVE_CHANGE_MISSING");
+  const workflow = services.repositories.getWorkflowRevision(
+    root.binding.workflowRevisionId,
+  );
+  if (workflow === null) throw new Error("E2E_ARCHIVE_WORKFLOW_MISSING");
   return {
     schemaVersion: 2 as const,
     projectId: job.projectId,
@@ -311,7 +318,7 @@ function archiveInputFor(
       changeRevisionId: root.binding.changeRevisionId,
     },
     executionPlanId: root.binding.executionPlanId,
-    workflowId: rootWorkflowId,
+    workflowId: workflow.workflowId,
     workflowRevisionId: root.binding.workflowRevisionId,
     runGraph: {
       rootRunId: job.runId,

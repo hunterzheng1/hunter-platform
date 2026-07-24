@@ -379,13 +379,32 @@ function humanGateCanceledWorkflow(): WorkflowRevision {
 
 function subflowOnlyWorkflow(): WorkflowRevision {
   const input = validWorkflowInput();
-  const subflow = input.steps[2]!;
+  const subflow = {
+    ...input.steps[2]!,
+    permissionPolicy: {
+      decision: "allow" as const,
+      permissions: ["workflow.dispatch-task"],
+    },
+  } as (typeof input.steps)[number];
   input.steps = [subflow];
   input.entryStepId = subflow.stepId;
   input.routes = [
     { routeId: RouteIdSchema.parse("rte_sub_only_ok"), fromStepId: subflow.stepId, outcome: "passed", priority: 0, toStepId: null },
     { routeId: RouteIdSchema.parse("rte_sub_only_no"), fromStepId: subflow.stepId, outcome: "failed", priority: 0, toStepId: null },
     { routeId: RouteIdSchema.parse("rte_sub_only_x"), fromStepId: subflow.stepId, outcome: "canceled", priority: 0, toStepId: null },
+  ];
+  input.loops = [];
+  return createWorkflowRevision(input);
+}
+
+function unrelatedSubflowWorkflow(): WorkflowRevision {
+  const input = validWorkflowInput();
+  const subflow = input.steps[2]!;
+  input.steps = [subflow];
+  input.entryStepId = subflow.stepId;
+  input.routes = [
+    { routeId: RouteIdSchema.parse("rte_unrelated_ok"), fromStepId: subflow.stepId, outcome: "passed", priority: 0, toStepId: null },
+    { routeId: RouteIdSchema.parse("rte_unrelated_no"), fromStepId: subflow.stepId, outcome: "failed", priority: 0, toStepId: null },
   ];
   input.loops = [];
   return createWorkflowRevision(input);
@@ -1022,6 +1041,20 @@ describe("authoritative FlowEngine", () => {
     })).toThrow(/TASK_FANOUT_REQUIRES_ACTIVE_SUBFLOW/u);
     expect(store.commits).toHaveLength(commitsBefore);
     expect(current(store).scheduledChildren).toEqual([]);
+  });
+
+  it("rejects Task fan-out from an unrelated subflow Step", () => {
+    const { store, engine, actor, runId } = engineHarness(
+      unrelatedSubflowWorkflow(),
+    );
+
+    expect(() => engine.handle({
+      type: "ScheduleTaskFanOut",
+      runId,
+      expectedVersion: current(store).version,
+      idempotencyKey: "fanout-unrelated-subflow",
+      actor,
+    })).toThrow(/TASK_FANOUT_REQUIRES_DISPATCH_CONTRACT/u);
   });
 
   it("records one deterministic Task fan-out decision and rejects duplicate active scheduling", () => {

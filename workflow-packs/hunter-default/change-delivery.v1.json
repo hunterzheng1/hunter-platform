@@ -1,6 +1,7 @@
 {
   "workflowId": "hunter.change-delivery",
   "revision": {
+    "workflowId": "wfl_hunter_change_delivery",
     "workflowRevisionId": "wfr_hunter_change_delivery_v1",
     "title": "Hunter Change delivery",
     "status": "published",

@@ -20,7 +20,7 @@ const WorkflowAssetSchema = z
 export type HunterDefaultWorkflowId = z.infer<typeof HunterDefaultWorkflowIdSchema>;
 
 export type HunterDefaultWorkflow = Readonly<
-  WorkflowRevision & { readonly workflowId: HunterDefaultWorkflowId }
+  WorkflowRevision & { readonly workflowKey: HunterDefaultWorkflowId }
 >;
 
 export interface HunterDefaultPack {
@@ -32,6 +32,10 @@ export interface HunterDefaultPack {
 const WORKFLOW_REVISION_BY_ID: Readonly<Record<HunterDefaultWorkflowId, string>> = {
   "hunter.change-delivery": "wfr_hunter_change_delivery_v1",
   "hunter.task-delivery": "wfr_hunter_task_delivery_v1",
+};
+const STABLE_WORKFLOW_BY_ID: Readonly<Record<HunterDefaultWorkflowId, string>> = {
+  "hunter.change-delivery": "wfl_hunter_change_delivery",
+  "hunter.task-delivery": "wfl_hunter_task_delivery",
 };
 
 function assetPath(name: string): string {
@@ -45,10 +49,13 @@ function assetPath(name: string): string {
 export function parseWorkflowAsset(input: unknown): HunterDefaultWorkflow {
   const asset = WorkflowAssetSchema.parse(input);
   const revision = createWorkflowRevision(asset.revision);
-  if (revision.workflowRevisionId !== WORKFLOW_REVISION_BY_ID[asset.workflowId]) {
+  if (
+    revision.workflowId !== STABLE_WORKFLOW_BY_ID[asset.workflowId]
+    || revision.workflowRevisionId !== WORKFLOW_REVISION_BY_ID[asset.workflowId]
+  ) {
     throw new Error("WORKFLOW_ASSET_IDENTITY_MISMATCH");
   }
-  return deepFreeze({ workflowId: asset.workflowId, ...revision });
+  return deepFreeze({ workflowKey: asset.workflowId, ...revision });
 }
 
 function readWorkflow(name: string): HunterDefaultWorkflow {
@@ -58,13 +65,13 @@ function readWorkflow(name: string): HunterDefaultWorkflow {
 export function createHunterDefaultPack(
   workflows: readonly HunterDefaultWorkflow[],
 ): Readonly<HunterDefaultPack> {
-  const identities = new Set(workflows.map(({ workflowId }) => workflowId));
+  const identities = new Set(workflows.map(({ workflowKey }) => workflowKey));
   if (workflows.length !== 2 || identities.size !== 2 || Object.keys(WORKFLOW_REVISION_BY_ID).some((id) => !identities.has(id as HunterDefaultWorkflowId))) {
     throw new Error("WORKFLOW_PACK_IDENTITIES_INVALID");
   }
   const orderedWorkflows = [
-    workflows.find(({ workflowId }) => workflowId === "hunter.change-delivery")!,
-    workflows.find(({ workflowId }) => workflowId === "hunter.task-delivery")!,
+    workflows.find(({ workflowKey }) => workflowKey === "hunter.change-delivery")!,
+    workflows.find(({ workflowKey }) => workflowKey === "hunter.task-delivery")!,
   ];
   return deepFreeze({
     packId: "hunter-default",

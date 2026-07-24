@@ -338,6 +338,14 @@ export class FlowEngine {
     if (definition?.kind !== "subflow") {
       throw new Error("TASK_FANOUT_REQUIRES_ACTIVE_SUBFLOW");
     }
+    if (
+      definition.permissionPolicy.decision !== "allow"
+      || !definition.permissionPolicy.permissions.includes(
+        "workflow.dispatch-task",
+      )
+    ) {
+      throw new Error("TASK_FANOUT_REQUIRES_DISPATCH_CONTRACT");
+    }
     const plan = this.requirePlan(state.binding.executionPlanId);
     const actual = this.store.childRuns(command.runId)
       .filter((child) => child.binding.subjectKind === "task")
@@ -1016,6 +1024,14 @@ export class FlowEngine {
     const definition = workflow.steps.find(({ stepId }) => stepId === step.stepId);
     if (definition?.kind !== "subflow") {
       throw new Error("TASK_FANIN_REQUIRES_ACTIVE_SUBFLOW");
+    }
+    if (
+      definition.permissionPolicy.decision !== "allow"
+      || !definition.permissionPolicy.permissions.includes(
+        "workflow.dispatch-task",
+      )
+    ) {
+      throw new Error("TASK_FANIN_REQUIRES_DISPATCH_CONTRACT");
     }
     const selected = selectRoute(workflow, step.stepId, "passed", {
       childStatus: "succeeded",

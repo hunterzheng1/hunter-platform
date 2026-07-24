@@ -11,7 +11,7 @@ import {
   OperationIdSchema, ProjectIdSchema, RepositoryIdSchema, RequirementIdSchema,
   RequirementRevisionIdSchema, RunIdSchema, RuntimeProviderIdSchema, TaskIdSchema,
   WorkspaceIdSchema, WorkspaceLeaseIdSchema, WorktreeIdSchema, WriterLeaseIdSchema,
-  WorkflowRevisionIdSchema, createChangeRevision, createProject, createRequirementRevision,
+  WorkflowIdSchema, WorkflowRevisionIdSchema, createChangeRevision, createProject, createRequirementRevision,
   createWorkflowRevision, canonicalSha256,
 } from "@hunter/domain";
 import { createWorkflowRunBinding, type RunBudgetLimit } from "@hunter/flow-engine";
@@ -29,14 +29,14 @@ const ids = {
   requirement: RequirementIdSchema.parse("req_chain00001"), requirementRevision: RequirementRevisionIdSchema.parse("rrv_chain00001"),
   change: ChangeIdSchema.parse("chg_chain00001"), changeRevision: ChangeRevisionIdSchema.parse("crv_chain00001"),
   plan: ExecutionPlanIdSchema.parse("epl_chain00001"), task: TaskIdSchema.parse("tsk_chain00001"),
-  workflow: WorkflowRevisionIdSchema.parse("wfr_chain00001"), rootWorkflow: WorkflowRevisionIdSchema.parse("wfr_chainroot01"), profile: AgentProfileIdSchema.parse("apr_chain00001"),
+  workflowId: WorkflowIdSchema.parse("wfl_chain00001"), workflow: WorkflowRevisionIdSchema.parse("wfr_chain00001"), rootWorkflowId: WorkflowIdSchema.parse("wfl_chainroot01"), rootWorkflow: WorkflowRevisionIdSchema.parse("wfr_chainroot01"), profile: AgentProfileIdSchema.parse("apr_chain00001"),
   root: RunIdSchema.parse("run_chain00001"), cancelRoot: RunIdSchema.parse("run_cancel0001"), owner: LeaseOwnerIdSchema.parse("own_chain00001"), workspace: WorkspaceIdSchema.parse("wsp_chain00001"),
 };
 
 function oneStepWorkflow() {
   const input = validWorkflowInput();
   const step = { ...input.steps[0]!, requiredCapabilities: ["launch" as const], agentProfileSelector: { strategy: "fixed" as const, agentProfileIds: [ids.profile] } };
-  return createWorkflowRevision({ ...input, workflowRevisionId: ids.workflow, steps: [step], entryStepId: step.stepId, routes: [
+  return createWorkflowRevision({ ...input, workflowId: ids.workflowId, workflowRevisionId: ids.workflow, steps: [step], entryStepId: step.stepId, routes: [
     { routeId: "rte_chain_pass1", fromStepId: step.stepId, outcome: "passed", priority: 0, toStepId: null },
     { routeId: "rte_chain_fail1", fromStepId: step.stepId, outcome: "failed", priority: 0, toStepId: null },
   ], loops: [] });
@@ -85,9 +85,14 @@ function rootWorkflow() {
     executor: { kind: "subflow" as const, selector: ids.workflow },
     agentProfileSelector: undefined,
     requiredCapabilities: [],
+    permissionPolicy: {
+      decision: "allow" as const,
+      permissions: ["workflow.dispatch-task"],
+    },
   };
   return createWorkflowRevision({
     ...input,
+    workflowId: ids.rootWorkflowId,
     workflowRevisionId: ids.rootWorkflow,
     title: "Foundation root task graph",
     steps: [step],
