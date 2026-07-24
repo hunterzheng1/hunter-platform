@@ -8,6 +8,7 @@ import {
   ProjectIdSchema,
   RunIdSchema,
   RuntimeProviderIdSchema,
+  canonicalSha256,
 } from "@hunter/domain";
 import {
   CapabilityProbeReceiptSchema,
@@ -220,5 +221,105 @@ describe("SQLite attempt observation", () => {
       evidenceHash: "b".repeat(64),
     });
     expect(leases.findActiveController).toHaveBeenCalledOnce();
+  });
+
+  it("prefers a completed recovery receipt over a pending settlement observation", async () => {
+    const launch = launchOperation();
+    const settlement = createExternalOperation({
+      schemaVersion: 1,
+      operationId: OperationIdSchema.parse(
+        `opn_${canonicalSha256({
+          launchOperationId: launch.operationId,
+          attemptId: ids.attempt,
+          action: "settlement-observe",
+        }).slice(0, 24)}`,
+      ),
+      projectId: ids.project,
+      runId: ids.run,
+      attemptId: ids.attempt,
+      operationVersion: 2,
+      operationType: "session.observe",
+      requestedCapabilities: ["observe"],
+      payload: {
+        nativeSessionId: ids.session,
+        controllerLeaseId: "ctl_observe0001",
+        controllerLeaseOwnerId: "own_observe0001",
+        controllerLeaseGeneration: 1,
+      },
+    });
+    const recovery = createExternalOperation({
+      schemaVersion: 1,
+      operationId: OperationIdSchema.parse(
+        `opn_${canonicalSha256({
+          runId: ids.run,
+          attemptId: ids.attempt,
+          nativeSessionId: ids.session,
+          action: "recovery-observe",
+        }).slice(0, 24)}`,
+      ),
+      projectId: ids.project,
+      runId: ids.run,
+      attemptId: ids.attempt,
+      operationVersion: 2,
+      operationType: "session.observe",
+      requestedCapabilities: ["observe"],
+      payload: {
+        nativeSessionId: ids.session,
+        controllerLeaseId: "ctl_observe0001",
+        controllerLeaseOwnerId: "own_observe0001",
+        controllerLeaseGeneration: 1,
+      },
+    });
+    const journal = {
+      findOperation: vi.fn((operationId: string) => {
+        const operation = operationId === launch.operationId
+          ? launch
+          : operationId === settlement.operationId
+            ? settlement
+            : operationId === recovery.operationId
+              ? recovery
+              : undefined;
+        return operation === undefined
+          ? null
+          : { operation, status: "pending" };
+      }),
+      commitCommand: vi.fn(),
+    };
+    const worker = {
+      resolveReceipt: vi.fn((operation: ExternalOperation) => {
+        if (operation.operationId === launch.operationId) {
+          return receipt(launch, "completed", [{ kind: "operation_accepted" }]);
+        }
+        if (operation.operationId === recovery.operationId) {
+          return receipt(recovery, "completed", [{ kind: "agent_returned" }]);
+        }
+        return null;
+      }),
+      runOnce: vi.fn(async () => {
+        throw new Error("NATIVE_EFFECT_MUST_NOT_BE_REDISPATCHED");
+      }),
+    };
+    const observation = new SqliteAttemptObservation(
+      journal as unknown as SqliteOperationJournal,
+      worker as unknown as OperationWorker,
+      {
+        findActiveController: vi.fn(async () => {
+          throw new Error("CONTROLLER_LEASE_MUST_NOT_BE_REACQUIRED");
+        }),
+      } as unknown as LeaseService,
+      () => observeCapability(),
+      () => new Date("2026-07-24T01:00:00.000Z"),
+    );
+
+    await expect(observation.observe({
+      runId: ids.run,
+      attemptId: ids.attempt,
+      operationId: ids.launch,
+    })).resolves.toEqual({
+      fact: "agent_returned",
+      evidenceHash: "b".repeat(64),
+    });
+    expect(worker.runOnce).not.toHaveBeenCalled();
+    expect(journal.commitCommand).not.toHaveBeenCalled();
   });
 });

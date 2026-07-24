@@ -64,15 +64,15 @@ export class SqliteAttemptObservation implements AttemptObservationPort {
         action: "recovery-observe",
       }).slice(0, 24)}`,
     );
-    const existingObservation = [
+    const existingObservations = [
       observationId,
       recoveryObservationId,
     ].map((operationId) => this.journal.findOperation(operationId))
-      .find((candidate) => candidate !== null);
-    if (existingObservation !== undefined && existingObservation !== null) {
-      const operation = ExternalOperationSchema.parse(
-        existingObservation.operation,
+      .filter((candidate) => candidate !== null)
+      .map((candidate) =>
+        ExternalOperationSchema.parse(candidate.operation)
       );
+    for (const operation of existingObservations) {
       if (
         operation.operationType !== "session.observe"
         || operation.runId !== input.runId
@@ -81,7 +81,20 @@ export class SqliteAttemptObservation implements AttemptObservationPort {
       ) {
         throw new Error("ATTEMPT_OBSERVATION_SCOPE_MISMATCH");
       }
-      return this.toAttemptObservation(await this.deliver(operation));
+    }
+    const completedObservation = existingObservations.find((operation) =>
+      this.worker.resolveReceipt(operation)?.operationStatus === "completed"
+    );
+    if (completedObservation !== undefined) {
+      return this.toAttemptObservation(
+        await this.deliver(completedObservation),
+      );
+    }
+    const existingObservation = existingObservations[0];
+    if (existingObservation !== undefined) {
+      return this.toAttemptObservation(
+        await this.deliver(existingObservation),
+      );
     }
     const controller = await this.leases.findActiveController(
       launch.projectId,
