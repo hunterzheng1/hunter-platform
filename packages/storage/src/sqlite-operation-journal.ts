@@ -1,7 +1,15 @@
 import { existsSync, readFileSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 
-import { RunIdSchema, type ProjectId, type RunId } from "@hunter/domain";
+import {
+  AttemptIdSchema,
+  OperationIdSchema,
+  RunIdSchema,
+  type AttemptId,
+  type OperationId,
+  type ProjectId,
+  type RunId,
+} from "@hunter/domain";
 import {
   ExternalOperationSchema,
   fingerprintExternalOperation,
@@ -55,6 +63,25 @@ export interface TerminalRunArchiveSchedule {
 
 export interface SqliteOperationJournalOptions {
   readonly scheduleTerminalRunArchive?: ((input: TerminalRunArchiveSchedule) => void) | undefined;
+}
+
+export type OutboxOperationStatus =
+  | "pending"
+  | "in_flight"
+  | "completed"
+  | "indeterminate"
+  | "needs_attention";
+
+export interface JournaledOperationState {
+  readonly operation: ExternalOperation;
+  readonly status: OutboxOperationStatus;
+}
+
+export interface UnprovenOperationState {
+  readonly operationId: OperationId;
+  readonly runId: RunId | null;
+  readonly attemptId: AttemptId | null;
+  readonly status: "indeterminate" | "needs_attention";
 }
 
 interface ReceiptRow {
@@ -167,6 +194,77 @@ export class SqliteOperationJournal {
     } finally {
       this.transactionDepth -= 1;
     }
+  }
+
+  public findOperation(operationIdInput: OperationId): JournaledOperationState | null {
+    const operationId = OperationIdSchema.parse(operationIdInput);
+    const row = this.database.prepare(
+      "SELECT operation_json, status FROM outbox WHERE operation_id = ?",
+    ).get(operationId) as {
+      readonly operation_json: string;
+      readonly status: OutboxOperationStatus;
+    } | undefined;
+    if (row === undefined) return null;
+    const operation = ExternalOperationSchema.parse(
+      JSON.parse(row.operation_json) as unknown,
+    );
+    if (operation.operationId !== operationId) {
+      throw new Error("JOURNALED_OPERATION_IDENTITY_MISMATCH");
+    }
+    return { operation, status: row.status };
+  }
+
+  public aggregateVersion(aggregateId: string): number {
+    requireNonEmpty(aggregateId, "AGGREGATE_ID");
+    const row = this.database.prepare(
+      "SELECT COALESCE(MAX(aggregate_version), 0) AS version FROM events WHERE aggregate_id = ?",
+    ).get(aggregateId) as unknown as VersionRow;
+    return row.version;
+  }
+
+  public reconcileObservedOperations(at: Date): void {
+    this.database.prepare(
+      `UPDATE outbox
+          SET status = (
+                SELECT observed_status
+                  FROM side_effect_receipts
+                 WHERE side_effect_receipts.operation_id = outbox.operation_id
+              ),
+              dispatch_owner = NULL,
+              dispatch_expires_at = NULL,
+              updated_at = ?
+        WHERE EXISTS (
+                SELECT 1
+                  FROM side_effect_receipts
+                 WHERE side_effect_receipts.operation_id = outbox.operation_id
+              )
+          AND status <> (
+                SELECT observed_status
+                  FROM side_effect_receipts
+                 WHERE side_effect_receipts.operation_id = outbox.operation_id
+              )`,
+    ).run(at.toISOString());
+  }
+
+  public listUnprovenOperations(): readonly UnprovenOperationState[] {
+    const rows = this.database.prepare(
+      `SELECT operation_id, run_id, attempt_id, status
+         FROM outbox
+        WHERE status IN ('indeterminate', 'needs_attention')
+        ORDER BY operation_id`,
+    ).all() as unknown as Array<{
+      readonly operation_id: string;
+      readonly run_id: string | null;
+      readonly attempt_id: string | null;
+      readonly status: "indeterminate" | "needs_attention";
+    }>;
+    return rows.map((row) => ({
+      operationId: OperationIdSchema.parse(row.operation_id),
+      runId: row.run_id === null ? null : RunIdSchema.parse(row.run_id),
+      attemptId:
+        row.attempt_id === null ? null : AttemptIdSchema.parse(row.attempt_id),
+      status: row.status,
+    }));
   }
 
   public commitCommand(command: CommitCommand): CommandReceipt {

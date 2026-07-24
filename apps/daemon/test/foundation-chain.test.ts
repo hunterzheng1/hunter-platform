@@ -29,7 +29,7 @@ const ids = {
   requirement: RequirementIdSchema.parse("req_chain00001"), requirementRevision: RequirementRevisionIdSchema.parse("rrv_chain00001"),
   change: ChangeIdSchema.parse("chg_chain00001"), changeRevision: ChangeRevisionIdSchema.parse("crv_chain00001"),
   plan: ExecutionPlanIdSchema.parse("epl_chain00001"), task: TaskIdSchema.parse("tsk_chain00001"),
-  workflow: WorkflowRevisionIdSchema.parse("wfr_chain00001"), profile: AgentProfileIdSchema.parse("apr_chain00001"),
+  workflow: WorkflowRevisionIdSchema.parse("wfr_chain00001"), rootWorkflow: WorkflowRevisionIdSchema.parse("wfr_chainroot01"), profile: AgentProfileIdSchema.parse("apr_chain00001"),
   root: RunIdSchema.parse("run_chain00001"), cancelRoot: RunIdSchema.parse("run_cancel0001"), owner: LeaseOwnerIdSchema.parse("own_chain00001"), workspace: WorkspaceIdSchema.parse("wsp_chain00001"),
 };
 
@@ -47,9 +47,10 @@ function persistCatalog(database: DatabaseSync, localPath: string) {
   const requirement = createRequirementRevision({ requirementId: ids.requirement, revisionId: ids.requirementRevision, projectId: ids.project, title: "Chain", body: "prove chain", acceptanceCriteria: ["verified"], constraints: ["fake only"], status: "approved", approvedAt: "2026-07-22T10:00:00.000Z" });
   const change = createChangeRevision({ changeId: ids.change, revisionId: ids.changeRevision, projectId: ids.project, title: "Chain", goal: "prove", nonGoals: ["real provider"], requirementRevisionIds: [ids.requirementRevision], repositoryIds: [ids.repository], acceptanceCriteria: ["green"], constraints: ["strict"], risks: ["crash"], dependsOnChangeRevisionIds: [], status: "draft" });
   const workflow = oneStepWorkflow();
+  const root = rootWorkflow();
   new SqliteOperationJournal(database).commitCommand({
     commandId: "foundation-catalog:seed",
-    requestFingerprint: canonicalSha256({ project, requirement, change, workflow }),
+    requestFingerprint: canonicalSha256({ project, requirement, change, workflow, root }),
     projectId: ids.project,
     aggregateId: `project:${ids.project}:foundation-catalog`,
     expectedVersion: 0,
@@ -59,6 +60,7 @@ function persistCatalog(database: DatabaseSync, localPath: string) {
       { eventId: "evt_chain_requirement", eventType: "RequirementRevisionApproved", eventData: { requirementRevisionId: requirement.revisionId, requirementRevision: requirement }, schemaVersion: 1, occurredAt: "2026-07-22T10:00:00.000Z" },
       { eventId: "evt_chain_change", eventType: "ChangeRevisionDefined", eventData: { changeRevisionId: change.revisionId, changeRevision: change }, schemaVersion: 1, occurredAt: "2026-07-22T10:00:00.000Z" },
       { eventId: "evt_chain_workflow", eventType: "WorkflowRevisionPublished", eventData: { workflowRevisionId: workflow.workflowRevisionId, workflowRevision: workflow }, schemaVersion: 1, occurredAt: "2026-07-22T10:00:00.000Z" },
+      { eventId: "evt_chain_root_workflow", eventType: "WorkflowRevisionPublished", eventData: { workflowRevisionId: root.workflowRevisionId, workflowRevision: root }, schemaVersion: 1, occurredAt: "2026-07-22T10:00:00.000Z" },
       { eventId: "evt_chain_profile", eventType: "AgentProfileDefined", eventData: { agentProfileId: ids.profile, agentProfile: { agentProfileId: ids.profile, projectId: ids.project, status: "active" } }, schemaVersion: 1, occurredAt: "2026-07-22T10:00:00.000Z" },
       { eventId: "evt_chain_policy", eventType: "ProjectRunPolicyDefined", eventData: { projectId: ids.project, policySnapshot: { snapshotHash: "a".repeat(64), policyVersion: 1 }, budgetLimit: { maxAttempts: 10, maxElapsedMs: 120_000, maxCost: 100, maxTokens: 10_000, maxLoopIterations: 3 } }, schemaVersion: 1, occurredAt: "2026-07-22T10:00:00.000Z" },
     ],
@@ -73,6 +75,32 @@ function capability() {
     { capability: "launch", status: "supported", evidenceId: EvidenceIdSchema.parse("evd_chain00001"), evidence: { source: "local_probe", digest: "a".repeat(64) }, probedAt: "2026-07-21T00:00:00.000Z" },
     { capability: "observe", status: "supported", evidenceId: EvidenceIdSchema.parse("evd_chain00002"), evidence: { source: "local_probe", digest: "b".repeat(64) }, probedAt: "2026-07-21T00:00:00.000Z" },
   ] });
+}
+
+function rootWorkflow() {
+  const input = validWorkflowInput();
+  const step = {
+    ...input.steps[0]!,
+    kind: "subflow" as const,
+    executor: { kind: "subflow" as const, selector: ids.workflow },
+    agentProfileSelector: undefined,
+    requiredCapabilities: [],
+  };
+  return createWorkflowRevision({
+    ...input,
+    workflowRevisionId: ids.rootWorkflow,
+    title: "Foundation root task graph",
+    steps: [step],
+    entryStepId: step.stepId,
+    routes: [{
+      routeId: "rte_chain_root_pass",
+      fromStepId: step.stepId,
+      outcome: "passed",
+      priority: 0,
+      toStepId: null,
+    }],
+    loops: [],
+  });
 }
 
 function chainApp(services: ReturnType<typeof createSqliteApplicationServices>) {
@@ -121,7 +149,7 @@ describe("Foundation chain", () => {
     let services = createSqliteApplicationServices({ database, externalHandler: fake, installSecret: "foundation-secret-tests", allowedHosts: ["hunter-test.localhost"], allowedOrigins: ["app://hunter"], capabilityReceiptFor: () => capability(), now: () => clock });
     const published = services.publishChange.execute({ changeRevisionId: ids.changeRevision, executionPlanId: ids.plan, tasks: [{ taskId: ids.task, title: "Chain", objective: "verify", acceptanceCriteria: ["green"], repositoryIds: [ids.repository], moduleScopes: ["packages"], dependsOn: [], readSet: [], writeSet: ["packages"], access: "write", workflowRevisionId: ids.workflow, defaultAgentProfileId: ids.profile, sessionPolicy: "new", workspacePolicy: { mode: "write", isolation: "worktree", reuse: false } }], expectedVersion: 0, idempotencyKey: "publish-chain-1" }, { actorId: "chain", correlationId: "chain" });
     const firstApp = chainApp(services);
-    expect((await firstApp.inject({ method: "POST", url: "/runs", headers: authenticatedHeaders(services), payload: { runId: ids.root, executionPlanId: ids.plan, workflowRevisionId: ids.workflow, expectedVersion: 0, idempotencyKey: "start-chain-root" } })).statusCode).toBe(200);
+    expect((await firstApp.inject({ method: "POST", url: "/runs", headers: authenticatedHeaders(services), payload: { runId: ids.root, executionPlanId: ids.plan, workflowRevisionId: ids.rootWorkflow, expectedVersion: 0, idempotencyKey: "start-chain-root" } })).statusCode).toBe(200);
     await firstApp.close();
     const dispatchCommand = { parentRunId: ids.root, expectedVersion: services.flowStore.loadRun(ids.root)!.version, idempotencyKey: "fanout-chain", actor: { actorId: "chain", correlationId: "chain" } };
     const fanout = services.runCoordinator.dispatch(dispatchCommand);
@@ -235,16 +263,13 @@ describe("Foundation chain", () => {
     expect((database.prepare("SELECT COUNT(*) AS count FROM side_effect_receipts").get() as { count: number }).count).toBe(3);
 
     const actor = { actorId: "chain", correlationId: "chain" };
-    services.flowEngine.handle({ type: "RecordExternalObservation", runId: ids.root, fact: "session_running", expectedVersion: services.flowStore.loadRun(ids.root)!.version, idempotencyKey: "root-resumed-chain", actor });
-    services.flowEngine.handle({ type: "RecordExternalObservation", runId: ids.root, fact: "agent_returned", expectedVersion: services.flowStore.loadRun(ids.root)!.version, idempotencyKey: "root-return-chain", actor });
-    services.flowEngine.handle({ type: "RecordVerifierResult", runId: ids.root, outcome: "passed", evidenceFingerprint: "c".repeat(64), expectedVersion: services.flowStore.loadRun(ids.root)!.version, idempotencyKey: "root-verify-chain", actor });
     expect(services.flowStore.loadRun(ids.root)!.status).not.toBe("succeeded");
     services.flowEngine.handle({ type: "RecordVerifierResult", runId: childRunId, outcome: "passed", evidenceFingerprint: "d".repeat(64), expectedVersion: services.flowStore.loadRun(childRunId)!.version, idempotencyKey: "child-verify-chain", actor });
     services.flowEngine.handle({ type: "ReconcileTaskChildren", runId: ids.root, expectedVersion: services.flowStore.loadRun(ids.root)!.version, idempotencyKey: "reconcile-chain", actor });
     expect(services.flowStore.loadRun(ids.root)!.status).toBe("succeeded");
     expect(services.flowStore.loadRun(ids.root)!.binding.bindingFingerprint).toBe(parent.bindingFingerprint);
 
-    services.startRun.execute({ runId: ids.cancelRoot, executionPlanId: ids.plan, workflowRevisionId: ids.workflow, expectedVersion: 0, idempotencyKey: "start-cancel-root" }, actor);
+    services.startRun.execute({ runId: ids.cancelRoot, executionPlanId: ids.plan, workflowRevisionId: ids.rootWorkflow, expectedVersion: 0, idempotencyKey: "start-cancel-root" }, actor);
     const cancelFanout = services.flowEngine.handle({ type: "ScheduleTaskFanOut", runId: ids.cancelRoot, expectedVersion: services.flowStore.loadRun(ids.cancelRoot)!.version, idempotencyKey: "fanout-cancel-root", actor }).response as { children: Array<{ taskId: typeof ids.task; childRunId: ReturnType<typeof RunIdSchema.parse>; budget: RunBudgetLimit }> };
     const cancelScheduled = cancelFanout.children[0]!;
     const cancelParent = services.flowStore.loadRun(ids.cancelRoot)!.binding;

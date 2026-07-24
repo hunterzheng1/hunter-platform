@@ -174,6 +174,27 @@ describe("SqliteOperationJournal", () => {
     );
   });
 
+  it("exposes typed operation state without leaking Outbox table rows", () => {
+    const { database: db, journal } = setup();
+    const externalOperation = operation();
+    journal.commitCommand(command());
+
+    expect(journal.findOperation(externalOperation.operationId)).toEqual({
+      operation: externalOperation,
+      status: "pending",
+    });
+    expect(journal.aggregateVersion("change:crv_revision01")).toBe(2);
+    db.prepare(
+      "UPDATE outbox SET status = 'needs_attention' WHERE operation_id = ?",
+    ).run(externalOperation.operationId);
+    expect(journal.listUnprovenOperations()).toEqual([{
+      operationId: externalOperation.operationId,
+      runId,
+      attemptId,
+      status: "needs_attention",
+    }]);
+  });
+
   it("allows an idempotent response-only command with null Event positions", () => {
     const { journal } = setup();
     const receipt = journal.commitCommand(

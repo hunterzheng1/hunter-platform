@@ -8,7 +8,7 @@ import type { ExecutionPlan, NativeSessionId, ProjectId, TaskId, WorkflowRevisio
 import { ControllerLeaseIdSchema, LeaseOwnerIdSchema, OperationIdSchema, ProjectIdSchema, WorkspaceLeaseIdSchema, WriterLeaseIdSchema, canonicalSha256, createProject } from "@hunter/domain";
 import { FlowEngine, reduceFlowEvents, type FlowCommandReceipt, type FlowCommit, type FlowDefinitions, type FlowEvent, type FlowStore, type WorkflowRunState } from "@hunter/flow-engine";
 import { ArchiveJobWorker, ArchiveWriter, SqliteArchiveJobStore, SqliteKnowledgeCatalog, type ArchiveJobFaultPoint, type ArchiveManifestSource } from "@hunter/knowledge";
-import { ExternalOperationReceiptSchema, LeaseSchema, computeCapabilityManifest, createExternalOperation, createWorkspacePathBoundary, decodeCapabilityProbeReceipt, decodeExternalOperationReceipt, type CapabilityProbeReceipt, type ExternalOperation, type ExternalOperationHandler, type Lease, type VerifiedWorkspacePath } from "@hunter/runtime-contracts";
+import { computeCapabilityManifest, createExternalOperation, createWorkspacePathBoundary, decodeCapabilityProbeReceipt, decodeExternalOperationReceipt, type CapabilityProbeReceipt, type ExternalOperation, type ExternalOperationHandler, type Lease, type VerifiedWorkspacePath } from "@hunter/runtime-contracts";
 import { deriveStepPolicy } from "@hunter/policy";
 import { LeaseService, RuntimeManager, RuntimeOperationHandler } from "@hunter/runtime-manager";
 import { EventLedgerReader, HunterProjection, OperationWorker, ProjectionRunner, SqliteOperationJournal } from "@hunter/storage";
@@ -204,32 +204,36 @@ export function createSqliteApplicationServices(input: {
       const attemptCancellations = flowStore.allRuns().filter((state) => !["succeeded", "failed", "canceled"].includes(state.status) && state.attemptCancellation !== null);
       for (const state of attemptCancellations) {
         const pending = state.attemptCancellation!;
-        const launchRow = input.database.prepare("SELECT operation_json FROM outbox WHERE operation_id = ?").get(pending.assignmentOperationId) as { operation_json: string } | undefined;
-        const launchReceiptRow = input.database.prepare("SELECT provider_receipt_json FROM side_effect_receipts WHERE operation_id = ? AND observed_status = 'completed'").get(pending.assignmentOperationId) as { provider_receipt_json: string } | undefined;
-        if (launchRow === undefined || launchReceiptRow === undefined) continue;
-        const launch = JSON.parse(launchRow.operation_json) as ExternalOperation;
+        const launchState = journal.findOperation(
+          OperationIdSchema.parse(pending.assignmentOperationId),
+        );
+        if (launchState === null) continue;
+        const launch = launchState.operation;
         if (launch.runId !== state.binding.runId || launch.attemptId !== pending.attemptId || launch.operationType !== "session.launch") {
           throw new Error("CANCELLATION_LAUNCH_SCOPE_MISMATCH");
         }
-        const launchReceipt = ExternalOperationReceiptSchema.parse(JSON.parse(launchReceiptRow.provider_receipt_json));
+        const launchReceipt = operationWorker.resolveReceipt(launch);
+        if (launchReceipt?.operationStatus !== "completed") continue;
         const session = launchReceipt.nativeReferences.find((reference) => reference.kind === "session");
         if (session === undefined) continue;
-        const controllerRows = input.database.prepare("SELECT receipt_json FROM lease_records WHERE lease_kind = 'controller' AND expires_at > ?").all(now().toISOString()) as Array<{ receipt_json: string }>;
-        const controller = controllerRows.map((row) => LeaseSchema.parse(JSON.parse(row.receipt_json))).find((lease) => lease.kind === "controller" && lease.scope.nativeSessionId === session.referenceId);
+        const controller = leaseService.listActive().find(
+          (lease) =>
+            lease.kind === "controller"
+            && lease.scope.nativeSessionId === session.referenceId,
+        );
         if (controller === undefined) continue;
         const interruptOperationId = OperationIdSchema.parse(`opn_${canonicalSha256({ runId: state.binding.runId, attemptId: pending.attemptId, sessionId: session.referenceId, action: "interrupt" }).slice(0, 24)}`);
         const interrupt = createExternalOperation({ schemaVersion: 1, operationId: interruptOperationId, projectId: state.binding.projectId, runId: state.binding.runId, attemptId: pending.attemptId, operationVersion: 2, operationType: "session.interrupt", requestedCapabilities: ["interrupt"], payload: { nativeSessionId: session.referenceId, reason: "hunter_run_canceled", controllerLeaseId: controller.leaseId, controllerLeaseOwnerId: controller.ownerId, controllerLeaseGeneration: controller.generation } });
         const aggregateId = `cancellation:${state.binding.runId}`;
-        const version = (input.database.prepare("SELECT COALESCE(MAX(aggregate_version), 0) AS version FROM events WHERE aggregate_id = ?").get(aggregateId) as { version: number }).version;
+        const version = journal.aggregateVersion(aggregateId);
         journal.commitCommand({ commandId: `schedule-interrupt:${state.binding.runId}:${pending.attemptId}`, requestFingerprint: canonicalSha256(interrupt), projectId: state.binding.projectId, aggregateId, expectedVersion: version, actor: { actorId: "flow-cancellation-reconciler", correlationId: `cancel:${state.binding.runId}` }, events: [], operations: [interrupt], response: { operationId: interrupt.operationId } });
         for (let delivery = 0; delivery < 1_000; delivery += 1) {
-          const status = input.database.prepare("SELECT status FROM outbox WHERE operation_id = ?").get(interrupt.operationId) as { status: string } | undefined;
-          if (status !== undefined && !["pending", "in_flight"].includes(status.status)) break;
+          const operationState = journal.findOperation(interrupt.operationId);
+          if (operationState !== null && !["pending", "in_flight"].includes(operationState.status)) break;
           if (await operationWorker.runOnce() === "idle") break;
         }
-        const interruptReceiptRow = input.database.prepare("SELECT provider_receipt_json FROM side_effect_receipts WHERE operation_id = ? AND observed_status = 'completed'").get(interrupt.operationId) as { provider_receipt_json: string } | undefined;
-        if (interruptReceiptRow === undefined) continue;
-        const interruptReceipt = ExternalOperationReceiptSchema.parse(JSON.parse(interruptReceiptRow.provider_receipt_json));
+        const interruptReceipt = operationWorker.resolveReceipt(interrupt);
+        if (interruptReceipt?.operationStatus !== "completed") continue;
         const current = flowStore.loadRun(state.binding.runId);
         if (current === null || current.attemptCancellation === null) continue;
         receipts.push(flowEngine.handle({ type: "AcknowledgeAttemptCancellation", runId: current.binding.runId, interruptOperationId: interrupt.operationId, evidenceFingerprint: interruptReceipt.evidence.evidenceHash, expectedVersion: current.version, idempotencyKey: `ack-interrupt-${interrupt.operationId}`, actor: { actorId: "flow-cancellation-reconciler", correlationId: `cancel:${current.binding.runId}` } }));
@@ -386,18 +390,7 @@ export function createSqliteApplicationServices(input: {
     });
   };
   const activeLeasesFor = (operation: ExternalOperation): readonly Lease[] =>
-    (input.database.prepare(
-      "SELECT receipt_json FROM lease_records WHERE expires_at > ?",
-    ).all(now().toISOString()) as Array<{ receipt_json: string }>).flatMap(
-      (row) => {
-        try {
-          const lease = LeaseSchema.parse(JSON.parse(row.receipt_json));
-          return lease.revokedAt === null ? [lease] : [];
-        } catch {
-          return [];
-        }
-      },
-    ).filter((lease) =>
+    leaseService.listActive().filter((lease) =>
       lease.projectId === operation.projectId
       && lease.ownerRunId === operation.runId
       && lease.ownerAttemptId === operation.attemptId
@@ -422,8 +415,7 @@ export function createSqliteApplicationServices(input: {
       const policy = deriveStepPolicy(step, { policyVersion: run.binding.policySnapshot.policyVersion, deniedPermissions: [] });
       const capabilityReceipt = input.capabilityReceiptFor?.(operation);
       if (capabilityReceipt === undefined || capabilityReceipt === null) throw new Error("CAPABILITY_RECEIPT_NOT_CONFIGURED");
-      const rows = input.database.prepare("SELECT receipt_json FROM lease_records WHERE expires_at > ?").all(now().toISOString()) as unknown as Array<{ receipt_json: string }>;
-      const leases = rows.map((row) => LeaseSchema.parse(JSON.parse(row.receipt_json))) as Lease[];
+      const leases = leaseService.listActive();
       const workspaceCandidates = leases.flatMap((lease) =>
         lease.kind === "workspace"
         && lease.revokedAt === null
@@ -469,16 +461,7 @@ export function createSqliteApplicationServices(input: {
     now,
     replayPolicy: () => "inspectable",
     dispatchAuthority: (operation) => {
-      const activeLeases = (input.database.prepare(
-        "SELECT receipt_json FROM lease_records WHERE expires_at > ?",
-      ).all(now().toISOString()) as Array<{ receipt_json: string }>).flatMap((row) => {
-        try {
-          const lease = LeaseSchema.parse(JSON.parse(row.receipt_json));
-          return lease.revokedAt === null ? [lease] : [];
-        } catch {
-          return [];
-        }
-      }).filter((lease) =>
+      const activeLeases = leaseService.listActive().filter((lease) =>
         lease.projectId === operation.projectId
         && lease.ownerRunId === operation.runId
         && lease.ownerAttemptId === operation.attemptId
@@ -631,7 +614,6 @@ export function createSqliteApplicationServices(input: {
     },
   });
   const attemptObservation = new SqliteAttemptObservation(
-    input.database,
     journal,
     operationWorker,
     leaseService,
@@ -677,22 +659,19 @@ export function createSqliteApplicationServices(input: {
       return [{ kind: "migration", status: "complete", schemaVersion: 1 }];
     },
     reconcileOutbox: async () => {
-      const timestamp = now().toISOString();
-      input.database.prepare(
-        `UPDATE outbox
-            SET status = (SELECT observed_status FROM side_effect_receipts WHERE side_effect_receipts.operation_id = outbox.operation_id),
-                dispatch_owner = NULL, dispatch_expires_at = NULL, updated_at = ?
-          WHERE EXISTS (SELECT 1 FROM side_effect_receipts WHERE side_effect_receipts.operation_id = outbox.operation_id)
-            AND status <> (SELECT observed_status FROM side_effect_receipts WHERE side_effect_receipts.operation_id = outbox.operation_id)`,
-      ).run(timestamp);
+      journal.reconcileObservedOperations(now());
       for (let index = 0; index < 1_000; index += 1) {
         if (await operationWorker.runOnce() === "idle") break;
         if (index === 999) throw new Error("OUTBOX_RECOVERY_LIMIT_EXCEEDED");
       }
-      const rows = input.database.prepare(
-        "SELECT operation_id, run_id, attempt_id, status FROM outbox WHERE status IN ('indeterminate','needs_attention') ORDER BY operation_id",
-      ).all() as unknown as Array<{ operation_id: string; run_id: string | null; attempt_id: string | null; status: "indeterminate" | "needs_attention" }>;
-      return rows.map((row) => ({ kind: "operation", status: row.status, reason: "reconciled_external_operation_not_proven", operationId: row.operation_id, runId: row.run_id, attemptId: row.attempt_id }));
+      return journal.listUnprovenOperations().map((operation) => ({
+        kind: "operation",
+        status: operation.status,
+        reason: "reconciled_external_operation_not_proven",
+        operationId: operation.operationId,
+        runId: operation.runId,
+        attemptId: operation.attemptId,
+      }));
     },
     resumeArchiveAndKnowledge: async () => {
       if (archiveWorker === undefined) return [];
@@ -724,12 +703,13 @@ export function createSqliteApplicationServices(input: {
       })),
     probeExternalState: async (attempts) => await Promise.all(attempts.map(async (attempt) => {
       if (typeof attempt.operationId !== "string") return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "missing", reason: "runtime_assignment_missing", flowObservation: "session_missing" };
-      const row = input.database.prepare("SELECT operation_json, status FROM outbox WHERE operation_id = ?").get(attempt.operationId) as { operation_json: string; status: string } | undefined;
-      if (row === undefined) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "missing", reason: "operation_journal_missing", flowObservation: "session_missing" };
-      const launchOperation = JSON.parse(row.operation_json) as ExternalOperation;
-      const receiptRow = input.database.prepare("SELECT provider_receipt_json FROM side_effect_receipts WHERE operation_id = ?").get(attempt.operationId) as { provider_receipt_json: string } | undefined;
-      if (receiptRow === undefined) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "indeterminate", reason: "launch_receipt_not_proven" };
-      const launchReceipt = ExternalOperationReceiptSchema.parse(JSON.parse(receiptRow.provider_receipt_json));
+      const launchState = journal.findOperation(
+        OperationIdSchema.parse(attempt.operationId),
+      );
+      if (launchState === null) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "missing", reason: "operation_journal_missing", flowObservation: "session_missing" };
+      const launchOperation = launchState.operation;
+      const launchReceipt = operationWorker.resolveReceipt(launchOperation);
+      if (launchReceipt === null) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "indeterminate", reason: "launch_receipt_not_proven" };
       if (launchReceipt.operationId !== launchOperation.operationId || launchReceipt.fingerprint !== launchOperation.fingerprint) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "indeterminate", reason: "launch_receipt_identity_mismatch" };
       const session = launchReceipt.nativeReferences.find((reference) => reference.kind === "session");
       if (session === undefined) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "indeterminate", reason: "native_session_reference_missing" };
@@ -754,19 +734,18 @@ export function createSqliteApplicationServices(input: {
       const observeSupported = manifest.capabilities.some(({ capability: atomicCapability, status }) => atomicCapability === "observe" && status === "supported");
       if (!observeSupported) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "needs_attention", reason: "session_observe_capability_not_proven", nativeSessionId: session.referenceId };
       const aggregateId = `recovery-session:${attempt.attemptId}`;
-      const version = (input.database.prepare("SELECT COALESCE(MAX(aggregate_version), 0) AS version FROM events WHERE aggregate_id = ?").get(aggregateId) as { version: number }).version;
+      const version = journal.aggregateVersion(aggregateId);
       journal.commitCommand({ commandId: `recovery-observe:${attempt.attemptId}`, requestFingerprint: observe.fingerprint, projectId: observe.projectId, aggregateId, expectedVersion: version, actor: { actorId: "startup-recovery", correlationId: `recovery:${attempt.runId}` }, events: [], operations: [observe], response: { operationId: observe.operationId } });
       for (let delivery = 0; delivery < 1_000; delivery += 1) {
-        const status = input.database.prepare("SELECT status FROM outbox WHERE operation_id = ?").get(observe.operationId) as { status: string } | undefined;
-        if (status !== undefined && !["pending", "in_flight"].includes(status.status)) break;
+        const operationState = journal.findOperation(observe.operationId);
+        if (operationState !== null && !["pending", "in_flight"].includes(operationState.status)) break;
         if (await operationWorker.runOnce() === "idle") break;
       }
-      const observedRow = input.database.prepare("SELECT provider_receipt_json FROM side_effect_receipts WHERE operation_id = ?").get(observe.operationId) as { provider_receipt_json: string } | undefined;
-      if (observedRow === undefined) {
-        const status = (input.database.prepare("SELECT status FROM outbox WHERE operation_id = ?").get(observe.operationId) as { status?: string } | undefined)?.status;
+      const observed = operationWorker.resolveReceipt(observe);
+      if (observed === null) {
+        const status = journal.findOperation(observe.operationId)?.status;
         return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: status === "needs_attention" ? "needs_attention" : "indeterminate", reason: "session_observation_not_proven", operationId: observe.operationId };
       }
-      const observed = ExternalOperationReceiptSchema.parse(JSON.parse(observedRow.provider_receipt_json));
       const sessionState = observed.facts.find((fact) => fact.kind === "session_observed")?.state;
       const flowObservation = sessionState === "missing"
         ? "session_missing"
@@ -781,7 +760,7 @@ export function createSqliteApplicationServices(input: {
       return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: missing ? "needs_attention" : "observed", reason: `session_observation_receipt:${observe.operationId}:${observed.evidence.evidenceHash}`, operationId: observe.operationId, nativeSessionId: session.referenceId, flowObservation };
     })),
     reconcileLeasesAndWorkspace: async (attempts) => {
-      const rows = input.database.prepare("SELECT lease_id, lease_kind, expires_at, receipt_json FROM lease_records ORDER BY lease_id").all() as unknown as Array<{ lease_id: string; lease_kind: string; expires_at: string; receipt_json: string }>;
+      const leases = leaseService.listRecorded();
       const projects = (input.database.prepare("SELECT event_data FROM events WHERE event_type = 'ProjectCreated' ORDER BY position DESC").all() as Array<{ event_data: string }>).flatMap((row) => {
         try { return [createProject((JSON.parse(row.event_data) as { project: unknown }).project)]; } catch { return []; }
       });
@@ -791,13 +770,13 @@ export function createSqliteApplicationServices(input: {
         if (affected.length === 0) facts.push(fact);
         else for (const attempt of affected) facts.push({ ...fact, runId: attempt.runId, attemptId: attempt.attemptId });
       };
-      for (const row of rows) {
-        if (Date.parse(row.expires_at) <= now().getTime()) {
-          recordForAffectedRuns(row.lease_id, { kind: "lease", leaseId: row.lease_id, leaseKind: row.lease_kind, status: "expired", reason: "lease_expired" });
+      for (const recordedLease of leases) {
+        if (Date.parse(recordedLease.expiresAt) <= now().getTime()) {
+          recordForAffectedRuns(recordedLease.leaseId, { kind: "lease", leaseId: recordedLease.leaseId, leaseKind: recordedLease.kind, status: "expired", reason: "lease_expired" });
           continue;
         }
-        let lease = LeaseSchema.parse(JSON.parse(row.receipt_json));
-        const affected = attempts.filter((attempt) => Array.isArray(attempt.leaseIds) && attempt.leaseIds.includes(row.lease_id));
+        let lease = recordedLease;
+        const affected = attempts.filter((attempt) => Array.isArray(attempt.leaseIds) && attempt.leaseIds.includes(lease.leaseId));
         if (lease.revokedAt !== null) {
           recordForAffectedRuns(lease.leaseId, { kind: "lease", leaseId: lease.leaseId, leaseKind: lease.kind, status: "expired", reason: "lease_revoked" });
           continue;

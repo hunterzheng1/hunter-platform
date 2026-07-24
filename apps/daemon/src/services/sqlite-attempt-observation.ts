@@ -1,5 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
-
 import {
   NativeSessionIdSchema,
   OperationIdSchema,
@@ -26,7 +24,6 @@ import type {
 
 export class SqliteAttemptObservation implements AttemptObservationPort {
   public constructor(
-    private readonly database: DatabaseSync,
     private readonly journal: SqliteOperationJournal,
     private readonly worker: OperationWorker,
     private readonly leases: LeaseService,
@@ -108,25 +105,19 @@ export class SqliteAttemptObservation implements AttemptObservationPort {
   }
 
   private operation(operationId: ReturnType<typeof OperationIdSchema.parse>) {
-    const row = this.database.prepare(
-      "SELECT operation_json FROM outbox WHERE operation_id = ?",
-    ).get(operationId) as { readonly operation_json: string } | undefined;
-    if (row === undefined) throw new Error("OPERATION_JOURNAL_ENTRY_REQUIRED");
-    return ExternalOperationSchema.parse(
-      JSON.parse(row.operation_json) as unknown,
-    );
+    const state = this.journal.findOperation(operationId);
+    if (state === null) throw new Error("OPERATION_JOURNAL_ENTRY_REQUIRED");
+    return ExternalOperationSchema.parse(state.operation);
   }
 
   private async deliver(operation: ExternalOperation) {
     for (let delivery = 0; delivery < 1_000; delivery += 1) {
       const existing = this.worker.resolveReceipt(operation);
       if (existing !== null) return existing;
-      const row = this.database.prepare(
-        "SELECT status FROM outbox WHERE operation_id = ?",
-      ).get(operation.operationId) as { readonly status: string } | undefined;
+      const row = this.journal.findOperation(operation.operationId);
       if (
-        row !== undefined
-        && ["indeterminate", "needs_attention", "failed"].includes(row.status)
+        row !== null
+        && ["indeterminate", "needs_attention"].includes(row.status)
       ) {
         throw new Error(`OPERATION_DELIVERY_${row.status.toUpperCase()}`);
       }

@@ -50,6 +50,8 @@ describe("LeaseService", () => {
     new SqliteOperationJournal(database);
     const service = new LeaseService(database, () => new Date("2026-07-22T10:01:00.000Z"));
     const first = await service.acquire(writer("own_00000001"));
+    expect(service.listRecorded()).toEqual([first]);
+    expect(service.listActive()).toEqual([first]);
     await expect(service.acquire(writer("own_00000002", "wrl_00000002"))).rejects.toThrow(/LEASE_SCOPE_BUSY/u);
     await expect(service.renew({
       leaseId: first.leaseId,

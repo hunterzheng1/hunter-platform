@@ -1,4 +1,5 @@
 import { readFileSync, realpathSync } from "node:fs";
+import { arch, release } from "node:os";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import {
@@ -6,8 +7,12 @@ import {
   CapabilityProbeReceiptSchema,
   computeCapabilityManifest,
 } from "@hunter/runtime-contracts";
+import { NodeCommandRunner } from "@hunter/spike-testkit";
 import { expect, test } from "@playwright/test";
 import { z } from "zod";
+
+import { createDoctorInventory } from "../spikes/doctor/src/probes.js";
+import { assertLocalProbeMatchesReceipt } from "./real-provider-validation.js";
 
 const enabled =
   process.platform === "win32"
@@ -37,7 +42,7 @@ const RealProviderReceiptBundleSchema = z.object({
   }).strict(),
 }).strict();
 
-test("owner-approved agents publish honest evidence-derived capability receipts", () => {
+test("owner-approved agents publish honest evidence-derived capability receipts", async () => {
   if (receiptBundlePath === undefined) {
     throw new Error("REAL_PROVIDER_RECEIPT_BUNDLE_REQUIRED");
   }
@@ -61,8 +66,35 @@ test("owner-approved agents publish honest evidence-derived capability receipts"
   const bundle = RealProviderReceiptBundleSchema.parse(
     JSON.parse(readFileSync(canonicalBundle, "utf8")) as unknown,
   );
+  const orcaExecutable = process.env.ORCA_CLI_COMMAND?.trim();
+  const inventory = await createDoctorInventory({
+    runner: new NodeCommandRunner(),
+    cwd: repositoryRoot,
+    now: () => new Date(),
+    host: {
+      platform: process.platform,
+      architecture: arch(),
+      release: release(),
+    },
+    ...(orcaExecutable === undefined || orcaExecutable === ""
+      ? {}
+      : { executableOverrides: { orca: orcaExecutable } }),
+  });
 
   for (const [connector, assertion] of Object.entries(bundle.connectors)) {
+    if (assertion.receipt.schemaVersion !== 2) {
+      throw new Error(`REAL_PROVIDER_CURRENT_RECEIPT_REQUIRED:${connector}`);
+    }
+    const localProbe = inventory.probes.find(({ id }) => id === connector);
+    if (localProbe === undefined) {
+      throw new Error(`REAL_PROVIDER_LOCAL_PROBE_MISSING:${connector}`);
+    }
+    expect(assertion.receipt.platform).toBe("windows");
+    assertLocalProbeMatchesReceipt(connector, {
+      availability: localProbe.availability.status,
+      authentication: localProbe.authentication.status,
+      version: localProbe.version,
+    }, assertion.receipt);
     const manifest = computeCapabilityManifest(assertion.receipt, new Date());
     expect(
       manifest.level,

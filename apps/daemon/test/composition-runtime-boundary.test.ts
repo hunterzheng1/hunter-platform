@@ -33,4 +33,21 @@ describe("production Runtime and verifier composition", () => {
     expect(compositionSource).toContain("AttemptSettlementRunner");
     expect(compositionSource).toContain("attemptSettlement");
   });
+
+  it("queries Outbox, receipts, and leases through their owning modules", () => {
+    const serviceSources = [
+      "sqlite-application-services.ts",
+      "sqlite-attempt-observation.ts",
+    ].map((file) =>
+      readFileSync(
+        resolve(import.meta.dirname, "..", "src", "services", file),
+        "utf8",
+      ));
+
+    for (const source of serviceSources) {
+      expect(source).not.toMatch(
+        /\b(?:FROM|UPDATE)\s+(?:outbox|side_effect_receipts|lease_records)\b/iu,
+      );
+    }
+  });
 });

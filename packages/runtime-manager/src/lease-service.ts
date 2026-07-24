@@ -263,6 +263,22 @@ export class LeaseService implements LeaseBoundary {
     return lease.revokedAt === null ? lease : null;
   }
 
+  public listRecorded(): readonly Lease[] {
+    const rows = this.database.prepare(
+      "SELECT receipt_json FROM lease_records ORDER BY lease_id",
+    ).all() as unknown as Array<{ readonly receipt_json: string }>;
+    return rows.map(({ receipt_json }) =>
+      LeaseSchema.parse(JSON.parse(receipt_json) as unknown));
+  }
+
+  public listActive(): readonly Lease[] {
+    const observedAt = this.now().getTime();
+    return this.listRecorded().filter(
+      (lease) =>
+        lease.revokedAt === null && Date.parse(lease.expiresAt) > observedAt,
+    );
+  }
+
   public async findActiveController(
     projectId: ProjectId,
     nativeSessionId: NativeSessionId,
