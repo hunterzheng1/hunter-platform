@@ -1,8 +1,3 @@
-PRAGMA foreign_keys = ON;
-PRAGMA journal_mode = WAL;
-
-BEGIN IMMEDIATE;
-
 CREATE TABLE IF NOT EXISTS events (
   position INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id TEXT NOT NULL UNIQUE,
@@ -159,12 +154,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS knowledge_archive_manifest
 CREATE INDEX IF NOT EXISTS knowledge_entries_project
   ON knowledge_entries(project_id, level, status, entry_id);
 
-CREATE TABLE IF NOT EXISTS storage_metadata (
-  metadata_key TEXT PRIMARY KEY,
-  metadata_value TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS pairing_challenges (
   pairing_id TEXT PRIMARY KEY,
   challenge_hash TEXT NOT NULL UNIQUE,
@@ -230,11 +219,3 @@ CREATE TABLE IF NOT EXISTS device_proof_nonces (
 
 CREATE INDEX IF NOT EXISTS device_proof_nonces_expiry
   ON device_proof_nonces(expires_at);
-
-INSERT INTO storage_metadata(metadata_key, metadata_value, updated_at)
-VALUES ('schema_version', '1', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-ON CONFLICT(metadata_key) DO UPDATE SET
-  metadata_value = excluded.metadata_value,
-  updated_at = excluded.updated_at;
-
-COMMIT;

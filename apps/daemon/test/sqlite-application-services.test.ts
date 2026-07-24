@@ -49,13 +49,25 @@ describe("createSqliteApplicationServices", () => {
     database.close();
   });
 
-  it("transactionally clears the one known interrupted migration marker before serving", async () => {
+  it("clears the legacy version 1 marker after upgrading storage to version 2", async () => {
     const database = new DatabaseSync(":memory:");
     const services = createSqliteApplicationServices({ database, externalHandler: { execute: async () => { throw new Error("not dispatched"); } }, installSecret: "migration-secret-tests", allowedHosts: ["hunter-test.localhost"], allowedOrigins: ["app://hunter"] });
     database.prepare("INSERT INTO storage_metadata(metadata_key, metadata_value, updated_at) VALUES ('migration_in_progress', 'target_schema_version:1', ?)").run(new Date().toISOString());
     const report = await services.recovery.run();
-    expect(report.conclusions).toContainEqual({ kind: "migration", status: "rolled_back", schemaVersion: 1 });
+    expect(report.conclusions).toContainEqual({ kind: "migration", status: "rolled_back", schemaVersion: 2 });
     expect(database.prepare("SELECT metadata_value FROM storage_metadata WHERE metadata_key = 'migration_in_progress'").get()).toBeUndefined();
+    database.close();
+  });
+
+  it("fails closed for an unknown legacy migration marker", async () => {
+    const database = new DatabaseSync(":memory:");
+    const services = createSqliteApplicationServices({ database, externalHandler: { execute: async () => { throw new Error("not dispatched"); } }, installSecret: "unknown-migration-marker-tests", allowedHosts: ["hunter-test.localhost"], allowedOrigins: ["app://hunter"] });
+    database.prepare("INSERT INTO storage_metadata(metadata_key, metadata_value, updated_at) VALUES ('migration_in_progress', 'target_schema_version:999', ?)").run(new Date().toISOString());
+
+    await expect(services.recovery.run()).rejects.toThrowError(
+      "INTERRUPTED_MIGRATION_REQUIRES_MANUAL_RECOVERY",
+    );
+    expect(database.prepare("SELECT metadata_value FROM storage_metadata WHERE metadata_key = 'migration_in_progress'").get()).toEqual({ metadata_value: "target_schema_version:999" });
     database.close();
   });
 
@@ -608,6 +620,59 @@ describe("createSqliteApplicationServices", () => {
       publishPort: async () => undefined,
     })).rejects.toThrow(/SECRET_REF_SCHEME_INVALID/u);
     expect(resolved).toBe(false);
+  });
+
+  it("fails a future storage migration before publishing a listener", async () => {
+    const dataDirectory = mkdtempSync(join(tmpdir(), "hunter-future-schema-"));
+    temporaryFixtures.add(dataDirectory);
+    const database = new DatabaseSync(join(dataDirectory, "hunter.sqlite"));
+    database.exec(`
+      CREATE TABLE storage_metadata (
+        metadata_key TEXT PRIMARY KEY,
+        metadata_value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO storage_metadata(metadata_key, metadata_value, updated_at)
+      VALUES ('schema_version', '999', '2026-07-24T09:30:00.000Z');
+    `);
+    database.close();
+    let published = false;
+
+    await expect(startDaemon({
+      dataDirectory,
+      secretRef: "os-credential://hunter/install",
+      secretStore: {
+        resolveSecret: async () => "resolved-install-secret-tests",
+      },
+      externalHandler: {
+        execute: async () => {
+          throw new Error("not dispatched");
+        },
+      },
+      verifier: passingVerifier,
+      allowedHost: "hunter-test.localhost",
+      allowedOrigin: "app://hunter",
+      publishPort: async () => {
+        published = true;
+      },
+    })).rejects.toThrowError("STORAGE_SCHEMA_VERSION_UNSUPPORTED");
+    expect(published).toBe(false);
+
+    const inspection = new DatabaseSync(
+      join(dataDirectory, "hunter.sqlite"),
+      { readOnly: true },
+    );
+    expect(
+      inspection.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'events'",
+      ).get(),
+    ).toBeUndefined();
+    expect(
+      inspection.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'storage_migrations'",
+      ).get(),
+    ).toBeUndefined();
+    inspection.close();
   });
 
   it("routes explicit remote enablement through the guarded TLS listener and OS secret references", async () => {

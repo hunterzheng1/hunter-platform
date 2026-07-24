@@ -1,4 +1,3 @@
-import { existsSync, readFileSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 
 import {
@@ -15,6 +14,11 @@ import {
   fingerprintExternalOperation,
   type ExternalOperation,
 } from "@hunter/runtime-contracts";
+import {
+  loadStorageMigrations,
+  runStorageMigrations,
+  type StorageMigrationReceipt,
+} from "./migration-runner.js";
 
 export interface ActorContext {
   readonly actorId: string;
@@ -97,16 +101,6 @@ interface VersionRow {
   readonly version: number;
 }
 
-function loadCoreMigration(): string {
-  const candidates = [
-    new URL("./migrations/001-core.sql", import.meta.url),
-    new URL("../src/migrations/001-core.sql", import.meta.url),
-  ];
-  const migration = candidates.find((candidate) => existsSync(candidate));
-  if (migration === undefined) throw new Error("CORE_MIGRATION_NOT_FOUND");
-  return readFileSync(migration, "utf8");
-}
-
 function requireNonEmpty(value: string, label: string): void {
   if (value.trim().length === 0) throw new Error(`${label}_REQUIRED`);
 }
@@ -172,12 +166,16 @@ function terminalRunOutcome(
 
 export class SqliteOperationJournal {
   private transactionDepth = 0;
+  public readonly migrationReceipt: StorageMigrationReceipt;
 
   public constructor(
     private readonly database: DatabaseSync,
     private readonly options: SqliteOperationJournalOptions = {},
   ) {
-    this.database.exec(loadCoreMigration());
+    this.migrationReceipt = runStorageMigrations(
+      this.database,
+      loadStorageMigrations(),
+    );
   }
 
   public runInImmediateTransaction<T>(work: () => T): T {

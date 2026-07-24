@@ -1,8 +1,9 @@
-import { mkdir, readFile, copyFile, rm } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { build } from "esbuild";
+import { copySqlMigrations } from "../dist/migration-resources.js";
 
 const desktopDirectory = dirname(dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = join(desktopDirectory, "..", "..");
@@ -60,14 +61,7 @@ for (const forbidden of [
     throw new Error("PRODUCTION_BUNDLE_CONTAINS_E2E_FIXTURE");
   }
 }
-await copyFile(
-  join(
-    repositoryRoot,
-    "packages",
-    "storage",
-    "src",
-    "migrations",
-    "001-core.sql",
-  ),
-  join(daemonOutputDirectory, "migrations", "001-core.sql"),
+await copySqlMigrations(
+  join(repositoryRoot, "packages", "storage", "src", "migrations"),
+  join(daemonOutputDirectory, "migrations"),
 );

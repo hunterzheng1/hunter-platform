@@ -19,6 +19,7 @@ record should retain a hash and a safe summary.
 
 Current records:
 
+- [`phase-1-versioned-migrations.md`](phase-1-versioned-migrations.md) — Task 3 versioned SQLite ledger, fail-closed startup integrity, legacy v1 compatibility, and desktop migration resource evidence.
 - [`phase-1-acceptance-ledger.md`](phase-1-acceptance-ledger.md) — test-enforced Phase 1 functional, Golden, non-functional, release-blocker, and supply-chain status ledger.
 - [`phase-1-hardening-baseline.md`](phase-1-hardening-baseline.md) — PR #5 merge fact, fresh-worktree RED/GREEN evidence, supply-chain permission boundary, and the Phase 1 provider status boundary.
 - [`vertical-slice-acceptance.md`](vertical-slice-acceptance.md) — Fake-only 首个产品纵向切片、双来源 Knowledge、移动安全与未签名 Windows 打包验收；真实 Provider 仍为 NOT_PROVEN。
