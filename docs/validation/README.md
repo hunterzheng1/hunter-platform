@@ -19,6 +19,7 @@ record should retain a hash and a safe summary.
 
 Current records:
 
+- [`phase-1-diagnostic-bundle.md`](phase-1-diagnostic-bundle.md) — Task 5 versioned redaction, allowlisted diagnostic bundle, fail-closed input bounds, and five-output Secret canary evidence.
 - [`phase-1-backup-restore.md`](phase-1-backup-restore.md) — Task 4 online SQLite snapshot, versioned manifest, fail-closed reference reconciliation, and isolated restore drill evidence.
 - [`phase-1-versioned-migrations.md`](phase-1-versioned-migrations.md) — Task 3 versioned SQLite ledger, fail-closed startup integrity, legacy v1 compatibility, and desktop migration resource evidence.
 - [`phase-1-acceptance-ledger.md`](phase-1-acceptance-ledger.md) — test-enforced Phase 1 functional, Golden, non-functional, release-blocker, and supply-chain status ledger.
