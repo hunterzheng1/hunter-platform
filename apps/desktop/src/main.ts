@@ -68,6 +68,8 @@ async function startApplication(): Promise<void> {
     app.isPackaged
       ? packagedResource(join("daemon", "main.cjs"))
       : join(app.getAppPath(), "dist-sidecar", "main.cjs"),
+    process.execPath,
+    app.getPath("userData"),
   );
   const daemon = await supervisor.startProtected(capability);
   const client = new DesktopDaemonClient(daemon.port, capability);

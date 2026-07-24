@@ -42,6 +42,12 @@ await build({
   format: "cjs",
   platform: "node",
   target: "node24",
+  banner: {
+    js: "const __hunterImportMetaUrl = require('node:url').pathToFileURL(__filename).href;",
+  },
+  define: {
+    "import.meta.url": "__hunterImportMetaUrl",
+  },
   sourcemap: false,
 });
 const daemonBundle = await readFile(daemonOutput, "utf8");

@@ -8,15 +8,20 @@ export type SpawnDaemon = (
 ) => ChildProcess;
 
 const DAEMON_ARGUMENTS = ["--port=0", "--bootstrap-stdin"] as const;
-const DAEMON_ENVIRONMENT = Object.freeze({
-  ELECTRON_RUN_AS_NODE: "1",
-  ...(process.platform === "win32" && process.env.SystemRoot !== undefined
-    ? { SystemRoot: process.env.SystemRoot }
-    : {}),
-  ...(process.platform === "win32" && process.env.WINDIR !== undefined
-    ? { WINDIR: process.env.WINDIR }
-    : {}),
-});
+function daemonEnvironment(dataDirectory: string | undefined) {
+  return Object.freeze({
+    ELECTRON_RUN_AS_NODE: "1",
+    ...(dataDirectory === undefined
+      ? {}
+      : { HUNTER_DESKTOP_DATA_DIRECTORY: dataDirectory }),
+    ...(process.platform === "win32" && process.env.SystemRoot !== undefined
+      ? { SystemRoot: process.env.SystemRoot }
+      : {}),
+    ...(process.platform === "win32" && process.env.WINDIR !== undefined
+      ? { WINDIR: process.env.WINDIR }
+      : {}),
+  });
+}
 const CapabilitySchema = z.string().regex(/^[A-Za-z0-9_-]{43}$/u);
 const ReadinessSchema = z.strictObject({
   schemaVersion: z.literal(1),
@@ -33,6 +38,7 @@ export class DaemonSupervisor {
     private readonly spawn: SpawnDaemon = nodeSpawn,
     private readonly daemonEntry: string,
     private readonly runtimeExecutable: string = process.execPath,
+    private readonly dataDirectory?: string | undefined,
   ) {}
 
   start(): ChildProcess {
@@ -42,7 +48,7 @@ export class DaemonSupervisor {
       this.runtimeExecutable,
       [this.daemonEntry, ...DAEMON_ARGUMENTS],
       {
-        env: DAEMON_ENVIRONMENT,
+        env: daemonEnvironment(this.dataDirectory),
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
       },

@@ -16,6 +16,8 @@ import {
   startRemoteTlsListener,
   type RemoteTlsListenerResult,
 } from "./auth/remote-tls-listener.js";
+import type { LocalPrincipal } from "./auth/local-authenticator.js";
+import { LocalCapabilityVerifier } from "./auth/local-capability.js";
 import { createMobileProjectionProvider } from "./routes/mobile-projections.js";
 import {
   createApplicationComposition,
@@ -45,8 +47,12 @@ export interface DaemonStartOptions {
   readonly repositories?: SqliteServiceRepositories | undefined;
   readonly externalHandler: ExternalOperationHandler;
   readonly verifier: CompletionVerifierPort;
-  readonly allowedHost: string;
+  readonly allowedHost?: string | undefined;
   readonly allowedOrigin: string;
+  readonly localCapability?: {
+    readonly capability: string;
+    readonly principal: LocalPrincipal;
+  } | undefined;
   readonly publishPort: (port: number) => Promise<void>;
   readonly remote?: RemoteDaemonOptions | undefined;
   readonly archive?: ApplicationCompositionInput["archive"] | undefined;
@@ -73,13 +79,16 @@ export async function startDaemon(options: DaemonStartOptions) {
   let workerDrain: Promise<void> = Promise.resolve();
   let remote: RemoteTlsListenerResult = { status: "disabled" };
   try {
+    const allowedHosts = options.allowedHost === undefined
+      ? []
+      : [options.allowedHost];
     const composition = createApplicationComposition({
       database,
       repositories: options.repositories,
       externalHandler: options.externalHandler,
       verifier: options.verifier,
       installSecret,
-      allowedHosts: [options.allowedHost],
+      allowedHosts,
       allowedOrigins: [options.allowedOrigin],
       contentDirectory: options.dataDirectory,
       ...(options.archive === undefined ? {} : { archive: options.archive }),
@@ -115,13 +124,37 @@ export async function startDaemon(options: DaemonStartOptions) {
        ON CONFLICT(metadata_key) DO UPDATE SET metadata_value = excluded.metadata_value, updated_at = excluded.updated_at`,
     ).run(options.secretRef, new Date().toISOString());
     await services.recovery.run();
-    await services.operationWorker.runOnce();
+    const settlementPending = (error: unknown) =>
+      error instanceof Error
+      && /^(?:ATTEMPT_RETURN_NOT_OBSERVED|CONTROLLER_LEASE_REQUIRED|NATIVE_SESSION_RECEIPT_REQUIRED|OPERATION_(?:DELIVERY|RECEIPT)_)/u.test(
+        error.message,
+      );
+    const driveApplication = async () => {
+      await services.operationWorker.runOnce();
+      const candidates = services.flowStore.allRuns().filter(
+        (state) =>
+          !["succeeded", "failed", "canceled"].includes(state.status)
+          && state.steps.some(
+            (step) =>
+              step.conclusion === "active"
+              && step.attempts.at(-1)?.assignment !== undefined,
+          ),
+      );
+      for (const state of candidates) {
+        try {
+          await composition.attemptSettlement.settle(state.binding.runId);
+        } catch (error) {
+          if (!settlementPending(error)) throw error;
+        }
+      }
+    };
+    await driveApplication();
     let workerFailure: unknown;
     const superviseWorker = () => {
       workerDrain = workerDrain.then(async () => {
         if (workerFailure !== undefined) return;
         try {
-          await services.operationWorker.runOnce();
+          await driveApplication();
         } catch (error) {
           workerFailure = error;
         }
@@ -134,6 +167,16 @@ export async function startDaemon(options: DaemonStartOptions) {
       allowedHosts: services.allowedHosts,
       allowedOrigins: services.allowedOrigins,
       eventStream: services.eventStream,
+      ...(options.localCapability === undefined
+        ? {}
+        : {
+            localCapability: {
+              verifier: new LocalCapabilityVerifier(
+                options.localCapability.capability,
+              ),
+              principal: options.localCapability.principal,
+            },
+          }),
       devices: pairing === undefined || tokens === undefined || deviceStore === undefined
         ? undefined
         : { pairing, store: deviceStore },
@@ -169,6 +212,9 @@ export async function startDaemon(options: DaemonStartOptions) {
     await app.listen(listenOptions);
     const address = app.server.address();
     if (address === null || typeof address === "string") throw new Error("DAEMON_LISTEN_ADDRESS_INVALID");
+    if (options.allowedHost === undefined) {
+      allowedHosts.push(`127.0.0.1:${address.port}`);
+    }
     const remoteOptions = options.remote;
     if (
       remoteOptions?.enabled === true

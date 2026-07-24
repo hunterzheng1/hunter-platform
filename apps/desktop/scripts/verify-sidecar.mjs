@@ -1,6 +1,8 @@
 import { Buffer } from "node:buffer";
 import { createHash, createHmac } from "node:crypto";
 import { spawn } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 import { clearTimeout, setTimeout } from "node:timers";
@@ -99,9 +101,13 @@ function waitForReadiness(child, capability) {
 
 async function start(index) {
   const capability = Buffer.alloc(32, index).toString("base64url");
+  const dataDirectory = await mkdtemp(
+    join(tmpdir(), "hunter-sidecar-smoke-"),
+  );
   const args = [daemonEntry, "--port=0", "--bootstrap-stdin"];
   const environment = {
     ELECTRON_RUN_AS_NODE: "1",
+    HUNTER_DESKTOP_DATA_DIRECTORY: dataDirectory,
     ...(process.platform === "win32" && process.env.SystemRoot !== undefined
       ? { SystemRoot: process.env.SystemRoot }
       : {}),
@@ -114,42 +120,52 @@ async function start(index) {
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
-  child.stdin.end(`${capability}\n`, "utf8");
-  const readiness = await waitForReadiness(child, capability);
-  const host = `127.0.0.1:${readiness.port}`;
-  const timestamp = Date.now();
-  const nonce = `sidecar-smoke-nonce-${index}`;
-  const bodyDigest = createHash("sha256").update("").digest("hex");
-  const canonical = [
-    "GET",
-    "/health",
-    host,
-    "app://hunter",
-    String(timestamp),
-    nonce,
-    "",
-    bodyDigest,
-  ].join("\n");
-  const signature = createHmac(
-    "sha256",
-    Buffer.from(capability, "base64url"),
-  ).update(canonical).digest("base64url");
-  const response = await globalThis.fetch(`http://${host}/health`, {
-    headers: {
+  try {
+    child.stdin.end(`${capability}\n`, "utf8");
+    const readiness = await waitForReadiness(child, capability);
+    const host = `127.0.0.1:${readiness.port}`;
+    const timestamp = Date.now();
+    const nonce = `sidecar-smoke-nonce-${index}`;
+    const bodyDigest = createHash("sha256").update("").digest("hex");
+    const canonical = [
+      "GET",
+      "/health",
       host,
-      origin: "app://hunter",
-      "x-hunter-local-timestamp": String(timestamp),
-      "x-hunter-local-nonce": nonce,
-      "x-hunter-local-body-sha256": bodyDigest,
-      "x-hunter-local-signature": signature,
-    },
-  });
-  if (response.status !== 200) {
-    child.kill("SIGTERM");
-    throw new Error("SIDECAR_AUTHENTICATED_HEALTH_FAILED");
+      "app://hunter",
+      String(timestamp),
+      nonce,
+      "",
+      bodyDigest,
+    ].join("\n");
+    const signature = createHmac(
+      "sha256",
+      Buffer.from(capability, "base64url"),
+    ).update(canonical).digest("base64url");
+    const response = await globalThis.fetch(`http://${host}/health`, {
+      headers: {
+        host,
+        origin: "app://hunter",
+        "x-hunter-local-timestamp": String(timestamp),
+        "x-hunter-local-nonce": nonce,
+        "x-hunter-local-body-sha256": bodyDigest,
+        "x-hunter-local-signature": signature,
+      },
+    });
+    if (response.status !== 200) {
+      throw new Error("SIDECAR_AUTHENTICATED_HEALTH_FAILED");
+    }
+    await response.body?.cancel();
+    return { child, dataDirectory, port: readiness.port };
+  } catch (error) {
+    if (child.exitCode === null) {
+      const closed = new Promise((resolveClose) =>
+        child.once("close", resolveClose));
+      child.kill("SIGTERM");
+      await closed;
+    }
+    await rm(dataDirectory, { recursive: true, force: true });
+    throw error;
   }
-  await response.body?.cancel();
-  return { child, port: readiness.port };
 }
 
 const running = await Promise.all([start(17), start(23)]);
@@ -168,5 +184,12 @@ try {
     })}\n`,
   );
 } finally {
-  for (const { child } of running) child.kill("SIGTERM");
+  await Promise.all(running.map(async ({ child, dataDirectory }) => {
+    if (child.exitCode === null) {
+      const closed = new Promise((resolve) => child.once("close", resolve));
+      child.kill("SIGTERM");
+      await closed;
+    }
+    await rm(dataDirectory, { recursive: true, force: true });
+  }));
 }

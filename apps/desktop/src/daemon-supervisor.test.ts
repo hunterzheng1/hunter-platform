@@ -43,6 +43,31 @@ describe("DaemonSupervisor", () => {
     );
   });
 
+  it("passes only the owned desktop data directory through the child environment", () => {
+    const child = new FakeChild();
+    const spawn = vi.fn(() => child) as unknown as SpawnDaemon;
+    const supervisor = new DaemonSupervisor(
+      spawn,
+      "C:\\Hunter\\daemon\\main.cjs",
+      "C:\\Hunter\\electron.exe",
+      "C:\\Users\\owner\\AppData\\Roaming\\Hunter",
+    );
+
+    supervisor.start();
+
+    expect(spawn).toHaveBeenCalledWith(
+      "C:\\Hunter\\electron.exe",
+      ["C:\\Hunter\\daemon\\main.cjs", "--port=0", "--bootstrap-stdin"],
+      expect.objectContaining({
+        env: expect.objectContaining({
+          ELECTRON_RUN_AS_NODE: "1",
+          HUNTER_DESKTOP_DATA_DIRECTORY:
+            "C:\\Users\\owner\\AppData\\Roaming\\Hunter",
+        }),
+      }),
+    );
+  });
+
   it("terminates only its owned child once and waits for exit before restarting", () => {
     const first = new FakeChild();
     const second = new FakeChild();

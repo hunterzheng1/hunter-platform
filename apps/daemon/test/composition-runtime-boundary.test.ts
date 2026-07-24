@@ -23,6 +23,14 @@ describe("production Runtime and verifier composition", () => {
       ),
       "utf8",
     );
+    const mainSource = readFileSync(
+      resolve(import.meta.dirname, "..", "src", "main.ts"),
+      "utf8",
+    );
+    const packagedMainSource = readFileSync(
+      resolve(import.meta.dirname, "..", "src", "protected-main.ts"),
+      "utf8",
+    );
 
     expect(fixtureSource).not.toMatch(
       /services\.flowEngine\.handle\(\{\s*type:\s*"RecordExternalObservation"/u,
@@ -32,6 +40,11 @@ describe("production Runtime and verifier composition", () => {
     );
     expect(compositionSource).toContain("AttemptSettlementRunner");
     expect(compositionSource).toContain("attemptSettlement");
+    expect(mainSource).toContain("attemptSettlement.settle");
+    expect(packagedMainSource).toContain("startDaemon");
+    expect(packagedMainSource).not.toContain(
+      "startProtectedBoundaryDaemon",
+    );
   });
 
   it("queries Outbox, receipts, and leases through their owning modules", () => {
