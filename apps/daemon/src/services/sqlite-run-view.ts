@@ -4,7 +4,7 @@ import {
   RunViewHttpResponseSchema,
   type RunViewHttpResponse,
 } from "@hunter/api-contracts";
-import type { RunId } from "@hunter/domain";
+import { ArtifactIdSchema, type RunId } from "@hunter/domain";
 import {
   currentRecoveryStep,
   type
@@ -105,6 +105,16 @@ export function createSqliteRunViewService(input: {
                 attempt,
               });
               const reason = waitingReason(attempt);
+              const artifactIds = ArtifactIdSchema.array().parse(
+                (input.database.prepare(
+                  `SELECT artifact_id
+                     FROM artifact_catalog
+                    WHERE attempt_id = ?
+                    ORDER BY created_at, artifact_id`,
+                ).all(attempt.attemptId) as unknown as readonly {
+                  readonly artifact_id: string;
+                }[]).map(({ artifact_id }) => artifact_id),
+              );
               return {
                 attemptId: attempt.attemptId,
                 attemptNumber: attempt.attemptNumber,
@@ -113,7 +123,7 @@ export function createSqliteRunViewService(input: {
                   && attempt.attemptId === currentAttemptId,
                 executionStatus: attempt.executionStatus,
                 verificationStatus: attempt.verificationStatus,
-                artifactIds: [],
+                artifactIds,
                 evidenceIds: evidence.flatMap((reference) =>
                   "evidenceId" in reference ? [reference.evidenceId] : []
                 ),

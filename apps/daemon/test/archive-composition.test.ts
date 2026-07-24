@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,6 +31,7 @@ import {
   canonicalSha256,
 } from "@hunter/domain";
 import { CanonicalWorkspaceKeySchema } from "@hunter/runtime-contracts";
+import { createWorkflowRunBinding } from "@hunter/flow-engine";
 import {
   SqliteArchiveJobStore,
   type ArchiveManifestSource,
@@ -41,8 +43,12 @@ import { createSqliteApplicationServices } from "../src/services/sqlite-applicat
 const projectId = ProjectIdSchema.parse("prj_archive_composition");
 const runId = RunIdSchema.parse("run_archive_composition");
 const ownerId = LeaseOwnerIdSchema.parse("own_archive_composition");
+const attemptId = AttemptIdSchema.parse("att_archive_composition");
 const now = new Date("2026-07-24T02:00:00.000Z");
-const contentHash = "a".repeat(64);
+const archiveContent = "archive-composition-content";
+const contentHash = createHash("sha256")
+  .update(archiveContent, "utf8")
+  .digest("hex");
 
 const temporaryRoots = new Set<string>();
 const temporaryDatabases = new Set<DatabaseSync>();
@@ -59,7 +65,6 @@ afterEach(() => {
 function fixtureSource(): ArchiveManifestSource {
   const repositoryId = RepositoryIdSchema.parse("rep_archive_composition");
   const deviceBindingId = DeviceBindingIdSchema.parse("dev_archive_composition");
-  const attemptId = AttemptIdSchema.parse("att_archive_composition");
   const workspaceId = WorkspaceIdSchema.parse("wsp_archive_composition");
   const worktreeId = WorktreeIdSchema.parse("wtr_archive_composition");
   const lease = {
@@ -174,6 +179,40 @@ function fixtureSource(): ArchiveManifestSource {
   };
 }
 
+function runBinding() {
+  return createWorkflowRunBinding({
+    runId,
+    projectId,
+    changeRevisionId: ChangeRevisionIdSchema.parse(
+      "crv_archive_composition",
+    ),
+    requirementRevisionIds: [
+      RequirementRevisionIdSchema.parse("rrv_archive_composition"),
+    ],
+    workflowRevisionId: WorkflowRevisionIdSchema.parse(
+      "wfr_archive_composition",
+    ),
+    policySnapshot: {
+      policyVersion: 1,
+      snapshotHash: "b".repeat(64),
+    },
+    initialBudget: {
+      maxAttempts: 3,
+      maxElapsedMs: 60_000,
+      maxCost: 10,
+      maxTokens: 1_000,
+      maxLoopIterations: 1,
+    },
+    subjectKind: "change",
+    parentRunId: null,
+    taskId: null,
+    executionPlanId: ExecutionPlanIdSchema.parse(
+      "epl_archive_composition",
+    ),
+    taskGraphFingerprint: "c".repeat(64),
+  });
+}
+
 function createServices(database: DatabaseSync, root: string) {
   return createSqliteApplicationServices({
     database,
@@ -186,6 +225,7 @@ function createServices(database: DatabaseSync, root: string) {
     allowedHosts: ["hunter-test.localhost"],
     allowedOrigins: ["app://hunter"],
     now: () => now,
+    contentDirectory: root,
     archive: {
       root,
       source: fixtureSource(),
@@ -239,11 +279,38 @@ describe("archive application composition", () => {
       commandId: "archive-start",
       expectedVersion: 0,
       eventId: "evt_archive_start",
-      flowEvent: { type: "RunStarted" },
+      flowEvent: { type: "RunStarted", binding: runBinding() },
+    });
+    commitFlowEvent(services, {
+      commandId: "archive-step",
+      expectedVersion: 1,
+      eventId: "evt_archive_step",
+      flowEvent: {
+        type: "StepActivated",
+        stepRunId: StepRunIdSchema.parse("spr_archive_composition"),
+        stepId: StepIdSchema.parse("stp_archive_composition"),
+        attemptId,
+        attemptNumber: 1,
+        fixedContentHash: "d".repeat(64),
+      },
+    });
+    const artifactId = ArtifactIdSchema.parse("art_archive_composition");
+    services.artifactCatalog?.register({
+      artifactId,
+      projectId,
+      attemptId,
+      kind: "log",
+      retentionClass: "standard",
+      summary: "Archive composition Artifact",
+    });
+    services.artifactCatalog?.append({
+      artifactId,
+      stream: "system",
+      content: archiveContent,
     });
     const terminal = commitFlowEvent(services, {
       commandId: "archive-terminal",
-      expectedVersion: 1,
+      expectedVersion: 2,
       eventId: "evt_archive_terminal",
       flowEvent: { type: "RunConcluded", status: "failed" },
     });
@@ -253,9 +320,9 @@ describe("archive application composition", () => {
     ).get(projectId, runId)).toEqual({
       status: "pending",
       first_position: 1,
-      last_position: 2,
+      last_position: 3,
     });
-    expect(terminal).toMatchObject({ firstPosition: 2, lastPosition: 2 });
+    expect(terminal).toMatchObject({ firstPosition: 3, lastPosition: 3 });
 
     database.close();
     temporaryDatabases.delete(database);
@@ -270,6 +337,10 @@ describe("archive application composition", () => {
     expect(database.prepare(
       "SELECT status, attempt_count FROM archive_jobs WHERE project_id = ? AND run_id = ?",
     ).get(projectId, runId)).toEqual({ status: "completed", attempt_count: 1 });
+    expect(() => services.artifactCatalog?.pruneBefore({
+      artifactId,
+      cursor: 1,
+    })).toThrow("ARTIFACT_RETENTION_PROTECTED");
   });
 
   it("rolls back the terminal event when the archive schedule conflicts", () => {
@@ -283,7 +354,7 @@ describe("archive application composition", () => {
       commandId: "atomic-start",
       expectedVersion: 0,
       eventId: "evt_atomic_start",
-      flowEvent: { type: "RunStarted" },
+      flowEvent: { type: "RunStarted", binding: runBinding() },
     });
     new SqliteArchiveJobStore(database).schedule({
       projectId,

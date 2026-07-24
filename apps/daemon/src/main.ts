@@ -26,6 +26,7 @@ import {
 import { createDesktopDefinitionServices } from "./services/desktop-definition-services.js";
 import type { CompletionVerifierPort } from "./services/application-services.js";
 import type { SqliteServiceRepositories } from "./services/sqlite-application-services.js";
+import { SqliteArtifactPages } from "./services/sqlite-artifact-pages.js";
 import { SqliteArchiveManifestSource } from "./services/sqlite-archive-manifest-source.js";
 
 export type RemoteDaemonOptions =
@@ -120,6 +121,11 @@ export async function startDaemon(options: DaemonStartOptions) {
       ...(archive === undefined ? {} : { archive }),
     });
     const { services } = composition;
+    const artifactCatalog = services.artifactCatalog;
+    if (artifactCatalog === undefined) {
+      throw new Error("ARTIFACT_CATALOG_NOT_COMPOSED");
+    }
+    const artifactPages = new SqliteArtifactPages(artifactCatalog);
     if (options.archive !== undefined && options.archive.source === undefined) {
       ownedArchiveSource = new SqliteArchiveManifestSource(services);
     }
@@ -220,6 +226,7 @@ export async function startDaemon(options: DaemonStartOptions) {
         ? undefined
         : { pairing, store: deviceStore },
       services: {
+        artifacts: artifactPages,
         listProjects: async (authorizedProjectIds) => {
           return authorizedProjectIds.flatMap((projectId) => {
             const project = services.repositories.getProject(projectId);

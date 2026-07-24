@@ -1,4 +1,5 @@
 import {
+  ArtifactIdSchema,
   AttemptIdSchema,
   CapabilityProbeReceiptIdSchema,
   ControllerLeaseIdSchema,
@@ -28,7 +29,7 @@ import {
   LeaseSchema,
   createExternalOperation,
 } from "@hunter/runtime-contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { SqliteArchiveManifestSource } from "../src/services/sqlite-archive-manifest-source.js";
 
@@ -166,6 +167,16 @@ function lease(kind: "workspace" | "writer" | "controller") {
 function sourceFor(
   outcome: "succeeded" | "failed",
   attempts: readonly ReturnType<typeof attempt>[],
+  artifactCatalog?: {
+    readonly listForAttempt: (attemptId: string) => readonly {
+      readonly artifactId: ReturnType<typeof ArtifactIdSchema.parse>;
+    }[];
+    readonly contentEdges: () => readonly {
+      readonly contentRef: string;
+      readonly contentHash: string;
+    }[];
+    readonly protect: (input: unknown) => void;
+  },
 ) {
   const run = {
     binding: {
@@ -247,6 +258,7 @@ function sourceFor(
           OperationIdSchema.parse(operation.operationId),
         )?.receipt ?? null,
     },
+    artifactCatalog,
   };
   return new SqliteArchiveManifestSource(
     services as unknown as ConstructorParameters<
@@ -308,5 +320,29 @@ describe("SQLite Archive manifest source", () => {
     expect(() => sourceFor("succeeded", [unverified]).build(
       job("succeeded"),
     )).toThrow("ARCHIVE_VERIFICATION_EVIDENCE_MISSING");
+  });
+
+  it("archives every durable Artifact CAS edge without protecting before publication", () => {
+    const verified = attempt(1, "e".repeat(64));
+    const artifactId = ArtifactIdSchema.parse("art_archive_source01");
+    const contentHash = "a".repeat(64);
+    const protect = vi.fn();
+    const manifest = sourceFor("succeeded", [verified], {
+      listForAttempt: () => [{ artifactId }],
+      contentEdges: () => [{
+        contentRef: `cas:sha256:${contentHash}`,
+        contentHash,
+      }],
+      protect,
+    }).build(job("succeeded"));
+
+    expect(
+      manifest.runGraph.runs[0]?.steps[0]?.attempts[0]?.artifacts,
+    ).toEqual([{
+      artifactId,
+      contentRef: `cas:sha256:${contentHash}`,
+      contentHash,
+    }]);
+    expect(protect).not.toHaveBeenCalled();
   });
 });

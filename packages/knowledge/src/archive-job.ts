@@ -260,6 +260,7 @@ export class SqliteArchiveJobStore {
     job: LeasedArchiveJob,
     receiptInput: unknown,
     now: Date,
+    recordReferences?: (receipt: VerifiedArchiveReceipt) => void,
   ): VerifiedArchiveReceipt {
     const receipt = VerifiedArchiveReceiptSchema.parse(receiptInput);
     if (
@@ -281,6 +282,7 @@ export class SqliteArchiveJobStore {
         if (JSON.stringify(existing) !== JSON.stringify(receipt)) {
           throw new Error("ARCHIVE_RECEIPT_CONFLICT");
         }
+        recordReferences?.(existing);
         this.database.exec("COMMIT");
         return existing;
       }
@@ -296,6 +298,7 @@ export class SqliteArchiveJobStore {
         now.toISOString(),
         job.jobId,
       );
+      recordReferences?.(receipt);
       this.database.exec("COMMIT");
       return receipt;
     } catch (error) {
@@ -393,6 +396,10 @@ export class ArchiveJobWorker {
       readonly now?: () => Date;
       readonly leaseDurationMs?: number;
       readonly fault?: (point: ArchiveJobFaultPoint) => void;
+      readonly recordReceiptReferences?: (
+        job: LeasedArchiveJob,
+        receipt: VerifiedArchiveReceipt,
+      ) => void;
     },
   ) {
     this.projector = new ArchiveKnowledgeProjector(options.catalog);
@@ -428,6 +435,9 @@ export class ArchiveJobWorker {
           job,
           receipt,
           this.currentTime(),
+          (recordedReceipt) => {
+            this.options.recordReceiptReferences?.(job, recordedReceipt);
+          },
         );
       }
       this.options.fault?.("after_archive_receipt");

@@ -31,7 +31,7 @@ import {
 } from "@hunter/domain";
 import { CanonicalWorkspaceKeySchema } from "@hunter/runtime-contracts";
 import { SqliteOperationJournal } from "@hunter/storage";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   ArchiveJobWorker,
@@ -362,6 +362,89 @@ describe("Archive manifest boundary", () => {
 });
 
 describe("ArchiveJobWorker crash recovery", () => {
+  it("records archive protection in the receipt transaction", async () => {
+    const root = mkdtempSync(join(tmpdir(), "hunter-archive-protection-"));
+    temporaryRoots.add(root);
+    const database = new DatabaseSync(join(root, "hunter.sqlite"));
+    temporaryDatabases.add(database);
+    new SqliteOperationJournal(database);
+    const store = new SqliteArchiveJobStore(database);
+    const scheduled = store.schedule({
+      projectId,
+      runId,
+      outcome: "failed",
+      firstPosition: 1,
+      lastPosition: 24,
+      actorId: "archive-test",
+      correlationId: "archive-protection",
+      occurredAt: "2026-07-24T00:00:00.000Z",
+    });
+    const recordReceiptReferences = vi.fn(() => {
+      expect(database.prepare(
+        "SELECT archive_receipt_json FROM archive_jobs WHERE job_id = ?",
+      ).get(scheduled.jobId)).toMatchObject({
+        archive_receipt_json: expect.stringContaining(
+          "\"receiptSchemaVersion\":1",
+        ),
+      });
+    });
+    const worker = new ArchiveJobWorker({
+      store,
+      writer: new ArchiveWriter(join(root, "archives")),
+      catalog: new SqliteKnowledgeCatalog(
+        database,
+        () => new Date("2026-07-24T00:01:00.000Z"),
+      ),
+      source: { build: () => manifestInput() },
+      ownerId,
+      now: () => new Date("2026-07-24T00:01:00.000Z"),
+      recordReceiptReferences,
+    });
+
+    await expect(worker.runOnce()).resolves.toBe("completed");
+    expect(recordReceiptReferences).toHaveBeenCalledOnce();
+  });
+
+  it("rolls back the receipt when archive reference protection fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "hunter-archive-protection-fail-"));
+    temporaryRoots.add(root);
+    const database = new DatabaseSync(join(root, "hunter.sqlite"));
+    temporaryDatabases.add(database);
+    new SqliteOperationJournal(database);
+    const store = new SqliteArchiveJobStore(database);
+    const scheduled = store.schedule({
+      projectId,
+      runId,
+      outcome: "failed",
+      firstPosition: 1,
+      lastPosition: 24,
+      actorId: "archive-test",
+      correlationId: "archive-protection-fail",
+      occurredAt: "2026-07-24T00:00:00.000Z",
+    });
+    const worker = new ArchiveJobWorker({
+      store,
+      writer: new ArchiveWriter(join(root, "archives")),
+      catalog: new SqliteKnowledgeCatalog(
+        database,
+        () => new Date("2026-07-24T00:01:00.000Z"),
+      ),
+      source: { build: () => manifestInput() },
+      ownerId,
+      now: () => new Date("2026-07-24T00:01:00.000Z"),
+      recordReceiptReferences: () => {
+        throw new Error("ARCHIVE_REFERENCE_WRITE_FAILED");
+      },
+    });
+
+    await expect(worker.runOnce()).resolves.toBe("needs_attention");
+    expect(database.prepare(
+      "SELECT archive_receipt_json FROM archive_jobs WHERE job_id = ?",
+    ).get(scheduled.jobId)).toEqual({
+      archive_receipt_json: null,
+    });
+  });
+
   it.each([
     "before_manifest_publication",
     "after_manifest_publication",
@@ -389,6 +472,7 @@ describe("ArchiveJobWorker crash recovery", () => {
         occurredAt: "2026-07-24T00:00:00.000Z",
       });
       const source = { build: () => manifestInput() };
+      const recordReceiptReferences = vi.fn();
       let injected = false;
       const crashing = new ArchiveJobWorker({
         store,
@@ -398,6 +482,7 @@ describe("ArchiveJobWorker crash recovery", () => {
         ownerId,
         now: () => new Date("2026-07-24T00:01:00.000Z"),
         leaseDurationMs: 1_000,
+        recordReceiptReferences,
         fault: (point) => {
           if (!injected && point === faultPoint) {
             injected = true;
@@ -416,6 +501,7 @@ describe("ArchiveJobWorker crash recovery", () => {
         ownerId,
         now: () => new Date("2026-07-24T00:03:00.000Z"),
         leaseDurationMs: 1_000,
+        recordReceiptReferences,
       });
 
       await expect(reconstructed.runOnce()).resolves.toBe("completed");
@@ -431,6 +517,7 @@ describe("ArchiveJobWorker crash recovery", () => {
       expect(database.prepare(
         "SELECT COUNT(*) AS count FROM knowledge_entries WHERE project_id = ?",
       ).get(projectId)).toEqual({ count: 1 });
+      expect(recordReceiptReferences).toHaveBeenCalledOnce();
       database.close();
       temporaryDatabases.delete(database);
     },

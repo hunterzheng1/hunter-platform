@@ -15,6 +15,7 @@ import { vi } from "vitest";
 
 import { LocalAuthenticator } from "../../src/auth/local-authenticator.js";
 import { buildApp } from "../../src/app.js";
+import type { ArtifactRoutesServices } from "../../src/routes/artifacts.js";
 import type { ProjectRoutesServices } from "../../src/routes/projects.js";
 import type { ChangeRoutesServices } from "../../src/routes/changes.js";
 import type { RequirementRoutesServices } from "../../src/routes/requirements.js";
@@ -30,11 +31,13 @@ const requirementId = RequirementIdSchema.parse("req_task2000001");
 const revisionId = RequirementRevisionIdSchema.parse("rrv_task2000001");
 
 type TestServices = ProjectRoutesServices & RunRoutesServices & {
+  readonly artifacts?: ArtifactRoutesServices | undefined;
   readonly changes: ChangeRoutesServices;
   readonly requirements: RequirementRoutesServices;
 };
 
 type TestServiceOverrides = Partial<ProjectRoutesServices & RunRoutesServices> & {
+  readonly artifacts?: Readonly<Partial<ArtifactRoutesServices>>;
   readonly changes?: Readonly<Partial<ChangeRoutesServices>>;
   readonly requirements?: Readonly<Partial<RequirementRoutesServices>>;
 };
@@ -47,7 +50,12 @@ export function buildTestApp(overrides: Readonly<TestServiceOverrides> = {}) {
     expiresAt: new Date(Date.now() + 60_000),
     csrf,
   });
-  const { changes: changeOverrides, requirements: requirementOverrides, ...rootOverrides } = overrides;
+  const {
+    artifacts: artifactOverrides,
+    changes: changeOverrides,
+    requirements: requirementOverrides,
+    ...rootOverrides
+  } = overrides;
   const services: TestServices = {
     listProjects: vi.fn(async () => []),
     createProject: vi.fn(async (): Promise<CreateProjectHttpResponse> => ({
@@ -100,6 +108,15 @@ export function buildTestApp(overrides: Readonly<TestServiceOverrides> = {}) {
       })),
       ...requirementOverrides,
     },
+    ...(artifactOverrides === undefined
+      ? {}
+      : {
+          artifacts: {
+            projectForArtifact: vi.fn(() => null),
+            readPage: vi.fn(() => null),
+            ...artifactOverrides,
+          },
+        }),
     projectForExecutionPlan: vi.fn(() => ({
       projectId: projectA,
       executionPlanId: ExecutionPlanIdSchema.parse("epl_task2000001"),

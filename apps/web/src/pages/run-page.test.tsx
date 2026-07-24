@@ -2,7 +2,10 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RunIdSchema } from "@hunter/domain/ids";
-import { RunViewHttpResponseSchema } from "@hunter/api-contracts";
+import {
+  ArtifactPageHttpResponseSchema,
+  RunViewHttpResponseSchema,
+} from "@hunter/api-contracts";
 
 import { RunPage } from "./run-page.js";
 import type { RunEventStreamHandlers } from "../hooks/use-run-events.js";
@@ -147,6 +150,55 @@ describe("RunPage", () => {
       }) as HTMLButtonElement).disabled,
     ).toBe(true);
     expect(screen.getByText(/历史 Attempt 只读/)).not.toBeNull();
+  });
+
+  it("loads only a requested bounded Artifact page through the shared API client", async () => {
+    const artifactPage = ArtifactPageHttpResponseSchema.parse({
+      schemaVersion: 1,
+      status: "ok",
+      artifact: {
+        artifactId: "art_task400001",
+        projectId: "prj_task400001",
+        attemptId: "att_task400002",
+        kind: "log",
+        retentionClass: "standard",
+        summary: "bounded run log",
+        byteLength: 4,
+        entryCount: 1,
+      },
+      cursor: 0,
+      nextCursor: 1,
+      retentionFloor: 0,
+      highWaterCursor: 1,
+      complete: true,
+      responseBytes: 4,
+      entries: [{
+        cursor: 1,
+        stream: "stdout",
+        content: "page",
+        contentHash: "a".repeat(64),
+        byteLength: 4,
+        occurredAt: "2026-07-24T12:00:00.000Z",
+      }],
+    });
+    const api = {
+      getRun: vi.fn(async () => runView),
+      getArtifactPage: vi.fn(async () => artifactPage),
+    };
+    render(<RunPage runId={runA} api={api} />);
+
+    await screen.findByRole("heading", { name: `Run ${runA}` });
+    fireEvent.click(screen.getByRole("button", { name: "测试 · 进行中" }));
+    expect(api.getArtifactPage).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", {
+      name: "加载产物 art_task400001",
+    }));
+
+    expect(await screen.findByText("page")).not.toBeNull();
+    expect(api.getArtifactPage).toHaveBeenCalledWith(
+      "art_task400001",
+      { cursor: 0, limit: 20 },
+    );
   });
 
   it("executes a receipt-derived recovery action with the current aggregate version without claiming Step success", async () => {

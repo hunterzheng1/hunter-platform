@@ -17,7 +17,9 @@ import { DatabaseSync } from "node:sqlite";
 
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
+import { ArtifactIdSchema, ProjectIdSchema } from "@hunter/domain";
 
+import { SqliteArtifactCatalog } from "./artifact-catalog.js";
 import {
   BackupManifestSchema,
   createBackupManifest,
@@ -226,7 +228,7 @@ describe("consistent Hunter backup and isolated restore", () => {
         backupId: BACKUP_ID,
         createdAt: NOW,
         storage: {
-          schemaVersion: 2,
+          schemaVersion: 3,
           eventLedger: { count: 1, firstPosition: 1, lastPosition: 1 },
         },
       });
@@ -240,7 +242,7 @@ describe("consistent Hunter backup and isolated restore", () => {
       expect(result.manifest.manifestHash).toMatch(/^[a-f0-9]{64}$/u);
       expect(result.migrationReceipt).toEqual({
         status: "verified",
-        sourceSchemaVersion: 2,
+        sourceSchemaVersion: 3,
         fingerprint: result.manifest.manifestHash,
       });
       expect(existsSync(join(result.backupDirectory, "manifest.json"))).toBe(true);
@@ -875,6 +877,65 @@ describe("consistent Hunter backup and isolated restore", () => {
     }
   });
 
+  it("fails closed when an Artifact catalog CAS reference is absent from the backup", async () => {
+    const source = fixture();
+    const backupRoot = temporaryRoot("artifact-cas-destination");
+    const restoreParent = temporaryRoot("artifact-cas-restore");
+    try {
+      const catalog = new SqliteArtifactCatalog(source.database, {
+        contentRoot: join(source.root, "content"),
+        quota: {
+          softLimitBytes: 1_024,
+          hardLimitBytes: 2_048,
+          criticalReserveBytes: 256,
+        },
+        now: () => new Date(NOW),
+      });
+      const artifactId = ArtifactIdSchema.parse("art_backup_catalog");
+      catalog.register({
+        artifactId,
+        projectId: ProjectIdSchema.parse("prj_backup_catalog"),
+        kind: "log",
+        retentionClass: "standard",
+        summary: "backup reconciliation fixture",
+      });
+      catalog.append({
+        artifactId,
+        stream: "stdout",
+        content: "catalog CAS content",
+      });
+      const backup = await createConsistentBackup({
+        sourceRoot: source.root,
+        backupRoot,
+        database: source.database,
+        backupId: BACKUP_ID,
+        now: () => new Date(NOW),
+      });
+      const files = backup.manifest.files.filter(
+        ({ scope }) => scope !== "content",
+      );
+      const rewritten = createBackupManifest({
+        schemaVersion: backup.manifest.schemaVersion,
+        backupId: backup.manifest.backupId,
+        createdAt: backup.manifest.createdAt,
+        storage: backup.manifest.storage,
+        files,
+      });
+      writeFileSync(
+        join(backup.backupDirectory, "manifest.json"),
+        `${JSON.stringify(rewritten)}\n`,
+        "utf8",
+      );
+
+      await expect(restoreConsistentBackup({
+        backupDirectory: backup.backupDirectory,
+        restoreRoot: join(restoreParent, "restored"),
+      })).rejects.toThrow("BACKUP_ORPHAN_ARTIFACT_CONTENT");
+    } finally {
+      source.database.close();
+    }
+  });
+
   it.each<BackupFaultPoint>([
     "after_database_snapshot",
     "after_files_copied",
@@ -955,14 +1016,14 @@ describe("consistent Hunter backup and isolated restore", () => {
       const migrations = [
         ...loadStorageMigrations(),
         {
-          version: 3,
+          version: 4,
           name: "rewrite-event-actor",
           sql: "UPDATE events SET actor_id = 'after';",
         },
       ];
       expect(
         validateStorageBackupSource(source.database, migrations).schemaVersion,
-      ).toBe(2);
+      ).toBe(3);
       expect(source.database.prepare(
         "SELECT actor_id FROM events WHERE event_id = ?",
       ).get("evt_backup_migration")).toEqual({ actor_id: "before" });
@@ -977,7 +1038,7 @@ describe("consistent Hunter backup and isolated restore", () => {
         now: () => new Date(NOW),
         backupReceiptFor: () => result.migrationReceipt,
       });
-      expect(receipt.schemaVersion).toBe(3);
+      expect(receipt.schemaVersion).toBe(4);
       expect(source.database.prepare(
         "SELECT actor_id FROM events WHERE event_id = ?",
       ).get("evt_backup_migration")).toEqual({ actor_id: "after" });

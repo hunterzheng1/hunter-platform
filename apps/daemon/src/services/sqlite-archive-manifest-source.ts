@@ -146,6 +146,16 @@ export class SqliteArchiveManifestSource implements ArchiveManifestSource {
                 const nativeReference = receipt.nativeReferences.find(
                   ({ kind }) => kind === "session",
                 );
+                const artifacts = this.services.artifactCatalog
+                  ?.listForAttempt(attempt.attemptId)
+                  .flatMap((artifact) =>
+                    this.services.artifactCatalog
+                      ?.contentEdges(artifact.artifactId)
+                      .map((edge) => ({
+                        artifactId: artifact.artifactId,
+                        ...edge,
+                      })) ?? []
+                  ) ?? [];
                 return {
                   attemptId: attempt.attemptId,
                   agentProfileId,
@@ -157,7 +167,7 @@ export class SqliteArchiveManifestSource implements ArchiveManifestSource {
                     nativeReference?.referenceId
                       ?? operation.operation.operationId,
                   ),
-                  artifacts: [],
+                  artifacts,
                   evidence: [{
                     evidenceId: EvidenceIdSchema.parse(
                       `evd_${canonicalSha256({
