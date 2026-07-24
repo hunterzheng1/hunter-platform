@@ -12,7 +12,9 @@ import { DatabaseSync } from "node:sqlite";
 import {
   createArchiveManifest,
   historicalKnowledgeEntryFor,
+  KnowledgeEntrySchema,
   VerifiedArchiveReceiptSchema,
+  verifyArchiveManifest,
 } from "../packages/knowledge/src/index.js";
 import {
   createConsistentBackup,
@@ -249,6 +251,12 @@ try {
   const restored = await restoreConsistentBackup({
     backupDirectory: created.backupDirectory,
     restoreRoot,
+    referenceValidators: {
+      parseArchiveManifest: verifyArchiveManifest,
+      parseArchiveReceipt: (input) =>
+        VerifiedArchiveReceiptSchema.parse(input),
+      parseKnowledgeEntry: (input) => KnowledgeEntrySchema.parse(input),
+    },
   });
   const inspection = new DatabaseSync(join(restoreRoot, "hunter.sqlite"), {
     readOnly: true,

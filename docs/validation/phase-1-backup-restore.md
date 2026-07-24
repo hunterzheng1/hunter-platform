@@ -35,10 +35,11 @@
   receipt；receipt 的 source schema version 与 manifest 一致，fingerprint 是
   manifest hash；
 - 恢复后使用 `@hunter/knowledge` 的 canonical Archive manifest、verified
-  receipt 和 Knowledge entry schema，对账 Event count/range/JSON、Project、
-  Run、outcome、manifest schema/hash/ref、Artifact/Evidence CAS 引用；Archive
-  只接受精确的 `archives/<manifest-hash>.json` 路径。缺文件、hash 漂移、无效
-  content reference、provenance 漂移或孤儿引用均拒绝发布恢复根；
+  receipt 和 Knowledge entry schema 作为组合层显式注入的 validators，对账
+  Event count/range/JSON、Project、Run、outcome、manifest schema/hash/ref、
+  Artifact/Evidence CAS 引用；storage 不反向依赖 knowledge。Archive 只接受
+  精确的 `archives/<manifest-hash>.json` 路径。缺文件、hash 漂移、无效 content
+  reference、provenance 漂移或孤儿引用均拒绝发布恢复根；
 - `runtime/`、`exports/`、源码仓库、worktree 和系统凭据库不在本任务备份范围。
   本批没有把备份扩展为生产保留策略、加密介质或远端同步。
 
@@ -76,6 +77,12 @@
 10. 第二轮审查发现 Archive 可落到嵌套目录、Knowledge 未完整核对
     Run/outcome/schema version，以及证据计数过期。增加 provenance/path 负例并
     修复后，精确测试 19/19、全量测试 932/932 通过。
+11. PR #9 首轮 Ubuntu Node 24 CI 在干净 checkout 的 `tsc -b` 真实失败：
+    `Cannot find module '@hunter/storage'`。`npx tsc -b --clean` 后本机复现，确认
+    storage → knowledge 与 knowledge 集成测试 → storage 构成构建期环，旧
+    `dist` 曾掩盖问题。将 canonical validators 改为恢复组合层的必填依赖并移除
+    storage → knowledge 后，无旧产物的根 typecheck、22 项定向测试、lint、
+    build 和恢复演练全部通过；失败 run 仍保留，不改写为 PASS。
 
 失败历史未重写为 PASS；每次重试都有新的原始错误或边界证据。
 

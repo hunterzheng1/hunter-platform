@@ -20,7 +20,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   createArchiveManifest,
   historicalKnowledgeEntryFor,
+  KnowledgeEntrySchema,
   VerifiedArchiveReceiptSchema,
+  verifyArchiveManifest,
 } from "@hunter/knowledge";
 
 import {
@@ -31,7 +33,8 @@ import {
 import {
   type BackupFaultPoint,
   createConsistentBackup,
-  restoreConsistentBackup,
+  type RestoreConsistentBackupInput,
+  restoreConsistentBackup as restoreConsistentBackupWithValidators,
 } from "./backup-service.js";
 import {
   loadStorageMigrations,
@@ -42,6 +45,21 @@ import {
 const roots = new Set<string>();
 const NOW = "2026-07-24T12:00:00.000Z";
 const BACKUP_ID = "bkp_20260724t120000000z_0123456789abcdef";
+const referenceValidators = {
+  parseArchiveManifest: verifyArchiveManifest,
+  parseArchiveReceipt: (input: unknown) =>
+    VerifiedArchiveReceiptSchema.parse(input),
+  parseKnowledgeEntry: (input: unknown) => KnowledgeEntrySchema.parse(input),
+};
+
+function restoreConsistentBackup(
+  input: Omit<RestoreConsistentBackupInput, "referenceValidators">,
+) {
+  return restoreConsistentBackupWithValidators({
+    ...input,
+    referenceValidators,
+  });
+}
 
 function temporaryRoot(label: string): string {
   const root = mkdtempSync(join(tmpdir(), `hunter-backup-${label}-`));

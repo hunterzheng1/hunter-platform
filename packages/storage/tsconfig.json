@@ -7,7 +7,6 @@
   },
   "references": [
     { "path": "../domain" },
-    { "path": "../knowledge" },
     { "path": "../runtime-contracts" },
     { "path": "../testkit" }
   ],

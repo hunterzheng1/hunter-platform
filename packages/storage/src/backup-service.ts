@@ -27,12 +27,6 @@ import {
 import { backup, DatabaseSync } from "node:sqlite";
 
 import {
-  KnowledgeEntrySchema,
-  VerifiedArchiveReceiptSchema,
-  verifyArchiveManifest,
-} from "@hunter/knowledge";
-
-import {
   BackupIdSchema,
   createBackupManifest,
   type BackupFileEntry,
@@ -71,6 +65,57 @@ export interface CreateConsistentBackupResult {
 export interface RestoreConsistentBackupInput {
   readonly backupDirectory: string;
   readonly restoreRoot: string;
+  readonly referenceValidators: BackupReferenceValidators;
+}
+
+interface ReconciledArchive {
+  readonly schemaVersion: 2;
+  readonly manifestHash: string;
+  readonly projectId: string;
+  readonly outcome: "succeeded" | "failed" | "canceled";
+  readonly ledger: {
+    readonly firstPosition: number;
+    readonly lastPosition: number;
+  };
+  readonly runGraph: {
+    readonly rootRunId: string;
+    readonly runs: readonly {
+      readonly steps: readonly {
+        readonly attempts: readonly {
+          readonly artifacts: readonly { readonly contentHash: string }[];
+          readonly evidence: readonly { readonly contentHash: string }[];
+        }[];
+      }[];
+    }[];
+  };
+}
+
+interface ReconciledArchiveReceipt {
+  readonly projectId: string;
+  readonly runId: string;
+  readonly outcome: "succeeded" | "failed" | "canceled";
+  readonly manifestSchemaVersion: number;
+  readonly manifestHash: string;
+  readonly manifestRef: string;
+}
+
+interface ReconciledKnowledgeEntry {
+  readonly level: string;
+  readonly scope: { readonly projectId: string };
+  readonly source: {
+    readonly projectId?: string | undefined;
+    readonly runId?: string | undefined;
+    readonly outcome?: string | undefined;
+    readonly manifestSchemaVersion?: number | undefined;
+    readonly manifestHash?: string | undefined;
+    readonly manifestRef?: string | undefined;
+  };
+}
+
+export interface BackupReferenceValidators {
+  readonly parseArchiveManifest: (input: unknown) => ReconciledArchive;
+  readonly parseArchiveReceipt: (input: unknown) => ReconciledArchiveReceipt;
+  readonly parseKnowledgeEntry: (input: unknown) => ReconciledKnowledgeEntry;
 }
 
 export interface BackupReconciliationReceipt {
@@ -480,6 +525,7 @@ function reconcileReferences(
   database: DatabaseSync,
   restoreRoot: string,
   manifest: BackupManifest,
+  validators: BackupReferenceValidators,
 ): BackupReconciliationReceipt {
   const ledger = ledgerSummary(database);
   const expected = manifest.storage.eventLedger;
@@ -548,11 +594,11 @@ function reconcileReferences(
     let archive;
     let receipt;
     try {
-      archive = verifyArchiveManifest(JSON.parse(readFileSync(
+      archive = validators.parseArchiveManifest(JSON.parse(readFileSync(
         join(restoreRoot, ...archiveEntry.relativePath.split("/")),
         "utf8",
       )) as unknown);
-      receipt = VerifiedArchiveReceiptSchema.parse(
+      receipt = validators.parseArchiveReceipt(
         JSON.parse(row.archive_receipt_json) as unknown,
       );
     } catch {
@@ -610,7 +656,7 @@ function reconcileReferences(
   for (const row of knowledgeRows) {
     let entry;
     try {
-      entry = KnowledgeEntrySchema.parse(
+      entry = validators.parseKnowledgeEntry(
         JSON.parse(row.entry_json) as unknown,
       );
     } catch {
@@ -739,7 +785,12 @@ export async function restoreConsistentBackup(
       }
       new ProjectionRunner(database, [new HunterProjection()])
         .rebuild("hunter");
-      reconciliation = reconcileReferences(database, staging, manifest);
+      reconciliation = reconcileReferences(
+        database,
+        staging,
+        manifest,
+        input.referenceValidators,
+      );
     } finally {
       database.close();
     }
