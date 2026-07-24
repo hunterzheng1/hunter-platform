@@ -20,7 +20,7 @@ const ManifestIdentitySchema = z
     projectId: ProjectIdSchema,
     runId: RunIdSchema,
     outcome: z.enum(["succeeded", "failed", "canceled"]),
-    manifestSchemaVersion: z.literal(1),
+    manifestSchemaVersion: z.literal(2),
     manifestHash: Sha256Schema,
     manifestRef: ContentAddressedManifestRefSchema,
   })

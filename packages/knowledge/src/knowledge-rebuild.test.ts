@@ -53,7 +53,7 @@ function seedCompletedArchive(
       projectId,
       runId,
       outcome: "failed",
-      manifestSchemaVersion: 1,
+      manifestSchemaVersion: 2,
       manifestHash: hash,
       manifestRef: `cas:sha256:${hash}`,
       verifiedAt: "2026-07-24T00:01:00.000Z",

@@ -6,6 +6,7 @@ import {
   OperationIdSchema,
   ProjectIdSchema,
   RunIdSchema,
+  WorkflowIdSchema,
 } from "./index.js";
 
 describe("canonical branded ids", () => {
@@ -16,6 +17,7 @@ describe("canonical branded ids", () => {
     expect(OperationIdSchema.parse("opn_00000001")).toBe("opn_00000001");
     expect(ArtifactIdSchema.parse("art_00000001")).toBe("art_00000001");
     expect(GateIdSchema.parse("gat_00000001")).toBe("gat_00000001");
+    expect(WorkflowIdSchema.parse("wfl_00000001")).toBe("wfl_00000001");
 
     expect(() => ProjectIdSchema.parse("C:\\repo\\hunter")).toThrow();
     expect(() => RunIdSchema.parse("run")).toThrow();

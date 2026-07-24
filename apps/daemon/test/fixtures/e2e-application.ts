@@ -25,6 +25,7 @@ import {
   WorkspaceLeaseIdSchema,
   WorktreeIdSchema,
   WriterLeaseIdSchema,
+  WorkflowIdSchema,
   WorkflowRevisionIdSchema,
   canonicalSha256,
   createChangeRevision,
@@ -61,6 +62,7 @@ const workflowRevisionId =
   WorkflowRevisionIdSchema.parse("wfr_e2econtract01");
 const rootWorkflowRevisionId =
   WorkflowRevisionIdSchema.parse("wfr_e2eroot000001");
+const rootWorkflowId = WorkflowIdSchema.parse("wfl_e2eroot000001");
 const agentProfileId = AgentProfileIdSchema.parse("apr_e2econtract01");
 const stepId = StepIdSchema.parse("stp_e2econtract01");
 const rootStepId = StepIdSchema.parse("stp_e2eroot000001");
@@ -276,24 +278,18 @@ function archiveInputFor(
   ).all() as unknown as Array<{ readonly receipt_json: string }>)
     .map(({ receipt_json }) => LeaseSchema.parse(JSON.parse(receipt_json) as unknown))
     .filter((lease) => lease.projectId === job.projectId);
-  const leaseReceiptBase = (lease: (typeof leases)[number]) => ({
-    repositoryId: lease.repositoryId,
-    deviceBindingId: lease.deviceBindingId,
-    gitHead: lease.gitHead,
-    receiptHash: canonicalSha256(lease),
-  });
   const workspace = leases.filter(
     (lease): lease is ReturnType<typeof WorkspaceLeaseSchema.parse> =>
       lease.kind === "workspace",
-  ).map((lease) => ({ ...leaseReceiptBase(lease), leaseId: lease.leaseId }));
+  ).map((lease) => ({ ...lease, receiptHash: canonicalSha256(lease) }));
   const writer = leases.filter(
     (lease): lease is ReturnType<typeof WriterLeaseSchema.parse> =>
       lease.kind === "writer",
-  ).map((lease) => ({ ...leaseReceiptBase(lease), leaseId: lease.leaseId }));
+  ).map((lease) => ({ ...lease, receiptHash: canonicalSha256(lease) }));
   const controller = leases.filter(
     (lease): lease is ReturnType<typeof ControllerLeaseSchema.parse> =>
       lease.kind === "controller",
-  ).map((lease) => ({ ...leaseReceiptBase(lease), leaseId: lease.leaseId }));
+  ).map((lease) => ({ ...lease, receiptHash: canonicalSha256(lease) }));
   if (workspace.length === 0 || writer.length === 0 || controller.length === 0) {
     throw new Error("E2E_ARCHIVE_LEASE_PROVENANCE_MISSING");
   }
@@ -302,7 +298,7 @@ function archiveInputFor(
   );
   if (change === null) throw new Error("E2E_ARCHIVE_CHANGE_MISSING");
   return {
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     projectId: job.projectId,
     repositories: [{
       repositoryId,
@@ -315,6 +311,7 @@ function archiveInputFor(
       changeRevisionId: root.binding.changeRevisionId,
     },
     executionPlanId: root.binding.executionPlanId,
+    workflowId: rootWorkflowId,
     workflowRevisionId: root.binding.workflowRevisionId,
     runGraph: {
       rootRunId: job.runId,

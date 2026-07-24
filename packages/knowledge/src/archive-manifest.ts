@@ -6,7 +6,6 @@ import {
   AttemptIdSchema,
   ChangeIdSchema,
   ChangeRevisionIdSchema,
-  ControllerLeaseIdSchema,
   DeviceBindingIdSchema,
   EvidenceIdSchema,
   ExecutionPlanIdSchema,
@@ -17,10 +16,14 @@ import {
   StepIdSchema,
   StepRunIdSchema,
   TaskIdSchema,
+  WorkflowIdSchema,
   WorkflowRevisionIdSchema,
-  WorkspaceLeaseIdSchema,
-  WriterLeaseIdSchema,
 } from "@hunter/domain";
+import {
+  ControllerLeaseSchema,
+  WorkspaceLeaseSchema,
+  WriterLeaseSchema,
+} from "@hunter/runtime-contracts";
 import { z } from "zod";
 
 const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -83,28 +86,19 @@ const RunManifestSchema = z
   })
   .strict();
 
-const LeaseReceiptBaseSchema = z
-  .object({
-    repositoryId: RepositoryIdSchema,
-    deviceBindingId: DeviceBindingIdSchema,
-    gitHead: GitHeadSchema,
-    receiptHash: Sha256Schema,
-  })
-  .strict();
-
-const WorkspaceLeaseReceiptSchema = LeaseReceiptBaseSchema.extend({
-  leaseId: WorkspaceLeaseIdSchema,
-}).strict();
-const WriterLeaseReceiptSchema = LeaseReceiptBaseSchema.extend({
-  leaseId: WriterLeaseIdSchema,
-}).strict();
-const ControllerLeaseReceiptSchema = LeaseReceiptBaseSchema.extend({
-  leaseId: ControllerLeaseIdSchema,
-}).strict();
+const WorkspaceLeaseReceiptSchema = WorkspaceLeaseSchema.safeExtend({
+  receiptHash: Sha256Schema,
+});
+const WriterLeaseReceiptSchema = WriterLeaseSchema.safeExtend({
+  receiptHash: Sha256Schema,
+});
+const ControllerLeaseReceiptSchema = ControllerLeaseSchema.safeExtend({
+  receiptHash: Sha256Schema,
+});
 
 export const ArchiveManifestInputSchema = z
   .object({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(2),
     projectId: ProjectIdSchema,
     repositories: z
       .array(
@@ -129,6 +123,7 @@ export const ArchiveManifestInputSchema = z
       })
       .strict(),
     executionPlanId: ExecutionPlanIdSchema,
+    workflowId: WorkflowIdSchema,
     workflowRevisionId: WorkflowRevisionIdSchema,
     runGraph: z
       .object({

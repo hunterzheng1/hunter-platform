@@ -33,6 +33,9 @@ export type ChangeRevisionId = z.infer<typeof ChangeRevisionIdSchema>;
 export const TaskIdSchema = canonicalId("tsk", "TaskId").brand<"TaskId">();
 export type TaskId = z.infer<typeof TaskIdSchema>;
 
+export const WorkflowIdSchema = canonicalId("wfl", "WorkflowId").brand<"WorkflowId">();
+export type WorkflowId = z.infer<typeof WorkflowIdSchema>;
+
 export const WorkflowRevisionIdSchema = canonicalId(
   "wfr",
   "WorkflowRevisionId",

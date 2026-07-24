@@ -82,7 +82,7 @@ function historical(
       projectId,
       runId: RunIdSchema.parse(`run_source_${suffix}`),
       outcome: "canceled",
-      manifestSchemaVersion: 1,
+      manifestSchemaVersion: 2,
       manifestHash: hash,
       manifestRef: `cas:sha256:${hash}`,
     },

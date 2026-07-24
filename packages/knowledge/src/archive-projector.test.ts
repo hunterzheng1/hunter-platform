@@ -35,7 +35,7 @@ function receipt(
     projectId,
     runId,
     outcome: "failed",
-    manifestSchemaVersion: 1,
+    manifestSchemaVersion: 2,
     manifestHash,
     manifestRef: `cas:sha256:${manifestHash}`,
     verifiedAt: "2026-07-23T01:02:03.000Z",

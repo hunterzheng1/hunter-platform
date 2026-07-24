@@ -6,7 +6,8 @@
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
   "references": [
-    { "path": "../domain" }
+    { "path": "../domain" },
+    { "path": "../runtime-contracts" }
   ],
   "include": ["src/**/*.ts"]
 }

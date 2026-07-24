@@ -14,17 +14,22 @@ import {
   EvidenceIdSchema,
   ExecutionPlanIdSchema,
   LeaseOwnerIdSchema,
+  NativeSessionIdSchema,
   ProjectIdSchema,
   RepositoryIdSchema,
   RequirementRevisionIdSchema,
   RunIdSchema,
   StepIdSchema,
   StepRunIdSchema,
+  WorkflowIdSchema,
   WorkflowRevisionIdSchema,
+  WorkspaceIdSchema,
   WorkspaceLeaseIdSchema,
+  WorktreeIdSchema,
   WriterLeaseIdSchema,
   canonicalSha256,
 } from "@hunter/domain";
+import { CanonicalWorkspaceKeySchema } from "@hunter/runtime-contracts";
 import {
   SqliteArchiveJobStore,
   type ArchiveManifestSource,
@@ -52,13 +57,39 @@ afterEach(() => {
 });
 
 function fixtureSource(): ArchiveManifestSource {
+  const repositoryId = RepositoryIdSchema.parse("rep_archive_composition");
+  const deviceBindingId = DeviceBindingIdSchema.parse("dev_archive_composition");
+  const attemptId = AttemptIdSchema.parse("att_archive_composition");
+  const workspaceId = WorkspaceIdSchema.parse("wsp_archive_composition");
+  const worktreeId = WorktreeIdSchema.parse("wtr_archive_composition");
+  const lease = {
+    schemaVersion: 2 as const,
+    projectId,
+    repositoryId,
+    deviceBindingId,
+    canonicalWorkspaceKey: CanonicalWorkspaceKeySchema.parse(
+      "win32:c:\\hunter\\archive-composition",
+    ),
+    gitHead: "1".repeat(40),
+    branch: "codex/archive-composition",
+    ownerRunId: runId,
+    ownerAttemptId: attemptId,
+    ownerId,
+    generation: 1,
+    mode: "write" as const,
+    acquiredAt: "2026-07-24T01:55:00.000Z",
+    expiresAt: "2026-07-24T02:10:00.000Z",
+    revokedAt: null,
+    revocationReason: null,
+    receiptHash: "d".repeat(64),
+  };
   return {
     build: (job) => ({
-      schemaVersion: 1,
+      schemaVersion: 2,
       projectId: job.projectId,
       repositories: [{
-        repositoryId: RepositoryIdSchema.parse("rep_archive_composition"),
-        deviceBindingId: DeviceBindingIdSchema.parse("dev_archive_composition"),
+        repositoryId,
+        deviceBindingId,
         gitHead: "1".repeat(40),
       }],
       requirementRevisionIds: [
@@ -69,6 +100,7 @@ function fixtureSource(): ArchiveManifestSource {
         changeRevisionId: ChangeRevisionIdSchema.parse("crv_archive_composition"),
       },
       executionPlanId: ExecutionPlanIdSchema.parse("epl_archive_composition"),
+      workflowId: WorkflowIdSchema.parse("wfl_archive_composition"),
       workflowRevisionId: WorkflowRevisionIdSchema.parse("wfr_archive_composition"),
       runGraph: {
         rootRunId: job.runId,
@@ -81,7 +113,7 @@ function fixtureSource(): ArchiveManifestSource {
             stepRunId: StepRunIdSchema.parse("spr_archive_composition"),
             stepId: StepIdSchema.parse("stp_archive_composition"),
             attempts: [{
-              attemptId: AttemptIdSchema.parse("att_archive_composition"),
+              attemptId,
               agentProfileId: AgentProfileIdSchema.parse("apr_archive_composition"),
               capabilityProbeDigest: "b".repeat(64),
               nativeSessionReferenceHash: "c".repeat(64),
@@ -101,25 +133,28 @@ function fixtureSource(): ArchiveManifestSource {
       },
       leases: {
         workspace: [{
+          ...lease,
+          kind: "workspace",
           leaseId: WorkspaceLeaseIdSchema.parse("wsl_archive_composition"),
-          repositoryId: RepositoryIdSchema.parse("rep_archive_composition"),
-          deviceBindingId: DeviceBindingIdSchema.parse("dev_archive_composition"),
-          gitHead: "1".repeat(40),
-          receiptHash: "d".repeat(64),
+          scope: { workspaceId },
         }],
         writer: [{
+          ...lease,
+          kind: "writer",
           leaseId: WriterLeaseIdSchema.parse("wrl_archive_composition"),
-          repositoryId: RepositoryIdSchema.parse("rep_archive_composition"),
-          deviceBindingId: DeviceBindingIdSchema.parse("dev_archive_composition"),
-          gitHead: "1".repeat(40),
-          receiptHash: "d".repeat(64),
+          scope: { workspaceId, worktreeId },
         }],
         controller: [{
+          ...lease,
+          kind: "controller",
           leaseId: ControllerLeaseIdSchema.parse("ctl_archive_composition"),
-          repositoryId: RepositoryIdSchema.parse("rep_archive_composition"),
-          deviceBindingId: DeviceBindingIdSchema.parse("dev_archive_composition"),
-          gitHead: "1".repeat(40),
-          receiptHash: "d".repeat(64),
+          scope: {
+            workspaceId,
+            worktreeId,
+            nativeSessionId: NativeSessionIdSchema.parse(
+              "ses_archive_composition",
+            ),
+          },
         }],
       },
       ledger: {

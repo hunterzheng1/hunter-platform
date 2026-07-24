@@ -106,7 +106,7 @@ const KnowledgeEntrySchema = z.discriminatedUnion("level", [
       projectId: ProjectIdSchema,
       runId: RunIdSchema,
       outcome: z.enum(["succeeded", "failed", "canceled"]),
-      manifestSchemaVersion: z.literal(1),
+      manifestSchemaVersion: z.literal(2),
       manifestHash: Sha256Schema,
       manifestRef: z.string().regex(/^cas:sha256:[a-f0-9]{64}$/u),
     }).strict(),

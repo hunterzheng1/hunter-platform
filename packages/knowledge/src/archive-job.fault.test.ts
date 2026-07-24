@@ -14,6 +14,7 @@ import {
   EvidenceIdSchema,
   ExecutionPlanIdSchema,
   LeaseOwnerIdSchema,
+  NativeSessionIdSchema,
   ProjectIdSchema,
   RepositoryIdSchema,
   RequirementRevisionIdSchema,
@@ -21,10 +22,14 @@ import {
   StepIdSchema,
   StepRunIdSchema,
   TaskIdSchema,
+  WorkflowIdSchema,
   WorkflowRevisionIdSchema,
+  WorkspaceIdSchema,
   WorkspaceLeaseIdSchema,
+  WorktreeIdSchema,
   WriterLeaseIdSchema,
 } from "@hunter/domain";
+import { CanonicalWorkspaceKeySchema } from "@hunter/runtime-contracts";
 import { SqliteOperationJournal } from "@hunter/storage";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -47,10 +52,38 @@ const contentHash = "a".repeat(64);
 const capabilityDigest = "b".repeat(64);
 const sessionHash = "c".repeat(64);
 const receiptHash = "d".repeat(64);
+const workflowId = WorkflowIdSchema.parse("wfl_archive_fault");
+const workspaceId = WorkspaceIdSchema.parse("wsp_archive_fault");
+const worktreeId = WorktreeIdSchema.parse("wtr_archive_fault");
+const nativeSessionId = NativeSessionIdSchema.parse("ses_archive_fault");
+
+function leaseReceiptBase() {
+  return {
+    schemaVersion: 2 as const,
+    projectId,
+    repositoryId: RepositoryIdSchema.parse("rep_archive_fault"),
+    deviceBindingId: DeviceBindingIdSchema.parse("dev_archive_fault"),
+    canonicalWorkspaceKey: CanonicalWorkspaceKeySchema.parse(
+      "win32:c:\\hunter\\archive",
+    ),
+    gitHead: "1".repeat(40),
+    branch: "codex/archive-fault",
+    ownerRunId: runId,
+    ownerAttemptId: AttemptIdSchema.parse("att_archive_root"),
+    ownerId,
+    generation: 1,
+    mode: "write" as const,
+    acquiredAt: "2026-07-23T23:58:00.000Z",
+    expiresAt: "2026-07-24T00:10:00.000Z",
+    revokedAt: null,
+    revocationReason: null,
+    receiptHash,
+  };
+}
 
 function manifestInput(outcome: "succeeded" | "failed" | "canceled" = "failed"): ArchiveManifestInput {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     projectId,
     repositories: [{
       repositoryId: RepositoryIdSchema.parse("rep_archive_fault"),
@@ -65,6 +98,7 @@ function manifestInput(outcome: "succeeded" | "failed" | "canceled" = "failed"):
       changeRevisionId: ChangeRevisionIdSchema.parse("crv_archive_fault"),
     },
     executionPlanId: ExecutionPlanIdSchema.parse("epl_archive_fault"),
+    workflowId,
     workflowRevisionId: WorkflowRevisionIdSchema.parse("wfr_archive_fault"),
     runGraph: {
       rootRunId: runId,
@@ -125,25 +159,22 @@ function manifestInput(outcome: "succeeded" | "failed" | "canceled" = "failed"):
     },
     leases: {
       workspace: [{
+        ...leaseReceiptBase(),
+        kind: "workspace",
         leaseId: WorkspaceLeaseIdSchema.parse("wsl_archive_fault"),
-        repositoryId: RepositoryIdSchema.parse("rep_archive_fault"),
-        deviceBindingId: DeviceBindingIdSchema.parse("dev_archive_fault"),
-        gitHead: "1".repeat(40),
-        receiptHash,
+        scope: { workspaceId },
       }],
       writer: [{
+        ...leaseReceiptBase(),
+        kind: "writer",
         leaseId: WriterLeaseIdSchema.parse("wrl_archive_fault"),
-        repositoryId: RepositoryIdSchema.parse("rep_archive_fault"),
-        deviceBindingId: DeviceBindingIdSchema.parse("dev_archive_fault"),
-        gitHead: "1".repeat(40),
-        receiptHash,
+        scope: { workspaceId, worktreeId },
       }],
       controller: [{
+        ...leaseReceiptBase(),
+        kind: "controller",
         leaseId: ControllerLeaseIdSchema.parse("ctl_archive_fault"),
-        repositoryId: RepositoryIdSchema.parse("rep_archive_fault"),
-        deviceBindingId: DeviceBindingIdSchema.parse("dev_archive_fault"),
-        gitHead: "1".repeat(40),
-        receiptHash,
+        scope: { workspaceId, worktreeId, nativeSessionId },
       }],
     },
     ledger: { firstPosition: 1, lastPosition: 24 },
@@ -170,6 +201,64 @@ afterEach(() => {
 });
 
 describe("Archive manifest boundary", () => {
+  it("requires stable Workflow identity and complete Workspace, Writer, and Controller lease receipts", () => {
+    const input = manifestInput();
+    const commonLease = {
+      ...leaseReceiptBase(),
+      generation: 3,
+    };
+
+    const manifest = createArchiveManifest({
+      ...input,
+      workflowId,
+      leases: {
+        workspace: [{
+          ...commonLease,
+          kind: "workspace",
+          leaseId: WorkspaceLeaseIdSchema.parse("wsl_archive_fault"),
+          scope: { workspaceId },
+        }],
+        writer: [{
+          ...commonLease,
+          kind: "writer",
+          leaseId: WriterLeaseIdSchema.parse("wrl_archive_fault"),
+          scope: {
+            workspaceId,
+            worktreeId,
+          },
+        }],
+        controller: [{
+          ...commonLease,
+          kind: "controller",
+          leaseId: ControllerLeaseIdSchema.parse("ctl_archive_fault"),
+          scope: {
+            workspaceId,
+            worktreeId,
+            nativeSessionId,
+          },
+        }],
+      },
+    });
+
+    expect(manifest).toMatchObject({
+      workflowId,
+      leases: {
+        workspace: [expect.objectContaining({
+          ownerId,
+          generation: 3,
+          branch: "codex/archive-fault",
+          expiresAt: "2026-07-24T00:10:00.000Z",
+        })],
+        writer: [expect.objectContaining({
+          scope: { workspaceId, worktreeId },
+        })],
+        controller: [expect.objectContaining({
+          scope: { workspaceId, worktreeId, nativeSessionId },
+        })],
+      },
+    });
+  });
+
   it.each(["succeeded", "failed", "canceled"] as const)(
     "creates and verifies a complete immutable %s manifest",
     (outcome) => {
@@ -177,7 +266,7 @@ describe("Archive manifest boundary", () => {
 
       expect(verifyArchiveManifest(manifest)).toEqual(manifest);
       expect(manifest).toMatchObject({
-        schemaVersion: 1,
+        schemaVersion: 2,
         projectId,
         outcome,
         runGraph: { rootRunId: runId },
@@ -260,6 +349,14 @@ describe("Archive manifest boundary", () => {
     expect(() => verifyArchiveManifest({
       ...manifest,
       actor: { ...manifest.actor, actorId: "tampered" },
+    })).toThrow("ARCHIVE_MANIFEST_HASH_MISMATCH");
+    expect(() => verifyArchiveManifest({
+      ...manifest,
+      leases: {
+        ...manifest.leases,
+        controller: manifest.leases.controller.map((lease, index) =>
+          index === 0 ? { ...lease, generation: lease.generation + 1 } : lease),
+      },
     })).toThrow("ARCHIVE_MANIFEST_HASH_MISMATCH");
   });
 });

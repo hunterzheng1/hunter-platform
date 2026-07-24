@@ -45,7 +45,7 @@ describe("KnowledgePage", () => {
             projectId: ProjectIdSchema.parse("prj_knowledge_page"),
             runId: RunIdSchema.parse("run_knowledge_page"),
             outcome: "succeeded" as const,
-            manifestSchemaVersion: 1 as const,
+            manifestSchemaVersion: 2 as const,
             manifestHash: "a".repeat(64),
             manifestRef: `cas:sha256:${"a".repeat(64)}`,
           },
