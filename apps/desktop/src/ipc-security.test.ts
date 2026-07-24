@@ -129,8 +129,8 @@ describe("desktop narrow IPC", () => {
     expect(source).not.toMatch(
       /\b(?:apiOrigin|token|authorization|fetch|node:fs|child_process|shell|ipcRenderer\.send|ipcRenderer\.invoke\([^)]*channel)\b/iu,
     );
-    expect(source).toContain(
-      'exposeInMainWorld(\n  "hunterAuthenticatedTransport"',
+    expect(source).toMatch(
+      /exposeInMainWorld\(\s*"hunterAuthenticatedTransport"/u,
     );
   });
 

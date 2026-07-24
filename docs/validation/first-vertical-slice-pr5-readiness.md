@@ -42,4 +42,7 @@
 - 真实 Provider Playwright 套件仍要求显式 owner opt-in 与脱敏 receipt bundle；
   缺少这些输入时必须 `SKIP`，不能提升为 PASS。
 - 本文件创建时，本次新 HEAD 尚未推送；GitHub Actions 状态如实为 `PENDING`。
+- 首次推送 `777a388` 后，Windows quality 在 run `30073463329` 与
+  `30073464951` 中真实失败：源码安全测试硬编码 LF，而 Windows checkout 使用
+  CRLF。后续提交把断言改为换行无关匹配；该失败历史不改写为 PASS。
 - 未合并 `main`、未创建发布、未部署、未执行真实远端 Provider 操作。
