@@ -625,6 +625,52 @@ export function validateStorageHealth(
   };
 }
 
+/**
+ * Validates a stable backup source without applying pending migrations.
+ *
+ * This keeps a destructive migration's backup prerequisite acyclic: the
+ * backup receipt describes the pre-migration schema and can then authorize
+ * the next migration.
+ */
+export function validateStorageBackupSource(
+  database: DatabaseSync,
+  migrations: readonly StorageMigration[],
+): StorageHealthReceipt {
+  validateDefinitions(migrations);
+  database.exec("PRAGMA foreign_keys = ON");
+  validateStorageIntegrity(database);
+  if (!hasTable(database, "storage_metadata")) {
+    throw new Error("STORAGE_SCHEMA_VERSION_UNSUPPORTED");
+  }
+  const schemaVersion = databaseSchemaVersion(database);
+  if (
+    schemaVersion === null
+    || schemaVersion <= 0
+    || schemaVersion > migrations.length
+  ) {
+    throw new Error("STORAGE_SCHEMA_VERSION_UNSUPPORTED");
+  }
+  if (hasTable(database, "storage_migrations")) {
+    const applied = appliedMigrations(database);
+    validateAppliedLedger(applied, migrations);
+    if (applied.length !== schemaVersion) {
+      throw new Error("MIGRATION_LEDGER_MISMATCH");
+    }
+    validateSchemaFingerprint(
+      database,
+      migrations.slice(0, schemaVersion),
+      "STORAGE_SCHEMA_FINGERPRINT_MISMATCH",
+    );
+  } else {
+    const legacyMigration = migrations[0];
+    if (schemaVersion !== 1 || legacyMigration === undefined) {
+      throw new Error("MIGRATION_LEDGER_MISMATCH");
+    }
+    validateLegacySchemaV1(database, legacyMigration);
+  }
+  return validateStorageHealth(database, schemaVersion);
+}
+
 function validateStorageIntegrity(database: DatabaseSync): void {
   const integrity = database.prepare("PRAGMA integrity_check").all() as unknown as
     readonly { readonly integrity_check?: string }[];

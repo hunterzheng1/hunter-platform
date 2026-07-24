@@ -1,3 +1,5 @@
+export * from "./backup-manifest.js";
+export * from "./backup-service.js";
 export * from "./event-ledger-reader.js";
 export * from "./hunter-projection.js";
 export * from "./migration-manifest.js";

@@ -19,6 +19,7 @@ record should retain a hash and a safe summary.
 
 Current records:
 
+- [`phase-1-backup-restore.md`](phase-1-backup-restore.md) — Task 4 online SQLite snapshot, versioned manifest, fail-closed reference reconciliation, and isolated restore drill evidence.
 - [`phase-1-versioned-migrations.md`](phase-1-versioned-migrations.md) — Task 3 versioned SQLite ledger, fail-closed startup integrity, legacy v1 compatibility, and desktop migration resource evidence.
 - [`phase-1-acceptance-ledger.md`](phase-1-acceptance-ledger.md) — test-enforced Phase 1 functional, Golden, non-functional, release-blocker, and supply-chain status ledger.
 - [`phase-1-hardening-baseline.md`](phase-1-hardening-baseline.md) — PR #5 merge fact, fresh-worktree RED/GREEN evidence, supply-chain permission boundary, and the Phase 1 provider status boundary.

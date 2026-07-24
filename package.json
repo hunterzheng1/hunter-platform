@@ -24,7 +24,8 @@
     "typecheck": "tsc -b --pretty false && tsc --noEmit --pretty false -p tsconfig.e2e.json",
     "verify:rebuild": "tsx scripts/verify-rebuild.ts",
     "verify:recovery": "tsx scripts/verify-recovery.ts",
-    "verify:foundation": "npm run lint && npm run typecheck && npm test && npm run verify:rebuild && npm run verify:recovery && npm run build"
+    "verify:backup-restore": "tsx scripts/verify-backup-restore.ts",
+    "verify:foundation": "npm run lint && npm run typecheck && npm test && npm run verify:rebuild && npm run verify:recovery && npm run verify:backup-restore && npm run build"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
