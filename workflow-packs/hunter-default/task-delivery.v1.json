@@ -1,0 +1,236 @@
+{
+  "workflowId": "hunter.task-delivery",
+  "revision": {
+    "workflowId": "wfl_hunter_task_delivery",
+    "workflowRevisionId": "wfr_hunter_task_delivery_v1",
+    "title": "Hunter Task delivery",
+    "status": "published",
+    "entryStepId": "stp_task_prepare_context_v1",
+    "steps": [
+      {
+        "stepId": "stp_task_prepare_context_v1",
+        "kind": "context",
+        "inputContract": { "schemaId": "hunter.task-context", "version": 1 },
+        "outputContract": { "schemaId": "hunter.handoff-pack", "version": 1 },
+        "executor": { "kind": "context", "selector": "prepare-task-context" },
+        "requiredCapabilities": [],
+        "permissionPolicy": { "decision": "allow", "permissions": ["context.prepare"] },
+        "verifier": {
+          "kind": "automated",
+          "verifierId": "handoff-pack-contract",
+          "outputContract": { "schemaId": "hunter.handoff-pack", "version": 1 }
+        },
+        "retryPolicy": {
+          "maxAttempts": 1,
+          "retryableErrorClasses": [],
+          "backoff": { "kind": "fixed", "initialDelayMs": 1000, "maxDelayMs": 1000 },
+          "jitter": "none",
+          "waitingBudgetCost": 1
+        },
+        "timeoutPolicy": { "timeoutMs": 600000, "onTimeout": "needs_attention" },
+        "budgetCost": { "units": 1, "elapsedMs": 600000, "cost": 0 },
+        "sessionPolicy": "new",
+        "workspacePolicy": { "mode": "read", "isolation": "shared_snapshot", "reuse": true }
+      },
+      {
+        "stepId": "stp_task_implement_v1",
+        "kind": "agent",
+        "inputContract": { "schemaId": "hunter.handoff-pack", "version": 1 },
+        "outputContract": { "schemaId": "hunter.implementation-receipt", "version": 1 },
+        "executor": { "kind": "runtime_agent", "selector": "implementation-agent" },
+        "agentProfileSelector": {
+          "strategy": "first_available",
+          "agentProfileIds": ["apr_default_implementer"]
+        },
+        "requiredCapabilities": ["workspace_targeting", "launch", "artifact_export"],
+        "permissionPolicy": { "decision": "allow", "permissions": ["workspace.modify"] },
+        "verifier": {
+          "kind": "automated",
+          "verifierId": "implementation-receipt-contract",
+          "outputContract": { "schemaId": "hunter.implementation-receipt", "version": 1 }
+        },
+        "retryPolicy": {
+          "maxAttempts": 1,
+          "retryableErrorClasses": [],
+          "backoff": { "kind": "fixed", "initialDelayMs": 1000, "maxDelayMs": 1000 },
+          "jitter": "none",
+          "waitingBudgetCost": 1
+        },
+        "timeoutPolicy": { "timeoutMs": 3600000, "onTimeout": "needs_attention" },
+        "budgetCost": { "units": 1, "elapsedMs": 3600000, "cost": 1 },
+        "sessionPolicy": "resume_if_supported",
+        "workspacePolicy": { "mode": "write", "isolation": "worktree", "reuse": true }
+      },
+      {
+        "stepId": "stp_task_test_v1",
+        "kind": "command",
+        "inputContract": { "schemaId": "hunter.implementation-receipt", "version": 1 },
+        "outputContract": { "schemaId": "hunter.test-evidence", "version": 1 },
+        "executor": { "kind": "command", "selector": "project-test-suite" },
+        "requiredCapabilities": ["workspace_targeting", "artifact_export"],
+        "permissionPolicy": { "decision": "allow", "permissions": ["workspace.test"] },
+        "verifier": {
+          "kind": "automated",
+          "verifierId": "test-evidence-verdict",
+          "outputContract": { "schemaId": "hunter.test-evidence", "version": 1 }
+        },
+        "retryPolicy": {
+          "maxAttempts": 1,
+          "retryableErrorClasses": [],
+          "backoff": { "kind": "fixed", "initialDelayMs": 1000, "maxDelayMs": 1000 },
+          "jitter": "none",
+          "waitingBudgetCost": 1
+        },
+        "timeoutPolicy": { "timeoutMs": 3600000, "onTimeout": "needs_attention" },
+        "budgetCost": { "units": 1, "elapsedMs": 3600000, "cost": 0 },
+        "sessionPolicy": "resume_if_supported",
+        "workspacePolicy": { "mode": "read", "isolation": "worktree", "reuse": true }
+      },
+      {
+        "stepId": "stp_task_review_v1",
+        "kind": "agent",
+        "inputContract": { "schemaId": "hunter.review-context", "version": 1 },
+        "outputContract": { "schemaId": "hunter.review-verdict", "version": 1 },
+        "executor": { "kind": "runtime_agent", "selector": "review-agent" },
+        "agentProfileSelector": {
+          "strategy": "first_available",
+          "agentProfileIds": ["apr_default_reviewer"]
+        },
+        "requiredCapabilities": ["workspace_targeting", "launch", "artifact_export"],
+        "permissionPolicy": { "decision": "allow", "permissions": ["workspace.review"] },
+        "verifier": {
+          "kind": "automated",
+          "verifierId": "review-verdict-contract",
+          "outputContract": { "schemaId": "hunter.review-verdict", "version": 1 }
+        },
+        "retryPolicy": {
+          "maxAttempts": 1,
+          "retryableErrorClasses": [],
+          "backoff": { "kind": "fixed", "initialDelayMs": 1000, "maxDelayMs": 1000 },
+          "jitter": "none",
+          "waitingBudgetCost": 1
+        },
+        "timeoutPolicy": { "timeoutMs": 3600000, "onTimeout": "needs_attention" },
+        "budgetCost": { "units": 1, "elapsedMs": 3600000, "cost": 0 },
+        "sessionPolicy": "new",
+        "workspacePolicy": { "mode": "read", "isolation": "worktree", "reuse": true }
+      },
+      {
+        "stepId": "stp_task_complete_v1",
+        "kind": "verify",
+        "inputContract": { "schemaId": "hunter.review-verdict", "version": 1 },
+        "outputContract": { "schemaId": "hunter.task-completion", "version": 1 },
+        "executor": { "kind": "verifier", "selector": "task-completion" },
+        "requiredCapabilities": ["artifact_export"],
+        "permissionPolicy": { "decision": "allow", "permissions": ["workflow.complete-task"] },
+        "verifier": {
+          "kind": "automated",
+          "verifierId": "task-completion",
+          "outputContract": { "schemaId": "hunter.task-completion", "version": 1 }
+        },
+        "retryPolicy": {
+          "maxAttempts": 1,
+          "retryableErrorClasses": [],
+          "backoff": { "kind": "fixed", "initialDelayMs": 1000, "maxDelayMs": 1000 },
+          "jitter": "none",
+          "waitingBudgetCost": 1
+        },
+        "timeoutPolicy": { "timeoutMs": 600000, "onTimeout": "needs_attention" },
+        "budgetCost": { "units": 1, "elapsedMs": 600000, "cost": 0 },
+        "sessionPolicy": "new",
+        "workspacePolicy": { "mode": "read", "isolation": "worktree", "reuse": true }
+      }
+    ],
+    "routes": [
+      {
+        "routeId": "rte_task_context_passed_v1",
+        "fromStepId": "stp_task_prepare_context_v1",
+        "outcome": "passed",
+        "priority": 0,
+        "toStepId": "stp_task_implement_v1"
+      },
+      {
+        "routeId": "rte_task_implement_passed_v1",
+        "fromStepId": "stp_task_implement_v1",
+        "outcome": "passed",
+        "priority": 0,
+        "toStepId": "stp_task_test_v1"
+      },
+      {
+        "routeId": "rte_task_test_passed_v1",
+        "fromStepId": "stp_task_test_v1",
+        "outcome": "passed",
+        "priority": 0,
+        "toStepId": "stp_task_review_v1"
+      },
+      {
+        "routeId": "rte_task_test_failed_v1",
+        "fromStepId": "stp_task_test_v1",
+        "outcome": "failed",
+        "priority": 0,
+        "toStepId": "stp_task_implement_v1"
+      },
+      {
+        "routeId": "rte_task_review_passed_v1",
+        "fromStepId": "stp_task_review_v1",
+        "outcome": "passed",
+        "priority": 0,
+        "toStepId": "stp_task_complete_v1"
+      },
+      {
+        "routeId": "rte_task_review_failed_v1",
+        "fromStepId": "stp_task_review_v1",
+        "outcome": "failed",
+        "priority": 0,
+        "toStepId": "stp_task_implement_v1"
+      },
+      {
+        "routeId": "rte_task_complete_passed_v1",
+        "fromStepId": "stp_task_complete_v1",
+        "outcome": "passed",
+        "priority": 0,
+        "toStepId": null
+      }
+    ],
+    "loops": [
+      {
+        "loopId": "lop_task_test_feedback_v1",
+        "routeId": "rte_task_test_failed_v1",
+        "fromStepId": "stp_task_test_v1",
+        "toStepId": "stp_task_implement_v1",
+        "maxIterations": 3,
+        "maxElapsedMs": 7200000,
+        "maxCost": 2,
+        "progressPredicate": {
+          "kind": "fingerprint_changed",
+          "source": "verification.evidence"
+        },
+        "stagnation": {
+          "maxSameFailureFingerprint": 2,
+          "maxNoDiffIterations": 1,
+          "maxVerifierErrors": 2
+        },
+        "reuse": { "profile": true, "session": true, "workspace": true },
+        "exhaustion": { "target": "needs_attention", "notify": true }
+      },
+      {
+        "loopId": "lop_task_review_feedback_v1",
+        "routeId": "rte_task_review_failed_v1",
+        "fromStepId": "stp_task_review_v1",
+        "toStepId": "stp_task_implement_v1",
+        "maxIterations": 3,
+        "maxElapsedMs": 7200000,
+        "maxCost": 2,
+        "progressPredicate": { "kind": "diff_present", "source": "workspace.diff" },
+        "stagnation": {
+          "maxSameFailureFingerprint": 2,
+          "maxNoDiffIterations": 1,
+          "maxVerifierErrors": 2
+        },
+        "reuse": { "profile": true, "session": false, "workspace": true },
+        "exhaustion": { "target": "needs_attention", "notify": true }
+      }
+    ],
+    "publishedAt": "2026-07-23T00:00:00.000Z"
+  }
+}

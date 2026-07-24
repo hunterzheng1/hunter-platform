@@ -10,8 +10,17 @@ export default defineConfig({
       "@hunter/application": fileURLToPath(
         new URL("./packages/application/src/index.ts", import.meta.url),
       ),
+      "@hunter/domain/ids": fileURLToPath(
+        new URL("./packages/domain/src/ids.ts", import.meta.url),
+      ),
       "@hunter/domain": fileURLToPath(
         new URL("./packages/domain/src/index.ts", import.meta.url),
+      ),
+      "@hunter/device-gateway/mobile-contracts": fileURLToPath(
+        new URL("./packages/device-gateway/src/mobile-contracts.ts", import.meta.url),
+      ),
+      "@hunter/device-gateway": fileURLToPath(
+        new URL("./packages/device-gateway/src/index.ts", import.meta.url),
       ),
       "@hunter/flow-engine": fileURLToPath(
         new URL("./packages/flow-engine/src/index.ts", import.meta.url),
@@ -21,6 +30,9 @@ export default defineConfig({
       ),
       "@hunter/runtime-contracts": fileURLToPath(
         new URL("./packages/runtime-contracts/src/index.ts", import.meta.url),
+      ),
+      "@hunter/runtime-manager": fileURLToPath(
+        new URL("./packages/runtime-manager/src/index.ts", import.meta.url),
       ),
       "@hunter/storage": fileURLToPath(
         new URL("./packages/storage/src/index.ts", import.meta.url),
@@ -34,7 +46,16 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["apps/**/*.test.ts", "packages/**/*.test.ts", "spikes/**/*.test.ts"],
+    testTimeout: 10_000,
+    include: [
+      "apps/**/*.test.ts",
+      "apps/**/*.test.tsx",
+      "e2e/fixtures/**/*.test.ts",
+      "packages/**/*.test.ts",
+      "scripts/**/*.test.ts",
+      "spikes/**/*.test.ts",
+      "workflow-packs/**/*.test.ts",
+    ],
     passWithNoTests: false,
   },
 });

@@ -3,8 +3,11 @@ import type { DatabaseSync } from "node:sqlite";
 import type { AgentProfileId, AtomicCapability, AttemptId, ProjectId, RepositoryId, RunId, WorkspaceId } from "@hunter/domain";
 import type { FlowCommandHandler, FlowCommandReceipt } from "@hunter/flow-engine";
 import {
-  CapabilityProbeReceiptSchema,
   ExternalOperationSchema,
+  LeaseSchema,
+  capabilityManifestSupportsOperation,
+  computeCapabilityManifest,
+  decodeCapabilityProbeReceipt,
   fingerprintExternalOperation,
   type CapabilityProbeReceipt,
   type ExternalOperation,
@@ -70,15 +73,19 @@ export class RuntimeManager {
       if (expected.workspaceId !== undefined && operation.payload.workspaceId !== expected.workspaceId) throw new Error("ASSIGNMENT_WORKSPACE_MISMATCH");
     }
     if (authority.policyDecision !== "allow") throw new Error("POLICY_NOT_ALLOWED");
-    const probe = CapabilityProbeReceiptSchema.parse(authority.capabilityReceipt);
+    const probe = decodeCapabilityProbeReceipt(authority.capabilityReceipt);
     const at = authority.now.getTime();
-    if (at < Date.parse(probe.observedAt) || at > Date.parse(probe.validUntil)) {
+    const receiptStart = probe.schemaVersion === 1
+      ? probe.observedAt
+      : probe.probedAt;
+    if (
+      at < Date.parse(receiptStart)
+      || at > Date.parse(probe.validUntil)
+    ) {
       throw new Error("CAPABILITY_RECEIPT_EXPIRED");
     }
-    const supported = new Set(
-      probe.results.filter(({ status }) => status === "SUPPORTED").map(({ capability }) => capability),
-    );
-    if (operation.requestedCapabilities.some((capability) => !supported.has(capability))) {
+    const manifest = computeCapabilityManifest(probe, authority.now);
+    if (!capabilityManifestSupportsOperation(manifest, operation)) {
       throw new Error("CAPABILITY_NOT_PROVEN");
     }
     const leaseKinds = new Set<string>();
@@ -89,7 +96,9 @@ export class RuntimeManager {
       ).get(leaseId) as unknown as LeaseRow | undefined;
       if (row === undefined || Date.parse(row.expires_at) <= at) throw new Error("LEASE_RECEIPT_REQUIRED");
       leaseKinds.add(row.lease_kind);
-      leases.push(JSON.parse(row.receipt_json) as Lease);
+      const lease = LeaseSchema.parse(JSON.parse(row.receipt_json));
+      if (lease.revokedAt !== null) throw new Error("LEASE_RECEIPT_REQUIRED");
+      leases.push(lease);
     }
     if (operation.operationType === "session.launch") {
       if (!["workspace", "writer"].every((kind) => leaseKinds.has(kind))) {
@@ -99,7 +108,7 @@ export class RuntimeManager {
       if (leases.some((lease) => (lease.kind === "workspace" || lease.kind === "writer") && lease.scope.workspaceId !== workspaceId)) throw new Error("LEASE_SCOPE_MISMATCH");
       if (new Set(leases.map(({ ownerId }) => ownerId)).size !== 1) throw new Error("LEASE_OWNER_MISMATCH");
       const workspaceLease = leases.find((lease) => lease.kind === "workspace");
-      if (workspaceLease === undefined || !expected.repositoryIds.includes(workspaceLease.scope.repositoryId)) throw new Error("LEASE_REPOSITORY_SCOPE_MISMATCH");
+      if (workspaceLease === undefined || !expected.repositoryIds.includes(workspaceLease.repositoryId)) throw new Error("LEASE_REPOSITORY_SCOPE_MISMATCH");
     }
     if (operation.operationType === "session.observe" || operation.operationType === "session.send" || operation.operationType === "session.interrupt") {
       if (operation.operationVersion !== 2) throw new Error("CONTROLLER_LEASE_AUTHORITY_VERSION_REQUIRED");

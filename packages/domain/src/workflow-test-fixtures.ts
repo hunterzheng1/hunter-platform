@@ -3,9 +3,11 @@ import {
   LoopIdSchema,
   RouteIdSchema,
   StepIdSchema,
+  WorkflowIdSchema,
   WorkflowRevisionIdSchema,
 } from "./ids.js";
 
+const workflowId = WorkflowIdSchema.parse("wfl_workflow0001");
 const workflowRevisionId = WorkflowRevisionIdSchema.parse("wfr_workflow02");
 const agentProfileId = AgentProfileIdSchema.parse("apr_profile01");
 
@@ -49,6 +51,7 @@ function policies() {
 export function validWorkflowInput() {
   const base = policies();
   return {
+    workflowId,
     workflowRevisionId,
     title: "Default development workflow",
     status: "published" as const,

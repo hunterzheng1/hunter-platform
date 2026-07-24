@@ -174,6 +174,27 @@ describe("SqliteOperationJournal", () => {
     );
   });
 
+  it("exposes typed operation state without leaking Outbox table rows", () => {
+    const { database: db, journal } = setup();
+    const externalOperation = operation();
+    journal.commitCommand(command());
+
+    expect(journal.findOperation(externalOperation.operationId)).toEqual({
+      operation: externalOperation,
+      status: "pending",
+    });
+    expect(journal.aggregateVersion("change:crv_revision01")).toBe(2);
+    db.prepare(
+      "UPDATE outbox SET status = 'needs_attention' WHERE operation_id = ?",
+    ).run(externalOperation.operationId);
+    expect(journal.listUnprovenOperations()).toEqual([{
+      operationId: externalOperation.operationId,
+      runId,
+      attemptId,
+      status: "needs_attention",
+    }]);
+  });
+
   it("allows an idempotent response-only command with null Event positions", () => {
     const { journal } = setup();
     const receipt = journal.commitCommand(
@@ -187,5 +208,21 @@ describe("SqliteOperationJournal", () => {
       }),
     );
     expect(receipt).toMatchObject({ firstPosition: null, lastPosition: null, response: { accepted: true } });
+  });
+
+  it("owns one immediate transaction across validation and command commit", () => {
+    const { database: db, journal } = setup();
+
+    expect(() =>
+      journal.runInImmediateTransaction(() => {
+        journal.commitCommand(command());
+        expect(db.prepare("SELECT COUNT(*) AS count FROM events").get()).toEqual({ count: 2 });
+        throw new Error("POST_COMMIT_VALIDATION_FAILED");
+      }),
+    ).toThrowError("POST_COMMIT_VALIDATION_FAILED");
+
+    expect(db.prepare("SELECT COUNT(*) AS count FROM events").get()).toEqual({ count: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM command_receipts").get()).toEqual({ count: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM outbox").get()).toEqual({ count: 0 });
   });
 });

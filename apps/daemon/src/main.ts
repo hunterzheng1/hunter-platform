@@ -2,10 +2,45 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import {
+  DeviceGateway,
+  DeviceStore,
+  PairingService,
+  TokenService,
+} from "@hunter/device-gateway";
 import type { ExternalOperationHandler } from "@hunter/runtime-contracts";
 
 import { assertLoopbackListenOptions, buildApp } from "./app.js";
-import { createSqliteApplicationServices, type SqliteServiceRepositories } from "./services/sqlite-application-services.js";
+import { buildRemoteDeviceApp } from "./auth/remote-device-auth.js";
+import {
+  startRemoteTlsListener,
+  type RemoteTlsListenerResult,
+} from "./auth/remote-tls-listener.js";
+import type { LocalPrincipal } from "./auth/local-authenticator.js";
+import { LocalCapabilityVerifier } from "./auth/local-capability.js";
+import { createMobileProjectionProvider } from "./routes/mobile-projections.js";
+import {
+  createApplicationComposition,
+  type ApplicationCompositionInput,
+} from "./services/composition-root.js";
+import { createDesktopDefinitionServices } from "./services/desktop-definition-services.js";
+import type { CompletionVerifierPort } from "./services/application-services.js";
+import type { SqliteServiceRepositories } from "./services/sqlite-application-services.js";
+import { SqliteArchiveManifestSource } from "./services/sqlite-archive-manifest-source.js";
+
+export type RemoteDaemonOptions =
+  | { readonly enabled?: false }
+  | {
+      readonly enabled: true;
+      readonly host: string;
+      readonly port: number;
+      readonly issuer: string;
+      readonly allowedHosts: readonly string[];
+      readonly allowedOrigins: readonly string[];
+      readonly signingSecretRef: string;
+      readonly tlsKeyRef: string;
+      readonly tlsCertRef: string;
+    };
 
 export interface DaemonStartOptions {
   readonly dataDirectory: string;
@@ -13,28 +48,104 @@ export interface DaemonStartOptions {
   readonly secretStore: { resolveSecret(secretRef: string): Promise<string> };
   readonly repositories?: SqliteServiceRepositories | undefined;
   readonly externalHandler: ExternalOperationHandler;
-  readonly allowedHost: string;
+  readonly verifier: CompletionVerifierPort;
+  readonly allowedHost?: string | undefined;
   readonly allowedOrigin: string;
+  readonly localCapability?: {
+    readonly capability: string;
+    readonly principal: LocalPrincipal;
+    readonly authorizeAllProjects?: boolean | undefined;
+  } | undefined;
   readonly publishPort: (port: number) => Promise<void>;
+  readonly remote?: RemoteDaemonOptions | undefined;
+  readonly archive?: (
+    Omit<NonNullable<ApplicationCompositionInput["archive"]>, "source">
+    & {
+      readonly source?:
+        NonNullable<ApplicationCompositionInput["archive"]>["source"]
+        | undefined;
+    }
+  ) | undefined;
+}
+
+function assertSecretRef(reference: string): void {
+  if (!/^os-credential:\/\/[A-Za-z0-9._/-]+$/u.test(reference)) {
+    throw new Error("SECRET_REF_SCHEME_INVALID");
+  }
 }
 
 export async function startDaemon(options: DaemonStartOptions) {
-  if (!/^os-credential:\/\/[A-Za-z0-9._/-]+$/u.test(options.secretRef)) throw new Error("SECRET_REF_SCHEME_INVALID");
+  assertSecretRef(options.secretRef);
+  if (options.remote?.enabled === true) {
+    assertSecretRef(options.remote.signingSecretRef);
+    assertSecretRef(options.remote.tlsKeyRef);
+    assertSecretRef(options.remote.tlsCertRef);
+  }
   mkdirSync(options.dataDirectory, { recursive: true });
   const installSecret = await options.secretStore.resolveSecret(options.secretRef);
   const database = new DatabaseSync(join(options.dataDirectory, "hunter.sqlite"));
   let app: ReturnType<typeof buildApp> | undefined;
   let workerTimer: ReturnType<typeof setInterval> | undefined;
   let workerDrain: Promise<void> = Promise.resolve();
+  let remote: RemoteTlsListenerResult = { status: "disabled" };
   try {
-    const services = createSqliteApplicationServices({
+    const allowedHosts = options.allowedHost === undefined
+      ? []
+      : [options.allowedHost];
+    let ownedArchiveSource:
+      | SqliteArchiveManifestSource
+      | undefined;
+    const archive = options.archive === undefined
+      ? undefined
+      : {
+          ...options.archive,
+          source: options.archive.source ?? {
+            build: (job) => {
+              if (ownedArchiveSource === undefined) {
+                throw new Error("ARCHIVE_SOURCE_NOT_READY");
+              }
+              return ownedArchiveSource.build(job);
+            },
+          },
+        };
+    const composition = createApplicationComposition({
       database,
       repositories: options.repositories,
       externalHandler: options.externalHandler,
+      verifier: options.verifier,
       installSecret,
-      allowedHosts: [options.allowedHost],
+      allowedHosts,
       allowedOrigins: [options.allowedOrigin],
       contentDirectory: options.dataDirectory,
+      ...(archive === undefined ? {} : { archive }),
+    });
+    const { services } = composition;
+    if (options.archive !== undefined && options.archive.source === undefined) {
+      ownedArchiveSource = new SqliteArchiveManifestSource(services);
+    }
+    const remoteEnabled = options.remote?.enabled === true;
+    const deviceStore = remoteEnabled ? new DeviceStore(database) : undefined;
+    const pairing = deviceStore === undefined
+      ? undefined
+      : new PairingService({ store: deviceStore });
+    const tokens = deviceStore === undefined || options.remote?.enabled !== true
+      ? undefined
+      : await TokenService.create({
+          store: deviceStore,
+          issuer: options.remote.issuer,
+          audience: "hunter-mobile",
+          signingSecretRef: options.remote.signingSecretRef,
+          secretStore: options.secretStore,
+        });
+    const gateway = deviceStore === undefined
+      ? undefined
+      : new DeviceGateway({
+          journal: services.journal,
+          commands: services.flowEngine,
+        });
+    const projections = createMobileProjectionProvider({
+      flowStore: services.flowStore,
+      repositories: services.repositories,
     });
     database.prepare(
       `INSERT INTO storage_metadata(metadata_key, metadata_value, updated_at)
@@ -42,13 +153,42 @@ export async function startDaemon(options: DaemonStartOptions) {
        ON CONFLICT(metadata_key) DO UPDATE SET metadata_value = excluded.metadata_value, updated_at = excluded.updated_at`,
     ).run(options.secretRef, new Date().toISOString());
     await services.recovery.run();
-    await services.operationWorker.runOnce();
+    const definitions = createDesktopDefinitionServices({
+      database,
+      services,
+      dataDirectory: options.dataDirectory,
+    });
+    const settlementPending = (error: unknown) =>
+      error instanceof Error
+      && /^(?:ATTEMPT_RETURN_NOT_OBSERVED|CONTROLLER_LEASE_REQUIRED|NATIVE_SESSION_RECEIPT_REQUIRED|OPERATION_(?:DELIVERY|RECEIPT)_)/u.test(
+        error.message,
+      );
+    const driveApplication = async () => {
+      await services.operationWorker.runOnce();
+      const candidates = services.flowStore.allRuns().filter(
+        (state) =>
+          !["succeeded", "failed", "canceled"].includes(state.status)
+          && state.steps.some(
+            (step) =>
+              step.conclusion === "active"
+              && step.attempts.at(-1)?.assignment !== undefined,
+          ),
+      );
+      for (const state of candidates) {
+        try {
+          await composition.attemptSettlement.settle(state.binding.runId);
+        } catch (error) {
+          if (!settlementPending(error)) throw error;
+        }
+      }
+    };
+    await driveApplication();
     let workerFailure: unknown;
     const superviseWorker = () => {
       workerDrain = workerDrain.then(async () => {
         if (workerFailure !== undefined) return;
         try {
-          await services.operationWorker.runOnce();
+          await driveApplication();
         } catch (error) {
           workerFailure = error;
         }
@@ -61,17 +201,81 @@ export async function startDaemon(options: DaemonStartOptions) {
       allowedHosts: services.allowedHosts,
       allowedOrigins: services.allowedOrigins,
       eventStream: services.eventStream,
+      ...(options.localCapability === undefined
+        ? {}
+        : {
+            localCapability: {
+              verifier: new LocalCapabilityVerifier(
+                options.localCapability.capability,
+              ),
+              principal: options.localCapability.authorizeAllProjects === true
+                ? () => ({
+                    ...options.localCapability!.principal,
+                    authorizedProjectIds: definitions.listProjectIds(),
+                  })
+                : options.localCapability.principal,
+            },
+          }),
+      devices: pairing === undefined || tokens === undefined || deviceStore === undefined
+        ? undefined
+        : { pairing, store: deviceStore },
       services: {
         listProjects: async (authorizedProjectIds) => {
-          services.projectionRunner.runIncremental();
-          const allowed = new Set<string>(authorizedProjectIds);
-          return services.projectionRunner.snapshot("hunter").filter(({ entityType, projectId }) => entityType === "Project" && allowed.has(projectId));
+          return authorizedProjectIds.flatMap((projectId) => {
+            const project = services.repositories.getProject(projectId);
+            return project === null ? [] : [{ projectId: project.projectId, name: project.name }];
+          });
+        },
+        createProject: async (command, actor) =>
+          definitions.createProject(command, actor),
+        getProject: async (projectId) => definitions.getProject(projectId),
+        requirements: {
+          createRequirement: async (projectId, command, actor) =>
+            definitions.requirements.createRequirement(
+              projectId,
+              command,
+              actor,
+            ),
+          getRequirementRevision:
+            definitions.requirements.getRequirementRevision,
+          approveRequirement: async (
+            projectId,
+            revisionId,
+            command,
+            actor,
+          ) => definitions.requirements.approveRequirement(
+            projectId,
+            revisionId,
+            command,
+            actor,
+          ),
+        },
+        changes: {
+          getChangeExecutionPlanRelation:
+            definitions.changes.getChangeExecutionPlanRelation,
+          getRequirementRevision:
+            definitions.changes.getRequirementRevision,
+          publishChange: async (projectId, command, actor) =>
+            definitions.changes.publishChange(projectId, command, actor),
         },
         projectForExecutionPlan: (executionPlanId) => {
           const plan = services.repositories.getExecutionPlan(executionPlanId);
           return plan === null ? null : { projectId: plan.projectId, executionPlanId: plan.executionPlanId };
         },
-        startRun: async (command, actor) => services.startRun.execute(command, actor),
+        projectForRun: (runId) => {
+          const run = services.flowStore.loadRun(runId);
+          return run === null
+            ? null
+            : { projectId: run.binding.projectId, runId: run.binding.runId };
+        },
+        startRun: async (command, actor) => composition.startRun.execute(command, actor),
+        ...(composition.knowledge === undefined
+          ? {}
+          : {
+              knowledge: {
+                resolve: async (input) => await composition.knowledge!.resolve(input),
+              },
+            }),
       },
     });
     const listenOptions = { host: "127.0.0.1", port: 0 } as const;
@@ -79,15 +283,50 @@ export async function startDaemon(options: DaemonStartOptions) {
     await app.listen(listenOptions);
     const address = app.server.address();
     if (address === null || typeof address === "string") throw new Error("DAEMON_LISTEN_ADDRESS_INVALID");
+    if (options.allowedHost === undefined) {
+      allowedHosts.push(`127.0.0.1:${address.port}`);
+    }
+    const remoteOptions = options.remote;
+    if (
+      remoteOptions?.enabled === true
+      && tokens !== undefined
+      && pairing !== undefined
+      && gateway !== undefined
+    ) {
+      const tlsKey = await options.secretStore.resolveSecret(remoteOptions.tlsKeyRef);
+      const tlsCert = await options.secretStore.resolveSecret(remoteOptions.tlsCertRef);
+      remote = await startRemoteTlsListener({
+        enabled: true,
+        host: remoteOptions.host,
+        port: remoteOptions.port,
+        key: tlsKey,
+        cert: tlsCert,
+        buildApp: (https) =>
+          buildRemoteDeviceApp({
+            tokens,
+            pairing,
+            gateway,
+            eventStream: services.eventStream,
+            projections,
+            allowedHosts: remoteOptions.allowedHosts,
+            allowedOrigins: remoteOptions.allowedOrigins,
+            https,
+          }),
+      });
+    } else {
+      remote = await startRemoteTlsListener({ enabled: false });
+    }
     await options.publishPort(address.port);
     const runningApp = app;
     let closed = false;
     return {
       port: address.port,
+      remote,
       services,
       shutdown: async () => {
         if (closed) return;
         closed = true;
+        if (remote.status === "listening") await remote.close();
         await runningApp.close();
         if (workerTimer !== undefined) clearInterval(workerTimer);
         await workerDrain;
@@ -98,6 +337,7 @@ export async function startDaemon(options: DaemonStartOptions) {
   } catch (error) {
     if (workerTimer !== undefined) clearInterval(workerTimer);
     if (app !== undefined) await app.close().catch(() => undefined);
+    if (remote.status === "listening") await remote.close().catch(() => undefined);
     await workerDrain.catch(() => undefined);
     database.close();
     throw error;

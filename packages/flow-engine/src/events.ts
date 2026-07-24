@@ -13,7 +13,7 @@ export type ExecutionStatus =
   | "canceled"
   | "stale"
   | "needs_attention";
-export type VerificationStatus = "pending" | "verifying" | "passed" | "failed" | "error" | "needs_human";
+export type VerificationStatus = "pending" | "verifying" | "passed" | "failed" | "error" | "needs_human" | "canceled";
 export type StepConclusion = "active" | "succeeded" | "failed" | "blocked" | "canceled";
 export type RunStatus =
   | "created"
@@ -87,5 +87,6 @@ export type FlowEvent =
   | { readonly type: "ExecutionFailed"; readonly stepRunId: StepRunId; readonly attemptId: AttemptId; readonly errorClass: string }
   | { readonly type: "RetryScheduled"; readonly stepRunId: StepRunId; readonly priorAttemptId: AttemptId; readonly nextAttemptId: AttemptId; readonly nextAttemptNumber: number; readonly delayMs: number; readonly notBefore: string }
   | { readonly type: "DependencyFailureDecided"; readonly taskId: TaskId; readonly failedDependencyIds: readonly TaskId[]; readonly action: "blocked" | "skipped" | "compensate" | "waived" | "terminate"; readonly compensationTaskId: TaskId | null; readonly waiverReceiptHash: string | null }
+  | { readonly type: "SupplementalInputRecorded"; readonly stepRunId: StepRunId; readonly text: string; readonly actorId: string }
   | { readonly type: "RunStatusChanged"; readonly status: RunStatus }
   | { readonly type: "RunConcluded"; readonly status: "succeeded" | "failed" | "canceled" | "needs_attention" };

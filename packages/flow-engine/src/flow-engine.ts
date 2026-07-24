@@ -2,19 +2,22 @@ import { createHash } from "node:crypto";
 
 import {
   AttemptIdSchema,
-  RunIdSchema,
+  GateIdSchema,
   StepRunIdSchema,
   canonicalSha256,
   type ExecutionPlan,
+  type GateId,
   type RequirementRevision,
   type RequirementRevisionId,
   type RunId,
+  type StepRunId,
   type TaskId,
   type WorkflowRevision,
 } from "@hunter/domain";
 import type { ExternalOperation } from "@hunter/runtime-contracts";
 
 import type {
+  ApplyRunControlCommand,
   FlowCommand,
   FlowCommandReceipt,
   ExistingRunCommand,
@@ -23,11 +26,13 @@ import type {
   StartRunCommand,
 } from "./commands.js";
 import type { FlowEvent } from "./events.js";
-import { deriveTaskFanOut, resolveDependencyFailure, resolveResumeFailure, resolveSupersedingRequirement, selectRoute, type FrozenDependencyFailureRule } from "./router.js";
+import { evaluateLoopGuard } from "./loop-guard.js";
+import { resolveDependencyFailure, resolveResumeFailure, resolveSupersedingRequirement, selectRoute, type FrozenDependencyFailureRule } from "./router.js";
 import { createWorkflowRunBinding } from "./run-binding.js";
 import type { PolicySnapshot } from "./run-binding.js";
 import type { WorkflowRunState } from "./state.js";
 import { remainingRunBudget } from "./run-budget.js";
+import { deriveChildRunId, deriveTaskFanOut } from "./task-scheduler.js";
 import { canTransitionExecution, isTerminalRun } from "./transition-table.js";
 
 export interface FlowCommit {
@@ -55,8 +60,12 @@ export interface FlowDefinitions {
   getDependencyFailureRule?(executionPlanId: string, taskId: TaskId, policySnapshot: PolicySnapshot): Readonly<FrozenDependencyFailureRule> | null;
 }
 
-function derivedId(prefix: "spr" | "att" | "run", value: string): string {
+function derivedId(prefix: "spr" | "att", value: string): string {
   return `${prefix}_${createHash("sha256").update(value).digest("hex").slice(0, 24)}`;
+}
+
+export function deriveHumanGateId(runId: RunId, stepRunId: StepRunId): GateId {
+  return GateIdSchema.parse(`gat_${canonicalSha256({ runId, stepRunId }).slice(0, 24)}`);
 }
 
 function activeStep(state: WorkflowRunState) {
@@ -114,6 +123,121 @@ export class FlowEngine {
         return this.activateScheduledRetry(command, commandId, requestFingerprint);
       case "ResolveTaskDependencyFailure":
         return this.resolveTaskDependencyFailure(command, commandId, requestFingerprint);
+      case "ApplyRunControl":
+        return this.applyRunControl(command, commandId, requestFingerprint);
+    }
+  }
+
+  public activeHumanGateId(runId: RunId): GateId {
+    const state = this.requireActiveRun(runId);
+    const workflow = this.requireWorkflow(state.binding.workflowRevisionId);
+    const { step } = activeStep(state);
+    const definition = workflow.steps.find(({ stepId }) => stepId === step.stepId);
+    if (definition?.verifier.kind !== "human_receipt") {
+      throw new Error("ACTIVE_STEP_NOT_HUMAN_GATE");
+    }
+    return deriveHumanGateId(runId, step.stepRunId);
+  }
+
+  private applyRunControl(
+    command: ApplyRunControlCommand,
+    commandId: string,
+    requestFingerprint: string,
+  ): FlowCommandReceipt {
+    const state = this.requireActiveRun(command.runId);
+    if (state.version !== command.expectedVersion) {
+      throw new Error(
+        `EXPECTED_VERSION_CONFLICT expected=${command.expectedVersion} actual=${state.version}`,
+      );
+    }
+    if (state.binding.projectId !== command.projectId) throw new Error("COMMAND_RUN_SCOPE_MISMATCH");
+    let step: ReturnType<typeof activeStep>["step"];
+    try {
+      ({ step } = activeStep(state));
+    } catch (error) {
+      if (command.target.kind === "gate") throw new Error("GATE_ALREADY_DECIDED");
+      throw error;
+    }
+
+    if (command.target.kind === "gate") {
+      if (command.action !== "approve" && command.action !== "reject") {
+        throw new Error("COMMAND_TARGET_KIND_MISMATCH");
+      }
+      const workflow = this.requireWorkflow(state.binding.workflowRevisionId);
+      const definition = workflow.steps.find(({ stepId }) => stepId === step.stepId);
+      if (definition?.verifier.kind !== "human_receipt") {
+        throw new Error("GATE_ALREADY_DECIDED");
+      }
+      if (deriveHumanGateId(command.runId, step.stepRunId) !== command.target.gateId) {
+        throw new Error("COMMAND_TARGET_SCOPE_MISMATCH");
+      }
+      return this.recordVerifier(
+        {
+          type: "RecordVerifierResult",
+          runId: command.runId,
+          outcome: command.action === "approve" ? "passed" : "canceled",
+          evidenceFingerprint: requestFingerprint,
+          humanReceipt: {
+            contentHash: step.fixedContentHash,
+            actorId: command.actor.actorId,
+          },
+          expectedVersion: command.expectedVersion,
+          idempotencyKey: command.idempotencyKey,
+          actor: {
+            ...command.actor,
+            roles: [
+              ...new Set([
+                ...(command.actor.roles ?? []),
+                definition.verifier.requiredRole,
+              ]),
+            ],
+          },
+        },
+        commandId,
+        requestFingerprint,
+      );
+    }
+
+    if (step.stepRunId !== command.target.stepRunId) {
+      throw new Error("COMMAND_TARGET_SCOPE_MISMATCH");
+    }
+    switch (command.action) {
+      case "pause":
+        if (state.status === "paused") throw new Error("RUN_ALREADY_PAUSED");
+        return this.commitExisting(
+          command,
+          commandId,
+          requestFingerprint,
+          [{ type: "RunStatusChanged", status: "paused" }],
+          { status: "accepted", action: command.action },
+        );
+      case "resume":
+        if (state.status !== "paused") throw new Error("RUN_NOT_PAUSED");
+        return this.commitExisting(
+          command,
+          commandId,
+          requestFingerprint,
+          [{ type: "RunStatusChanged", status: "running" }],
+          { status: "accepted", action: command.action },
+        );
+      case "supplement":
+        return this.commitExisting(
+          command,
+          commandId,
+          requestFingerprint,
+          [{
+            type: "SupplementalInputRecorded",
+            stepRunId: step.stepRunId,
+            text: command.payload.text,
+            actorId: command.actor.actorId,
+          }],
+          { status: "accepted", action: command.action },
+        );
+      case "terminate":
+        return this.cancelRun(command, commandId, requestFingerprint);
+      case "approve":
+      case "reject":
+        throw new Error("COMMAND_TARGET_KIND_MISMATCH");
     }
   }
 
@@ -208,15 +332,36 @@ export class FlowEngine {
   private scheduleTaskFanOut(command: Extract<FlowCommand, { type: "ScheduleTaskFanOut" }>, commandId: string, requestFingerprint: string) {
     const state = this.requireActiveRun(command.runId);
     if (state.binding.subjectKind !== "change") throw new Error("TASK_FANOUT_REQUIRES_ROOT_RUN");
+    const { step } = activeStep(state);
+    const workflow = this.requireWorkflow(state.binding.workflowRevisionId);
+    const definition = workflow.steps.find(({ stepId }) => stepId === step.stepId);
+    if (definition?.kind !== "subflow") {
+      throw new Error("TASK_FANOUT_REQUIRES_ACTIVE_SUBFLOW");
+    }
+    if (
+      definition.permissionPolicy.decision !== "allow"
+      || !definition.permissionPolicy.permissions.includes(
+        "workflow.dispatch-task",
+      )
+    ) {
+      throw new Error("TASK_FANOUT_REQUIRES_DISPATCH_CONTRACT");
+    }
     const plan = this.requirePlan(state.binding.executionPlanId);
     const actual = this.store.childRuns(command.runId)
       .filter((child) => child.binding.subjectKind === "task")
       .map((child) => ({ taskId: child.binding.subjectKind === "task" ? child.binding.taskId : plan.tasks[0]!.taskId, status: isTerminalRun(child.status) ? child.status as "succeeded" | "failed" | "canceled" : "running" as const }));
     const actualIds = new Set(actual.map(({ taskId }) => taskId));
     const decided = state.scheduledChildren.filter(({ taskId }) => !actualIds.has(taskId)).map(({ taskId }) => ({ taskId, status: "running" as const }));
-    const taskIds = deriveTaskFanOut(plan, [...actual, ...decided], state.dependencyFailureDecisions);
+    const taskIds = deriveTaskFanOut(
+      plan,
+      [...actual, ...decided],
+      state.dependencyFailureDecisions.map(({ taskId, action }) => ({
+        taskId,
+        action,
+      })),
+    );
     const budget = this.allocateChildBudget(state, plan, taskIds.length);
-    const children = taskIds.map((taskId) => ({ taskId, childRunId: RunIdSchema.parse(derivedId("run", `${command.runId}:${taskId}`)), budget }));
+    const children = taskIds.map((taskId) => ({ taskId, childRunId: deriveChildRunId(command.runId, taskId), budget }));
     const events: FlowEvent[] = [{ type: "TaskFanOutDecided", children }];
     return this.commitExisting(command, commandId, requestFingerprint, events, { children });
   }
@@ -242,9 +387,23 @@ export class FlowEngine {
       const accepted = new Set([...state.acceptedChildRunIds, ...terminal.map(({ child }) => child.binding.runId)]);
       const allScheduledAccepted = state.scheduledChildren.length > 0 && state.scheduledChildren.every(({ childRunId }) => accepted.has(childRunId));
       const allResolved = this.taskGraphResolved(state, plan, accepted);
-      const integrationSucceeded = state.steps.some(({ conclusion }) => conclusion === "succeeded");
-      if (allScheduledAccepted && allResolved && integrationSucceeded) events.push({ type: "RunConcluded", status: "succeeded" });
-      else if (terminal.some(({ status }) => status !== "succeeded")) events.push({ type: "RunStatusChanged", status: "needs_attention" });
+      if (allScheduledAccepted && allResolved) {
+        events.push(...this.concludePassedTaskSubflow(state, {
+          ...state,
+          acceptedChildRunIds: [...accepted],
+          budgetUsage: {
+            ...state.budgetUsage,
+            attempts: state.budgetUsage.attempts + rolled.attempts,
+            elapsedMs: state.budgetUsage.elapsedMs + rolled.elapsedMs,
+            cost: state.budgetUsage.cost + rolled.cost,
+            tokens: state.budgetUsage.tokens + rolled.tokens,
+            loopIterations:
+              state.budgetUsage.loopIterations + rolled.loopIterations,
+          },
+        }));
+      } else if (terminal.some(({ status }) => status !== "succeeded")) {
+        events.push({ type: "RunStatusChanged", status: "needs_attention" });
+      }
     }
     return this.commitExisting(command, commandId, requestFingerprint, events, { acceptedChildRunIds: terminal.map(({ child }) => child.binding.runId) });
   }
@@ -429,7 +588,7 @@ export class FlowEngine {
     const recordedDecision: WorkflowRunState["dependencyFailureDecisions"][number] = { taskId: command.taskId, failedDependencyIds, action: decision.action, compensationTaskId, waiverReceiptHash };
     const events: FlowEvent[] = [{ type: "DependencyFailureDecided", ...recordedDecision }];
     const scheduledTaskId = decision.action === "compensate" ? decision.taskId : decision.action === "waived" ? command.taskId : null;
-    const children = scheduledTaskId === null ? [] : [{ taskId: scheduledTaskId, childRunId: RunIdSchema.parse(derivedId("run", `${command.runId}:${scheduledTaskId}`)), budget: this.allocateChildBudget(state, plan, 1) }];
+    const children = scheduledTaskId === null ? [] : [{ taskId: scheduledTaskId, childRunId: deriveChildRunId(command.runId, scheduledTaskId), budget: this.allocateChildBudget(state, plan, 1) }];
     if (scheduledTaskId !== null) {
       if (!plan.tasks.some(({ taskId }) => taskId === scheduledTaskId)) throw new Error("DEPENDENCY_DECISION_TASK_NOT_IN_PLAN");
       if (state.scheduledChildren.some(({ taskId }) => taskId === scheduledTaskId) || childByTask.has(scheduledTaskId)) throw new Error("DEPENDENCY_DECISION_TASK_ALREADY_SCHEDULED");
@@ -437,10 +596,16 @@ export class FlowEngine {
     }
     if (decision.action === "blocked") events.push({ type: "RunStatusChanged", status: "paused" });
     if (decision.action === "skipped") {
-      const integrationSucceeded = state.steps.some(({ conclusion }) => conclusion === "succeeded");
-      events.push(integrationSucceeded && this.taskGraphResolved(state, plan, new Set(state.acceptedChildRunIds), recordedDecision)
-        ? { type: "RunConcluded", status: "succeeded" }
-        : { type: "RunStatusChanged", status: "running" });
+      if (this.taskGraphResolved(
+        state,
+        plan,
+        new Set(state.acceptedChildRunIds),
+        recordedDecision,
+      )) {
+        events.push(...this.concludePassedTaskSubflow(state, state));
+      } else {
+        events.push({ type: "RunStatusChanged", status: "running" });
+      }
     }
     if (decision.action === "compensate" || decision.action === "waived") events.push({ type: "RunStatusChanged", status: "running" });
     if (decision.action === "terminate") {
@@ -574,7 +739,10 @@ export class FlowEngine {
     if (step.executionStatus !== "returned") throw new Error("EXECUTION_NOT_RETURNED");
     const definition = workflow.steps.find(({ stepId }) => stepId === step.stepId);
     if (definition === undefined) throw new Error("WORKFLOW_STEP_NOT_FOUND");
-    if (definition.verifier.kind === "human_receipt" && command.outcome === "passed") {
+    if (command.outcome === "canceled" && definition.verifier.kind !== "human_receipt") {
+      throw new Error("CANCELED_OUTCOME_REQUIRES_HUMAN_RECEIPT_VERIFIER");
+    }
+    if (definition.verifier.kind === "human_receipt" && (command.outcome === "passed" || command.outcome === "canceled")) {
       if (command.humanReceipt?.contentHash !== step.fixedContentHash) {
         throw new Error("HUMAN_RECEIPT_CONTENT_HASH_MISMATCH");
       }
@@ -603,7 +771,11 @@ export class FlowEngine {
         verificationStatus: "needs_human",
       });
     }
-    const routeOutcome = command.outcome === "passed" ? "passed" : "failed";
+    const routeOutcome = command.outcome === "canceled"
+      ? "canceled"
+      : command.outcome === "passed"
+        ? "passed"
+        : "failed";
     const selected = selectRoute(workflow, step.stepId, routeOutcome, {
       failureClass: command.outcome === "error" ? "verifier_infrastructure" : "product_verification",
     });
@@ -624,7 +796,6 @@ export class FlowEngine {
       const target = workflow.steps.find(({ stepId }) => stepId === selected.loop?.toStepId);
       if (target === undefined) throw new Error("LOOP_TARGET_STEP_MISSING");
       const loopUsage = state.loopUsage[selected.loop.loopId] ?? { iterations: 0, elapsedMs: 0, cost: 0, lastProgressFingerprint: null, repeatedFailureFingerprintCount: 0, lastFailureFingerprint: null, noProgressCount: 0, verifierErrorCount: 0 };
-      const nextIteration = loopUsage.iterations + 1;
       const progressFingerprint = selected.loop.progressPredicate.source === "workspace.diff"
         ? command.diffFingerprint ?? null
         : selected.loop.progressPredicate.source === "verification.evidence"
@@ -639,29 +810,26 @@ export class FlowEngine {
         : selected.loop.progressPredicate.kind === "fingerprint_changed"
           ? progressFingerprint !== null && progressFingerprint !== loopUsage.lastProgressFingerprint
           : loopUsage.lastProgressFingerprint === null || (loopUsage.lastProgressFingerprint === "verifier:error" && progressFingerprint === "verifier:failed");
-      const repeatedFailureCount = command.failureFingerprint === undefined
-        ? loopUsage.repeatedFailureFingerprintCount
-        : command.failureFingerprint === loopUsage.lastFailureFingerprint
-          ? loopUsage.repeatedFailureFingerprintCount + 1
-          : 1;
-      const noProgressCount = progressSatisfied ? 0 : loopUsage.noProgressCount + 1;
-      const verifierErrorCount = command.outcome === "error" ? loopUsage.verifierErrorCount + 1 : 0;
-      const nextLoopElapsedMs = loopUsage.elapsedMs + target.budgetCost.elapsedMs;
-      const nextLoopCost = loopUsage.cost + target.budgetCost.cost;
-      const exhausted =
-        nextIteration > selected.loop.maxIterations ||
-        state.budgetUsage.loopIterations + 1 > state.binding.initialBudget.maxLoopIterations ||
-        nextLoopElapsedMs > selected.loop.maxElapsedMs ||
-        (selected.loop.maxCost !== undefined && nextLoopCost > selected.loop.maxCost) ||
-        repeatedFailureCount > selected.loop.stagnation.maxSameFailureFingerprint ||
-        noProgressCount > selected.loop.stagnation.maxNoDiffIterations ||
-        verifierErrorCount > selected.loop.stagnation.maxVerifierErrors ||
-        !this.budgetAvailable(state, target);
-      if (exhausted) {
+      const guard = evaluateLoopGuard({
+        policy: selected.loop,
+        usage: loopUsage,
+        runLimit: state.binding.initialBudget,
+        runUsage: state.budgetUsage,
+        targetBudgetCost: {
+          elapsedMs: target.budgetCost.elapsedMs,
+          cost: target.budgetCost.cost,
+        },
+        stepBudgetAvailable: this.budgetAvailable(state, target),
+        progressSatisfied,
+        failureFingerprint: command.failureFingerprint ?? null,
+        verifierError: command.outcome === "error",
+      });
+      if (!guard.proceed) {
         events.push({ type: "StepConcluded", stepRunId: step.stepRunId, conclusion: "failed" });
         if (selected.loop.exhaustion.target === "paused") events.push({ type: "RunStatusChanged", status: "paused" });
         else events.push({ type: "RunConcluded", status: selected.loop.exhaustion.target });
       } else {
+        events.push({ type: "StepConcluded", stepRunId: step.stepRunId, conclusion: "failed" });
         const targetState = state.steps.find(({ stepId }) => stepId === target.stepId);
         const attemptNumber = (targetState?.attempts.length ?? 0) + 1;
         const stepRunId = StepRunIdSchema.parse(
@@ -670,7 +838,7 @@ export class FlowEngine {
         const attemptId = AttemptIdSchema.parse(
           derivedId("att", `${state.binding.runId}:${target.stepId}:${attemptNumber}`),
         );
-        events.push({ type: "LoopActivated", loopId: selected.loop.loopId, iteration: nextIteration, elapsedMs: nextLoopElapsedMs, cost: nextLoopCost, progressFingerprint, progressSatisfied, failureFingerprint: command.failureFingerprint ?? null, verifierError: command.outcome === "error" });
+        events.push({ type: "LoopActivated", loopId: selected.loop.loopId, iteration: guard.next.iteration, elapsedMs: guard.next.elapsedMs, cost: guard.next.cost, progressFingerprint, progressSatisfied, failureFingerprint: command.failureFingerprint ?? null, verifierError: command.outcome === "error" });
         events.push({
           type: "BudgetConsumed",
           attempts: 1,
@@ -696,14 +864,19 @@ export class FlowEngine {
         });
       }
       return this.commitExisting(command, commandId, requestFingerprint, events, {
-        loopIteration: nextIteration,
+        loopIteration: guard.next.iteration,
+        loopGuardReason: guard.proceed ? null : guard.reason,
       });
     }
 
     events.push({
       type: "StepConcluded",
       stepRunId: step.stepRunId,
-      conclusion: command.outcome === "passed" ? "succeeded" : "failed",
+      conclusion: command.outcome === "canceled"
+        ? "canceled"
+        : command.outcome === "passed"
+          ? "succeeded"
+          : "failed",
     });
     if (selected.route.toStepId === null) {
       if (state.binding.subjectKind === "change" && command.outcome === "passed") {
@@ -715,7 +888,14 @@ export class FlowEngine {
           ? { type: "RunConcluded", status: "succeeded" }
           : { type: "RunStatusChanged", status: hasFailedChild ? "needs_attention" : "paused" });
       } else {
-        events.push({ type: "RunConcluded", status: command.outcome === "passed" ? "succeeded" : "failed" });
+        events.push({
+          type: "RunConcluded",
+          status: command.outcome === "canceled"
+            ? "canceled"
+            : command.outcome === "passed"
+              ? "succeeded"
+              : "failed",
+        });
       }
     } else {
       const target = workflow.steps.find(({ stepId }) => stepId === selected.route.toStepId);
@@ -833,6 +1013,88 @@ export class FlowEngine {
       const dependents = plan.tasks.filter(({ dependsOn }) => dependsOn.includes(task.taskId));
       return dependents.length > 0 && dependents.every(({ taskId }) => dependentAcceptsFailure(taskId));
     });
+  }
+
+  private concludePassedTaskSubflow(
+    state: WorkflowRunState,
+    budgetState: WorkflowRunState,
+  ): FlowEvent[] {
+    const workflow = this.requireWorkflow(state.binding.workflowRevisionId);
+    const { step } = activeStep(state);
+    const definition = workflow.steps.find(({ stepId }) => stepId === step.stepId);
+    if (definition?.kind !== "subflow") {
+      throw new Error("TASK_FANIN_REQUIRES_ACTIVE_SUBFLOW");
+    }
+    if (
+      definition.permissionPolicy.decision !== "allow"
+      || !definition.permissionPolicy.permissions.includes(
+        "workflow.dispatch-task",
+      )
+    ) {
+      throw new Error("TASK_FANIN_REQUIRES_DISPATCH_CONTRACT");
+    }
+    const selected = selectRoute(workflow, step.stepId, "passed", {
+      childStatus: "succeeded",
+    });
+    if (selected === null || selected.loop !== null) {
+      throw new Error("TASK_FANIN_ROUTE_REQUIRED");
+    }
+    const events: FlowEvent[] = [
+      {
+        type: "StepConcluded",
+        stepRunId: step.stepRunId,
+        conclusion: "succeeded",
+      },
+      {
+        type: "RouteSelected",
+        routeId: selected.route.routeId,
+        fromStepId: selected.route.fromStepId,
+        toStepId: selected.route.toStepId,
+        outcome: "passed",
+      },
+    ];
+    if (selected.route.toStepId === null) {
+      events.push({ type: "RunConcluded", status: "succeeded" });
+      return events;
+    }
+    const target = workflow.steps.find(
+      ({ stepId }) => stepId === selected.route.toStepId,
+    );
+    if (target === undefined) throw new Error("ROUTE_TARGET_STEP_MISSING");
+    if (!this.budgetAvailable(budgetState, target)) {
+      events.push({ type: "RunStatusChanged", status: "needs_attention" });
+      return events;
+    }
+    const stepRunId = StepRunIdSchema.parse(
+      derivedId("spr", `${state.binding.runId}:${target.stepId}`),
+    );
+    const attemptId = AttemptIdSchema.parse(
+      derivedId("att", `${state.binding.runId}:${target.stepId}:1`),
+    );
+    events.push({
+      type: "BudgetConsumed",
+      attempts: 1,
+      elapsedMs: target.budgetCost.elapsedMs,
+      cost: target.budgetCost.cost,
+      tokens: 0,
+      loopIterations: 0,
+      progressFingerprint: null,
+      failureFingerprint: null,
+      noDiff: false,
+      verifierError: false,
+    });
+    events.push({
+      type: "StepActivated",
+      stepRunId,
+      stepId: target.stepId,
+      attemptId,
+      attemptNumber: 1,
+      fixedContentHash: canonicalSha256({
+        bindingFingerprint: state.binding.bindingFingerprint,
+        stepId: target.stepId,
+      }),
+    });
+    return events;
   }
 
   private budgetAvailable(state: WorkflowRunState, step: WorkflowRevision["steps"][number]): boolean {

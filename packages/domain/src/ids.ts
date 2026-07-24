@@ -4,7 +4,7 @@ function canonicalId(prefix: string, label: string) {
   return z
     .string()
     .regex(
-      new RegExp(`^${prefix}_[a-z0-9][a-z0-9_-]{7,63}$`, "u"),
+      new RegExp(`^${prefix}_[a-z0-9][a-z0-9_-]{7,91}$`, "u"),
       `${label} must be a canonical opaque identifier`,
     );
 }
@@ -33,6 +33,9 @@ export type ChangeRevisionId = z.infer<typeof ChangeRevisionIdSchema>;
 export const TaskIdSchema = canonicalId("tsk", "TaskId").brand<"TaskId">();
 export type TaskId = z.infer<typeof TaskIdSchema>;
 
+export const WorkflowIdSchema = canonicalId("wfl", "WorkflowId").brand<"WorkflowId">();
+export type WorkflowId = z.infer<typeof WorkflowIdSchema>;
+
 export const WorkflowRevisionIdSchema = canonicalId(
   "wfr",
   "WorkflowRevisionId",
@@ -44,6 +47,9 @@ export type StepId = z.infer<typeof StepIdSchema>;
 
 export const StepRunIdSchema = canonicalId("spr", "StepRunId").brand<"StepRunId">();
 export type StepRunId = z.infer<typeof StepRunIdSchema>;
+
+export const GateIdSchema = canonicalId("gat", "GateId").brand<"GateId">();
+export type GateId = z.infer<typeof GateIdSchema>;
 
 export const RouteIdSchema = canonicalId("rte", "RouteId").brand<"RouteId">();
 export type RouteId = z.infer<typeof RouteIdSchema>;
@@ -68,6 +74,15 @@ export type OperationId = z.infer<typeof OperationIdSchema>;
 
 export const EvidenceIdSchema = canonicalId("evd", "EvidenceId").brand<"EvidenceId">();
 export type EvidenceId = z.infer<typeof EvidenceIdSchema>;
+
+export const ArtifactIdSchema = canonicalId("art", "ArtifactId").brand<"ArtifactId">();
+export type ArtifactId = z.infer<typeof ArtifactIdSchema>;
+
+export const KnowledgeEntryIdSchema = canonicalId(
+  "kne",
+  "KnowledgeEntryId",
+).brand<"KnowledgeEntryId">();
+export type KnowledgeEntryId = z.infer<typeof KnowledgeEntryIdSchema>;
 
 export const AgentProfileIdSchema = canonicalId("apr", "AgentProfileId").brand<"AgentProfileId">();
 export type AgentProfileId = z.infer<typeof AgentProfileIdSchema>;

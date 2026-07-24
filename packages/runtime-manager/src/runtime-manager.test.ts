@@ -20,7 +20,7 @@ import {
   WriterLeaseIdSchema,
   canonicalSha256,
 } from "@hunter/domain";
-import { CapabilityProbeReceiptSchema, ControllerLeaseSchema, WorkspaceLeaseSchema, WriterLeaseSchema, createExternalOperation, type Lease } from "@hunter/runtime-contracts";
+import { CanonicalWorkspaceKeySchema, CapabilityProbeReceiptSchema, ControllerLeaseSchema, WorkspaceLeaseSchema, WriterLeaseSchema, createExternalOperation, type Lease } from "@hunter/runtime-contracts";
 import { SqliteOperationJournal, OperationWorker } from "@hunter/storage";
 import { FakeRuntime } from "@hunter/testkit";
 import { describe, expect, it } from "vitest";
@@ -34,6 +34,8 @@ const projectId = ProjectIdSchema.parse("prj_runtime001");
 const runId = RunIdSchema.parse("run_runtime001");
 const attemptId = AttemptIdSchema.parse("att_runtime001");
 const workspaceId = WorkspaceIdSchema.parse("wsp_runtime001");
+const repositoryId = RepositoryIdSchema.parse("rep_runtime001");
+const worktreeId = WorktreeIdSchema.parse("wtr_runtime001");
 
 function manager(database: DatabaseSync, journal: SqliteOperationJournal, options: { readonly leaseIds?: readonly Lease["leaseId"][]; readonly capabilityReceipt?: ReturnType<typeof capability>; readonly policyDecision?: "allow" | "deny" | "require_approval" } = {}) {
   return new RuntimeManager(database, {
@@ -66,20 +68,24 @@ function manager(database: DatabaseSync, journal: SqliteOperationJournal, option
       requestedCapabilities: ["launch"] as const,
       agentProfileId: AgentProfileIdSchema.parse("apr_runtime001"),
       workspaceId,
-      repositoryIds: [RepositoryIdSchema.parse("rep_runtime001")],
+      repositoryIds: [repositoryId],
     },
   }) });
 }
 
 function capability() {
   return CapabilityProbeReceiptSchema.parse({
-    schemaVersion: 1,
+    schemaVersion: 2,
     probeReceiptId: CapabilityProbeReceiptIdSchema.parse("cpr_runtime001"),
     subject: { kind: "provider", providerId: RuntimeProviderIdSchema.parse("rtp_runtime001"), implementationVersion: "1.0.0" },
     platform: "windows",
-    observedAt: "2026-07-22T09:00:00.000Z",
+    executable: { status: "available" },
+    loginState: "not_required",
+    productVersion: { observed: "fake-1", supported: ["fake-1"] },
+    protocol: { kind: "fake", observedVersion: "1", supportedVersions: ["1"], schemaVersion: 1, supportedSchemaVersions: [1], schemaDigest: "b".repeat(64) },
+    probedAt: "2026-07-22T09:00:00.000Z",
     validUntil: "2026-07-22T11:00:00.000Z",
-    results: [{ capability: "launch", status: "SUPPORTED", evidenceId: EvidenceIdSchema.parse("evd_runtime001"), evidenceHash: "a".repeat(64) }],
+    results: [{ capability: "launch", status: "supported", evidenceId: EvidenceIdSchema.parse("evd_runtime001"), evidence: { source: "local_probe", digest: "a".repeat(64) }, probedAt: "2026-07-22T09:00:00.000Z" }],
   });
 }
 
@@ -87,10 +93,27 @@ async function harness() {
   const database = new DatabaseSync(":memory:");
   const journal = new SqliteOperationJournal(database);
   const leases = new LeaseService(database, () => new Date(now));
-  const common = { schemaVersion: 1 as const, ownerId: owner, generation: 1, acquiredAt: "2026-07-22T10:00:00.000Z", expiresAt: "2026-07-22T10:30:00.000Z" };
-  const workspace = await leases.acquire(WorkspaceLeaseSchema.parse({ ...common, kind: "workspace", leaseId: WorkspaceLeaseIdSchema.parse("wsl_runtime001"), scope: { workspaceId, deviceBindingId: DeviceBindingIdSchema.parse("dev_runtime001"), repositoryId: RepositoryIdSchema.parse("rep_runtime001"), mode: "write", baselineRevision: "a".repeat(40) } }));
-  const writer = await leases.acquire(WriterLeaseSchema.parse({ ...common, kind: "writer", leaseId: WriterLeaseIdSchema.parse("wrl_runtime001"), scope: { workspaceId, worktreeId: WorktreeIdSchema.parse("wtr_runtime001") } }));
-  const controller = await leases.acquire(ControllerLeaseSchema.parse({ ...common, kind: "controller", leaseId: ControllerLeaseIdSchema.parse("ctl_runtime001"), scope: { nativeSessionId: NativeSessionIdSchema.parse("ses_runtime001") } }));
+  const common = {
+    schemaVersion: 2 as const,
+    projectId,
+    repositoryId,
+    deviceBindingId: DeviceBindingIdSchema.parse("dev_runtime001"),
+    canonicalWorkspaceKey: CanonicalWorkspaceKeySchema.parse("posix:/fixtures/runtime"),
+    gitHead: "a".repeat(40),
+    branch: "codex/task14-runtime-manager",
+    ownerRunId: runId,
+    ownerAttemptId: attemptId,
+    ownerId: owner,
+    generation: 1,
+    mode: "write" as const,
+    acquiredAt: "2026-07-22T10:00:00.000Z",
+    expiresAt: "2026-07-22T10:30:00.000Z",
+    revokedAt: null,
+    revocationReason: null,
+  };
+  const workspace = await leases.acquire(WorkspaceLeaseSchema.parse({ ...common, kind: "workspace", leaseId: WorkspaceLeaseIdSchema.parse("wsl_runtime001"), scope: { workspaceId } }));
+  const writer = await leases.acquire(WriterLeaseSchema.parse({ ...common, kind: "writer", leaseId: WriterLeaseIdSchema.parse("wrl_runtime001"), scope: { workspaceId, worktreeId } }));
+  const controller = await leases.acquire(ControllerLeaseSchema.parse({ ...common, kind: "controller", leaseId: ControllerLeaseIdSchema.parse("ctl_runtime001"), scope: { workspaceId, worktreeId, nativeSessionId: NativeSessionIdSchema.parse("ses_runtime001") } }));
   const operation = createExternalOperation({ schemaVersion: 1, operationId: OperationIdSchema.parse("opn_runtime001"), projectId, runId, attemptId, operationVersion: 1, operationType: "session.launch", requestedCapabilities: ["launch"], payload: { agentProfileId: AgentProfileIdSchema.parse("apr_runtime001"), workspaceId } });
   return { database, journal, operation, leaseIds: [workspace.leaseId, writer.leaseId, controller.leaseId] as const };
 }
@@ -119,7 +142,7 @@ describe("RuntimeManager", () => {
     const receipt = capability();
     const unsupported = CapabilityProbeReceiptSchema.parse({
       ...receipt,
-      results: receipt.results.map((result) => ({ ...result, status: "NOT_PROVEN" as const })),
+      results: receipt.results.map((result) => ({ ...result, status: "unknown" as const })),
     });
     expect(() => manager(database, journal, { capabilityReceipt: unsupported }).requestAssignment({ commandId: "assign:no-cap", expectedVersion: 0, operation })).toThrow(/CAPABILITY_NOT_PROVEN/u);
     expect(() => manager(database, journal, { capabilityReceipt: receipt }).requestAssignment({ commandId: "assign:no-lease", expectedVersion: 0, operation })).toThrow(/LEASE_RECEIPT_REQUIRED/u);

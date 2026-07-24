@@ -1,12 +1,14 @@
 import type { DatabaseSync } from "node:sqlite";
-import { accessSync, constants, existsSync, realpathSync } from "node:fs";
+import { accessSync, constants, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { isAbsolute, join } from "node:path";
 
 import { PublishChangeService, StartRunService, type PublishChangeRepositories, type StartRunRepositories } from "@hunter/application";
-import type { ExecutionPlan, ProjectId, TaskId, WorkflowRevision } from "@hunter/domain";
-import { OperationIdSchema, ProjectIdSchema, canonicalSha256, createProject } from "@hunter/domain";
+import type { ExecutionPlan, NativeSessionId, ProjectId, TaskId, WorkflowRevision, WorktreeId } from "@hunter/domain";
+import { ControllerLeaseIdSchema, LeaseOwnerIdSchema, OperationIdSchema, ProjectIdSchema, WorkspaceLeaseIdSchema, WriterLeaseIdSchema, canonicalSha256, createProject } from "@hunter/domain";
 import { FlowEngine, reduceFlowEvents, type FlowCommandReceipt, type FlowCommit, type FlowDefinitions, type FlowEvent, type FlowStore, type WorkflowRunState } from "@hunter/flow-engine";
-import { CapabilityProbeReceiptSchema, ExternalOperationReceiptSchema, LeaseSchema, createExternalOperation, type CapabilityProbeReceipt, type ExternalOperation, type ExternalOperationHandler, type Lease } from "@hunter/runtime-contracts";
+import { ArchiveJobWorker, ArchiveWriter, SqliteArchiveJobStore, SqliteKnowledgeCatalog, type ArchiveJobFaultPoint, type ArchiveManifestSource } from "@hunter/knowledge";
+import { computeCapabilityManifest, createExternalOperation, createWorkspacePathBoundary, decodeCapabilityProbeReceipt, decodeExternalOperationReceipt, type CapabilityProbeReceipt, type ExternalOperation, type ExternalOperationHandler, type Lease, type VerifiedWorkspacePath } from "@hunter/runtime-contracts";
 import { deriveStepPolicy } from "@hunter/policy";
 import { LeaseService, RuntimeManager, RuntimeOperationHandler } from "@hunter/runtime-manager";
 import { EventLedgerReader, HunterProjection, OperationWorker, ProjectionRunner, SqliteOperationJournal } from "@hunter/storage";
@@ -15,6 +17,8 @@ import { LocalAuthenticator } from "../auth/local-authenticator.js";
 import { DurableEventStream } from "../events/durable-event-stream.js";
 import { StartupRecoveryCoordinator, type RecoveryFact } from "../startup/startup-recovery-coordinator.js";
 import { SqliteDefinitionRepository } from "./sqlite-definition-repository.js";
+import { SqliteAttemptObservation } from "./sqlite-attempt-observation.js";
+import { RunCoordinator } from "./run-coordinator.js";
 
 interface ReceiptRow {
   readonly request_fingerprint: string;
@@ -24,6 +28,14 @@ interface ReceiptRow {
 interface FlowEventRow {
   readonly aggregate_id: string;
   readonly event_data: string;
+}
+
+function withoutLeaseGeneration<T extends Lease>(
+  lease: T,
+): Omit<T, "generation"> {
+  const { generation, ...template } = lease;
+  void generation;
+  return template;
 }
 
 export class SqliteFlowStore implements FlowStore {
@@ -113,12 +125,52 @@ export function createSqliteApplicationServices(input: {
   readonly allowedHosts: readonly string[];
   readonly allowedOrigins: readonly string[];
   readonly capabilityReceiptFor?: ((operation: ExternalOperation) => CapabilityProbeReceipt | null) | undefined;
+  readonly leaseRecoveryObservationFor?: ((lease: Lease) => {
+    readonly worktreeId?: WorktreeId | undefined;
+    readonly nativeSessionId?: NativeSessionId | undefined;
+  } | null) | undefined;
+  readonly verifiedWorkspacePathForLease?: ((lease: Lease) => VerifiedWorkspacePath | null) | undefined;
   readonly resolveAuthorizedProjectIds?: ((principalId: string) => readonly ProjectId[] | undefined) | undefined;
   readonly now?: (() => Date) | undefined;
   readonly contentDirectory?: string | undefined;
+  readonly archive?: {
+    readonly root: string;
+    readonly source: ArchiveManifestSource;
+    readonly ownerId: ReturnType<typeof LeaseOwnerIdSchema.parse>;
+    readonly leaseDurationMs?: number | undefined;
+    readonly fault?: ((point: ArchiveJobFaultPoint) => void) | undefined;
+  } | undefined;
 }) {
   const now = input.now ?? (() => new Date());
-  const journal = new SqliteOperationJournal(input.database);
+  const archiveJobStore = input.archive === undefined
+    ? undefined
+    : new SqliteArchiveJobStore(input.database);
+  const journal = new SqliteOperationJournal(input.database, {
+    scheduleTerminalRunArchive: archiveJobStore === undefined
+      ? undefined
+      : (schedule) => {
+          archiveJobStore.schedule(schedule);
+        },
+  });
+  const knowledgeCatalog = input.archive === undefined
+    ? undefined
+    : new SqliteKnowledgeCatalog(input.database, now);
+  const archiveWorker = input.archive === undefined || archiveJobStore === undefined || knowledgeCatalog === undefined
+    ? undefined
+    : new ArchiveJobWorker({
+        store: archiveJobStore,
+        writer: new ArchiveWriter(join(input.archive.root, "archives")),
+        catalog: knowledgeCatalog,
+        source: input.archive.source,
+        ownerId: input.archive.ownerId,
+        now,
+        ...(input.archive.leaseDurationMs === undefined
+          ? {}
+          : { leaseDurationMs: input.archive.leaseDurationMs }),
+        ...(input.archive.fault === undefined
+          ? {}
+          : { fault: input.archive.fault }),
+      });
   input.database.exec(`CREATE TABLE IF NOT EXISTS principal_project_authorizations (
     principal_id TEXT PRIMARY KEY,
     project_ids_json TEXT NOT NULL,
@@ -140,6 +192,11 @@ export function createSqliteApplicationServices(input: {
   const repositories: SqliteServiceRepositories = input.repositories ?? new SqliteDefinitionRepository(input.database);
   const flowStore = new SqliteFlowStore(input.database, journal, now);
   const flowEngine = new FlowEngine(flowStore, repositories, now);
+  const runCoordinator = new RunCoordinator({
+    store: flowStore,
+    definitions: repositories,
+    commands: flowEngine,
+  });
   const reconcileCancellationRequests = async () => {
     const receipts: FlowCommandReceipt[] = [];
     for (let round = 0; round < 100; round += 1) {
@@ -147,32 +204,36 @@ export function createSqliteApplicationServices(input: {
       const attemptCancellations = flowStore.allRuns().filter((state) => !["succeeded", "failed", "canceled"].includes(state.status) && state.attemptCancellation !== null);
       for (const state of attemptCancellations) {
         const pending = state.attemptCancellation!;
-        const launchRow = input.database.prepare("SELECT operation_json FROM outbox WHERE operation_id = ?").get(pending.assignmentOperationId) as { operation_json: string } | undefined;
-        const launchReceiptRow = input.database.prepare("SELECT provider_receipt_json FROM side_effect_receipts WHERE operation_id = ? AND observed_status = 'completed'").get(pending.assignmentOperationId) as { provider_receipt_json: string } | undefined;
-        if (launchRow === undefined || launchReceiptRow === undefined) continue;
-        const launch = JSON.parse(launchRow.operation_json) as ExternalOperation;
+        const launchState = journal.findOperation(
+          OperationIdSchema.parse(pending.assignmentOperationId),
+        );
+        if (launchState === null) continue;
+        const launch = launchState.operation;
         if (launch.runId !== state.binding.runId || launch.attemptId !== pending.attemptId || launch.operationType !== "session.launch") {
           throw new Error("CANCELLATION_LAUNCH_SCOPE_MISMATCH");
         }
-        const launchReceipt = ExternalOperationReceiptSchema.parse(JSON.parse(launchReceiptRow.provider_receipt_json));
+        const launchReceipt = operationWorker.resolveReceipt(launch);
+        if (launchReceipt?.operationStatus !== "completed") continue;
         const session = launchReceipt.nativeReferences.find((reference) => reference.kind === "session");
         if (session === undefined) continue;
-        const controllerRows = input.database.prepare("SELECT receipt_json FROM lease_records WHERE lease_kind = 'controller' AND expires_at > ?").all(now().toISOString()) as Array<{ receipt_json: string }>;
-        const controller = controllerRows.map((row) => LeaseSchema.parse(JSON.parse(row.receipt_json))).find((lease) => lease.kind === "controller" && lease.scope.nativeSessionId === session.referenceId);
+        const controller = leaseService.listActive().find(
+          (lease) =>
+            lease.kind === "controller"
+            && lease.scope.nativeSessionId === session.referenceId,
+        );
         if (controller === undefined) continue;
         const interruptOperationId = OperationIdSchema.parse(`opn_${canonicalSha256({ runId: state.binding.runId, attemptId: pending.attemptId, sessionId: session.referenceId, action: "interrupt" }).slice(0, 24)}`);
         const interrupt = createExternalOperation({ schemaVersion: 1, operationId: interruptOperationId, projectId: state.binding.projectId, runId: state.binding.runId, attemptId: pending.attemptId, operationVersion: 2, operationType: "session.interrupt", requestedCapabilities: ["interrupt"], payload: { nativeSessionId: session.referenceId, reason: "hunter_run_canceled", controllerLeaseId: controller.leaseId, controllerLeaseOwnerId: controller.ownerId, controllerLeaseGeneration: controller.generation } });
         const aggregateId = `cancellation:${state.binding.runId}`;
-        const version = (input.database.prepare("SELECT COALESCE(MAX(aggregate_version), 0) AS version FROM events WHERE aggregate_id = ?").get(aggregateId) as { version: number }).version;
+        const version = journal.aggregateVersion(aggregateId);
         journal.commitCommand({ commandId: `schedule-interrupt:${state.binding.runId}:${pending.attemptId}`, requestFingerprint: canonicalSha256(interrupt), projectId: state.binding.projectId, aggregateId, expectedVersion: version, actor: { actorId: "flow-cancellation-reconciler", correlationId: `cancel:${state.binding.runId}` }, events: [], operations: [interrupt], response: { operationId: interrupt.operationId } });
         for (let delivery = 0; delivery < 1_000; delivery += 1) {
-          const status = input.database.prepare("SELECT status FROM outbox WHERE operation_id = ?").get(interrupt.operationId) as { status: string } | undefined;
-          if (status !== undefined && !["pending", "in_flight"].includes(status.status)) break;
+          const operationState = journal.findOperation(interrupt.operationId);
+          if (operationState !== null && !["pending", "in_flight"].includes(operationState.status)) break;
           if (await operationWorker.runOnce() === "idle") break;
         }
-        const interruptReceiptRow = input.database.prepare("SELECT provider_receipt_json FROM side_effect_receipts WHERE operation_id = ? AND observed_status = 'completed'").get(interrupt.operationId) as { provider_receipt_json: string } | undefined;
-        if (interruptReceiptRow === undefined) continue;
-        const interruptReceipt = ExternalOperationReceiptSchema.parse(JSON.parse(interruptReceiptRow.provider_receipt_json));
+        const interruptReceipt = operationWorker.resolveReceipt(interrupt);
+        if (interruptReceipt?.operationStatus !== "completed") continue;
         const current = flowStore.loadRun(state.binding.runId);
         if (current === null || current.attemptCancellation === null) continue;
         receipts.push(flowEngine.handle({ type: "AcknowledgeAttemptCancellation", runId: current.binding.runId, interruptOperationId: interrupt.operationId, evidenceFingerprint: interruptReceipt.evidence.evidenceHash, expectedVersion: current.version, idempotencyKey: `ack-interrupt-${interrupt.operationId}`, actor: { actorId: "flow-cancellation-reconciler", correlationId: `cancel:${current.binding.runId}` } }));
@@ -205,7 +266,135 @@ export function createSqliteApplicationServices(input: {
   };
   const eventReader = new EventLedgerReader(input.database);
   const projectionRunner = new ProjectionRunner(input.database, [new HunterProjection()]);
-  const leaseService = new LeaseService(input.database);
+  const leaseService = new LeaseService(input.database, now);
+  const deterministicLeaseId = (
+    prefix: "wsl" | "wrl" | "ctl" | "own",
+    value: unknown,
+  ): string => `${prefix}_${canonicalSha256(value).slice(0, 24)}`;
+  const persistedDeviceBindingFor = (
+    operation: Extract<ExternalOperation, { operationType: "workspace.prepare" }>,
+  ) => {
+    const rows = input.database.prepare(
+      `SELECT event_data
+         FROM events
+        WHERE aggregate_id = ? AND event_type = 'ProjectCreated'
+        ORDER BY position DESC`,
+    ).all(`project:${operation.projectId}`) as Array<{ event_data: string }>;
+    for (const row of rows) {
+      try {
+        const eventData = JSON.parse(row.event_data) as {
+          readonly projectId?: unknown;
+          readonly project?: unknown;
+        };
+        const project = createProject(eventData.project);
+        if (
+          project.projectId !== operation.projectId
+          || eventData.projectId !== operation.projectId
+          || !project.repositoryBindings.some(
+            ({ repositoryId }) =>
+              repositoryId === operation.payload.repositoryId,
+          )
+        ) {
+          continue;
+        }
+        const binding = project.deviceBindings.find(
+          ({ deviceBindingId }) =>
+            deviceBindingId === operation.payload.deviceBindingId,
+        );
+        if (
+          binding === undefined
+          || binding.repositoryId !== operation.payload.repositoryId
+          || binding.availability !== "available"
+          || !isAbsolute(binding.localPath)
+        ) {
+          continue;
+        }
+        return binding;
+      } catch {
+        continue;
+      }
+    }
+    throw new Error("PERSISTED_DEVICE_BINDING_SCOPE_REQUIRED");
+  };
+  const inspectGitWorkspace = (
+    workspacePath: string,
+    args: readonly string[],
+  ): string => {
+    try {
+      return execFileSync("git", ["-C", workspacePath, ...args], {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: 5_000,
+      }).trim();
+    } catch {
+      throw new Error("GIT_WORKSPACE_INSPECTION_FAILED");
+    }
+  };
+  const acquireWorkspaceLease = async (
+    operation: ExternalOperation,
+  ) => {
+    if (operation.operationType !== "workspace.prepare") {
+      throw new Error("WORKSPACE_PREPARE_OPERATION_REQUIRED");
+    }
+    if (operation.runId === null || operation.attemptId === null) {
+      throw new Error("WORKSPACE_LEASE_RUN_SCOPE_REQUIRED");
+    }
+    const binding = persistedDeviceBindingFor(operation);
+    const boundary = createWorkspacePathBoundary(
+      new Map([[operation.payload.repositoryId, binding.localPath]]),
+    );
+    const verifiedRepositoryPath = boundary.verify(
+      operation.payload.repositoryId,
+      binding.localPath,
+    );
+    const topLevel = inspectGitWorkspace(
+      verifiedRepositoryPath,
+      ["rev-parse", "--show-toplevel"],
+    );
+    const verifiedTopLevel = boundary.verify(operation.payload.repositoryId, topLevel);
+    const gitHead = inspectGitWorkspace(
+      verifiedRepositoryPath,
+      ["rev-parse", "HEAD"],
+    );
+    if (gitHead !== operation.payload.baselineRevision) {
+      throw new Error("WORKSPACE_BASELINE_MISMATCH");
+    }
+    const branch = inspectGitWorkspace(
+      verifiedRepositoryPath,
+      ["branch", "--show-current"],
+    );
+    const acquiredAt = now();
+    return leaseService.acquireNext({
+      schemaVersion: 2,
+      projectId: operation.projectId,
+      repositoryId: operation.payload.repositoryId,
+      deviceBindingId: operation.payload.deviceBindingId,
+      canonicalWorkspaceKey: boundary.canonicalKey(verifiedTopLevel),
+      gitHead,
+      branch,
+      ownerRunId: operation.runId,
+      ownerAttemptId: operation.attemptId,
+      kind: "workspace",
+      leaseId: WorkspaceLeaseIdSchema.parse(deterministicLeaseId("wsl", operation)),
+      ownerId: LeaseOwnerIdSchema.parse(deterministicLeaseId("own", {
+        runId: operation.runId,
+        attemptId: operation.attemptId,
+        workspaceId: operation.payload.workspaceId,
+      })),
+      mode: operation.payload.mode,
+      acquiredAt: acquiredAt.toISOString(),
+      expiresAt: new Date(acquiredAt.getTime() + 30 * 60_000).toISOString(),
+      revokedAt: null,
+      revocationReason: null,
+      scope: { workspaceId: operation.payload.workspaceId },
+    });
+  };
+  const activeLeasesFor = (operation: ExternalOperation): readonly Lease[] =>
+    leaseService.listActive().filter((lease) =>
+      lease.projectId === operation.projectId
+      && lease.ownerRunId === operation.runId
+      && lease.ownerAttemptId === operation.attemptId
+    );
   const runtimeManager = new RuntimeManager(input.database, flowEngine, {
     resolve: (operation) => {
       if (operation.runId === null) throw new Error("ASSIGNMENT_RUN_SCOPE_REQUIRED");
@@ -226,16 +415,24 @@ export function createSqliteApplicationServices(input: {
       const policy = deriveStepPolicy(step, { policyVersion: run.binding.policySnapshot.policyVersion, deniedPermissions: [] });
       const capabilityReceipt = input.capabilityReceiptFor?.(operation);
       if (capabilityReceipt === undefined || capabilityReceipt === null) throw new Error("CAPABILITY_RECEIPT_NOT_CONFIGURED");
-      const rows = input.database.prepare("SELECT receipt_json FROM lease_records WHERE expires_at > ?").all(now().toISOString()) as unknown as Array<{ receipt_json: string }>;
-      const leases = rows.map((row) => LeaseSchema.parse(JSON.parse(row.receipt_json))) as Lease[];
-      const workspaceCandidates = leases.flatMap((lease) => lease.kind === "workspace" && task.repositoryIds.includes(lease.scope.repositoryId) ? [lease] : []);
+      const leases = leaseService.listActive();
+      const workspaceCandidates = leases.flatMap((lease) =>
+        lease.kind === "workspace"
+        && lease.revokedAt === null
+        && lease.projectId === operation.projectId
+        && lease.ownerRunId === operation.runId
+        && lease.ownerAttemptId === operation.attemptId
+        && task.repositoryIds.includes(lease.repositoryId)
+          ? [lease]
+          : [],
+      );
       if (workspaceCandidates.length !== 1) throw new Error("ASSIGNMENT_AUTHORITATIVE_WORKSPACE_REQUIRED");
       const workspaceId = workspaceCandidates[0]!.scope.workspaceId;
       const scoped = leases.filter((lease) => lease.kind !== "controller" && lease.scope.workspaceId === workspaceId);
       const workspaceOwner = scoped.find((lease) => lease.kind === "workspace")?.ownerId;
       const requiredLeaseIds = scoped.filter((lease) => workspaceOwner === undefined || lease.ownerId === workspaceOwner).map(({ leaseId }) => leaseId);
       const expectedMode = step.workspacePolicy.mode === "write" ? "write" : "read_only";
-      if (workspaceCandidates[0]!.scope.mode !== expectedMode) throw new Error("ASSIGNMENT_WORKSPACE_MODE_MISMATCH");
+      if (workspaceCandidates[0]!.mode !== expectedMode) throw new Error("ASSIGNMENT_WORKSPACE_MODE_MISMATCH");
       const writerLeases = scoped.flatMap((lease) => lease.kind === "writer" && lease.ownerId === workspaceOwner ? [lease] : []);
       if (step.workspacePolicy.isolation === "worktree" && (writerLeases.length !== 1 || writerLeases[0]!.scope.worktreeId === null)) throw new Error("ASSIGNMENT_WORKTREE_LEASE_REQUIRED");
       const usedLeaseIds = new Set(flowStore.allRuns().filter((candidate) => !["succeeded", "failed", "canceled"].includes(candidate.status)).flatMap((candidate) => candidate.steps.flatMap(({ attempts }) => attempts.flatMap((attempt) => attempt.assignment === undefined || attempt.attemptId === operation.attemptId || ["failed", "canceled", "returned", "stale"].includes(attempt.executionStatus) ? [] : attempt.assignment.leaseIds))));
@@ -264,19 +461,165 @@ export function createSqliteApplicationServices(input: {
     now,
     replayPolicy: () => "inspectable",
     dispatchAuthority: (operation) => {
-      if (operation.operationType !== "session.observe" && operation.operationType !== "session.send" && operation.operationType !== "session.interrupt") return { allowed: true };
-      if (operation.operationVersion !== 2) return { allowed: false, reason: "controller_lease_authority_version_required" };
-      const row = input.database.prepare("SELECT lease_kind, owner_id, generation, expires_at, receipt_json FROM lease_records WHERE lease_id = ?").get(operation.payload.controllerLeaseId) as { lease_kind: string; owner_id: string; generation: number; expires_at: string; receipt_json: string } | undefined;
-      if (row === undefined || row.lease_kind !== "controller" || row.owner_id !== operation.payload.controllerLeaseOwnerId || row.generation !== operation.payload.controllerLeaseGeneration || Date.parse(row.expires_at) <= now().getTime()) return { allowed: false, reason: "controller_lease_dispatch_authority_missing" };
-      try {
-        const lease = LeaseSchema.parse(JSON.parse(row.receipt_json));
-        if (lease.kind !== "controller" || lease.leaseId !== operation.payload.controllerLeaseId || lease.ownerId !== operation.payload.controllerLeaseOwnerId || lease.generation !== operation.payload.controllerLeaseGeneration || lease.expiresAt !== row.expires_at || lease.scope.nativeSessionId !== operation.payload.nativeSessionId) return { allowed: false, reason: "controller_lease_dispatch_authority_mismatch" };
-      } catch {
-        return { allowed: false, reason: "controller_lease_dispatch_authority_invalid" };
+      const activeLeases = leaseService.listActive().filter((lease) =>
+        lease.projectId === operation.projectId
+        && lease.ownerRunId === operation.runId
+        && lease.ownerAttemptId === operation.attemptId
+      );
+      if (
+        operation.operationType === "session.observe"
+        || operation.operationType === "session.send"
+        || operation.operationType === "session.interrupt"
+        || operation.operationType === "session.resume"
+      ) {
+        if (operation.operationVersion !== 2) return { allowed: false, reason: "controller_lease_authority_version_required" };
+        const controller = activeLeases.find((lease) =>
+          lease.kind === "controller"
+          && lease.leaseId === operation.payload.controllerLeaseId
+          && lease.ownerId === operation.payload.controllerLeaseOwnerId
+          && lease.generation === operation.payload.controllerLeaseGeneration
+          && lease.scope.nativeSessionId === operation.payload.nativeSessionId
+        );
+        return controller === undefined
+          ? { allowed: false, reason: "controller_lease_dispatch_authority_missing" }
+          : { allowed: true };
       }
-      return { allowed: true };
+      const workspaceId = operation.payload.workspaceId;
+      const workspace = activeLeases.find((lease) =>
+        lease.kind === "workspace" && lease.scope.workspaceId === workspaceId
+      );
+      if (workspace === undefined) {
+        return { allowed: false, reason: "workspace_lease_dispatch_authority_missing" };
+      }
+      if (operation.operationType === "workspace.release") return { allowed: true };
+      if (
+        operation.operationType === "workspace.prepare"
+        && (
+          workspace.repositoryId !== operation.payload.repositoryId
+          || workspace.deviceBindingId !== operation.payload.deviceBindingId
+          || workspace.mode !== operation.payload.mode
+          || workspace.gitHead !== operation.payload.baselineRevision
+        )
+      ) {
+        return { allowed: false, reason: "workspace_lease_dispatch_authority_mismatch" };
+      }
+      const requiresWriter =
+        operation.operationType === "session.launch"
+        || operation.operationType === "task_pack.write"
+        || operation.operationType === "native_surface.open";
+      if (!requiresWriter) return { allowed: true };
+      const writer = activeLeases.find((lease) =>
+        lease.kind === "writer"
+        && lease.scope.workspaceId === workspaceId
+        && lease.repositoryId === workspace.repositoryId
+        && lease.deviceBindingId === workspace.deviceBindingId
+        && lease.ownerId === workspace.ownerId
+      );
+      return writer === undefined
+        ? { allowed: false, reason: "writer_lease_dispatch_authority_missing" }
+        : { allowed: true };
+    },
+    prepareReceiptTransaction: (operation, receiptInput) => {
+      const receipt = decodeExternalOperationReceipt(receiptInput);
+      if (
+        receipt.operationId !== operation.operationId
+        || receipt.fingerprint !== operation.fingerprint
+      ) {
+        throw new Error("OPERATION_RECEIPT_IDENTITY_MISMATCH");
+      }
+      if (receipt.operationStatus !== "completed") return;
+      if (operation.operationType === "workspace.prepare" && operation.payload.mode === "write") {
+        const prepared = receipt.workspaceResult;
+        if (prepared === undefined) {
+          throw new Error("PREPARED_WORKSPACE_IDENTITY_NOT_PROVEN");
+        }
+        const binding = persistedDeviceBindingFor(operation);
+        const boundary = createWorkspacePathBoundary(
+          new Map([[
+            operation.payload.repositoryId,
+            binding.localPath,
+          ]]),
+        );
+        const verifiedWorkspacePath = boundary.verify(
+          operation.payload.repositoryId,
+          prepared.reportedWorkspacePath,
+        );
+        const topLevel = inspectGitWorkspace(
+          verifiedWorkspacePath,
+          ["rev-parse", "--show-toplevel"],
+        );
+        const verifiedTopLevel = boundary.verify(operation.payload.repositoryId, topLevel);
+        const gitHead = inspectGitWorkspace(
+          verifiedWorkspacePath,
+          ["rev-parse", "HEAD"],
+        );
+        if (gitHead !== operation.payload.baselineRevision) {
+          throw new Error("PREPARED_WORKSPACE_BASELINE_MISMATCH");
+        }
+        const branch = inspectGitWorkspace(
+          verifiedWorkspacePath,
+          ["branch", "--show-current"],
+        );
+        const canonicalWorkspaceKey = boundary.canonicalKey(verifiedTopLevel);
+        return () => {
+          const workspace = activeLeasesFor(operation).find((lease) =>
+            lease.kind === "workspace"
+            && lease.scope.workspaceId === operation.payload.workspaceId
+            && lease.repositoryId === operation.payload.repositoryId
+            && lease.deviceBindingId === operation.payload.deviceBindingId
+          );
+          if (workspace === undefined) {
+            throw new Error("WORKSPACE_LEASE_RECEIPT_AUTHORITY_MISSING");
+          }
+          const workspaceTemplate = withoutLeaseGeneration(workspace);
+          leaseService.acquireNext({
+            ...workspaceTemplate,
+            kind: "writer",
+            leaseId: WriterLeaseIdSchema.parse(deterministicLeaseId("wrl", operation)),
+            canonicalWorkspaceKey,
+            gitHead,
+            branch,
+            mode: "write",
+            scope: {
+              workspaceId: operation.payload.workspaceId,
+              worktreeId: prepared.worktreeId,
+            },
+          }, { transaction: "existing" });
+        };
+      }
+      if (operation.operationType === "session.launch") {
+        const session = receipt.nativeReferences.find((reference) => reference.kind === "session");
+        if (session === undefined) throw new Error("NATIVE_SESSION_RECEIPT_REQUIRED");
+        return () => {
+          const writer = activeLeasesFor(operation)
+            .flatMap((lease) => lease.kind === "writer" ? [lease] : [])
+            .find((lease) => lease.scope.workspaceId === operation.payload.workspaceId);
+          if (writer === undefined) {
+            throw new Error("WRITER_LEASE_RECEIPT_AUTHORITY_MISSING");
+          }
+          const writerTemplate = withoutLeaseGeneration(writer);
+          leaseService.acquireNext({
+            ...writerTemplate,
+            kind: "controller",
+            leaseId: ControllerLeaseIdSchema.parse(deterministicLeaseId("ctl", operation)),
+            scope: {
+              workspaceId: writer.scope.workspaceId,
+              worktreeId: writer.scope.worktreeId,
+              nativeSessionId: session.referenceId,
+            },
+          }, { transaction: "existing" });
+        };
+      }
+      return;
     },
   });
+  const attemptObservation = new SqliteAttemptObservation(
+    journal,
+    operationWorker,
+    leaseService,
+    input.capabilityReceiptFor,
+    now,
+  );
   const authenticator = new LocalAuthenticator(input.installSecret, () => false, input.resolveAuthorizedProjectIds ?? defaultAuthorizationResolver);
   const eventStream = new DurableEventStream(eventReader, undefined, undefined, (authorizedProjectIds) => {
     projectionRunner.runIncremental();
@@ -316,22 +659,41 @@ export function createSqliteApplicationServices(input: {
       return [{ kind: "migration", status: "complete", schemaVersion: 1 }];
     },
     reconcileOutbox: async () => {
-      const timestamp = now().toISOString();
-      input.database.prepare(
-        `UPDATE outbox
-            SET status = (SELECT observed_status FROM side_effect_receipts WHERE side_effect_receipts.operation_id = outbox.operation_id),
-                dispatch_owner = NULL, dispatch_expires_at = NULL, updated_at = ?
-          WHERE EXISTS (SELECT 1 FROM side_effect_receipts WHERE side_effect_receipts.operation_id = outbox.operation_id)
-            AND status <> (SELECT observed_status FROM side_effect_receipts WHERE side_effect_receipts.operation_id = outbox.operation_id)`,
-      ).run(timestamp);
+      journal.reconcileObservedOperations(now());
       for (let index = 0; index < 1_000; index += 1) {
         if (await operationWorker.runOnce() === "idle") break;
         if (index === 999) throw new Error("OUTBOX_RECOVERY_LIMIT_EXCEEDED");
       }
-      const rows = input.database.prepare(
-        "SELECT operation_id, run_id, attempt_id, status FROM outbox WHERE status IN ('indeterminate','needs_attention') ORDER BY operation_id",
-      ).all() as unknown as Array<{ operation_id: string; run_id: string | null; attempt_id: string | null; status: "indeterminate" | "needs_attention" }>;
-      return rows.map((row) => ({ kind: "operation", status: row.status, reason: "reconciled_external_operation_not_proven", operationId: row.operation_id, runId: row.run_id, attemptId: row.attempt_id }));
+      return journal.listUnprovenOperations().map((operation) => ({
+        kind: "operation",
+        status: operation.status,
+        reason: "reconciled_external_operation_not_proven",
+        operationId: operation.operationId,
+        runId: operation.runId,
+        attemptId: operation.attemptId,
+      }));
+    },
+    resumeArchiveAndKnowledge: async () => {
+      if (archiveWorker === undefined) return [];
+      let completed = 0;
+      for (let index = 0; index < 1_000; index += 1) {
+        const result = await archiveWorker.runOnce();
+        if (result === "idle") {
+          return completed === 0
+            ? []
+            : [{ kind: "archive", status: "completed", completed }];
+        }
+        if (result === "needs_attention") {
+          return [{
+            kind: "archive",
+            status: "needs_attention",
+            reason: "archive_or_knowledge_projection_not_proven",
+            completed,
+          }];
+        }
+        completed += 1;
+      }
+      throw new Error("ARCHIVE_RECOVERY_LIMIT_EXCEEDED");
     },
     enumerateActiveAttempts: async () => flowStore.allRuns()
       .filter((state) => !["succeeded", "failed", "canceled"].includes(state.status))
@@ -341,44 +703,64 @@ export function createSqliteApplicationServices(input: {
       })),
     probeExternalState: async (attempts) => await Promise.all(attempts.map(async (attempt) => {
       if (typeof attempt.operationId !== "string") return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "missing", reason: "runtime_assignment_missing", flowObservation: "session_missing" };
-      const row = input.database.prepare("SELECT operation_json, status FROM outbox WHERE operation_id = ?").get(attempt.operationId) as { operation_json: string; status: string } | undefined;
-      if (row === undefined) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "missing", reason: "operation_journal_missing", flowObservation: "session_missing" };
-      const launchOperation = JSON.parse(row.operation_json) as ExternalOperation;
-      const receiptRow = input.database.prepare("SELECT provider_receipt_json FROM side_effect_receipts WHERE operation_id = ?").get(attempt.operationId) as { provider_receipt_json: string } | undefined;
-      if (receiptRow === undefined) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "indeterminate", reason: "launch_receipt_not_proven" };
-      const launchReceipt = ExternalOperationReceiptSchema.parse(JSON.parse(receiptRow.provider_receipt_json));
+      const launchState = journal.findOperation(
+        OperationIdSchema.parse(attempt.operationId),
+      );
+      if (launchState === null) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "missing", reason: "operation_journal_missing", flowObservation: "session_missing" };
+      const launchOperation = launchState.operation;
+      const launchReceipt = operationWorker.resolveReceipt(launchOperation);
+      if (launchReceipt === null) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "indeterminate", reason: "launch_receipt_not_proven" };
       if (launchReceipt.operationId !== launchOperation.operationId || launchReceipt.fingerprint !== launchOperation.fingerprint) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "indeterminate", reason: "launch_receipt_identity_mismatch" };
       const session = launchReceipt.nativeReferences.find((reference) => reference.kind === "session");
       if (session === undefined) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "indeterminate", reason: "native_session_reference_missing" };
-      const controllerRow = input.database.prepare("SELECT receipt_json FROM lease_records WHERE lease_kind = 'controller' AND scope_key = ? AND expires_at > ?").get(session.referenceId, now().toISOString()) as { receipt_json: string } | undefined;
-      if (controllerRow === undefined) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "needs_attention", reason: "controller_lease_not_available", nativeSessionId: session.referenceId };
-      let controller = LeaseSchema.parse(JSON.parse(controllerRow.receipt_json));
-      if (controller.kind !== "controller") return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "needs_attention", reason: "controller_lease_invalid", nativeSessionId: session.referenceId };
-      const renewalFloor = new Date(now().getTime() + 5 * 60_000);
-      if (Date.parse(controller.expiresAt) < renewalFloor.getTime()) controller = await leaseService.renew({ leaseId: controller.leaseId, ownerId: controller.ownerId, generation: controller.generation, expiresAt: renewalFloor.toISOString() });
-      if (controller.kind !== "controller") throw new Error("CONTROLLER_LEASE_KIND_CHANGED");
-      const observeOperationId = OperationIdSchema.parse(`opn_${canonicalSha256({ runId: attempt.runId, attemptId: attempt.attemptId, nativeSessionId: session.referenceId, action: "recovery-observe" }).slice(0, 24)}`);
-      const observe = createExternalOperation({ schemaVersion: 1, operationId: observeOperationId, projectId: launchOperation.projectId, runId: launchOperation.runId, attemptId: launchOperation.attemptId, operationVersion: 2, operationType: "session.observe", requestedCapabilities: ["observe"], payload: { nativeSessionId: session.referenceId, controllerLeaseId: controller.leaseId, controllerLeaseOwnerId: controller.ownerId, controllerLeaseGeneration: controller.generation } });
-      const capability = input.capabilityReceiptFor?.(observe);
-      if (capability === undefined || capability === null) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "needs_attention", reason: "session_observe_capability_not_configured", nativeSessionId: session.referenceId };
-      const probe = CapabilityProbeReceiptSchema.parse(capability);
-      const observedAt = now().getTime();
-      const observeSupported = probe.results.some(({ capability: atomicCapability, status }) => atomicCapability === "observe" && status === "SUPPORTED");
-      if (!observeSupported || observedAt < Date.parse(probe.observedAt) || observedAt > Date.parse(probe.validUntil)) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "needs_attention", reason: "session_observe_capability_not_proven", nativeSessionId: session.referenceId };
-      const aggregateId = `recovery-session:${attempt.attemptId}`;
-      const version = (input.database.prepare("SELECT COALESCE(MAX(aggregate_version), 0) AS version FROM events WHERE aggregate_id = ?").get(aggregateId) as { version: number }).version;
-      journal.commitCommand({ commandId: `recovery-observe:${attempt.attemptId}`, requestFingerprint: observe.fingerprint, projectId: observe.projectId, aggregateId, expectedVersion: version, actor: { actorId: "startup-recovery", correlationId: `recovery:${attempt.runId}` }, events: [], operations: [observe], response: { operationId: observe.operationId } });
+      const settlementObservationId = OperationIdSchema.parse(`opn_${canonicalSha256({ launchOperationId: launchOperation.operationId, attemptId: attempt.attemptId, action: "settlement-observe" }).slice(0, 24)}`);
+      const recordedSettlement = journal.findOperation(settlementObservationId);
+      let observe: ExternalOperation;
+      if (recordedSettlement !== null) {
+        observe = recordedSettlement.operation;
+        if (
+          observe.operationType !== "session.observe"
+          || observe.runId !== attempt.runId
+          || observe.attemptId !== attempt.attemptId
+          || observe.payload.nativeSessionId !== session.referenceId
+        ) {
+          throw new Error("RECOVERY_OBSERVATION_SCOPE_MISMATCH");
+        }
+      } else {
+        let controller = await leaseService.findActiveController(
+          launchOperation.projectId,
+          session.referenceId,
+        );
+        if (controller === null) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "needs_attention", reason: "controller_lease_not_available", nativeSessionId: session.referenceId };
+        const renewalFloor = new Date(now().getTime() + 5 * 60_000);
+        if (Date.parse(controller.expiresAt) < renewalFloor.getTime()) {
+          const renewed = await leaseService.renew({ leaseId: controller.leaseId, ownerId: controller.ownerId, generation: controller.generation, expiresAt: renewalFloor.toISOString() });
+          if (renewed.kind !== "controller") throw new Error("CONTROLLER_LEASE_KIND_CHANGED");
+          controller = renewed;
+        }
+        const observeOperationId = OperationIdSchema.parse(`opn_${canonicalSha256({ runId: attempt.runId, attemptId: attempt.attemptId, nativeSessionId: session.referenceId, action: "recovery-observe" }).slice(0, 24)}`);
+        observe = createExternalOperation({ schemaVersion: 1, operationId: observeOperationId, projectId: launchOperation.projectId, runId: launchOperation.runId, attemptId: launchOperation.attemptId, operationVersion: 2, operationType: "session.observe", requestedCapabilities: ["observe"], payload: { nativeSessionId: session.referenceId, controllerLeaseId: controller.leaseId, controllerLeaseOwnerId: controller.ownerId, controllerLeaseGeneration: controller.generation } });
+        const capability = input.capabilityReceiptFor?.(observe);
+        if (capability === undefined || capability === null) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "needs_attention", reason: "session_observe_capability_not_configured", nativeSessionId: session.referenceId };
+        const probe = decodeCapabilityProbeReceipt(capability);
+        const observedAt = now().getTime();
+        const manifest = computeCapabilityManifest(probe, new Date(observedAt));
+        const observeSupported = manifest.capabilities.some(({ capability: atomicCapability, status }) => atomicCapability === "observe" && status === "supported");
+        if (!observeSupported) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "needs_attention", reason: "session_observe_capability_not_proven", nativeSessionId: session.referenceId };
+        const aggregateId = `recovery-session:${attempt.attemptId}`;
+        const version = journal.aggregateVersion(aggregateId);
+        journal.commitCommand({ commandId: `recovery-observe:${attempt.attemptId}`, requestFingerprint: observe.fingerprint, projectId: observe.projectId, aggregateId, expectedVersion: version, actor: { actorId: "startup-recovery", correlationId: `recovery:${attempt.runId}` }, events: [], operations: [observe], response: { operationId: observe.operationId } });
+      }
       for (let delivery = 0; delivery < 1_000; delivery += 1) {
-        const status = input.database.prepare("SELECT status FROM outbox WHERE operation_id = ?").get(observe.operationId) as { status: string } | undefined;
-        if (status !== undefined && !["pending", "in_flight"].includes(status.status)) break;
+        const operationState = journal.findOperation(observe.operationId);
+        if (operationState !== null && !["pending", "in_flight"].includes(operationState.status)) break;
         if (await operationWorker.runOnce() === "idle") break;
       }
-      const observedRow = input.database.prepare("SELECT provider_receipt_json FROM side_effect_receipts WHERE operation_id = ?").get(observe.operationId) as { provider_receipt_json: string } | undefined;
-      if (observedRow === undefined) {
-        const status = (input.database.prepare("SELECT status FROM outbox WHERE operation_id = ?").get(observe.operationId) as { status?: string } | undefined)?.status;
+      const observed = operationWorker.resolveReceipt(observe);
+      if (observed === null) {
+        const status = journal.findOperation(observe.operationId)?.status;
         return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: status === "needs_attention" ? "needs_attention" : "indeterminate", reason: "session_observation_not_proven", operationId: observe.operationId };
       }
-      const observed = ExternalOperationReceiptSchema.parse(JSON.parse(observedRow.provider_receipt_json));
       const sessionState = observed.facts.find((fact) => fact.kind === "session_observed")?.state;
       const flowObservation = sessionState === "missing"
         ? "session_missing"
@@ -393,7 +775,7 @@ export function createSqliteApplicationServices(input: {
       return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: missing ? "needs_attention" : "observed", reason: `session_observation_receipt:${observe.operationId}:${observed.evidence.evidenceHash}`, operationId: observe.operationId, nativeSessionId: session.referenceId, flowObservation };
     })),
     reconcileLeasesAndWorkspace: async (attempts) => {
-      const rows = input.database.prepare("SELECT lease_id, lease_kind, expires_at, receipt_json FROM lease_records ORDER BY lease_id").all() as unknown as Array<{ lease_id: string; lease_kind: string; expires_at: string; receipt_json: string }>;
+      const leases = leaseService.listRecorded();
       const projects = (input.database.prepare("SELECT event_data FROM events WHERE event_type = 'ProjectCreated' ORDER BY position DESC").all() as Array<{ event_data: string }>).flatMap((row) => {
         try { return [createProject((JSON.parse(row.event_data) as { project: unknown }).project)]; } catch { return []; }
       });
@@ -403,32 +785,68 @@ export function createSqliteApplicationServices(input: {
         if (affected.length === 0) facts.push(fact);
         else for (const attempt of affected) facts.push({ ...fact, runId: attempt.runId, attemptId: attempt.attemptId });
       };
-      for (const row of rows) {
-        if (Date.parse(row.expires_at) <= now().getTime()) {
-          recordForAffectedRuns(row.lease_id, { kind: "lease", leaseId: row.lease_id, leaseKind: row.lease_kind, status: "expired", reason: "lease_expired" });
+      for (const recordedLease of leases) {
+        if (Date.parse(recordedLease.expiresAt) <= now().getTime()) {
+          recordForAffectedRuns(recordedLease.leaseId, { kind: "lease", leaseId: recordedLease.leaseId, leaseKind: recordedLease.kind, status: "expired", reason: "lease_expired" });
           continue;
         }
-        let lease = LeaseSchema.parse(JSON.parse(row.receipt_json));
-        const affected = attempts.filter((attempt) => Array.isArray(attempt.leaseIds) && attempt.leaseIds.includes(row.lease_id));
-        const renewalFloor = new Date(now().getTime() + 5 * 60_000);
-        if (affected.length > 0 && Date.parse(lease.expiresAt) < renewalFloor.getTime()) lease = await leaseService.renew({ leaseId: lease.leaseId, ownerId: lease.ownerId, generation: lease.generation, expiresAt: renewalFloor.toISOString() });
-        if (lease.kind !== "workspace") continue;
-        const binding = projects.flatMap(({ deviceBindings }) => deviceBindings).find(({ deviceBindingId }) => deviceBindingId === lease.scope.deviceBindingId);
+        let lease = recordedLease;
+        const affected = attempts.filter((attempt) => Array.isArray(attempt.leaseIds) && attempt.leaseIds.includes(lease.leaseId));
+        if (lease.revokedAt !== null) {
+          recordForAffectedRuns(lease.leaseId, { kind: "lease", leaseId: lease.leaseId, leaseKind: lease.kind, status: "expired", reason: "lease_revoked" });
+          continue;
+        }
+        const binding = projects.flatMap(({ deviceBindings }) => deviceBindings).find(({ deviceBindingId }) => deviceBindingId === lease.deviceBindingId);
         if (binding === undefined || !existsSync(binding.localPath)) {
+          await leaseService.quarantine(lease.leaseId, "device_binding_path_missing");
           recordForAffectedRuns(lease.leaseId, { kind: "workspace", leaseId: lease.leaseId, status: "missing", reason: "device_binding_path_missing" });
           continue;
         }
         try {
-          const realpath = realpathSync.native(binding.localPath);
-          const topLevel = execFileSync("git", ["-C", binding.localPath, "rev-parse", "--show-toplevel"], { encoding: "utf8", windowsHide: true }).trim();
-          const head = execFileSync("git", ["-C", binding.localPath, "rev-parse", "HEAD"], { encoding: "utf8", windowsHide: true }).trim();
-          const changes = execFileSync("git", ["-C", binding.localPath, "status", "--porcelain"], { encoding: "utf8", windowsHide: true }).trim();
-          LeaseService.verifyWorkspaceIdentity({ expectedWorktreeId: realpath, observedWorktreeId: realpath, expectedRealpath: realpath, observedRealpath: realpathSync.native(topLevel), baselineRevision: lease.scope.baselineRevision, observedHead: head });
-          recordForAffectedRuns(lease.leaseId, changes === ""
-            ? { kind: "workspace", leaseId: lease.leaseId, status: "observed", reason: "workspace_identity_confirmed" }
-            : { kind: "workspace", leaseId: lease.leaseId, status: "drift", reason: "workspace_unexpected_writes" });
+          const externalObservation = input.leaseRecoveryObservationFor?.(lease) ?? null;
+          if (lease.kind !== "workspace" && externalObservation === null) {
+            await leaseService.quarantine(lease.leaseId, "lease_external_identity_not_proven");
+            recordForAffectedRuns(lease.leaseId, { kind: "lease", leaseId: lease.leaseId, leaseKind: lease.kind, status: "needs_attention", reason: "lease_external_identity_not_proven" });
+            continue;
+          }
+          const bindingBoundary = createWorkspacePathBoundary(new Map([[lease.repositoryId, binding.localPath]]));
+          const workspacePath = lease.kind === "workspace"
+            ? bindingBoundary.verify(lease.repositoryId, binding.localPath)
+            : input.verifiedWorkspacePathForLease?.(lease) ?? null;
+          if (workspacePath === null) {
+            await leaseService.quarantine(lease.leaseId, "leased_worktree_path_not_proven");
+            recordForAffectedRuns(lease.leaseId, { kind: "lease", leaseId: lease.leaseId, leaseKind: lease.kind, status: "needs_attention", reason: "leased_worktree_path_not_proven" });
+            continue;
+          }
+          const workspaceBoundary = createWorkspacePathBoundary(new Map([[lease.repositoryId, workspacePath]]));
+          const topLevel = execFileSync("git", ["-C", workspacePath, "rev-parse", "--show-toplevel"], { encoding: "utf8", windowsHide: true }).trim();
+          const head = execFileSync("git", ["-C", workspacePath, "rev-parse", "HEAD"], { encoding: "utf8", windowsHide: true }).trim();
+          const changes = execFileSync("git", ["-C", workspacePath, "status", "--porcelain"], { encoding: "utf8", windowsHide: true }).trim();
+          const verifiedTopLevel = workspaceBoundary.verify(lease.repositoryId, topLevel);
+          await leaseService.recoverLease(lease.leaseId, {
+            deviceBindingId: binding.deviceBindingId,
+            canonicalWorkspaceKey: workspaceBoundary.canonicalKey(verifiedTopLevel),
+            gitHead: head,
+            worktreeId: externalObservation?.worktreeId,
+            nativeSessionId: externalObservation?.nativeSessionId,
+          });
+          if (lease.kind === "workspace" && changes !== "") {
+            await leaseService.quarantine(lease.leaseId, "workspace_unexpected_writes");
+            recordForAffectedRuns(lease.leaseId, { kind: "workspace", leaseId: lease.leaseId, status: "drift", reason: "workspace_unexpected_writes" });
+            continue;
+          }
+          const renewalFloor = new Date(now().getTime() + 5 * 60_000);
+          if (affected.length > 0 && Date.parse(lease.expiresAt) < renewalFloor.getTime()) {
+            lease = await leaseService.renew({ leaseId: lease.leaseId, ownerId: lease.ownerId, generation: lease.generation, expiresAt: renewalFloor.toISOString() });
+          }
+          if (lease.kind === "workspace") {
+            recordForAffectedRuns(lease.leaseId, { kind: "workspace", leaseId: lease.leaseId, status: "observed", reason: "workspace_identity_confirmed" });
+          } else {
+            recordForAffectedRuns(lease.leaseId, { kind: "lease", leaseId: lease.leaseId, leaseKind: lease.kind, status: "observed", reason: "lease_identity_confirmed" });
+          }
         } catch {
-          recordForAffectedRuns(lease.leaseId, { kind: "workspace", leaseId: lease.leaseId, status: "drift", reason: "workspace_identity_or_head_drift" });
+          await leaseService.quarantine(lease.leaseId, "workspace_identity_or_head_drift");
+          recordForAffectedRuns(lease.leaseId, { kind: lease.kind === "workspace" ? "workspace" : "lease", leaseId: lease.leaseId, leaseKind: lease.kind, status: "drift", reason: "workspace_identity_or_head_drift" });
         }
       }
       return facts;
@@ -472,14 +890,20 @@ export function createSqliteApplicationServices(input: {
   });
   return {
     journal,
+    archiveJobStore,
+    archiveWorker,
+    knowledgeCatalog,
     flowStore,
     flowEngine,
+    runCoordinator,
     eventReader,
     projectionRunner,
     eventStream,
     leaseService,
+    acquireWorkspaceLease,
     runtimeManager,
     operationWorker,
+    attemptObservation,
     authenticator,
     setPrincipalProjectAuthorization,
     recovery,

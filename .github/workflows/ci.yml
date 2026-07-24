@@ -30,3 +30,28 @@ jobs:
       - run: npm run verify:rebuild
       - run: npm run verify:recovery
       - run: npm run build
+
+  vertical-slice:
+    name: Vertical slice / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npx playwright test e2e/vertical-slice.spec.ts --project=chromium
+      - if: runner.os == 'Windows'
+        run: npm run pack:win -w @hunter/desktop

@@ -1,7 +1,15 @@
 import { existsSync, readFileSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 
-import type { ProjectId } from "@hunter/domain";
+import {
+  AttemptIdSchema,
+  OperationIdSchema,
+  RunIdSchema,
+  type AttemptId,
+  type OperationId,
+  type ProjectId,
+  type RunId,
+} from "@hunter/domain";
 import {
   ExternalOperationSchema,
   fingerprintExternalOperation,
@@ -40,6 +48,40 @@ export interface CommandReceipt {
   readonly lastPosition: number | null;
   readonly response: unknown;
   readonly committedAt: string;
+}
+
+export interface TerminalRunArchiveSchedule {
+  readonly projectId: ProjectId;
+  readonly runId: RunId;
+  readonly outcome: "succeeded" | "failed" | "canceled";
+  readonly firstPosition: number;
+  readonly lastPosition: number;
+  readonly actorId: string;
+  readonly correlationId: string;
+  readonly occurredAt: string;
+}
+
+export interface SqliteOperationJournalOptions {
+  readonly scheduleTerminalRunArchive?: ((input: TerminalRunArchiveSchedule) => void) | undefined;
+}
+
+export type OutboxOperationStatus =
+  | "pending"
+  | "in_flight"
+  | "completed"
+  | "indeterminate"
+  | "needs_attention";
+
+export interface JournaledOperationState {
+  readonly operation: ExternalOperation;
+  readonly status: OutboxOperationStatus;
+}
+
+export interface UnprovenOperationState {
+  readonly operationId: OperationId;
+  readonly runId: RunId | null;
+  readonly attemptId: AttemptId | null;
+  readonly status: "indeterminate" | "needs_attention";
 }
 
 interface ReceiptRow {
@@ -100,15 +142,134 @@ function toReceipt(row: ReceiptRow): CommandReceipt {
   };
 }
 
+function terminalRunOutcome(
+  event: NewDomainEvent,
+): "succeeded" | "failed" | "canceled" | null {
+  if (
+    event.eventType !== "FlowEvent" ||
+    typeof event.eventData !== "object" ||
+    event.eventData === null ||
+    !("flowEvent" in event.eventData)
+  ) {
+    return null;
+  }
+  const flowEvent = event.eventData.flowEvent;
+  if (
+    typeof flowEvent !== "object" ||
+    flowEvent === null ||
+    !("type" in flowEvent) ||
+    flowEvent.type !== "RunConcluded" ||
+    !("status" in flowEvent)
+  ) {
+    return null;
+  }
+  return flowEvent.status === "succeeded" ||
+    flowEvent.status === "failed" ||
+    flowEvent.status === "canceled"
+    ? flowEvent.status
+    : null;
+}
+
 export class SqliteOperationJournal {
-  public constructor(private readonly database: DatabaseSync) {
+  private transactionDepth = 0;
+
+  public constructor(
+    private readonly database: DatabaseSync,
+    private readonly options: SqliteOperationJournalOptions = {},
+  ) {
     this.database.exec(loadCoreMigration());
+  }
+
+  public runInImmediateTransaction<T>(work: () => T): T {
+    if (this.transactionDepth > 0) return work();
+    this.database.exec("BEGIN IMMEDIATE");
+    this.transactionDepth += 1;
+    try {
+      const result = work();
+      this.database.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    } finally {
+      this.transactionDepth -= 1;
+    }
+  }
+
+  public findOperation(operationIdInput: OperationId): JournaledOperationState | null {
+    const operationId = OperationIdSchema.parse(operationIdInput);
+    const row = this.database.prepare(
+      "SELECT operation_json, status FROM outbox WHERE operation_id = ?",
+    ).get(operationId) as {
+      readonly operation_json: string;
+      readonly status: OutboxOperationStatus;
+    } | undefined;
+    if (row === undefined) return null;
+    const operation = ExternalOperationSchema.parse(
+      JSON.parse(row.operation_json) as unknown,
+    );
+    if (operation.operationId !== operationId) {
+      throw new Error("JOURNALED_OPERATION_IDENTITY_MISMATCH");
+    }
+    return { operation, status: row.status };
+  }
+
+  public aggregateVersion(aggregateId: string): number {
+    requireNonEmpty(aggregateId, "AGGREGATE_ID");
+    const row = this.database.prepare(
+      "SELECT COALESCE(MAX(aggregate_version), 0) AS version FROM events WHERE aggregate_id = ?",
+    ).get(aggregateId) as unknown as VersionRow;
+    return row.version;
+  }
+
+  public reconcileObservedOperations(at: Date): void {
+    this.database.prepare(
+      `UPDATE outbox
+          SET status = (
+                SELECT observed_status
+                  FROM side_effect_receipts
+                 WHERE side_effect_receipts.operation_id = outbox.operation_id
+              ),
+              dispatch_owner = NULL,
+              dispatch_expires_at = NULL,
+              updated_at = ?
+        WHERE EXISTS (
+                SELECT 1
+                  FROM side_effect_receipts
+                 WHERE side_effect_receipts.operation_id = outbox.operation_id
+              )
+          AND status <> (
+                SELECT observed_status
+                  FROM side_effect_receipts
+                 WHERE side_effect_receipts.operation_id = outbox.operation_id
+              )`,
+    ).run(at.toISOString());
+  }
+
+  public listUnprovenOperations(): readonly UnprovenOperationState[] {
+    const rows = this.database.prepare(
+      `SELECT operation_id, run_id, attempt_id, status
+         FROM outbox
+        WHERE status IN ('indeterminate', 'needs_attention')
+        ORDER BY operation_id`,
+    ).all() as unknown as Array<{
+      readonly operation_id: string;
+      readonly run_id: string | null;
+      readonly attempt_id: string | null;
+      readonly status: "indeterminate" | "needs_attention";
+    }>;
+    return rows.map((row) => ({
+      operationId: OperationIdSchema.parse(row.operation_id),
+      runId: row.run_id === null ? null : RunIdSchema.parse(row.run_id),
+      attemptId:
+        row.attempt_id === null ? null : AttemptIdSchema.parse(row.attempt_id),
+      status: row.status,
+    }));
   }
 
   public commitCommand(command: CommitCommand): CommandReceipt {
     validateCommand(command);
-    this.database.exec("BEGIN IMMEDIATE");
-    try {
+    return this.runInImmediateTransaction(() => {
       const existing = this.database
         .prepare(
           `SELECT command_id, request_fingerprint, first_position, last_position, response_json, committed_at
@@ -119,7 +280,6 @@ export class SqliteOperationJournal {
         if (existing.request_fingerprint !== command.requestFingerprint) {
           throw new Error("IDEMPOTENCY_KEY_REUSED");
         }
-        this.database.exec("COMMIT");
         return toReceipt(existing);
       }
 
@@ -191,6 +351,52 @@ export class SqliteOperationJournal {
         );
       }
 
+      const terminalEvents = command.events
+        .map((event) => ({ event, outcome: terminalRunOutcome(event) }))
+        .filter(
+          (
+            candidate,
+          ): candidate is {
+            readonly event: NewDomainEvent;
+            readonly outcome: "succeeded" | "failed" | "canceled";
+          } => candidate.outcome !== null,
+        );
+      if (terminalEvents.length > 1) {
+        throw new Error("MULTIPLE_TERMINAL_RUN_EVENTS");
+      }
+      if (
+        terminalEvents.length === 1 &&
+        this.options.scheduleTerminalRunArchive !== undefined
+      ) {
+        const runId = RunIdSchema.parse(
+          command.aggregateId.startsWith("run:")
+            ? command.aggregateId.slice("run:".length)
+            : command.aggregateId,
+        );
+        const range = this.database.prepare(
+          `SELECT MIN(position) AS first_position, MAX(position) AS last_position
+             FROM events WHERE aggregate_id = ?`,
+        ).get(command.aggregateId) as unknown as {
+          readonly first_position: number | null;
+          readonly last_position: number | null;
+        };
+        if (range.first_position === null || range.last_position === null) {
+          throw new Error("TERMINAL_RUN_LEDGER_RANGE_MISSING");
+        }
+        const terminal = terminalEvents[0];
+        if (terminal === undefined) throw new Error("TERMINAL_RUN_EVENT_MISSING");
+        this.options.scheduleTerminalRunArchive({
+          projectId: command.projectId,
+          runId,
+          outcome: terminal.outcome,
+          firstPosition: range.first_position,
+          lastPosition: range.last_position,
+          actorId: command.actor.actorId,
+          correlationId: command.actor.correlationId,
+          occurredAt: terminal.event.occurredAt,
+        });
+      }
+
       this.database
         .prepare(
           `INSERT INTO command_receipts(
@@ -209,18 +415,13 @@ export class SqliteOperationJournal {
           committedAt,
         );
 
-      const receipt: CommandReceipt = {
+      return {
         commandId: command.commandId,
         firstPosition,
         lastPosition,
         response: command.response,
         committedAt,
       };
-      this.database.exec("COMMIT");
-      return receipt;
-    } catch (error) {
-      this.database.exec("ROLLBACK");
-      throw error;
-    }
+    });
   }
 }

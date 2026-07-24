@@ -13,6 +13,7 @@ import {
   createRequirementRevision,
   createWorkflowRevision,
   canonicalSha256,
+  type ExecutionPlan,
   type WorkflowRevision,
 } from "@hunter/domain";
 import { createExternalOperation } from "@hunter/runtime-contracts";
@@ -23,6 +24,7 @@ import { FlowEngine } from "./flow-engine.js";
 import { reduceFlowEvents, type WorkflowRunState } from "./state.js";
 import { createWorkflowRunBinding } from "./run-binding.js";
 import { remainingRunBudget } from "./run-budget.js";
+import { MAX_EXECUTION_PLAN_TASKS } from "./task-scheduler.js";
 import { validWorkflowInput } from "../../domain/src/workflow-test-fixtures.js";
 
 const ids = {
@@ -359,15 +361,50 @@ function humanGateWorkflow(): WorkflowRevision {
   return createWorkflowRevision(input);
 }
 
+function humanGateCanceledWorkflow(): WorkflowRevision {
+  const input = validWorkflowInput();
+  const archive = input.steps[1]!;
+  const gate = input.steps[3]!;
+  input.steps = [gate, archive];
+  input.entryStepId = gate.stepId;
+  input.routes = [
+    { routeId: RouteIdSchema.parse("rte_gate_cancel"), fromStepId: gate.stepId, outcome: "canceled", priority: 0, toStepId: archive.stepId },
+    { routeId: RouteIdSchema.parse("rte_gate_pass"), fromStepId: gate.stepId, outcome: "passed", priority: 0, toStepId: null },
+    { routeId: RouteIdSchema.parse("rte_archive_pass"), fromStepId: archive.stepId, outcome: "passed", priority: 0, toStepId: null },
+    { routeId: RouteIdSchema.parse("rte_archive_fail"), fromStepId: archive.stepId, outcome: "failed", priority: 0, toStepId: null },
+  ];
+  input.loops = [];
+  return createWorkflowRevision(input);
+}
+
 function subflowOnlyWorkflow(): WorkflowRevision {
   const input = validWorkflowInput();
-  const subflow = input.steps[2]!;
+  const subflow = {
+    ...input.steps[2]!,
+    permissionPolicy: {
+      decision: "allow" as const,
+      permissions: ["workflow.dispatch-task"],
+    },
+  } as (typeof input.steps)[number];
   input.steps = [subflow];
   input.entryStepId = subflow.stepId;
   input.routes = [
     { routeId: RouteIdSchema.parse("rte_sub_only_ok"), fromStepId: subflow.stepId, outcome: "passed", priority: 0, toStepId: null },
     { routeId: RouteIdSchema.parse("rte_sub_only_no"), fromStepId: subflow.stepId, outcome: "failed", priority: 0, toStepId: null },
     { routeId: RouteIdSchema.parse("rte_sub_only_x"), fromStepId: subflow.stepId, outcome: "canceled", priority: 0, toStepId: null },
+  ];
+  input.loops = [];
+  return createWorkflowRevision(input);
+}
+
+function unrelatedSubflowWorkflow(): WorkflowRevision {
+  const input = validWorkflowInput();
+  const subflow = input.steps[2]!;
+  input.steps = [subflow];
+  input.entryStepId = subflow.stepId;
+  input.routes = [
+    { routeId: RouteIdSchema.parse("rte_unrelated_ok"), fromStepId: subflow.stepId, outcome: "passed", priority: 0, toStepId: null },
+    { routeId: RouteIdSchema.parse("rte_unrelated_no"), fromStepId: subflow.stepId, outcome: "failed", priority: 0, toStepId: null },
   ];
   input.loops = [];
   return createWorkflowRevision(input);
@@ -387,9 +424,12 @@ function childAgentWorkflow(): WorkflowRevision {
   return createWorkflowRevision(input);
 }
 
-function engineHarness(workflow = singleStepWorkflow(), now: () => Date = () => new Date("2026-07-22T10:00:00.000Z")) {
+function engineHarness(
+  workflow = singleStepWorkflow(),
+  now: () => Date = () => new Date("2026-07-22T10:00:00.000Z"),
+  plan: Readonly<ExecutionPlan> = executionPlan(),
+) {
   const store = new TestFlowStore();
-  const plan = executionPlan();
   const engine = new FlowEngine(store, {
     getWorkflowRevision: () => workflow,
     getExecutionPlan: () => plan,
@@ -504,6 +544,7 @@ describe("authoritative FlowEngine", () => {
       executionStatus: "returned",
       verificationStatus: "passed",
       conclusion: "succeeded",
+      attempts: [{ verificationEvidenceFingerprint: "e".repeat(64) }],
     });
     expect(current(store).status).toBe("paused");
   });
@@ -586,6 +627,71 @@ describe("authoritative FlowEngine", () => {
     });
   });
 
+  it("keeps exactly one active Step across a multi-step Loop back-edge", () => {
+    const input = validWorkflowInput();
+    const implement = input.steps[0]!;
+    const test = input.steps[1]!;
+    input.steps = [implement, test];
+    input.entryStepId = implement.stepId;
+    input.routes = [
+      {
+        routeId: RouteIdSchema.parse("rte_multi_impl_pass"),
+        fromStepId: implement.stepId,
+        outcome: "passed",
+        priority: 0,
+        toStepId: test.stepId,
+      },
+      {
+        routeId: RouteIdSchema.parse("rte_multi_test_pass"),
+        fromStepId: test.stepId,
+        outcome: "passed",
+        priority: 0,
+        toStepId: null,
+      },
+      {
+        routeId: RouteIdSchema.parse("rte_multi_test_loop"),
+        fromStepId: test.stepId,
+        outcome: "failed",
+        priority: 0,
+        toStepId: implement.stepId,
+      },
+    ];
+    input.loops = [
+      {
+        ...input.loops[0]!,
+        routeId: RouteIdSchema.parse("rte_multi_test_loop"),
+        fromStepId: test.stepId,
+        toStepId: implement.stepId,
+        maxIterations: 3,
+        maxElapsedMs: 30_000,
+        progressPredicate: { kind: "diff_present", source: "workspace.diff" },
+      },
+    ];
+    const workflow = createWorkflowRevision(input);
+    const { store, engine, actor, runId } = engineHarness(workflow);
+
+    engine.handle({ type: "RecordExternalObservation", runId, fact: "agent_returned", expectedVersion: current(store).version, idempotencyKey: "multi-implement-return-1", actor });
+    engine.handle({ type: "RecordVerifierResult", runId, outcome: "passed", evidenceFingerprint: "1".repeat(64), expectedVersion: current(store).version, idempotencyKey: "multi-implement-pass-1", actor });
+    engine.handle({ type: "RecordExternalObservation", runId, fact: "agent_returned", expectedVersion: current(store).version, idempotencyKey: "multi-test-return-1", actor });
+    engine.handle({ type: "RecordVerifierResult", runId, outcome: "failed", evidenceFingerprint: "2".repeat(64), failureFingerprint: "multi-failure-1", diffFingerprint: "multi-diff-1", expectedVersion: current(store).version, idempotencyKey: "multi-test-fail-1", actor });
+
+    expect(current(store).steps.filter(({ conclusion }) => conclusion === "active")).toHaveLength(1);
+    expect(current(store).steps.find(({ stepId }) => stepId === test.stepId)?.conclusion).toBe("failed");
+    expect(current(store).steps.find(({ stepId }) => stepId === implement.stepId)).toMatchObject({
+      conclusion: "active",
+      attempts: [{ attemptNumber: 1 }, { attemptNumber: 2 }],
+    });
+
+    engine.handle({ type: "RecordExternalObservation", runId, fact: "agent_returned", expectedVersion: current(store).version, idempotencyKey: "multi-implement-return-2", actor });
+    engine.handle({ type: "RecordVerifierResult", runId, outcome: "passed", evidenceFingerprint: "3".repeat(64), expectedVersion: current(store).version, idempotencyKey: "multi-implement-pass-2", actor });
+    engine.handle({ type: "RecordExternalObservation", runId, fact: "agent_returned", expectedVersion: current(store).version, idempotencyKey: "multi-test-return-2", actor });
+    engine.handle({ type: "RecordVerifierResult", runId, outcome: "failed", evidenceFingerprint: "4".repeat(64), failureFingerprint: "multi-failure-2", diffFingerprint: "multi-diff-2", expectedVersion: current(store).version, idempotencyKey: "multi-test-fail-2", actor });
+
+    expect(current(store).loopUsage[workflow.loops[0]!.loopId]?.iterations).toBe(2);
+    expect(current(store).steps.filter(({ conclusion }) => conclusion === "active")).toHaveLength(1);
+    expect(current(store).steps.find(({ stepId }) => stepId === implement.stepId)?.attempts).toHaveLength(3);
+  });
+
   it("derives retry/backoff from the frozen Step and creates a new bounded Attempt", () => {
     let clock = new Date("2026-07-22T10:00:00.000Z");
     const { store, engine, actor, runId } = engineHarness(singleStepWorkflow(), () => clock);
@@ -665,6 +771,180 @@ describe("authoritative FlowEngine", () => {
     expect(current(store).status).toBe("paused");
   });
 
+  it("routes an authenticated Human Gate cancellation without canceling the Run", () => {
+    const workflow = humanGateCanceledWorkflow();
+    const { store, engine, actor, runId } = engineHarness(workflow);
+    engine.handle({
+      type: "RecordExternalObservation",
+      runId,
+      fact: "agent_returned",
+      expectedVersion: current(store).version,
+      idempotencyKey: "gate-cancel-returned",
+      actor,
+    });
+    engine.handle({
+      type: "RecordVerifierResult",
+      runId,
+      outcome: "canceled",
+      evidenceFingerprint: "c".repeat(64),
+      humanReceipt: {
+        contentHash: current(store).steps[0]!.fixedContentHash,
+        actorId: actor.actorId,
+      },
+      expectedVersion: current(store).version,
+      idempotencyKey: "gate-canceled",
+      actor,
+    });
+
+    const state = current(store);
+    expect(state.status).toBe("running");
+    expect(state.steps.find(({ stepId }) => stepId === workflow.entryStepId)).toMatchObject({
+      verificationStatus: "canceled",
+      conclusion: "canceled",
+    });
+    expect(state.steps.find(({ stepId }) => stepId !== workflow.entryStepId)?.conclusion).toBe("active");
+    expect(store.commits.at(-1)!.events).toContainEqual(expect.objectContaining({
+      type: "RouteSelected",
+      outcome: "canceled",
+    }));
+    expect(store.commits.at(-1)!.events).not.toContainEqual(expect.objectContaining({
+      type: "RunConcluded",
+      status: "canceled",
+    }));
+  });
+
+  it("applies replay-safe operator controls as canonical Flow events", () => {
+    const { store, engine, actor, runId } = engineHarness();
+    const stepRunId = current(store).steps[0]!.stepRunId;
+    const pause = {
+      type: "ApplyRunControl" as const,
+      projectId: ids.project,
+      runId,
+      target: { kind: "step" as const, stepRunId },
+      action: "pause" as const,
+      payload: {},
+      expectedVersion: current(store).version,
+      idempotencyKey: "operator-pause-0001",
+      actor,
+    };
+
+    const first = engine.handle(pause);
+    const paused = current(store);
+    expect(paused.status).toBe("paused");
+    expect(engine.handle(pause)).toEqual(first);
+    expect(current(store)).toEqual(paused);
+    expect(store.commits.at(-1)!.events).toEqual([
+      { type: "RunStatusChanged", status: "paused" },
+    ]);
+
+    engine.handle({
+      ...pause,
+      action: "resume",
+      expectedVersion: current(store).version,
+      idempotencyKey: "operator-resume-0001",
+    });
+    expect(current(store).status).toBe("running");
+
+    engine.handle({
+      ...pause,
+      action: "supplement",
+      payload: { text: "Use the verified recovery path." },
+      expectedVersion: current(store).version,
+      idempotencyKey: "operator-supplement-0001",
+    });
+    expect(current(store).supplementalInputs).toEqual([
+      {
+        stepRunId,
+        text: "Use the verified recovery path.",
+        actorId: actor.actorId,
+      },
+    ]);
+    expect(store.commits.flatMap(({ events }) => events.map(({ type }) => type))).not.toContain(
+      "MobileRunPaused",
+    );
+  });
+
+  it("decides the derived active Human Gate through the canonical verifier transition", () => {
+    const { store, engine, actor, runId } = engineHarness(humanGateWorkflow());
+    engine.handle({
+      type: "RecordExternalObservation",
+      runId,
+      fact: "agent_returned",
+      expectedVersion: current(store).version,
+      idempotencyKey: "operator-gate-returned",
+      actor,
+    });
+    const stepRunId = current(store).steps[0]!.stepRunId;
+    const gateId = engine.activeHumanGateId(runId);
+
+    engine.handle({
+      type: "ApplyRunControl",
+      projectId: ids.project,
+      runId,
+      target: { kind: "gate", gateId },
+      action: "approve",
+      payload: {},
+      expectedVersion: current(store).version,
+      idempotencyKey: "operator-gate-approve-0001",
+      actor,
+    });
+
+    expect(current(store).steps.find((step) => step.stepRunId === stepRunId)).toMatchObject({
+      verificationStatus: "passed",
+      conclusion: "succeeded",
+    });
+    expect(store.commits.at(-1)!.events.map(({ type }) => type)).toContain("VerificationChanged");
+    expect(store.commits.at(-1)!.events.map(({ type }) => type)).not.toContain("MobileGateApproved");
+  });
+
+  it("rejects a canceled verifier outcome for an automated verifier", () => {
+    const { store, engine, actor, runId } = engineHarness();
+    engine.handle({
+      type: "RecordExternalObservation",
+      runId,
+      fact: "agent_returned",
+      expectedVersion: current(store).version,
+      idempotencyKey: "automated-cancel-returned",
+      actor,
+    });
+
+    expect(() => engine.handle({
+      type: "RecordVerifierResult",
+      runId,
+      outcome: "canceled",
+      evidenceFingerprint: "c".repeat(64),
+      expectedVersion: current(store).version,
+      idempotencyKey: "automated-canceled",
+      actor,
+    })).toThrow(/CANCELED_OUTCOME_REQUIRES_HUMAN_RECEIPT_VERIFIER/u);
+  });
+
+  it.each([
+    ["missing", undefined],
+    ["wrong", { contentHash: "0".repeat(64), actorId: "flow-test" }],
+  ] as const)("rejects a Human Gate cancellation with a %s receipt", (_label, humanReceipt) => {
+    const { store, engine, actor, runId } = engineHarness(humanGateCanceledWorkflow());
+    engine.handle({
+      type: "RecordExternalObservation",
+      runId,
+      fact: "agent_returned",
+      expectedVersion: current(store).version,
+      idempotencyKey: `gate-cancel-${_label}-returned`,
+      actor,
+    });
+
+    expect(() => engine.handle({
+      type: "RecordVerifierResult",
+      runId,
+      outcome: "canceled",
+      evidenceFingerprint: "c".repeat(64),
+      humanReceipt,
+      expectedVersion: current(store).version,
+      idempotencyKey: `gate-cancel-${_label}`,
+      actor,
+    })).toThrow(/HUMAN_RECEIPT_CONTENT_HASH_MISMATCH/u);
+  });
+
   it("uses declared terminal transitions for timeout and cancel", () => {
     const timed = engineHarness();
     timed.engine.handle({
@@ -695,6 +975,7 @@ describe("authoritative FlowEngine", () => {
     void ignoredFingerprint;
     const workflow = createWorkflowRevision({ ...unsigned, loops: base.loops.map((loop) => ({ ...loop, exhaustion: { ...loop.exhaustion, target } })) });
     const { store, engine, actor, runId } = engineHarness(workflow);
+    let finalReceipt: ReturnType<typeof engine.handle> | null = null;
     for (let index = 0; index < 3 && current(store).status === "running"; index += 1) {
       engine.handle({
         type: "RecordExternalObservation",
@@ -704,7 +985,7 @@ describe("authoritative FlowEngine", () => {
         idempotencyKey: `exhaust-return-${index}`,
         actor,
       });
-      engine.handle({
+      finalReceipt = engine.handle({
         type: "RecordVerifierResult",
         runId,
         outcome: "failed",
@@ -719,6 +1000,10 @@ describe("authoritative FlowEngine", () => {
     expect(current(store).status).toBe(target);
     expect(current(store).steps[0]!.attempts).toHaveLength(3);
     expect(current(store).budgetUsage).toMatchObject({ attempts: 3, loopIterations: 2 });
+    expect(finalReceipt?.response).toMatchObject({
+      loopIteration: 3,
+      loopGuardReason: "MAX_ITERATIONS",
+    });
   });
 
   it("does not treat repeated ordinary verifier failures as verifier improvement", () => {
@@ -744,8 +1029,37 @@ describe("authoritative FlowEngine", () => {
     expect(bindingFingerprint).toBe(canonicalSha256(unsigned));
   });
 
+  it("rejects Task fan-out before the root Run reaches its dispatch subflow Step", () => {
+    const { store, engine, actor, runId } = engineHarness(singleStepWorkflow());
+    const commitsBefore = store.commits.length;
+
+    expect(() => engine.handle({
+      type: "ScheduleTaskFanOut",
+      runId,
+      expectedVersion: current(store).version,
+      idempotencyKey: "fanout-before-dispatch",
+      actor,
+    })).toThrow(/TASK_FANOUT_REQUIRES_ACTIVE_SUBFLOW/u);
+    expect(store.commits).toHaveLength(commitsBefore);
+    expect(current(store).scheduledChildren).toEqual([]);
+  });
+
+  it("rejects Task fan-out from an unrelated subflow Step", () => {
+    const { store, engine, actor, runId } = engineHarness(
+      unrelatedSubflowWorkflow(),
+    );
+
+    expect(() => engine.handle({
+      type: "ScheduleTaskFanOut",
+      runId,
+      expectedVersion: current(store).version,
+      idempotencyKey: "fanout-unrelated-subflow",
+      actor,
+    })).toThrow(/TASK_FANOUT_REQUIRES_DISPATCH_CONTRACT/u);
+  });
+
   it("records one deterministic Task fan-out decision and rejects duplicate active scheduling", () => {
-    const { store, engine, actor, runId } = engineHarness();
+    const { store, engine, actor, runId } = engineHarness(subflowOnlyWorkflow());
     const receipt = engine.handle({ type: "ScheduleTaskFanOut", runId, expectedVersion: current(store).version, idempotencyKey: "fanout-one", actor });
     expect(receipt.response).toMatchObject({ children: [{ taskId: ids.task, childRunId: expect.stringMatching(/^run_/u) }] });
     expect(current(store).scheduledChildren).toHaveLength(1);
@@ -754,8 +1068,39 @@ describe("authoritative FlowEngine", () => {
     expect(current(store).scheduledChildren).toHaveLength(1);
   });
 
+  it("rejects an oversized frozen Task graph before persisting fan-out", () => {
+    const baseTask = executionPlan().tasks[0]!;
+    const oversizedPlan = createExecutionPlan({
+      executionPlanId: ids.plan,
+      projectId: ids.project,
+      changeRevisionId: "crv_revision01",
+      requirementRevisionIds: requirements,
+      tasks: Array.from({ length: MAX_EXECUTION_PLAN_TASKS + 1 }, (_, index) => ({
+        ...baseTask,
+        taskId: TaskIdSchema.parse(`tsk_flowlimit${index.toString().padStart(5, "0")}`),
+        title: `Task ${index}`,
+      })),
+      publishedAt: "2026-07-22T01:00:00.000Z",
+    });
+    const { store, engine, actor, runId } = engineHarness(
+      subflowOnlyWorkflow(),
+      () => new Date("2026-07-22T10:00:00.000Z"),
+      oversizedPlan,
+    );
+    const commitsBefore = store.commits.length;
+    expect(() => engine.handle({
+      type: "ScheduleTaskFanOut",
+      runId,
+      expectedVersion: current(store).version,
+      idempotencyKey: "fanout-oversized-plan",
+      actor,
+    })).toThrow(/TASK_SCHEDULER_PLAN_LIMIT_EXCEEDED/u);
+    expect(store.commits).toHaveLength(commitsBefore);
+    expect(current(store).scheduledChildren).toEqual([]);
+  });
+
   it("keeps a canceled parent non-terminal until every requested child is terminal", () => {
-    const { store, engine, actor, runId } = engineHarness();
+    const { store, engine, actor, runId } = engineHarness(subflowOnlyWorkflow());
     const plan = executionPlan();
     const scheduled = engine.handle({ type: "ScheduleTaskFanOut", runId, expectedVersion: current(store).version, idempotencyKey: "cancel-fanout", actor }).response as { children: Array<{ taskId: typeof ids.task; childRunId: typeof ids.childRun; budget: typeof initialBudget }> };
     const parent = current(store).binding;
@@ -784,7 +1129,7 @@ describe("authoritative FlowEngine", () => {
   });
 
   it("persists bounded child allocations whose total cannot exceed the parent remainder", () => {
-    const { store, engine, actor, runId } = engineHarness();
+    const { store, engine, actor, runId } = engineHarness(subflowOnlyWorkflow());
     const response = engine.handle({ type: "ScheduleTaskFanOut", runId, expectedVersion: current(store).version, idempotencyKey: "bounded-fanout", actor }).response as { children: Array<{ budget: typeof initialBudget }> };
     const budget = response.children[0]!.budget;
     expect(budget.maxAttempts).toBeLessThan(initialBudget.maxAttempts);
@@ -793,7 +1138,7 @@ describe("authoritative FlowEngine", () => {
   });
 
   it("does not let parent retry spend budget already reserved for a child", () => {
-    const { store, engine, actor, runId } = engineHarness();
+    const { store, engine, actor, runId } = engineHarness(subflowOnlyWorkflow());
     engine.handle({ type: "ScheduleTaskFanOut", runId, expectedVersion: current(store).version, idempotencyKey: "reserve-before-retry", actor });
     engine.handle({ type: "RecordExecutionFailure", runId, errorClass: "transient", expectedVersion: current(store).version, idempotencyKey: "retry-with-reservation", actor });
     expect(current(store)).toMatchObject({ status: "needs_attention", scheduledRetry: null });
@@ -812,17 +1157,13 @@ describe("authoritative FlowEngine", () => {
   });
 
   it("waits for Task fan-in, accepts each child once, and rolls its budget into the parent", () => {
-    const { store, engine, actor, runId } = engineHarness();
+    const { store, engine, actor, runId } = engineHarness(subflowOnlyWorkflow());
     const scheduled = engine.handle({ type: "ScheduleTaskFanOut", runId, expectedVersion: current(store).version, idempotencyKey: "fanout-rollup", actor }).response as { children: Array<{ taskId: typeof ids.task; childRunId: typeof ids.childRun; budget: typeof initialBudget }> };
     const parent = current(store).binding;
     const childRunId = scheduled.children[0]!.childRunId;
     const childBudget = scheduled.children[0]!.budget;
     const child = createWorkflowRunBinding({ runId: childRunId, projectId: parent.projectId, changeRevisionId: parent.changeRevisionId, requirementRevisionIds: parent.requirementRevisionIds, workflowRevisionId: ids.workflow, policySnapshot: parent.policySnapshot, initialBudget: childBudget, subjectKind: "task", parentRunId: runId, taskId: ids.task, executionPlanId: parent.executionPlanId }, { parent, executionPlan: executionPlan(), activeTaskIds: [], parentTerminal: false, childBudgetAllocation: childBudget });
     engine.handle({ type: "StartRun", binding: child, expectedVersion: 0, idempotencyKey: "start-rollup-child", actor });
-
-    engine.handle({ type: "RecordExternalObservation", runId, fact: "agent_returned", expectedVersion: current(store).version, idempotencyKey: "root-return-fanin", actor });
-    engine.handle({ type: "RecordVerifierResult", runId, outcome: "passed", evidenceFingerprint: "a".repeat(64), expectedVersion: current(store).version, idempotencyKey: "root-verify-fanin", actor });
-    expect(current(store).status).toBe("paused");
 
     const childState = () => store.loadRun(childRunId)!;
     engine.handle({ type: "RecordExternalObservation", runId: childRunId, fact: "agent_returned", expectedVersion: childState().version, idempotencyKey: "child-return-fanin", actor });
@@ -887,7 +1228,7 @@ describe("authoritative FlowEngine", () => {
 
   it.each([
     ["block", "paused"],
-    ["skip", "running"],
+    ["skip", "succeeded"],
     ["terminate", "canceled"],
   ] as const)("records the server-derived %s dependency-failure rule", (policy, expectedStatus) => {
     const { store, engine, actor, childRunId } = dependencyFailureHarness({ policy });
@@ -914,12 +1255,52 @@ describe("authoritative FlowEngine", () => {
     const receipt = engine.handle({ ...base, humanWaiver: { actorId: actor.actorId, contentHash } } as never);
     expect(receipt.response).toMatchObject({ action: "waived", children: [{ taskId: ids.dependent }] });
     expect(store.loadRun(ids.rootRun)!.dependencyFailureDecisions[0]).toMatchObject({ waiverReceiptHash: contentHash });
+    const scheduled = (receipt.response as {
+      children: Array<{
+        taskId: typeof ids.dependent;
+        childRunId: typeof ids.childRun;
+        budget: typeof initialBudget;
+      }>;
+    }).children[0]!;
+    const parent = store.loadRun(ids.rootRun)!.binding;
+    const plan = dependencyPlan();
+    const child = createWorkflowRunBinding({
+      runId: scheduled.childRunId,
+      projectId: parent.projectId,
+      changeRevisionId: parent.changeRevisionId,
+      requirementRevisionIds: parent.requirementRevisionIds,
+      workflowRevisionId: ids.workflow,
+      policySnapshot: parent.policySnapshot,
+      initialBudget: scheduled.budget,
+      subjectKind: "task",
+      parentRunId: parent.runId,
+      taskId: scheduled.taskId,
+      executionPlanId: parent.executionPlanId,
+    }, {
+      parent,
+      executionPlan: plan,
+      activeTaskIds: [],
+      parentTerminal: false,
+      childBudgetAllocation: scheduled.budget,
+    });
+    engine.handle({
+      type: "StartRun",
+      binding: child,
+      expectedVersion: 0,
+      idempotencyKey: "start-waived-dependent",
+      actor,
+    });
+    expect(engine.handle({
+      type: "ScheduleTaskFanOut",
+      runId: ids.rootRun,
+      expectedVersion: store.loadRun(ids.rootRun)!.version,
+      idempotencyKey: "fanout-after-waiver-start",
+      actor,
+    }).response).toEqual({ children: [] });
   });
 
-  it("can finish an already verified parent after an accepted failed dependency is explicitly skipped", () => {
+  it("can finish a parent after an accepted failed dependency is explicitly skipped", () => {
     const { store, engine, actor } = dependencyFailureHarness({ policy: "skip" });
-    engine.handle({ type: "RecordExternalObservation", runId: ids.rootRun, fact: "agent_returned", expectedVersion: store.loadRun(ids.rootRun)!.version, idempotencyKey: "dependency-root-return", actor });
-    engine.handle({ type: "RecordVerifierResult", runId: ids.rootRun, outcome: "passed", evidenceFingerprint: "e".repeat(64), expectedVersion: store.loadRun(ids.rootRun)!.version, idempotencyKey: "dependency-root-verify", actor });
     expect(store.loadRun(ids.rootRun)).toMatchObject({ status: "needs_attention", acceptedChildRunIds: [expect.any(String)] });
     engine.handle({ type: "ResolveTaskDependencyFailure", runId: ids.rootRun, taskId: ids.dependent, expectedVersion: store.loadRun(ids.rootRun)!.version, idempotencyKey: "dependency-skip-finish", actor } as never);
     expect(store.loadRun(ids.rootRun)!.status).toBe("succeeded");
@@ -945,8 +1326,6 @@ describe("authoritative FlowEngine", () => {
     engine.handle({ type: "StartRun", binding: child, expectedVersion: 0, idempotencyKey: `start-${policy}`, actor });
     engine.handle({ type: "RecordExternalObservation", runId: child.runId, fact: "agent_returned", expectedVersion: store.loadRun(child.runId)!.version, idempotencyKey: `return-${policy}`, actor });
     engine.handle({ type: "RecordVerifierResult", runId: child.runId, outcome: "passed", evidenceFingerprint: "7".repeat(64), expectedVersion: store.loadRun(child.runId)!.version, idempotencyKey: `verify-${policy}`, actor });
-    engine.handle({ type: "RecordExternalObservation", runId: ids.rootRun, fact: "agent_returned", expectedVersion: store.loadRun(ids.rootRun)!.version, idempotencyKey: `root-return-${policy}`, actor });
-    engine.handle({ type: "RecordVerifierResult", runId: ids.rootRun, outcome: "passed", evidenceFingerprint: "8".repeat(64), expectedVersion: store.loadRun(ids.rootRun)!.version, idempotencyKey: `root-verify-${policy}`, actor });
     engine.handle({ type: "ReconcileTaskChildren", runId: ids.rootRun, expectedVersion: store.loadRun(ids.rootRun)!.version, idempotencyKey: `reconcile-${policy}`, actor });
     expect(store.loadRun(ids.rootRun)!.status).toBe("succeeded");
   });
@@ -955,7 +1334,7 @@ describe("authoritative FlowEngine", () => {
 function dependencyFailureHarness(rule: { readonly policy: "block" | "skip" | "terminate" } | { readonly policy: "compensation"; readonly compensationTaskId: typeof ids.compensation } | { readonly policy: "waiver"; readonly requiredRole: string }) {
   const store = new TestFlowStore();
   const plan = dependencyPlan(rule.policy === "compensation");
-  const workflow = singleStepWorkflow();
+  const workflow = subflowOnlyWorkflow();
   const engine = new FlowEngine(store, {
     getWorkflowRevision: () => workflow,
     getExecutionPlan: () => plan,

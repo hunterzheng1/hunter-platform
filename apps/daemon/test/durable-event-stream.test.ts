@@ -47,7 +47,17 @@ describe("DurableEventStream", () => {
     expect(() => stream.replay({ headerCursor: "bad", authorizedProjectIds: [projectA] })).toThrow(/EVENT_CURSOR_INVALID/u);
     expect(() => stream.replay({ headerCursor: "2", authorizedProjectIds: [projectA] })).toThrow(/EVENT_CURSOR_INVALID/u);
     reader.setRetentionFloor(1);
-    expect(stream.replay({ headerCursor: "0", authorizedProjectIds: [projectA] })).toEqual({ status: "resync_required", code: "EVENT_CURSOR_RESYNC_REQUIRED", retentionFloor: 1, highWaterPosition: 1, snapshotUrl: "/events/snapshot" });
+    expect(stream.replay({ headerCursor: "0", authorizedProjectIds: [projectA] })).toEqual({
+      status: "resync_required",
+      code: "EVENT_CURSOR_GAP",
+      retentionFloor: 1,
+      highWaterPosition: 1,
+      instructions: {
+        snapshot: "reload_snapshot",
+        rebuild: "replace_projection_from_snapshot",
+        resume: "subscribe_after_high_water_position",
+      },
+    });
     database.close();
   });
 
@@ -118,7 +128,7 @@ describe("DurableEventStream", () => {
     const stream = new DurableEventStream(reader, undefined, undefined, (authorizedProjectIds) => ({ projectionVersion: 3, cursor: 2, entities: authorizedProjectIds.map((projectId) => ({ projectId })) }));
     const authenticator = new LocalAuthenticator("stream-endpoint-secret");
     const token = authenticator.issueSession({ principalId: "stream-user", authorizedProjectIds: [projectA], expiresAt: new Date(Date.now() + 60_000), csrf: "stream-csrf" });
-    const app = buildApp({ authenticator, allowedHosts: ["hunter-test.localhost"], allowedOrigins: ["app://hunter"], eventStream: stream, services: { listProjects: async () => [], projectForExecutionPlan: () => null, startRun: async () => ({}) } });
+    const app = buildApp({ authenticator, allowedHosts: ["hunter-test.localhost"], allowedOrigins: ["app://hunter"], eventStream: stream, services: { listProjects: async () => [], projectForExecutionPlan: () => null, projectForRun: () => null, startRun: async () => ({}) } });
     const headers = { host: "hunter-test.localhost", origin: "app://hunter", authorization: `Bearer ${token}` };
     const replay = await app.inject({ method: "GET", url: "/events?once=1", headers });
     expect(replay.statusCode).toBe(200);

@@ -6,24 +6,29 @@
   "workspaces": [
     "apps/*",
     "packages/*",
-    "spikes/*"
+    "spikes/*",
+    "workflow-packs/*"
   ],
   "engines": {
     "node": ">=24 <25"
   },
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && npm run copy-assets -w @hunter/workflow-pack-default",
     "lint": "eslint .",
     "spike:doctor": "npm run build --workspace @hunter/spike-doctor && node --enable-source-maps spikes/doctor/dist/main.js --output docs/validation/environment-inventory.json",
+    "spike:codex": "npm run build --workspace @hunter/spike-codex && node --enable-source-maps spikes/codex/dist/scenario.js --output docs/validation/evidence/codex/direct-runtime.json",
+    "spike:codex-app-server": "npm run build --workspace @hunter/spike-codex && node --enable-source-maps spikes/codex/dist/app-server-scenario.js --output docs/validation/evidence/codex/app-server-runtime.json",
     "spike:orca": "npm run build --workspace @hunter/spike-orca && node --enable-source-maps spikes/orca/dist/scenario.js --output docs/validation/evidence/orca/preflight.json",
+    "start:e2e": "node scripts/start-e2e.mjs",
     "test": "vitest run",
-    "typecheck": "tsc -b --pretty false",
+    "typecheck": "tsc -b --pretty false && tsc --noEmit --pretty false -p tsconfig.e2e.json",
     "verify:rebuild": "tsx scripts/verify-rebuild.ts",
     "verify:recovery": "tsx scripts/verify-recovery.ts",
     "verify:foundation": "npm run lint && npm run typecheck && npm test && npm run verify:rebuild && npm run verify:recovery && npm run build"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
+    "@playwright/test": "1.55.0",
     "@types/node": "^24.0.0",
     "eslint": "^9.0.0",
     "fast-check": "^4.9.0",

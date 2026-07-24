@@ -3,10 +3,16 @@
 .hunter/cache/
 .hunter/tmp/
 .hunter-e2e/
+.worktrees/
 
 # Dependencies and build output
 node_modules/
+test-results/
+playwright-report/
 dist/
+dist-sidecar/
+dist-types/
+dist-installers/
 build/
 .next/
 coverage/

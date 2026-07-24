@@ -1,30 +1,73 @@
 import {
+  AttemptIdSchema,
   ControllerLeaseIdSchema,
   DeviceBindingIdSchema,
   LeaseOwnerIdSchema,
   NativeSessionIdSchema,
+  ProjectIdSchema,
   RepositoryIdSchema,
+  RunIdSchema,
   WorkspaceIdSchema,
   WorkspaceLeaseIdSchema,
   WorktreeIdSchema,
   WriterLeaseIdSchema,
 } from "@hunter/domain";
 import { z } from "zod";
+import { CanonicalWorkspaceKeySchema } from "./external-boundary.js";
+
+function containsForbiddenBranchCharacter(value: string): boolean {
+  return [...value].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 31
+      || codePoint === 127
+      || "~^:?*[\\".includes(character);
+  });
+}
 
 const leaseFields = {
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
+  projectId: ProjectIdSchema,
+  repositoryId: RepositoryIdSchema,
+  deviceBindingId: DeviceBindingIdSchema,
+  canonicalWorkspaceKey: CanonicalWorkspaceKeySchema,
+  gitHead: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u),
+  branch: z
+    .string()
+    .min(1)
+    .max(255)
+    .refine(
+      (value) =>
+        !value.startsWith("-") &&
+        !value.endsWith("/") &&
+        !value.includes("..") &&
+        !containsForbiddenBranchCharacter(value),
+      "LEASE_BRANCH_INVALID",
+    ),
+  ownerRunId: RunIdSchema,
+  ownerAttemptId: AttemptIdSchema,
   ownerId: LeaseOwnerIdSchema,
   generation: z.number().int().positive(),
+  mode: z.enum(["read_only", "write"]),
   acquiredAt: z.iso.datetime(),
   expiresAt: z.iso.datetime(),
+  revokedAt: z.iso.datetime().nullable(),
+  revocationReason: z.string().min(1).max(512).nullable(),
 };
 
 function validateLeaseWindow(
-  lease: { acquiredAt: string; expiresAt: string },
+  lease: {
+    acquiredAt: string;
+    expiresAt: string;
+    revokedAt: string | null;
+    revocationReason: string | null;
+  },
   context: z.core.$RefinementCtx,
 ): void {
   if (Date.parse(lease.expiresAt) <= Date.parse(lease.acquiredAt)) {
     context.addIssue({ code: "custom", message: "LEASE_WINDOW_INVALID" });
+  }
+  if ((lease.revokedAt === null) !== (lease.revocationReason === null)) {
+    context.addIssue({ code: "custom", message: "LEASE_REVOCATION_INVALID" });
   }
 }
 
@@ -35,10 +78,6 @@ export const WorkspaceLeaseSchema = z
     leaseId: WorkspaceLeaseIdSchema,
     scope: z.strictObject({
       workspaceId: WorkspaceIdSchema,
-      deviceBindingId: DeviceBindingIdSchema,
-      repositoryId: RepositoryIdSchema,
-      mode: z.enum(["read_only", "write"]),
-      baselineRevision: z.string().min(7).max(128),
     }),
   })
   .superRefine(validateLeaseWindow);
@@ -51,10 +90,15 @@ export const WriterLeaseSchema = z
     leaseId: WriterLeaseIdSchema,
     scope: z.strictObject({
       workspaceId: WorkspaceIdSchema,
-      worktreeId: WorktreeIdSchema.nullable(),
+      worktreeId: WorktreeIdSchema,
     }),
   })
-  .superRefine(validateLeaseWindow);
+  .superRefine((lease, context) => {
+    validateLeaseWindow(lease, context);
+    if (lease.mode !== "write") {
+      context.addIssue({ code: "custom", message: "WRITER_LEASE_REQUIRES_WRITE_MODE" });
+    }
+  });
 export type WriterLease = z.infer<typeof WriterLeaseSchema>;
 
 export const ControllerLeaseSchema = z
@@ -62,7 +106,11 @@ export const ControllerLeaseSchema = z
     ...leaseFields,
     kind: z.literal("controller"),
     leaseId: ControllerLeaseIdSchema,
-    scope: z.strictObject({ nativeSessionId: NativeSessionIdSchema }),
+    scope: z.strictObject({
+      workspaceId: WorkspaceIdSchema,
+      worktreeId: WorktreeIdSchema,
+      nativeSessionId: NativeSessionIdSchema,
+    }),
   })
   .superRefine(validateLeaseWindow);
 export type ControllerLease = z.infer<typeof ControllerLeaseSchema>;

@@ -1,0 +1,249 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "phase0_direct_codex_runtime",
+  "generatedAt": "2026-07-22T17:03:47.221Z",
+  "generator": {
+    "name": "hunter-phase0-direct-codex",
+    "version": "0.1.0"
+  },
+  "host": {
+    "platform": "win32",
+    "architecture": "x64",
+    "release": "10.0.26200",
+    "nodeVersion": "v24.14.0"
+  },
+  "connector": "direct_codex_cli",
+  "installedVersion": "0.144.6",
+  "helpHashes": {
+    "exec": "2623cfaf78083b7e0b74354c969c2c02812e91ef7d5db342271ff05b98ccccbd",
+    "resume": "e395e3a5716cd1a59985a8cef7c43ceb8dc93eea27962d29be3107f0022de6b3",
+    "appServer": "b55baa5e2cbd1288cdf57f5756236d070d29300dbd4125105f602405560a99f9"
+  },
+  "loginAvailable": true,
+  "connectorVerdict": "NOT_PROVEN",
+  "proofScope": "local_typed_scenario",
+  "modelServiceCallAttempted": true,
+  "remoteRepositoryWriteAttempted": false,
+  "realCallCount": 3,
+  "fixture": {
+    "cwdScope": "temporary_git_fixture",
+    "remotePresent": false,
+    "repositoryCleanAfterScenario": true,
+    "cleanup": "verified_by_fixture_return"
+  },
+  "commands": [
+    {
+      "operation": "version",
+      "args": [
+        "--version"
+      ],
+      "cwdScope": "temporary_git_fixture",
+      "exitCode": 0,
+      "timedOut": false,
+      "timeoutCleanup": "not_applicable",
+      "spawnError": null,
+      "outputDiscarded": false,
+      "stdoutSha256": "a560ff1e62b63d4f161d1705f0b0ed337f602f084c3b45e15ef213478d24f2b3",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "operation": "exec_help",
+      "args": [
+        "exec",
+        "--help"
+      ],
+      "cwdScope": "temporary_git_fixture",
+      "exitCode": 0,
+      "timedOut": false,
+      "timeoutCleanup": "not_applicable",
+      "spawnError": null,
+      "outputDiscarded": false,
+      "stdoutSha256": "2623cfaf78083b7e0b74354c969c2c02812e91ef7d5db342271ff05b98ccccbd",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "operation": "resume_help",
+      "args": [
+        "exec",
+        "resume",
+        "--help"
+      ],
+      "cwdScope": "temporary_git_fixture",
+      "exitCode": 0,
+      "timedOut": false,
+      "timeoutCleanup": "not_applicable",
+      "spawnError": null,
+      "outputDiscarded": false,
+      "stdoutSha256": "e395e3a5716cd1a59985a8cef7c43ceb8dc93eea27962d29be3107f0022de6b3",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "operation": "app_server_help",
+      "args": [
+        "app-server",
+        "--help"
+      ],
+      "cwdScope": "temporary_git_fixture",
+      "exitCode": 0,
+      "timedOut": false,
+      "timeoutCleanup": "not_applicable",
+      "spawnError": null,
+      "outputDiscarded": false,
+      "stdoutSha256": "b55baa5e2cbd1288cdf57f5756236d070d29300dbd4125105f602405560a99f9",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "operation": "login_status",
+      "args": [
+        "login",
+        "status"
+      ],
+      "cwdScope": "temporary_git_fixture",
+      "exitCode": 0,
+      "timedOut": false,
+      "timeoutCleanup": "not_applicable",
+      "spawnError": null,
+      "outputDiscarded": true,
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "operation": "create",
+      "args": [
+        "exec",
+        "--json",
+        "--sandbox",
+        "read-only",
+        "<READ_ONLY_PROMPT>"
+      ],
+      "cwdScope": "temporary_git_fixture",
+      "exitCode": 0,
+      "timedOut": false,
+      "timeoutCleanup": "not_applicable",
+      "spawnError": null,
+      "outputDiscarded": false,
+      "stdoutSha256": "ce0df691be7f87eeb5540840460e07ab496054b164c3440ed3e5354116c2a6ac",
+      "stderrSha256": "40e48773110993ea3ef729b09902f92f68c50f23b719105ab309de9a351888c8"
+    },
+    {
+      "operation": "resume",
+      "args": [
+        "exec",
+        "--json",
+        "--sandbox",
+        "read-only",
+        "resume",
+        "<SESSION_ID>",
+        "<RESUME_PROMPT>"
+      ],
+      "cwdScope": "temporary_git_fixture",
+      "exitCode": 0,
+      "timedOut": false,
+      "timeoutCleanup": "not_applicable",
+      "spawnError": null,
+      "outputDiscarded": false,
+      "stdoutSha256": "23c3534b57fb66ce54a8b2f6aa1ee29dd8347801d826d1fe071d7acba1886ae3",
+      "stderrSha256": "78ed9f271f58015df6fdc506004e621d73598389ce458a36520d7abc1bbc948f"
+    },
+    {
+      "operation": "interrupt",
+      "args": [
+        "exec",
+        "--json",
+        "--sandbox",
+        "read-only",
+        "<INTERRUPT_PROMPT>"
+      ],
+      "cwdScope": "temporary_git_fixture",
+      "exitCode": null,
+      "timedOut": true,
+      "timeoutCleanup": "process_tree_terminated",
+      "spawnError": null,
+      "outputDiscarded": false,
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "481697b162b1f64eda90a0f89d03f16066e0e914b99d69b0d015d6f08f5e8070"
+    },
+    {
+      "operation": "fixture_status",
+      "args": [
+        "status",
+        "--porcelain"
+      ],
+      "cwdScope": "temporary_git_fixture",
+      "exitCode": 0,
+      "timedOut": false,
+      "timeoutCleanup": "not_applicable",
+      "spawnError": null,
+      "outputDiscarded": false,
+      "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "discover",
+      "outcome": "PASS",
+      "reason": "fixed_cli_and_login_available"
+    },
+    {
+      "id": "workspace_targeting",
+      "outcome": "PASS",
+      "reason": "temporary_no_remote_fixture_bound"
+    },
+    {
+      "id": "launch",
+      "outcome": "PASS",
+      "reason": "structured_session_identity_created"
+    },
+    {
+      "id": "send",
+      "outcome": "PASS",
+      "reason": "fixed_prompt_accepted"
+    },
+    {
+      "id": "observe",
+      "outcome": "PASS",
+      "reason": "structured_events_observed"
+    },
+    {
+      "id": "structured_events",
+      "outcome": "PASS",
+      "reason": "versioned_jsonl_stream_parsed"
+    },
+    {
+      "id": "permission_events",
+      "outcome": "NOT_PROVEN",
+      "reason": "no_safe_permission_event_exercised"
+    },
+    {
+      "id": "resume",
+      "outcome": "PASS",
+      "reason": "same_session_identity_resumed"
+    },
+    {
+      "id": "interrupt",
+      "outcome": "NOT_PROVEN",
+      "reason": "process_tree_termination_is_not_structured_session_interrupt"
+    },
+    {
+      "id": "completion_receipt",
+      "outcome": "PASS",
+      "reason": "structured_turn_terminal_event_observed_not_step_success"
+    },
+    {
+      "id": "headless",
+      "outcome": "PASS",
+      "reason": "noninteractive_exec_json_completed"
+    },
+    {
+      "id": "artifact_export",
+      "outcome": "NOT_PROVEN",
+      "reason": "artifact_export_not_exercised"
+    }
+  ],
+  "redaction": {
+    "applied": true,
+    "schemaVersion": 1
+  },
+  "contentFingerprint": "00094ae46c65670a9461c3e2acadcd1d769617ebeab2c591e0c5e62e97551a36"
+}

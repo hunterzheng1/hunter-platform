@@ -65,6 +65,17 @@ CREATE TABLE IF NOT EXISTS side_effect_receipts (
   recorded_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS evidence_records (
+  evidence_id TEXT PRIMARY KEY,
+  operation_id TEXT NOT NULL UNIQUE REFERENCES outbox(operation_id),
+  evidence_hash TEXT NOT NULL,
+  observed_status TEXT NOT NULL CHECK (observed_status IN ('completed','indeterminate','needs_attention')),
+  proof_scope TEXT NOT NULL CHECK (proof_scope IN ('contract_only','local_observation','human_receipt')),
+  observed_at TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  recorded_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS lease_records (
   lease_id TEXT PRIMARY KEY,
   lease_kind TEXT NOT NULL CHECK (lease_kind IN ('workspace','writer','controller')),
@@ -95,11 +106,130 @@ CREATE TABLE IF NOT EXISTS projection_checkpoints (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS archive_jobs (
+  job_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  outcome TEXT NOT NULL CHECK (outcome IN ('succeeded','failed','canceled')),
+  status TEXT NOT NULL CHECK (status IN ('pending','leased','completed','needs_attention')),
+  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+  lease_owner TEXT,
+  lease_generation INTEGER NOT NULL DEFAULT 0 CHECK (lease_generation >= 0),
+  lease_token_hash TEXT,
+  lease_acquired_at TEXT,
+  lease_expires_at TEXT,
+  input_fingerprint TEXT NOT NULL,
+  first_position INTEGER NOT NULL CHECK (first_position > 0),
+  last_position INTEGER NOT NULL CHECK (last_position >= first_position),
+  actor_id TEXT NOT NULL,
+  correlation_id TEXT NOT NULL,
+  occurred_at TEXT NOT NULL,
+  manifest_hash TEXT,
+  manifest_ref TEXT,
+  archive_receipt_json TEXT,
+  projection_fingerprint TEXT,
+  knowledge_entry_id TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (project_id, run_id)
+);
+
+CREATE INDEX IF NOT EXISTS archive_jobs_eligible
+  ON archive_jobs(status, lease_expires_at, created_at);
+
+CREATE TABLE IF NOT EXISTS knowledge_entries (
+  entry_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  level TEXT NOT NULL CHECK (level IN ('authoritative','experiential','historical')),
+  status TEXT NOT NULL CHECK (status IN ('active','superseded','withdrawn')),
+  source_identity TEXT NOT NULL,
+  manifest_hash TEXT,
+  rebuildable INTEGER NOT NULL CHECK (rebuildable IN (0, 1)),
+  entry_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (project_id, source_identity)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS knowledge_archive_manifest
+  ON knowledge_entries(project_id, manifest_hash)
+  WHERE manifest_hash IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS knowledge_entries_project
+  ON knowledge_entries(project_id, level, status, entry_id);
+
 CREATE TABLE IF NOT EXISTS storage_metadata (
   metadata_key TEXT PRIMARY KEY,
   metadata_value TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS pairing_challenges (
+  pairing_id TEXT PRIMARY KEY,
+  challenge_hash TEXT NOT NULL UNIQUE,
+  created_by_principal_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  consumed_at TEXT,
+  submitted_at TEXT,
+  submitted_device_name TEXT,
+  submitted_public_jwk_json TEXT,
+  submitted_public_key_thumbprint TEXT,
+  confirmed_device_name TEXT,
+  confirmed_scopes_json TEXT,
+  confirmed_project_ids_json TEXT,
+  confirmed_device_expires_at TEXT,
+  confirmed_device_id TEXT,
+  delivered_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS devices (
+  device_id TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  public_jwk_json TEXT NOT NULL,
+  public_key_thumbprint TEXT NOT NULL UNIQUE,
+  scopes_json TEXT NOT NULL,
+  project_ids_json TEXT NOT NULL,
+  version INTEGER NOT NULL CHECK (version > 0),
+  expires_at TEXT NOT NULL,
+  revoked_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS refresh_families (
+  family_id TEXT PRIMARY KEY,
+  device_id TEXT NOT NULL REFERENCES devices(device_id),
+  refresh_hash TEXT NOT NULL UNIQUE,
+  previous_refresh_hash TEXT UNIQUE,
+  generation INTEGER NOT NULL CHECK (generation >= 0),
+  expires_at TEXT NOT NULL,
+  revoked_at TEXT,
+  reuse_detected_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS refresh_credential_history (
+  family_id TEXT NOT NULL REFERENCES refresh_families(family_id),
+  refresh_hash TEXT NOT NULL UNIQUE,
+  generation INTEGER NOT NULL CHECK (generation >= 0),
+  retired_at TEXT NOT NULL,
+  PRIMARY KEY (family_id, generation)
+);
+
+CREATE TABLE IF NOT EXISTS device_proof_nonces (
+  device_id TEXT NOT NULL REFERENCES devices(device_id),
+  token_jti TEXT NOT NULL,
+  nonce TEXT NOT NULL,
+  observed_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  PRIMARY KEY (device_id, token_jti, nonce)
+);
+
+CREATE INDEX IF NOT EXISTS device_proof_nonces_expiry
+  ON device_proof_nonces(expires_at);
 
 INSERT INTO storage_metadata(metadata_key, metadata_value, updated_at)
 VALUES ('schema_version', '1', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))

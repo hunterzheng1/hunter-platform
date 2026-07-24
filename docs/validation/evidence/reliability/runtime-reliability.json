@@ -1,0 +1,151 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "phase0_runtime_reliability",
+  "generatedAt": "2026-07-22T14:21:47.345Z",
+  "generator": {
+    "name": "hunter-runtime-reliability",
+    "version": "0.1.0"
+  },
+  "host": {
+    "platform": "win32",
+    "architecture": "x64",
+    "release": "10.0.26200",
+    "nodeVersion": "v24.14.0"
+  },
+  "proofScope": "hunter_contract_fixture",
+  "fixture": {
+    "cwdScope": "temporary_git_fixture",
+    "workspaceShape": "unicode_and_spaces"
+  },
+  "scenarios": [
+    {
+      "id": "unicode_space_workspace",
+      "expectedObservableState": "succeeded",
+      "observedState": "succeeded",
+      "verdict": "PASS",
+      "reason": "verifier_confirmed_unicode_and_space_cwd",
+      "cleanup": {
+        "target": "temporary_git_fixture",
+        "outcome": "PASS",
+        "mechanic": "validated_fixture_cleanup_on_return",
+        "remainingResources": 0
+      },
+      "commands": [
+        {
+          "executable": "node",
+          "args": [
+            "-e",
+            "[UNICODE_CWD_VERIFIER]"
+          ],
+          "cwdScope": "temporary_git_fixture",
+          "exitCode": 0,
+          "timedOut": false,
+          "spawnError": null
+        }
+      ]
+    },
+    {
+      "id": "child_process_tree",
+      "expectedObservableState": "succeeded",
+      "observedState": "succeeded",
+      "verdict": "PASS",
+      "reason": "harmless_node_process_tree_created_and_terminated",
+      "cleanup": {
+        "target": "spawned_process_tree",
+        "outcome": "PASS",
+        "mechanic": "windows_exact_pid_handles",
+        "remainingResources": 0
+      },
+      "commands": [
+        {
+          "executable": "node",
+          "args": [
+            "process-tree-fixture.mjs"
+          ],
+          "cwdScope": "temporary_git_fixture",
+          "exitCode": 0,
+          "timedOut": false,
+          "spawnError": null
+        }
+      ]
+    },
+    {
+      "id": "forced_provider_exit",
+      "expectedObservableState": "needs_attention",
+      "observedState": "needs_attention",
+      "verdict": "PASS",
+      "reason": "provider_exit_observed_without_success_transition",
+      "cleanup": {
+        "target": "provider_process",
+        "outcome": "PASS",
+        "mechanic": "exact_child_handle_reaped_by_command_runner",
+        "remainingResources": 0
+      },
+      "commands": [
+        {
+          "executable": "node",
+          "args": [
+            "-e",
+            "[FORCED_EXIT_FIXTURE]"
+          ],
+          "cwdScope": "temporary_git_fixture",
+          "exitCode": 23,
+          "timedOut": false,
+          "spawnError": null
+        }
+      ]
+    },
+    {
+      "id": "stale_session_reference",
+      "expectedObservableState": "needs_attention",
+      "observedState": "needs_attention",
+      "verdict": "PASS",
+      "reason": "missing_native_session_requires_attention",
+      "cleanup": {
+        "target": "native_session_reference",
+        "outcome": "PASS",
+        "mechanic": "stale_reference_released",
+        "remainingResources": 0
+      },
+      "commands": []
+    },
+    {
+      "id": "duplicate_command_idempotency",
+      "expectedObservableState": "succeeded",
+      "observedState": "succeeded",
+      "verdict": "PASS",
+      "reason": "duplicate_key_reused_single_verified_receipt",
+      "cleanup": {
+        "target": "idempotency_record",
+        "outcome": "PASS",
+        "mechanic": "bounded_in_memory_record_released",
+        "remainingResources": 0
+      },
+      "commands": []
+    },
+    {
+      "id": "denied_permission_request",
+      "expectedObservableState": "waiting_approval",
+      "observedState": "waiting_approval",
+      "verdict": "PASS",
+      "reason": "denied_permission_waits_for_explicit_approval",
+      "cleanup": {
+        "target": "permission_request",
+        "outcome": "PASS",
+        "mechanic": "pending_request_released",
+        "remainingResources": 0
+      },
+      "commands": []
+    }
+  ],
+  "summary": {
+    "passed": 6,
+    "failed": 0,
+    "notProven": 0
+  },
+  "redaction": {
+    "applied": true,
+    "schemaVersion": 1
+  },
+  "contentFingerprint": "f1b47010837dbd592788aa396b989b6ff299e117f8e42261a97836e6aea7f49b"
+}

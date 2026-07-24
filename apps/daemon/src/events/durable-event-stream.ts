@@ -7,7 +7,7 @@ import type { LocalAuthenticator } from "../auth/local-authenticator.js";
 
 export type ReplayResult =
   | { readonly status: "ok"; readonly retentionFloor: number; readonly highWaterPosition: number; readonly events: readonly LedgerEvent[] }
-  | { readonly status: "resync_required"; readonly code: "EVENT_CURSOR_RESYNC_REQUIRED"; readonly retentionFloor: number; readonly highWaterPosition: number; readonly snapshotUrl: string };
+  | { readonly status: "resync_required"; readonly code: "EVENT_CURSOR_GAP"; readonly retentionFloor: number; readonly highWaterPosition: number; readonly instructions: { readonly snapshot: "reload_snapshot"; readonly rebuild: "replace_projection_from_snapshot"; readonly resume: "subscribe_after_high_water_position" } };
 
 export function refreshEventAuthorization(authenticator: LocalAuthenticator, bearerToken: string, projectId: ProjectId): boolean {
   return authenticator.authenticate(bearerToken).authorizedProjectIds.includes(projectId);
@@ -41,7 +41,7 @@ export class DurableEventStream {
     if (position > highWaterPosition) throw new Error("EVENT_CURSOR_INVALID");
     const page = this.reader.readAfter({ position, authorizedProjectIds: input.authorizedProjectIds, limit: input.limit ?? 100 });
     if (page.status === "resync_required") {
-      return { status: "resync_required", code: "EVENT_CURSOR_RESYNC_REQUIRED", retentionFloor: page.retentionFloor, highWaterPosition: page.highWaterPosition, snapshotUrl: "/events/snapshot" };
+      return { status: "resync_required", code: "EVENT_CURSOR_GAP", retentionFloor: page.retentionFloor, highWaterPosition: page.highWaterPosition, instructions: { snapshot: "reload_snapshot", rebuild: "replace_projection_from_snapshot", resume: "subscribe_after_high_water_position" } };
     }
     return page;
   }
@@ -81,7 +81,11 @@ export class DurableEventStream {
   }
 }
 
-export function registerDurableEventRoutes(app: FastifyInstance, stream: DurableEventStream, authenticator: LocalAuthenticator): void {
+export function registerDurableEventRoutes(
+  app: FastifyInstance,
+  stream: DurableEventStream,
+  authenticator?: LocalAuthenticator,
+): void {
   app.get("/events", async (request, reply) => {
     const principal = requirePrincipal(request);
     const query = request.query as { cursor?: string | undefined; once?: string | undefined };
@@ -113,10 +117,15 @@ export function registerDurableEventRoutes(app: FastifyInstance, stream: Durable
           "referrer-policy": "no-referrer",
         });
         reply.raw.write(stream.format(result.events));
-        const bearerToken = (request.headers.authorization ?? "").slice(7);
+        const bearerToken = request.headers.authorization?.startsWith("Bearer ")
+          ? request.headers.authorization.slice(7)
+          : undefined;
         keepalive = setInterval(() => {
           try {
-            authenticator.authenticate(bearerToken);
+            if (authenticator !== undefined) {
+              if (bearerToken === undefined) throw new Error("AUTH_REQUIRED");
+              authenticator.authenticate(bearerToken);
+            }
             if (!reply.raw.writableEnded) reply.raw.write(stream.formatKeepalive());
           } catch {
             abort.abort();
@@ -132,7 +141,11 @@ export function registerDurableEventRoutes(app: FastifyInstance, stream: Durable
           signal: abort.signal,
         })) {
           try {
-            if (!refreshEventAuthorization(authenticator, bearerToken, event.projectId)) continue;
+            const authorized = authenticator === undefined
+              ? principal.authorizedProjectIds.includes(event.projectId)
+              : bearerToken !== undefined
+                && refreshEventAuthorization(authenticator, bearerToken, event.projectId);
+            if (!authorized) continue;
           } catch {
             abort.abort();
             break;

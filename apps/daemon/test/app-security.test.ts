@@ -16,7 +16,7 @@ function harness(options: { readonly expiresAt?: Date; readonly limits?: { reado
     void actor;
     return { runId: body.runId };
   }));
-  const app = buildApp({ authenticator, allowedHosts: [host], allowedOrigins: [origin], ...(options.limits === undefined ? {} : { limits: options.limits }), ...(options.bodyLimit === undefined ? {} : { bodyLimit: options.bodyLimit }), ...(options.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: options.requestTimeoutMs }), services: { listProjects: async (projectIds) => projectIds.map((projectId) => ({ projectId })), projectForExecutionPlan: () => ({ projectId: options.planProjectId ?? ProjectIdSchema.parse("prj_http000001"), executionPlanId: ExecutionPlanIdSchema.parse(body.executionPlanId) }), startRun } });
+  const app = buildApp({ authenticator, allowedHosts: [host], allowedOrigins: [origin], ...(options.limits === undefined ? {} : { limits: options.limits }), ...(options.bodyLimit === undefined ? {} : { bodyLimit: options.bodyLimit }), ...(options.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: options.requestTimeoutMs }), services: { listProjects: async (projectIds) => projectIds.map((projectId) => ({ projectId })), projectForExecutionPlan: () => ({ projectId: options.planProjectId ?? ProjectIdSchema.parse("prj_http000001"), executionPlanId: ExecutionPlanIdSchema.parse(body.executionPlanId) }), projectForRun: () => null, startRun } });
   const headers = { host, origin, authorization: `Bearer ${credential}`, "x-csrf-token": "csrf-proof", "content-type": "application/json" };
   return { app, startRun, headers };
 }
@@ -69,7 +69,14 @@ describe("secure local app", () => {
     expect(response.statusCode).toBe(200);
     expect(startRun).toHaveBeenCalledOnce();
     expect(startRun.mock.calls[0]![1]).toMatchObject({ actorId: "desktop-user" });
-    expect(await app.inject({ method: "POST", url: "/pair", headers, payload: {} }).then((value) => value.statusCode)).toBe(404);
+    for (const path of [
+      "/pair",
+      "/api/v1/devices/pairing-code",
+      "/api/v1/devices/pair",
+      "/api/v1/mobile/commands",
+    ]) {
+      expect(await app.inject({ method: "POST", url: path, headers, payload: {} }).then((value) => value.statusCode)).toBe(404);
+    }
     await app.close();
 
     const forbidden = harness({ planProjectId: ProjectIdSchema.parse("prj_http000002") });

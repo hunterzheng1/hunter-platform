@@ -15,6 +15,7 @@ export interface StepAttemptState {
   readonly attemptNumber: number;
   readonly executionStatus: ExecutionStatus;
   readonly verificationStatus: VerificationStatus;
+  readonly verificationEvidenceFingerprint?: string | undefined;
   readonly assignment?: {
     readonly operationId: string;
     readonly capabilityProbeReceiptId: string;
@@ -60,6 +61,11 @@ export interface WorkflowRunState {
     readonly verifierErrorCount: number;
   }>>;
   readonly acceptedChildRunIds: readonly RunId[];
+  readonly supplementalInputs: readonly {
+    readonly stepRunId: StepRunId;
+    readonly text: string;
+    readonly actorId: string;
+  }[];
   readonly supersedingDecisions: readonly { readonly newerRevisionId: RequirementRevisionId; readonly decision: "continue_old_input" | "terminate" | "create_new_plan" }[];
   readonly dependencyFailureDecisions: readonly { readonly taskId: TaskId; readonly failedDependencyIds: readonly TaskId[]; readonly action: "blocked" | "skipped" | "compensate" | "waived" | "terminate"; readonly compensationTaskId: TaskId | null; readonly waiverReceiptHash: string | null }[];
 }
@@ -93,6 +99,7 @@ function applyEvent(current: WorkflowRunState | null, event: FlowEvent): Workflo
       scheduledRetry: null,
       loopUsage: {},
       acceptedChildRunIds: [],
+      supplementalInputs: [],
       supersedingDecisions: [],
       dependencyFailureDecisions: [],
     };
@@ -174,7 +181,12 @@ function applyEvent(current: WorkflowRunState | null, event: FlowEvent): Workflo
         verificationStatus: event.status,
         attempts: step.attempts.map((attempt) =>
           attempt.attemptId === event.attemptId
-            ? { ...attempt, verificationStatus: event.status }
+            ? {
+                ...attempt,
+                verificationStatus: event.status,
+                verificationEvidenceFingerprint:
+                  event.evidenceFingerprint,
+              }
             : attempt,
         ),
       }));
@@ -251,6 +263,15 @@ function applyEvent(current: WorkflowRunState | null, event: FlowEvent): Workflo
       break;
     case "DependencyFailureDecided":
       state = { ...state, dependencyFailureDecisions: [...state.dependencyFailureDecisions, { taskId: event.taskId, failedDependencyIds: event.failedDependencyIds, action: event.action, compensationTaskId: event.compensationTaskId, waiverReceiptHash: event.waiverReceiptHash }] };
+      break;
+    case "SupplementalInputRecorded":
+      state = {
+        ...state,
+        supplementalInputs: [
+          ...state.supplementalInputs,
+          { stepRunId: event.stepRunId, text: event.text, actorId: event.actorId },
+        ],
+      };
       break;
   }
   return { ...state, version: state.version + 1 };

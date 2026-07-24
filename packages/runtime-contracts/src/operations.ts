@@ -14,7 +14,11 @@ import {
   WorkspaceIdSchema,
 } from "@hunter/domain";
 import { z } from "zod";
-import { AtomicCapabilitySchema } from "./manifest.js";
+import {
+  AtomicCapabilitySchema,
+  CapabilityManifestSchema,
+  type CapabilityManifest,
+} from "./manifest.js";
 
 const operationFields = {
   schemaVersion: z.literal(1),
@@ -61,6 +65,14 @@ const sessionInterruptPayload = z.strictObject({
   ...controllerAuthorityFields,
 });
 const nativeSurfacePayload = z.strictObject({ workspaceId: WorkspaceIdSchema });
+const taskPackWritePayload = z.strictObject({
+  workspaceId: WorkspaceIdSchema,
+  inputEvidenceId: EvidenceIdSchema,
+});
+const sessionResumePayload = z.strictObject({
+  nativeSessionId: NativeSessionIdSchema,
+  ...controllerAuthorityFields,
+});
 
 const unsignedVariants = [
   z.strictObject({
@@ -112,6 +124,16 @@ const unsignedVariants = [
     ...versionOneFields,
     operationType: z.literal("native_surface.open"),
     payload: nativeSurfacePayload,
+  }),
+  z.strictObject({
+    ...versionTwoFields,
+    operationType: z.literal("task_pack.write"),
+    payload: taskPackWritePayload,
+  }),
+  z.strictObject({
+    ...versionTwoFields,
+    operationType: z.literal("session.resume"),
+    payload: sessionResumePayload,
   }),
 ] as const;
 
@@ -176,6 +198,18 @@ const signedVariants = [
     operationType: z.literal("native_surface.open"),
     payload: nativeSurfacePayload,
   }),
+  z.strictObject({
+    ...versionTwoFields,
+    ...fingerprintField,
+    operationType: z.literal("task_pack.write"),
+    payload: taskPackWritePayload,
+  }),
+  z.strictObject({
+    ...versionTwoFields,
+    ...fingerprintField,
+    operationType: z.literal("session.resume"),
+    payload: sessionResumePayload,
+  }),
 ] as const;
 
 function rejectDuplicateCapabilities(
@@ -221,4 +255,19 @@ export function fingerprintExternalOperation(operation: ExternalOperation): stri
     Object.entries(operation).filter(([key]) => key !== "fingerprint"),
   );
   return hash(ExternalOperationUnsignedSchema.parse(unsigned));
+}
+
+export function capabilityManifestSupportsOperation(
+  manifestInput: CapabilityManifest,
+  operationInput: ExternalOperation,
+): boolean {
+  const manifest = CapabilityManifestSchema.parse(manifestInput);
+  const operation = ExternalOperationSchema.parse(operationInput);
+  const supported = new Set(
+    manifest.capabilities
+      .filter(({ status }) => status === "supported")
+      .map(({ capability }) => capability),
+  );
+  return operation.requestedCapabilities.every((capability) =>
+    supported.has(capability));
 }
