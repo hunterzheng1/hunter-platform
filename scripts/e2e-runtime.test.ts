@@ -10,6 +10,7 @@ import {
   E2E_CSRF_HEADER,
   E2E_SESSION_COOKIE,
   assertOwnedTemporaryDirectory,
+  atomicWriteE2eReadiness,
   atomicWritePlaywrightState,
   classifyE2eLock,
   closeOwnedHttpServer,
@@ -66,6 +67,29 @@ describe("E2E runtime security boundary", () => {
       expect(await stat(target)).toMatchObject({ mode: expect.any(Number) });
       expect(protect).toHaveBeenCalledOnce();
       expect(protect.mock.calls[0]?.[0]).not.toBe(target);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("publishes a credential-free versioned readiness file atomically", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "hunter-e2e-readiness-unit-"));
+    const target = join(directory, "readiness.json");
+    const protect = vi.fn(async () => undefined);
+    try {
+      await atomicWriteE2eReadiness(target, {
+        schemaVersion: 1,
+        webOrigin: "http://127.0.0.1:4173",
+        storageStatePath: ".hunter-e2e/playwright-state.json",
+      }, protect);
+      const text = await readFile(target, "utf8");
+      expect(JSON.parse(text)).toEqual({
+        schemaVersion: 1,
+        webOrigin: "http://127.0.0.1:4173",
+        storageStatePath: ".hunter-e2e/playwright-state.json",
+      });
+      expect(text).not.toMatch(/authorization|bearer|cookie|csrf|token/iu);
+      expect(protect).toHaveBeenCalledOnce();
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -137,6 +161,20 @@ describe("E2E runtime security boundary", () => {
         "/api/v1/projects/prj_e2econtract01/requirements",
       ),
     ).toBe(true);
+    expect(
+      isAllowedE2eProxyRequest(
+        "GET",
+        "/api/v1/projects/prj_e2econtract01/knowledge",
+        "?includeHistorical=true",
+      ),
+    ).toBe(true);
+    expect(
+      isAllowedE2eProxyRequest(
+        "GET",
+        "/api/v1/projects/prj_e2econtract01/knowledge",
+        "?includeHistorical=all",
+      ),
+    ).toBe(false);
     expect(isAllowedE2eProxyRequest("POST", "/runs")).toBe(true);
     expect(isAllowedE2eProxyRequest("GET", "/health")).toBe(false);
     expect(isAllowedE2eProxyRequest("POST", "/pair")).toBe(false);

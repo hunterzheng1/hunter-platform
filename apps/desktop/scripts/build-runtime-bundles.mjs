@@ -44,6 +44,16 @@ await build({
   target: "node24",
   sourcemap: false,
 });
+const daemonBundle = await readFile(daemonOutput, "utf8");
+for (const forbidden of [
+  "deterministic-contract-fixture-v1",
+  "fake-runtime-scenario",
+  "E2E contract workflow",
+]) {
+  if (daemonBundle.includes(forbidden)) {
+    throw new Error("PRODUCTION_BUNDLE_CONTAINS_E2E_FIXTURE");
+  }
+}
 await copyFile(
   join(
     repositoryRoot,

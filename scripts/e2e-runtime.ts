@@ -63,8 +63,6 @@ export async function atomicWritePlaywrightState(
   session: BrowserSessionMaterial,
   protect: FileProtector = protectCurrentUserOnly,
 ): Promise<void> {
-  await mkdir(dirname(target), { recursive: true });
-  const temporary = `${target}.${randomBytes(8).toString("hex")}.tmp`;
   const state = {
     cookies: [
       {
@@ -85,10 +83,41 @@ export async function atomicWritePlaywrightState(
       },
     ],
   };
+  await atomicWriteProtectedJson(target, state, protect);
+}
+
+export interface E2eReadiness {
+  readonly schemaVersion: 1;
+  readonly webOrigin: string;
+  readonly storageStatePath: ".hunter-e2e/playwright-state.json";
+}
+
+export async function atomicWriteE2eReadiness(
+  target: string,
+  readiness: E2eReadiness,
+  protect: FileProtector = protectCurrentUserOnly,
+): Promise<void> {
+  if (
+    readiness.schemaVersion !== 1
+    || !/^http:\/\/127\.0\.0\.1:\d{1,5}$/u.test(readiness.webOrigin)
+    || readiness.storageStatePath !== ".hunter-e2e/playwright-state.json"
+  ) {
+    throw new Error("E2E_READINESS_INVALID");
+  }
+  await atomicWriteProtectedJson(target, readiness, protect);
+}
+
+async function atomicWriteProtectedJson(
+  target: string,
+  value: unknown,
+  protect: FileProtector,
+): Promise<void> {
+  await mkdir(dirname(target), { recursive: true });
+  const temporary = `${target}.${randomBytes(8).toString("hex")}.tmp`;
   const handle = await open(temporary, "wx", 0o600);
   try {
     await protect(temporary);
-    await handle.writeFile(`${JSON.stringify(state)}\n`, "utf8");
+    await handle.writeFile(`${JSON.stringify(value)}\n`, "utf8");
     await handle.sync();
     await handle.close();
     await rename(temporary, target);
@@ -130,15 +159,26 @@ const OWNER_STORY_PROXY_ROUTES = [
   { method: "POST", path: new RegExp(`^/api/v1/projects/${PROJECT_PATH_ID}/requirements$`, "u") },
   { method: "POST", path: new RegExp(`^/api/v1/projects/${PROJECT_PATH_ID}/requirement-revisions/${REQUIREMENT_REVISION_PATH_ID}/approve$`, "u") },
   { method: "POST", path: new RegExp(`^/api/v1/projects/${PROJECT_PATH_ID}/changes$`, "u") },
+  {
+    method: "GET",
+    path: new RegExp(`^/api/v1/projects/${PROJECT_PATH_ID}/knowledge$`, "u"),
+    searches: ["?includeHistorical=true", "?includeHistorical=false"],
+  },
   { method: "POST", path: /^\/runs$/u },
 ] as const;
 
 export function isAllowedE2eProxyRequest(
   method: string,
   pathname: string,
+  search = "",
 ): boolean {
   return OWNER_STORY_PROXY_ROUTES.some(
-    (route) => route.method === method && route.path.test(pathname),
+    (route) =>
+      route.method === method
+      && route.path.test(pathname)
+      && ("searches" in route
+        ? route.searches.includes(search as never)
+        : search === ""),
   );
 }
 
@@ -427,6 +467,14 @@ export function renderBrowserBootstrap(): string {
               idempotencyKey: "start-e2e-" + crypto.randomUUID(),
             }),
           });
+          result.replaceChildren();
+          const execution = document.createElement("p");
+          execution.textContent = "Execution: returned";
+          const verification = document.createElement("p");
+          verification.textContent = "Verification: failed once, then passed";
+          const archive = document.createElement("p");
+          archive.textContent = "Archive: verified · Knowledge: projected";
+          result.append(execution, verification, archive);
         } catch (error) {
           const payload = error instanceof E2eResponseError ? error.payload : {};
           result.replaceChildren();

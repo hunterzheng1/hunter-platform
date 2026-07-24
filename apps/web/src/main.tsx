@@ -11,6 +11,7 @@ import { createMobileComposition } from "./mobile/mobile-composition.js";
 import { MobileUnavailablePage } from "./pages/mobile-cockpit.js";
 import { ProjectListPage } from "./pages/project-list-page.js";
 import { ProjectPage } from "./pages/project-page.js";
+import { KnowledgePage } from "./pages/knowledge-page.js";
 import {
   isMobileRoute,
   registerMobileServiceWorker,
@@ -20,6 +21,10 @@ import "./styles.css";
 function routeProjectId(pathname: string): string | undefined {
   const match = /^\/projects\/([^/]+)$/u.exec(pathname);
   return match?.[1];
+}
+
+function routeKnowledgeProjectId(pathname: string): string | undefined {
+  return /^\/projects\/([^/]+)\/knowledge$/u.exec(pathname)?.[1];
 }
 
 declare global {
@@ -32,8 +37,14 @@ declare global {
 function Workbench({ transport }: { readonly transport: AuthenticatedHunterTransport }) {
   const [api] = useState(() => new HunterApi(transport));
   const [projectId, setProjectId] = useState(() => routeProjectId(window.location.pathname));
+  const [knowledgeProjectId, setKnowledgeProjectId] = useState(
+    () => routeKnowledgeProjectId(window.location.pathname),
+  );
   useEffect(() => {
-    const synchronizeRoute = () => setProjectId(routeProjectId(window.location.pathname));
+    const synchronizeRoute = () => {
+      setProjectId(routeProjectId(window.location.pathname));
+      setKnowledgeProjectId(routeKnowledgeProjectId(window.location.pathname));
+    };
     window.addEventListener("popstate", synchronizeRoute);
     return () => window.removeEventListener("popstate", synchronizeRoute);
   }, []);
@@ -41,6 +52,12 @@ function Workbench({ transport }: { readonly transport: AuthenticatedHunterTrans
     const path = nextProjectId === undefined ? "/" : `/projects/${nextProjectId}`;
     window.history.pushState({}, "", path);
     setProjectId(nextProjectId);
+    setKnowledgeProjectId(undefined);
+  };
+  const navigateToKnowledge = (nextProjectId: string) => {
+    window.history.pushState({}, "", `/projects/${nextProjectId}/knowledge`);
+    setProjectId(undefined);
+    setKnowledgeProjectId(nextProjectId);
   };
   return (
     <>
@@ -48,9 +65,18 @@ function Workbench({ transport }: { readonly transport: AuthenticatedHunterTrans
         <span className="wordmark">Hunter</span>
         <span className="local-status"><span aria-hidden="true" />本地工作台</span>
       </header>
-      {projectId === undefined
+      {knowledgeProjectId !== undefined
+        ? <KnowledgePage projectId={knowledgeProjectId} api={api} onBack={() => navigate(knowledgeProjectId)} />
+        : projectId === undefined
         ? <ProjectListPage api={api} onOpen={(id) => navigate(id)} />
-        : <ProjectPage projectId={projectId} api={api} onBack={() => navigate()} />}
+        : (
+          <ProjectPage
+            projectId={projectId}
+            api={api}
+            onBack={() => navigate()}
+            onOpenKnowledge={() => navigateToKnowledge(projectId)}
+          />
+        )}
     </>
   );
 }

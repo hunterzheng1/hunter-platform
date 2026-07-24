@@ -7,8 +7,6 @@ export default defineConfig({
   outputDir: ".hunter-e2e/test-results",
   reporter: [["line"]],
   use: {
-    baseURL: "http://127.0.0.1:4173",
-    storageState: ".hunter-e2e/playwright-state.json",
     trace: "off",
     screenshot: "off",
     video: "off",

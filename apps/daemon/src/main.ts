@@ -17,7 +17,11 @@ import {
   type RemoteTlsListenerResult,
 } from "./auth/remote-tls-listener.js";
 import { createMobileProjectionProvider } from "./routes/mobile-projections.js";
-import { createSqliteApplicationServices, type SqliteServiceRepositories } from "./services/sqlite-application-services.js";
+import {
+  createApplicationComposition,
+  type ApplicationCompositionInput,
+} from "./services/composition-root.js";
+import type { SqliteServiceRepositories } from "./services/sqlite-application-services.js";
 
 export type RemoteDaemonOptions =
   | { readonly enabled?: false }
@@ -43,6 +47,7 @@ export interface DaemonStartOptions {
   readonly allowedOrigin: string;
   readonly publishPort: (port: number) => Promise<void>;
   readonly remote?: RemoteDaemonOptions | undefined;
+  readonly archive?: ApplicationCompositionInput["archive"] | undefined;
 }
 
 function assertSecretRef(reference: string): void {
@@ -66,7 +71,7 @@ export async function startDaemon(options: DaemonStartOptions) {
   let workerDrain: Promise<void> = Promise.resolve();
   let remote: RemoteTlsListenerResult = { status: "disabled" };
   try {
-    const services = createSqliteApplicationServices({
+    const composition = createApplicationComposition({
       database,
       repositories: options.repositories,
       externalHandler: options.externalHandler,
@@ -74,7 +79,9 @@ export async function startDaemon(options: DaemonStartOptions) {
       allowedHosts: [options.allowedHost],
       allowedOrigins: [options.allowedOrigin],
       contentDirectory: options.dataDirectory,
+      ...(options.archive === undefined ? {} : { archive: options.archive }),
     });
+    const { services } = composition;
     const remoteEnabled = options.remote?.enabled === true;
     const deviceStore = remoteEnabled ? new DeviceStore(database) : undefined;
     const pairing = deviceStore === undefined
@@ -144,7 +151,14 @@ export async function startDaemon(options: DaemonStartOptions) {
             ? null
             : { projectId: run.binding.projectId, runId: run.binding.runId };
         },
-        startRun: async (command, actor) => services.startRun.execute(command, actor),
+        startRun: async (command, actor) => composition.startRun.execute(command, actor),
+        ...(composition.knowledge === undefined
+          ? {}
+          : {
+              knowledge: {
+                resolve: async (input) => await composition.knowledge!.resolve(input),
+              },
+            }),
       },
     });
     const listenOptions = { host: "127.0.0.1", port: 0 } as const;

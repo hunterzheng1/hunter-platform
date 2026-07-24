@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures/readiness-test.js";
 
 test.afterEach(async ({ page }) => {
   if (page.isClosed()) return;
@@ -14,7 +14,7 @@ test.afterEach(async ({ page }) => {
     .catch(() => undefined);
 });
 
-test("需求到归档知识的故事只在首个未接线 Run 转换处 RED", async ({
+test("认证的需求到归档知识纵向切片达到 GREEN", async ({
   page,
 }) => {
   await page.goto("/");
@@ -38,18 +38,13 @@ test("需求到归档知识的故事只在首个未接线 Run 转换处 RED", as
     .getByRole("button", { name: "启动工作流（测试契约）" })
     .click();
 
-  const projectPosition = page.getByTestId("project-created-position");
-  const approvalPosition = page.getByTestId(
-    "requirement-approved-position",
-  );
-  await expect(projectPosition).toHaveText(/^[1-9]\d*$/u);
-  await expect(approvalPosition).toHaveText(/^[1-9]\d*$/u);
-  await expect(page.getByText("RUN_COMPOSITION_NOT_WIRED")).toBeVisible();
+  await expect(page.getByText("Execution: returned")).toBeVisible();
+  await expect(page.getByText("Verification: failed once, then passed")).toBeVisible();
+  await expect(page.getByText("Archive: verified · Knowledge: projected")).toBeVisible();
 
-  const projectPositionText = await projectPosition.textContent();
-  const approvalPositionText = await approvalPosition.textContent();
-  expect(
-    await page.getByText("执行：已返回 · 验证：失败").isVisible(),
-    `RUN_COMPOSITION_NOT_WIRED; ProjectCreated ledger position=${projectPositionText}; RequirementRevisionApproved ledger position=${approvalPositionText}`,
-  ).toBe(true);
+  await page.getByRole("button", { name: "查看 Knowledge" }).click();
+  await expect(page.getByRole("heading", { name: "Knowledge" })).toBeVisible();
+  await expect(page.getByText("historical · active").first()).toBeVisible();
+  await expect(page.getByText(/archive · run_/u).first()).toBeVisible();
+  await expect(page.getByText(/^sha256:[a-f0-9]{64}$/u).first()).toBeVisible();
 });

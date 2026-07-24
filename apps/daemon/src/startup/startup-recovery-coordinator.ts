@@ -13,6 +13,7 @@ export interface RecoveryPorts {
   enumerateActiveAttempts(): Promise<readonly RecoveryFact[]>;
   probeExternalState(attempts: readonly RecoveryFact[]): Promise<readonly RecoveryFact[]>;
   reconcileLeasesAndWorkspace(attempts: readonly RecoveryFact[]): Promise<readonly RecoveryFact[]>;
+  resumeArchiveAndKnowledge?: (() => Promise<readonly RecoveryFact[]>) | undefined;
   validateProjections(): Promise<readonly RecoveryFact[]>;
   submitRecoveryConclusions(facts: readonly RecoveryFact[]): Promise<unknown>;
 }
@@ -48,8 +49,11 @@ export class StartupRecoveryCoordinator {
     const leases = await timed("leases", async () => await this.ports.reconcileLeasesAndWorkspace(attempts));
     const outbox = await timed("outbox", async () => await this.ports.reconcileOutbox());
     const external = await timed("external", async () => await this.ports.probeExternalState(attempts));
+    const archives = this.ports.resumeArchiveAndKnowledge === undefined
+      ? []
+      : await timed("archives", async () => await this.ports.resumeArchiveAndKnowledge!());
     const projections = await timed("projections", async () => await this.ports.validateProjections());
-    const conclusions = [...storage, ...migration, ...outbox, ...external, ...leases, ...projections]
+    const conclusions = [...storage, ...migration, ...outbox, ...external, ...leases, ...archives, ...projections]
       .map(conclusion);
     const fingerprint = canonicalSha256(conclusions);
     const receipt = await timed("flow", async () => await this.ports.submitRecoveryConclusions(conclusions));

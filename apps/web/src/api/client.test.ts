@@ -25,6 +25,25 @@ describe("HunterApi", () => {
     await expect(api.listProjects()).rejects.toThrow();
   });
 
+  it("rejects Knowledge entries with unvalidated provenance fields", async () => {
+    const projectId = ProjectIdSchema.parse("prj_knowledge_api");
+    const api = new HunterApi({
+      request: async () => ({
+        projectId,
+        entries: [{
+          entryId: "kne_knowledge_api",
+          level: "historical",
+          status: "active",
+          summary: "Archived succeeded Run.",
+          body: "Verified manifest provenance.",
+          forgedPrivateProviderField: "must-not-cross-the-boundary",
+        }],
+      }),
+    });
+
+    await expect(api.getKnowledge(projectId, true)).rejects.toThrow();
+  });
+
   it("fails closed unless a trusted host injects the authenticated transport boundary", () => {
     expect(AuthenticatedHunterTransportSchema.safeParse(undefined).success).toBe(false);
     expect(AuthenticatedHunterTransportSchema.safeParse({ request: "fetch" }).success).toBe(false);

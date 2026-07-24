@@ -259,4 +259,29 @@ describe("ProjectPage", () => {
     expect((await screen.findByText(/执行规划上下文尚未配置/u)).textContent).toContain("执行规划上下文尚未配置");
     expect(screen.queryByRole("button", { name: "使用并行交付模板" })).toBeNull();
   });
+
+  it("exposes an explicit project-scoped Knowledge navigation action", async () => {
+    const onOpenKnowledge = vi.fn();
+    const api = {
+      getProject: vi.fn(async () => ({
+        projectId,
+        name: "Hunter",
+        requirements: [],
+      })),
+      createRequirement: vi.fn(),
+      approveRequirement: vi.fn(),
+    };
+    render(
+      <ProjectPage
+        projectId={projectId}
+        api={api}
+        onBack={vi.fn()}
+        onOpenKnowledge={onOpenKnowledge}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "Hunter" });
+    fireEvent.click(screen.getByRole("button", { name: "查看 Knowledge" }));
+    expect(onOpenKnowledge).toHaveBeenCalledOnce();
+  });
 });

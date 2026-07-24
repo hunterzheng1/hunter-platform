@@ -7,7 +7,7 @@ import { PublishChangeService, StartRunService, type PublishChangeRepositories, 
 import type { ExecutionPlan, NativeSessionId, ProjectId, TaskId, WorkflowRevision, WorktreeId } from "@hunter/domain";
 import { ControllerLeaseIdSchema, LeaseOwnerIdSchema, OperationIdSchema, ProjectIdSchema, WorkspaceLeaseIdSchema, WriterLeaseIdSchema, canonicalSha256, createProject } from "@hunter/domain";
 import { FlowEngine, reduceFlowEvents, type FlowCommandReceipt, type FlowCommit, type FlowDefinitions, type FlowEvent, type FlowStore, type WorkflowRunState } from "@hunter/flow-engine";
-import { ArchiveJobWorker, ArchiveWriter, SqliteArchiveJobStore, SqliteKnowledgeCatalog, type ArchiveManifestSource } from "@hunter/knowledge";
+import { ArchiveJobWorker, ArchiveWriter, SqliteArchiveJobStore, SqliteKnowledgeCatalog, type ArchiveJobFaultPoint, type ArchiveManifestSource } from "@hunter/knowledge";
 import { ExternalOperationReceiptSchema, LeaseSchema, computeCapabilityManifest, createExternalOperation, createWorkspacePathBoundary, decodeCapabilityProbeReceipt, decodeExternalOperationReceipt, type CapabilityProbeReceipt, type ExternalOperation, type ExternalOperationHandler, type Lease, type VerifiedWorkspacePath } from "@hunter/runtime-contracts";
 import { deriveStepPolicy } from "@hunter/policy";
 import { LeaseService, RuntimeManager, RuntimeOperationHandler } from "@hunter/runtime-manager";
@@ -137,6 +137,7 @@ export function createSqliteApplicationServices(input: {
     readonly source: ArchiveManifestSource;
     readonly ownerId: ReturnType<typeof LeaseOwnerIdSchema.parse>;
     readonly leaseDurationMs?: number | undefined;
+    readonly fault?: ((point: ArchiveJobFaultPoint) => void) | undefined;
   } | undefined;
 }) {
   const now = input.now ?? (() => new Date());
@@ -165,6 +166,9 @@ export function createSqliteApplicationServices(input: {
         ...(input.archive.leaseDurationMs === undefined
           ? {}
           : { leaseDurationMs: input.archive.leaseDurationMs }),
+        ...(input.archive.fault === undefined
+          ? {}
+          : { fault: input.archive.fault }),
       });
   input.database.exec(`CREATE TABLE IF NOT EXISTS principal_project_authorizations (
     principal_id TEXT PRIMARY KEY,
@@ -419,7 +423,16 @@ export function createSqliteApplicationServices(input: {
       if (capabilityReceipt === undefined || capabilityReceipt === null) throw new Error("CAPABILITY_RECEIPT_NOT_CONFIGURED");
       const rows = input.database.prepare("SELECT receipt_json FROM lease_records WHERE expires_at > ?").all(now().toISOString()) as unknown as Array<{ receipt_json: string }>;
       const leases = rows.map((row) => LeaseSchema.parse(JSON.parse(row.receipt_json))) as Lease[];
-      const workspaceCandidates = leases.flatMap((lease) => lease.kind === "workspace" && lease.revokedAt === null && task.repositoryIds.includes(lease.repositoryId) ? [lease] : []);
+      const workspaceCandidates = leases.flatMap((lease) =>
+        lease.kind === "workspace"
+        && lease.revokedAt === null
+        && lease.projectId === operation.projectId
+        && lease.ownerRunId === operation.runId
+        && lease.ownerAttemptId === operation.attemptId
+        && task.repositoryIds.includes(lease.repositoryId)
+          ? [lease]
+          : [],
+      );
       if (workspaceCandidates.length !== 1) throw new Error("ASSIGNMENT_AUTHORITATIVE_WORKSPACE_REQUIRED");
       const workspaceId = workspaceCandidates[0]!.scope.workspaceId;
       const scoped = leases.filter((lease) => lease.kind !== "controller" && lease.scope.workspaceId === workspaceId);
@@ -671,6 +684,28 @@ export function createSqliteApplicationServices(input: {
         "SELECT operation_id, run_id, attempt_id, status FROM outbox WHERE status IN ('indeterminate','needs_attention') ORDER BY operation_id",
       ).all() as unknown as Array<{ operation_id: string; run_id: string | null; attempt_id: string | null; status: "indeterminate" | "needs_attention" }>;
       return rows.map((row) => ({ kind: "operation", status: row.status, reason: "reconciled_external_operation_not_proven", operationId: row.operation_id, runId: row.run_id, attemptId: row.attempt_id }));
+    },
+    resumeArchiveAndKnowledge: async () => {
+      if (archiveWorker === undefined) return [];
+      let completed = 0;
+      for (let index = 0; index < 1_000; index += 1) {
+        const result = await archiveWorker.runOnce();
+        if (result === "idle") {
+          return completed === 0
+            ? []
+            : [{ kind: "archive", status: "completed", completed }];
+        }
+        if (result === "needs_attention") {
+          return [{
+            kind: "archive",
+            status: "needs_attention",
+            reason: "archive_or_knowledge_projection_not_proven",
+            completed,
+          }];
+        }
+        completed += 1;
+      }
+      throw new Error("ARCHIVE_RECOVERY_LIMIT_EXCEEDED");
     },
     enumerateActiveAttempts: async () => flowStore.allRuns()
       .filter((state) => !["succeeded", "failed", "canceled"].includes(state.status))

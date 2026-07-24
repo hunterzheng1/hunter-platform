@@ -25,11 +25,12 @@ import { DatabaseSync } from "node:sqlite";
 
 import { ProjectIdSchema } from "@hunter/domain";
 import { createVerticalSliceFixture } from "../e2e/fixtures/fake-runtime-scenario.js";
-import { createE2eDaemonComposition } from "./e2e-application.js";
+import { createE2eDaemonComposition } from "../apps/daemon/test/fixtures/e2e-application.js";
 import {
   E2E_SESSION_COOKIE,
   acquireFailClosedLock,
   assertOwnedTemporaryDirectory,
+  atomicWriteE2eReadiness,
   atomicWritePlaywrightState,
   collectBoundedBody,
   closeOwnedHttpServer,
@@ -57,6 +58,7 @@ const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(moduleDirectory, "..");
 const e2eDirectory = join(repositoryRoot, ".hunter-e2e");
 const statePath = join(e2eDirectory, "playwright-state.json");
+const readinessPath = join(e2eDirectory, "readiness.json");
 const lockPath = join(e2eDirectory, "active.lock");
 const webDist = join(repositoryRoot, "apps", "web", "dist");
 
@@ -189,6 +191,7 @@ async function proxyToDaemon(input: {
   readonly browserRequest: IncomingMessage;
   readonly browserResponse: ServerResponse;
   readonly pathname: string;
+  readonly search: string;
   readonly daemonPort: number;
   readonly daemonHostHeader: string;
   readonly daemonCsrf: string;
@@ -199,9 +202,10 @@ async function proxyToDaemon(input: {
   readonly getCredential: () => string;
   readonly onAuthenticated: () => Promise<void>;
   readonly onProjectCreated: (projectId: string) => void;
+  readonly onRunStarted: () => Promise<void>;
 }): Promise<void> {
   const method = input.browserRequest.method ?? "";
-  if (!isAllowedE2eProxyRequest(method, input.pathname)) {
+  if (!isAllowedE2eProxyRequest(method, input.pathname, input.search)) {
     input.browserResponse.writeHead(404).end();
     return;
   }
@@ -235,7 +239,7 @@ async function proxyToDaemon(input: {
         hostname: WEB_HOST,
         port: input.daemonPort,
         method,
-        path: input.pathname,
+        path: `${input.pathname}${input.search}`,
         headers: {
           host: input.daemonHostHeader,
           origin: WEB_ORIGIN,
@@ -283,6 +287,13 @@ async function proxyToDaemon(input: {
       input.onProjectCreated(payload.projectId);
     }
   }
+  if (
+    method === "POST"
+    && input.pathname === "/runs"
+    && daemonResponse.statusCode === 200
+  ) {
+    await input.onRunStarted();
+  }
   input.browserResponse.statusCode = daemonResponse.statusCode;
   input.browserResponse.setHeader(
     "content-type",
@@ -298,9 +309,6 @@ export async function runE2eLauncher(options: {
   readonly selfCheck: boolean;
   readonly verify: boolean;
 }): Promise<void> {
-  if (options.verify) {
-    throw new Error("E2E_VERIFY_NOT_AVAILABLE_UNTIL_TASK_19");
-  }
   let database: DatabaseSync | undefined;
   let composition:
     | ReturnType<typeof createE2eDaemonComposition>
@@ -333,6 +341,9 @@ export async function runE2eLauncher(options: {
     },
     async () => {
       await rm(statePath, { force: true });
+    },
+    async () => {
+      await rm(readinessPath, { force: true });
     },
     async () => {
       await releaseOwnedLock(lockOwner);
@@ -439,6 +450,7 @@ export async function runE2eLauncher(options: {
             browserRequest: request,
             browserResponse: response,
             pathname: url.pathname.slice("/__e2e_api".length) || "/",
+            search: url.search,
             daemonPort,
             daemonHostHeader,
             daemonCsrf: activeComposition.daemonCsrf,
@@ -451,6 +463,9 @@ export async function runE2eLauncher(options: {
               daemonCredential = activeComposition.issueSession([
                 ProjectIdSchema.parse(projectId),
               ]);
+            },
+            onRunStarted: async () => {
+              await activeComposition.runUntilSettled();
             },
           });
           return;
@@ -531,6 +546,12 @@ export async function runE2eLauncher(options: {
       webServer?.listen(WEB_PORT, WEB_HOST);
     });
     startupStop.throwIfStopRequested();
+    await atomicWriteE2eReadiness(readinessPath, {
+      schemaVersion: 1,
+      webOrigin: WEB_ORIGIN,
+      storageStatePath: ".hunter-e2e/playwright-state.json",
+    });
+    startupStop.throwIfStopRequested();
     ready = true;
 
     if (options.selfCheck) {
@@ -538,6 +559,32 @@ export async function runE2eLauncher(options: {
       startupStop.throwIfStopRequested();
       if (!response.ok) throw new Error("E2E_SELF_CHECK_FAILED");
       process.stdout.write("E2E_SELF_CHECK_READY\n");
+      return;
+    }
+    if (options.verify) {
+      const readiness = await fetch(`${WEB_ORIGIN}/__e2e_ready`);
+      const health = await activeComposition.app.inject({
+        method: "GET",
+        url: "/health",
+        headers: {
+          host: daemonHostHeader,
+          origin: WEB_ORIGIN,
+          authorization: `Bearer ${daemonCredential}`,
+          "x-csrf-token": activeComposition.daemonCsrf,
+        },
+      });
+      startupStop.throwIfStopRequested();
+      if (!readiness.ok || health.statusCode !== 200) {
+        throw new Error("E2E_VERIFY_FAILED");
+      }
+      process.stdout.write(`${JSON.stringify({
+        status: "ready",
+        webOrigin: WEB_ORIGIN,
+        daemonPortMode: "random_loopback",
+        authenticatedHealth: "pass",
+        playwrightState: "created_then_cleanup",
+        cleanup: "owned_resources_only",
+      })}\n`);
       return;
     }
     await stopped;

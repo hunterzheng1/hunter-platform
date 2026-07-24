@@ -26,10 +26,12 @@ export function ProjectPage({
   projectId,
   api,
   onBack,
+  onOpenKnowledge,
 }: {
   readonly projectId: string;
   readonly api: ProjectApi;
   readonly onBack: () => void;
+  readonly onOpenKnowledge?: (() => void) | undefined;
 }) {
   const [project, setProject] = useState<ProjectView>();
   const [loading, setLoading] = useState(true);
@@ -83,6 +85,11 @@ export function ProjectPage({
     <main className="page-shell" aria-busy={busyRevisionId !== undefined}>
       <nav aria-label="项目导航">
         <button className="button button-quiet" type="button" onClick={onBack}>← 返回项目</button>
+        {onOpenKnowledge === undefined ? null : (
+          <button className="button button-secondary" type="button" onClick={onOpenKnowledge}>
+            查看 Knowledge
+          </button>
+        )}
       </nav>
       <header className="page-header detail-header">
         <div>

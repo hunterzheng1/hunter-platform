@@ -11,6 +11,7 @@ import { registerDeviceRoutes, type DeviceRoutesServices } from "./routes/device
 import { registerProjectRoutes, type ProjectRoutesServices } from "./routes/projects.js";
 import { registerRequirementRoutes, type RequirementRoutesServices } from "./routes/requirements.js";
 import { registerRunRoutes, type RunRoutesServices } from "./routes/runs.js";
+import { registerKnowledgeRoutes, type KnowledgeRoutesServices } from "./routes/knowledge.js";
 
 export interface BuildAppOptions {
   readonly authenticator: LocalAuthenticator;
@@ -19,6 +20,7 @@ export interface BuildAppOptions {
   readonly services: RunRoutesServices & ProjectRoutesServices & {
     readonly changes?: ChangeRoutesServices | undefined;
     readonly requirements?: RequirementRoutesServices | undefined;
+    readonly knowledge?: KnowledgeRoutesServices | undefined;
   };
   readonly bodyLimit?: number;
   readonly requestTimeoutMs?: number | undefined;
@@ -45,6 +47,9 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
     registerRequirementRoutes(app, options.services.requirements);
   }
   registerRunRoutes(app, options.services);
+  if (options.services.knowledge !== undefined) {
+    registerKnowledgeRoutes(app, options.services.knowledge);
+  }
   if (options.devices !== undefined) {
     registerDeviceRoutes(app, options.devices);
   }

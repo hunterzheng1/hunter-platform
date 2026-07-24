@@ -18,11 +18,11 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { createVerticalSliceFixture } from "../e2e/fixtures/fake-runtime-scenario.js";
-import { createE2eDaemonComposition } from "./e2e-application.js";
+import { createE2eDaemonComposition } from "../apps/daemon/test/fixtures/e2e-application.js";
 import { assertOwnedTemporaryDirectory } from "./e2e-runtime.js";
 
-describe("Task 13A authenticated daemon composition", () => {
-  it("commits Project and approved Requirement before the fixed unwired Run error", async () => {
+describe("Task 19 authenticated daemon composition", () => {
+  it("commits Project and approved Requirement before driving the wired Run", async () => {
     const database = new DatabaseSync(":memory:");
     const temporaryPrefix = join(tmpdir(), "hunter-e2e-application-unit-");
     const dataDirectory = await mkdtemp(temporaryPrefix);
@@ -155,18 +155,13 @@ describe("Task 13A authenticated daemon composition", () => {
           idempotencyKey: "start-run-e2e-contract",
         },
       });
-      expect(run.statusCode).toBe(501);
-      expect(run.json()).toEqual({
-        code: "RUN_COMPOSITION_NOT_WIRED",
-        positions: {
-          ProjectCreated: expect.any(Number),
-          RequirementRevisionApproved: expect.any(Number),
-        },
-      });
-      expect(run.json().positions.ProjectCreated).toBeGreaterThan(0);
-      expect(run.json().positions.RequirementRevisionApproved).toBeGreaterThan(
-        run.json().positions.ProjectCreated,
-      );
+      expect(run.statusCode).toBe(200);
+      await composition.runUntilSettled();
+      expect(
+        composition.services.flowStore.allRuns().every(
+          ({ status }) => status === "succeeded",
+        ),
+      ).toBe(true);
       expect(
         database
           .prepare(
