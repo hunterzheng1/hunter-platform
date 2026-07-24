@@ -1,12 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
 import { accessSync, constants, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { isAbsolute } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 import { PublishChangeService, StartRunService, type PublishChangeRepositories, type StartRunRepositories } from "@hunter/application";
 import type { ExecutionPlan, NativeSessionId, ProjectId, TaskId, WorkflowRevision, WorktreeId } from "@hunter/domain";
 import { ControllerLeaseIdSchema, LeaseOwnerIdSchema, OperationIdSchema, ProjectIdSchema, WorkspaceLeaseIdSchema, WriterLeaseIdSchema, canonicalSha256, createProject } from "@hunter/domain";
 import { FlowEngine, reduceFlowEvents, type FlowCommandReceipt, type FlowCommit, type FlowDefinitions, type FlowEvent, type FlowStore, type WorkflowRunState } from "@hunter/flow-engine";
+import { ArchiveJobWorker, ArchiveWriter, SqliteArchiveJobStore, SqliteKnowledgeCatalog, type ArchiveManifestSource } from "@hunter/knowledge";
 import { ExternalOperationReceiptSchema, LeaseSchema, computeCapabilityManifest, createExternalOperation, createWorkspacePathBoundary, decodeCapabilityProbeReceipt, decodeExternalOperationReceipt, type CapabilityProbeReceipt, type ExternalOperation, type ExternalOperationHandler, type Lease, type VerifiedWorkspacePath } from "@hunter/runtime-contracts";
 import { deriveStepPolicy } from "@hunter/policy";
 import { LeaseService, RuntimeManager, RuntimeOperationHandler } from "@hunter/runtime-manager";
@@ -131,9 +132,40 @@ export function createSqliteApplicationServices(input: {
   readonly resolveAuthorizedProjectIds?: ((principalId: string) => readonly ProjectId[] | undefined) | undefined;
   readonly now?: (() => Date) | undefined;
   readonly contentDirectory?: string | undefined;
+  readonly archive?: {
+    readonly root: string;
+    readonly source: ArchiveManifestSource;
+    readonly ownerId: ReturnType<typeof LeaseOwnerIdSchema.parse>;
+    readonly leaseDurationMs?: number | undefined;
+  } | undefined;
 }) {
   const now = input.now ?? (() => new Date());
-  const journal = new SqliteOperationJournal(input.database);
+  const archiveJobStore = input.archive === undefined
+    ? undefined
+    : new SqliteArchiveJobStore(input.database);
+  const journal = new SqliteOperationJournal(input.database, {
+    scheduleTerminalRunArchive: archiveJobStore === undefined
+      ? undefined
+      : (schedule) => {
+          archiveJobStore.schedule(schedule);
+        },
+  });
+  const knowledgeCatalog = input.archive === undefined
+    ? undefined
+    : new SqliteKnowledgeCatalog(input.database, now);
+  const archiveWorker = input.archive === undefined || archiveJobStore === undefined || knowledgeCatalog === undefined
+    ? undefined
+    : new ArchiveJobWorker({
+        store: archiveJobStore,
+        writer: new ArchiveWriter(join(input.archive.root, "archives")),
+        catalog: knowledgeCatalog,
+        source: input.archive.source,
+        ownerId: input.archive.ownerId,
+        now,
+        ...(input.archive.leaseDurationMs === undefined
+          ? {}
+          : { leaseDurationMs: input.archive.leaseDurationMs }),
+      });
   input.database.exec(`CREATE TABLE IF NOT EXISTS principal_project_authorizations (
     principal_id TEXT PRIMARY KEY,
     project_ids_json TEXT NOT NULL,
@@ -820,6 +852,9 @@ export function createSqliteApplicationServices(input: {
   });
   return {
     journal,
+    archiveJobStore,
+    archiveWorker,
+    knowledgeCatalog,
     flowStore,
     flowEngine,
     runCoordinator,

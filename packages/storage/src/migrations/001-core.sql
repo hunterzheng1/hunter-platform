@@ -106,6 +106,59 @@ CREATE TABLE IF NOT EXISTS projection_checkpoints (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS archive_jobs (
+  job_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  outcome TEXT NOT NULL CHECK (outcome IN ('succeeded','failed','canceled')),
+  status TEXT NOT NULL CHECK (status IN ('pending','leased','completed','needs_attention')),
+  attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+  lease_owner TEXT,
+  lease_generation INTEGER NOT NULL DEFAULT 0 CHECK (lease_generation >= 0),
+  lease_token_hash TEXT,
+  lease_acquired_at TEXT,
+  lease_expires_at TEXT,
+  input_fingerprint TEXT NOT NULL,
+  first_position INTEGER NOT NULL CHECK (first_position > 0),
+  last_position INTEGER NOT NULL CHECK (last_position >= first_position),
+  actor_id TEXT NOT NULL,
+  correlation_id TEXT NOT NULL,
+  occurred_at TEXT NOT NULL,
+  manifest_hash TEXT,
+  manifest_ref TEXT,
+  archive_receipt_json TEXT,
+  projection_fingerprint TEXT,
+  knowledge_entry_id TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (project_id, run_id)
+);
+
+CREATE INDEX IF NOT EXISTS archive_jobs_eligible
+  ON archive_jobs(status, lease_expires_at, created_at);
+
+CREATE TABLE IF NOT EXISTS knowledge_entries (
+  entry_id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  level TEXT NOT NULL CHECK (level IN ('authoritative','experiential','historical')),
+  status TEXT NOT NULL CHECK (status IN ('active','superseded','withdrawn')),
+  source_identity TEXT NOT NULL,
+  manifest_hash TEXT,
+  rebuildable INTEGER NOT NULL CHECK (rebuildable IN (0, 1)),
+  entry_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (project_id, source_identity)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS knowledge_archive_manifest
+  ON knowledge_entries(project_id, manifest_hash)
+  WHERE manifest_hash IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS knowledge_entries_project
+  ON knowledge_entries(project_id, level, status, entry_id);
+
 CREATE TABLE IF NOT EXISTS storage_metadata (
   metadata_key TEXT PRIMARY KEY,
   metadata_value TEXT NOT NULL,

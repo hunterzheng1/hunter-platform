@@ -8,6 +8,7 @@
     { "path": "../../packages/device-gateway" },
     { "path": "../../packages/domain" },
     { "path": "../../packages/flow-engine" },
+    { "path": "../../packages/knowledge" },
     { "path": "../../packages/policy" },
     { "path": "../../packages/runtime-contracts" },
     { "path": "../../packages/runtime-manager" },

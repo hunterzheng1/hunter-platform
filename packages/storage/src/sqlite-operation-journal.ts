@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 
-import type { ProjectId } from "@hunter/domain";
+import { RunIdSchema, type ProjectId, type RunId } from "@hunter/domain";
 import {
   ExternalOperationSchema,
   fingerprintExternalOperation,
@@ -40,6 +40,21 @@ export interface CommandReceipt {
   readonly lastPosition: number | null;
   readonly response: unknown;
   readonly committedAt: string;
+}
+
+export interface TerminalRunArchiveSchedule {
+  readonly projectId: ProjectId;
+  readonly runId: RunId;
+  readonly outcome: "succeeded" | "failed" | "canceled";
+  readonly firstPosition: number;
+  readonly lastPosition: number;
+  readonly actorId: string;
+  readonly correlationId: string;
+  readonly occurredAt: string;
+}
+
+export interface SqliteOperationJournalOptions {
+  readonly scheduleTerminalRunArchive?: ((input: TerminalRunArchiveSchedule) => void) | undefined;
 }
 
 interface ReceiptRow {
@@ -100,10 +115,41 @@ function toReceipt(row: ReceiptRow): CommandReceipt {
   };
 }
 
+function terminalRunOutcome(
+  event: NewDomainEvent,
+): "succeeded" | "failed" | "canceled" | null {
+  if (
+    event.eventType !== "FlowEvent" ||
+    typeof event.eventData !== "object" ||
+    event.eventData === null ||
+    !("flowEvent" in event.eventData)
+  ) {
+    return null;
+  }
+  const flowEvent = event.eventData.flowEvent;
+  if (
+    typeof flowEvent !== "object" ||
+    flowEvent === null ||
+    !("type" in flowEvent) ||
+    flowEvent.type !== "RunConcluded" ||
+    !("status" in flowEvent)
+  ) {
+    return null;
+  }
+  return flowEvent.status === "succeeded" ||
+    flowEvent.status === "failed" ||
+    flowEvent.status === "canceled"
+    ? flowEvent.status
+    : null;
+}
+
 export class SqliteOperationJournal {
   private transactionDepth = 0;
 
-  public constructor(private readonly database: DatabaseSync) {
+  public constructor(
+    private readonly database: DatabaseSync,
+    private readonly options: SqliteOperationJournalOptions = {},
+  ) {
     this.database.exec(loadCoreMigration());
   }
 
@@ -205,6 +251,52 @@ export class SqliteOperationJournal {
           committedAt,
           committedAt,
         );
+      }
+
+      const terminalEvents = command.events
+        .map((event) => ({ event, outcome: terminalRunOutcome(event) }))
+        .filter(
+          (
+            candidate,
+          ): candidate is {
+            readonly event: NewDomainEvent;
+            readonly outcome: "succeeded" | "failed" | "canceled";
+          } => candidate.outcome !== null,
+        );
+      if (terminalEvents.length > 1) {
+        throw new Error("MULTIPLE_TERMINAL_RUN_EVENTS");
+      }
+      if (
+        terminalEvents.length === 1 &&
+        this.options.scheduleTerminalRunArchive !== undefined
+      ) {
+        const runId = RunIdSchema.parse(
+          command.aggregateId.startsWith("run:")
+            ? command.aggregateId.slice("run:".length)
+            : command.aggregateId,
+        );
+        const range = this.database.prepare(
+          `SELECT MIN(position) AS first_position, MAX(position) AS last_position
+             FROM events WHERE aggregate_id = ?`,
+        ).get(command.aggregateId) as unknown as {
+          readonly first_position: number | null;
+          readonly last_position: number | null;
+        };
+        if (range.first_position === null || range.last_position === null) {
+          throw new Error("TERMINAL_RUN_LEDGER_RANGE_MISSING");
+        }
+        const terminal = terminalEvents[0];
+        if (terminal === undefined) throw new Error("TERMINAL_RUN_EVENT_MISSING");
+        this.options.scheduleTerminalRunArchive({
+          projectId: command.projectId,
+          runId,
+          outcome: terminal.outcome,
+          firstPosition: range.first_position,
+          lastPosition: range.last_position,
+          actorId: command.actor.actorId,
+          correlationId: command.actor.correlationId,
+          occurredAt: terminal.event.occurredAt,
+        });
       }
 
       this.database

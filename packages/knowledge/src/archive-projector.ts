@@ -63,7 +63,7 @@ export const ArchiveKnowledgeProjectionCommitSchema = z
     if (Date.parse(commit.expiresAt) <= Date.parse(commit.acquiredAt)) {
       context.addIssue({ code: "custom", message: "LEASE_WINDOW_INVALID" });
     }
-    const expectedEntry = historicalEntryFor(commit.receipt);
+    const expectedEntry = historicalKnowledgeEntryFor(commit.receipt);
     const expectedInputFingerprint = fingerprintInput(commit.receipt);
     const expectedEntryFingerprint = fingerprintEntry(expectedEntry);
     if (
@@ -137,7 +137,9 @@ function entryIdFor(receipt: VerifiedArchiveReceipt): KnowledgeEntryId {
   );
 }
 
-function historicalEntryFor(receipt: VerifiedArchiveReceipt): KnowledgeEntry {
+export function historicalKnowledgeEntryFor(
+  receipt: VerifiedArchiveReceipt,
+): KnowledgeEntry {
   return KnowledgeEntrySchema.parse({
     schemaVersion: 1,
     entryId: entryIdFor(receipt),
@@ -171,7 +173,7 @@ export class ArchiveKnowledgeProjector {
 
   async project(input: unknown): Promise<ArchiveKnowledgeProjectionResult> {
     const job = ArchiveKnowledgeProjectionJobSchema.parse(input);
-    const entry = historicalEntryFor(job.receipt);
+    const entry = historicalKnowledgeEntryFor(job.receipt);
     const inputFingerprint = fingerprintInput(job.receipt);
     const expectedEntryFingerprint = fingerprintEntry(entry);
     const commit = validateArchiveKnowledgeProjectionCommit({
