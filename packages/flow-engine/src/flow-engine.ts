@@ -382,6 +382,7 @@ export class FlowEngine {
       if (allScheduledAccepted && allResolved) {
         events.push(...this.concludePassedTaskSubflow(state, {
           ...state,
+          acceptedChildRunIds: [...accepted],
           budgetUsage: {
             ...state.budgetUsage,
             attempts: state.budgetUsage.attempts + rolled.attempts,

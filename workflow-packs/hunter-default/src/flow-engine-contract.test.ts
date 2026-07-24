@@ -263,6 +263,8 @@ function verifyActive(
 }
 
 function startTaskChild(harness: ReturnType<typeof startRoot>, taskWorkflow: WorkflowRevision) {
+  verifyActive(harness, ids.rootRun, "root-plan-before-fan-out", "passed");
+  verifyActive(harness, ids.rootRun, "root-approval-before-fan-out", "passed");
   const scheduled = harness.engine.handle({
     type: "ScheduleTaskFanOut",
     runId: ids.rootRun,
@@ -330,7 +332,7 @@ describe("default pack as a FlowEngine consumer", () => {
       actor,
     });
 
-    for (const key of ["plan", "approve", "dispatch", "integrate", "archive", "ingest"]) {
+    for (const key of ["integrate", "archive", "ingest"]) {
       verifyActive(harness, ids.rootRun, key, "passed");
     }
 

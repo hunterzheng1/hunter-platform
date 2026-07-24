@@ -150,7 +150,7 @@ describe("Task 19 authenticated daemon composition", () => {
         payload: {
           runId: RunIdSchema.parse("run_e2econtract01"),
           executionPlanId,
-          workflowRevisionId,
+          workflowRevisionId: composition.catalog.rootWorkflowRevisionId,
           expectedVersion: 0,
           idempotencyKey: "start-run-e2e-contract",
         },
