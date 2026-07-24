@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -49,9 +49,6 @@ async function createMainWindow(): Promise<BrowserWindow> {
       },
     },
     rendererUrl,
-    (target) => {
-      void shell.openExternal(target).catch(() => undefined);
-    },
   );
 
   if (rendererEntry === undefined) {

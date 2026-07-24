@@ -31,7 +31,7 @@ describe("locked-down desktop window boundary", () => {
     expect(loadFile).toHaveBeenCalledWith("C:\\Hunter\\resources\\web\\index.html");
   });
 
-  it("denies new windows, navigation, and permissions while opening only HTTPS externally", () => {
+  it("denies new windows, navigation, permissions, and direct external-open side effects", () => {
     let openHandler: ((details: { url: string }) => { action: "deny" }) | undefined;
     let navigateHandler: ((event: { preventDefault(): void }, url: string) => void) | undefined;
     let permissionHandler: ((webContents: unknown, permission: string, callback: (allowed: boolean) => void) => void) | undefined;
@@ -47,12 +47,11 @@ describe("locked-down desktop window boundary", () => {
       },
     };
     const openExternal = vi.fn();
-    installWindowBoundary(contents, "file:///C:/Hunter/resources/web/index.html", openExternal);
+    installWindowBoundary(contents, "file:///C:/Hunter/resources/web/index.html");
 
     expect(openHandler?.({ url: "https://docs.example.test" })).toEqual({ action: "deny" });
     expect(openHandler?.({ url: "file:///C:/private.txt" })).toEqual({ action: "deny" });
-    expect(openExternal).toHaveBeenCalledOnce();
-    expect(openExternal).toHaveBeenCalledWith("https://docs.example.test");
+    expect(openExternal).not.toHaveBeenCalled();
 
     const localEvent = { preventDefault: vi.fn() };
     navigateHandler?.(localEvent, "file:///C:/Hunter/resources/web/index.html");
@@ -61,12 +60,12 @@ describe("locked-down desktop window boundary", () => {
     const externalEvent = { preventDefault: vi.fn() };
     navigateHandler?.(externalEvent, "https://docs.example.test/guide");
     expect(externalEvent.preventDefault).toHaveBeenCalledOnce();
-    expect(openExternal).toHaveBeenLastCalledWith("https://docs.example.test/guide");
+    expect(openExternal).not.toHaveBeenCalled();
 
     const unsafeEvent = { preventDefault: vi.fn() };
     navigateHandler?.(unsafeEvent, "javascript:alert(1)");
     expect(unsafeEvent.preventDefault).toHaveBeenCalledOnce();
-    expect(openExternal).toHaveBeenCalledTimes(2);
+    expect(openExternal).not.toHaveBeenCalled();
 
     const permissionResult = vi.fn();
     permissionHandler?.({}, "notifications", permissionResult);

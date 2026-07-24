@@ -1,5 +1,3 @@
-import { isAllowedExternalUrl } from "./window-policy.js";
-
 export const CHECKED_IN_VITE_RENDERER_URL = "http://127.0.0.1:5173/";
 
 export const LOCKED_DOWN_WEB_PREFERENCES = Object.freeze({
@@ -29,19 +27,13 @@ export interface WindowBoundaryContents {
 export function installWindowBoundary(
   contents: WindowBoundaryContents,
   rendererUrl: string,
-  openExternal: (target: string) => void,
 ): void {
-  const openIfAllowed = (target: string) => {
-    if (isAllowedExternalUrl(target)) openExternal(target);
-  };
-  contents.setWindowOpenHandler(({ url }) => {
-    openIfAllowed(url);
+  contents.setWindowOpenHandler(() => {
     return { action: "deny" };
   });
   contents.onWillNavigate((event, url) => {
     if (url === rendererUrl) return;
     event.preventDefault();
-    openIfAllowed(url);
   });
   contents.setPermissionRequestHandler((_webContents, _permission, callback) => {
     callback(false);
