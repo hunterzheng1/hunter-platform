@@ -713,29 +713,44 @@ export function createSqliteApplicationServices(input: {
       if (launchReceipt.operationId !== launchOperation.operationId || launchReceipt.fingerprint !== launchOperation.fingerprint) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "indeterminate", reason: "launch_receipt_identity_mismatch" };
       const session = launchReceipt.nativeReferences.find((reference) => reference.kind === "session");
       if (session === undefined) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "indeterminate", reason: "native_session_reference_missing" };
-      let controller = await leaseService.findActiveController(
-        launchOperation.projectId,
-        session.referenceId,
-      );
-      if (controller === null) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "needs_attention", reason: "controller_lease_not_available", nativeSessionId: session.referenceId };
-      const renewalFloor = new Date(now().getTime() + 5 * 60_000);
-      if (Date.parse(controller.expiresAt) < renewalFloor.getTime()) {
-        const renewed = await leaseService.renew({ leaseId: controller.leaseId, ownerId: controller.ownerId, generation: controller.generation, expiresAt: renewalFloor.toISOString() });
-        if (renewed.kind !== "controller") throw new Error("CONTROLLER_LEASE_KIND_CHANGED");
-        controller = renewed;
+      const settlementObservationId = OperationIdSchema.parse(`opn_${canonicalSha256({ launchOperationId: launchOperation.operationId, attemptId: attempt.attemptId, action: "settlement-observe" }).slice(0, 24)}`);
+      const recordedSettlement = journal.findOperation(settlementObservationId);
+      let observe: ExternalOperation;
+      if (recordedSettlement !== null) {
+        observe = recordedSettlement.operation;
+        if (
+          observe.operationType !== "session.observe"
+          || observe.runId !== attempt.runId
+          || observe.attemptId !== attempt.attemptId
+          || observe.payload.nativeSessionId !== session.referenceId
+        ) {
+          throw new Error("RECOVERY_OBSERVATION_SCOPE_MISMATCH");
+        }
+      } else {
+        let controller = await leaseService.findActiveController(
+          launchOperation.projectId,
+          session.referenceId,
+        );
+        if (controller === null) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "needs_attention", reason: "controller_lease_not_available", nativeSessionId: session.referenceId };
+        const renewalFloor = new Date(now().getTime() + 5 * 60_000);
+        if (Date.parse(controller.expiresAt) < renewalFloor.getTime()) {
+          const renewed = await leaseService.renew({ leaseId: controller.leaseId, ownerId: controller.ownerId, generation: controller.generation, expiresAt: renewalFloor.toISOString() });
+          if (renewed.kind !== "controller") throw new Error("CONTROLLER_LEASE_KIND_CHANGED");
+          controller = renewed;
+        }
+        const observeOperationId = OperationIdSchema.parse(`opn_${canonicalSha256({ runId: attempt.runId, attemptId: attempt.attemptId, nativeSessionId: session.referenceId, action: "recovery-observe" }).slice(0, 24)}`);
+        observe = createExternalOperation({ schemaVersion: 1, operationId: observeOperationId, projectId: launchOperation.projectId, runId: launchOperation.runId, attemptId: launchOperation.attemptId, operationVersion: 2, operationType: "session.observe", requestedCapabilities: ["observe"], payload: { nativeSessionId: session.referenceId, controllerLeaseId: controller.leaseId, controllerLeaseOwnerId: controller.ownerId, controllerLeaseGeneration: controller.generation } });
+        const capability = input.capabilityReceiptFor?.(observe);
+        if (capability === undefined || capability === null) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "needs_attention", reason: "session_observe_capability_not_configured", nativeSessionId: session.referenceId };
+        const probe = decodeCapabilityProbeReceipt(capability);
+        const observedAt = now().getTime();
+        const manifest = computeCapabilityManifest(probe, new Date(observedAt));
+        const observeSupported = manifest.capabilities.some(({ capability: atomicCapability, status }) => atomicCapability === "observe" && status === "supported");
+        if (!observeSupported) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "needs_attention", reason: "session_observe_capability_not_proven", nativeSessionId: session.referenceId };
+        const aggregateId = `recovery-session:${attempt.attemptId}`;
+        const version = journal.aggregateVersion(aggregateId);
+        journal.commitCommand({ commandId: `recovery-observe:${attempt.attemptId}`, requestFingerprint: observe.fingerprint, projectId: observe.projectId, aggregateId, expectedVersion: version, actor: { actorId: "startup-recovery", correlationId: `recovery:${attempt.runId}` }, events: [], operations: [observe], response: { operationId: observe.operationId } });
       }
-      const observeOperationId = OperationIdSchema.parse(`opn_${canonicalSha256({ runId: attempt.runId, attemptId: attempt.attemptId, nativeSessionId: session.referenceId, action: "recovery-observe" }).slice(0, 24)}`);
-      const observe = createExternalOperation({ schemaVersion: 1, operationId: observeOperationId, projectId: launchOperation.projectId, runId: launchOperation.runId, attemptId: launchOperation.attemptId, operationVersion: 2, operationType: "session.observe", requestedCapabilities: ["observe"], payload: { nativeSessionId: session.referenceId, controllerLeaseId: controller.leaseId, controllerLeaseOwnerId: controller.ownerId, controllerLeaseGeneration: controller.generation } });
-      const capability = input.capabilityReceiptFor?.(observe);
-      if (capability === undefined || capability === null) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "needs_attention", reason: "session_observe_capability_not_configured", nativeSessionId: session.referenceId };
-      const probe = decodeCapabilityProbeReceipt(capability);
-      const observedAt = now().getTime();
-      const manifest = computeCapabilityManifest(probe, new Date(observedAt));
-      const observeSupported = manifest.capabilities.some(({ capability: atomicCapability, status }) => atomicCapability === "observe" && status === "supported");
-      if (!observeSupported) return { kind: "session", runId: attempt.runId, attemptId: attempt.attemptId, status: "needs_attention", reason: "session_observe_capability_not_proven", nativeSessionId: session.referenceId };
-      const aggregateId = `recovery-session:${attempt.attemptId}`;
-      const version = journal.aggregateVersion(aggregateId);
-      journal.commitCommand({ commandId: `recovery-observe:${attempt.attemptId}`, requestFingerprint: observe.fingerprint, projectId: observe.projectId, aggregateId, expectedVersion: version, actor: { actorId: "startup-recovery", correlationId: `recovery:${attempt.runId}` }, events: [], operations: [observe], response: { operationId: observe.operationId } });
       for (let delivery = 0; delivery < 1_000; delivery += 1) {
         const operationState = journal.findOperation(observe.operationId);
         if (operationState !== null && !["pending", "in_flight"].includes(operationState.status)) break;

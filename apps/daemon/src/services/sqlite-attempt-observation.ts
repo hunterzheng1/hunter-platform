@@ -56,8 +56,20 @@ export class SqliteAttemptObservation implements AttemptObservationPort {
         action: "settlement-observe",
       }).slice(0, 24)}`,
     );
-    const existingObservation = this.journal.findOperation(observationId);
-    if (existingObservation !== null) {
+    const recoveryObservationId = OperationIdSchema.parse(
+      `opn_${canonicalSha256({
+        runId: input.runId,
+        attemptId: input.attemptId,
+        nativeSessionId: session.referenceId,
+        action: "recovery-observe",
+      }).slice(0, 24)}`,
+    );
+    const existingObservation = [
+      observationId,
+      recoveryObservationId,
+    ].map((operationId) => this.journal.findOperation(operationId))
+      .find((candidate) => candidate !== null);
+    if (existingObservation !== undefined && existingObservation !== null) {
       const operation = ExternalOperationSchema.parse(
         existingObservation.operation,
       );
