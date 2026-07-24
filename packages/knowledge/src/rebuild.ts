@@ -39,7 +39,7 @@ function sha256(value: string): string {
 function authoritativeEntry(
   projectId: ReturnType<typeof ProjectIdSchema.parse>,
   row: RequirementViewRow,
-): KnowledgeEntry {
+): KnowledgeEntry | undefined {
   const requirementRevisionId = RequirementRevisionIdSchema.parse(row.entity_id);
   const view = JSON.parse(row.view_json) as unknown;
   if (view === null || typeof view !== "object" || Array.isArray(view)) {
@@ -63,6 +63,9 @@ function authoritativeEntry(
     throw new Error("KNOWLEDGE_REQUIREMENT_VIEW_SCOPE_MISMATCH");
   }
   const rawStatus = revision?.status ?? record.status;
+  if (rawStatus === "draft" || rawStatus === "in_review") {
+    return undefined;
+  }
   const status = rawStatus === "active" || rawStatus === "approved"
     ? "active"
     : rawStatus === "superseded" || rawStatus === "withdrawn"
@@ -132,8 +135,10 @@ export async function rebuildKnowledge(input: {
         AND project_id = ?
       ORDER BY entity_id`,
   ).all(projectId) as unknown as RequirementViewRow[];
-  const authoritative = requirementRows.map((row) =>
-    authoritativeEntry(projectId, row));
+  const authoritative = requirementRows.flatMap((row) => {
+    const entry = authoritativeEntry(projectId, row);
+    return entry === undefined ? [] : [entry];
+  });
   const entries = [...historical, ...authoritative].sort((left, right) =>
     left.entryId.localeCompare(right.entryId));
   const catalog = new SqliteKnowledgeCatalog(

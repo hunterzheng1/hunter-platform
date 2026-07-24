@@ -67,7 +67,7 @@ function seedRequirement(
   database: DatabaseSync,
   projectId: typeof projectA,
   suffix: string,
-  status: "active" | "superseded" | "withdrawn",
+  status: "draft" | "in_review" | "active" | "superseded" | "withdrawn",
 ): void {
   const requirementRevisionId = RequirementRevisionIdSchema.parse(
     `rrv_rebuild_${suffix}`,
@@ -91,6 +91,30 @@ function seedRequirement(
 }
 
 describe("rebuildKnowledge", () => {
+  it("skips legitimate draft and in-review revisions while rebuilding approved authoritative knowledge", async () => {
+    const database = new DatabaseSync(":memory:");
+    new SqliteOperationJournal(database);
+    seedRequirement(database, projectA, "draft_a", "draft");
+    seedRequirement(database, projectA, "review_a", "in_review");
+    seedRequirement(database, projectA, "active_a", "active");
+
+    const rebuilt = await rebuildKnowledge({
+      database,
+      projectId: projectA,
+      now: () => new Date("2026-07-24T00:02:00.000Z"),
+    });
+    const entries = await new SqliteKnowledgeCatalog(database)
+      .listByProject(projectA);
+
+    expect(rebuilt.authoritativeCount).toBe(1);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.source).toMatchObject({
+      type: "requirement_revision",
+      requirementRevisionId: "rrv_rebuild_active_a",
+    });
+    database.close();
+  });
+
   it("rebuilds only one Project from verified Archives and authoritative revisions with byte-stable ordering", async () => {
     const database = new DatabaseSync(":memory:");
     new SqliteOperationJournal(database);

@@ -1009,8 +1009,23 @@ describe("authoritative FlowEngine", () => {
     expect(bindingFingerprint).toBe(canonicalSha256(unsigned));
   });
 
+  it("rejects Task fan-out before the root Run reaches its dispatch subflow Step", () => {
+    const { store, engine, actor, runId } = engineHarness(singleStepWorkflow());
+    const commitsBefore = store.commits.length;
+
+    expect(() => engine.handle({
+      type: "ScheduleTaskFanOut",
+      runId,
+      expectedVersion: current(store).version,
+      idempotencyKey: "fanout-before-dispatch",
+      actor,
+    })).toThrow(/TASK_FANOUT_REQUIRES_ACTIVE_SUBFLOW/u);
+    expect(store.commits).toHaveLength(commitsBefore);
+    expect(current(store).scheduledChildren).toEqual([]);
+  });
+
   it("records one deterministic Task fan-out decision and rejects duplicate active scheduling", () => {
-    const { store, engine, actor, runId } = engineHarness();
+    const { store, engine, actor, runId } = engineHarness(subflowOnlyWorkflow());
     const receipt = engine.handle({ type: "ScheduleTaskFanOut", runId, expectedVersion: current(store).version, idempotencyKey: "fanout-one", actor });
     expect(receipt.response).toMatchObject({ children: [{ taskId: ids.task, childRunId: expect.stringMatching(/^run_/u) }] });
     expect(current(store).scheduledChildren).toHaveLength(1);
@@ -1034,7 +1049,7 @@ describe("authoritative FlowEngine", () => {
       publishedAt: "2026-07-22T01:00:00.000Z",
     });
     const { store, engine, actor, runId } = engineHarness(
-      singleStepWorkflow(),
+      subflowOnlyWorkflow(),
       () => new Date("2026-07-22T10:00:00.000Z"),
       oversizedPlan,
     );
@@ -1051,7 +1066,7 @@ describe("authoritative FlowEngine", () => {
   });
 
   it("keeps a canceled parent non-terminal until every requested child is terminal", () => {
-    const { store, engine, actor, runId } = engineHarness();
+    const { store, engine, actor, runId } = engineHarness(subflowOnlyWorkflow());
     const plan = executionPlan();
     const scheduled = engine.handle({ type: "ScheduleTaskFanOut", runId, expectedVersion: current(store).version, idempotencyKey: "cancel-fanout", actor }).response as { children: Array<{ taskId: typeof ids.task; childRunId: typeof ids.childRun; budget: typeof initialBudget }> };
     const parent = current(store).binding;
@@ -1080,7 +1095,7 @@ describe("authoritative FlowEngine", () => {
   });
 
   it("persists bounded child allocations whose total cannot exceed the parent remainder", () => {
-    const { store, engine, actor, runId } = engineHarness();
+    const { store, engine, actor, runId } = engineHarness(subflowOnlyWorkflow());
     const response = engine.handle({ type: "ScheduleTaskFanOut", runId, expectedVersion: current(store).version, idempotencyKey: "bounded-fanout", actor }).response as { children: Array<{ budget: typeof initialBudget }> };
     const budget = response.children[0]!.budget;
     expect(budget.maxAttempts).toBeLessThan(initialBudget.maxAttempts);
@@ -1089,7 +1104,7 @@ describe("authoritative FlowEngine", () => {
   });
 
   it("does not let parent retry spend budget already reserved for a child", () => {
-    const { store, engine, actor, runId } = engineHarness();
+    const { store, engine, actor, runId } = engineHarness(subflowOnlyWorkflow());
     engine.handle({ type: "ScheduleTaskFanOut", runId, expectedVersion: current(store).version, idempotencyKey: "reserve-before-retry", actor });
     engine.handle({ type: "RecordExecutionFailure", runId, errorClass: "transient", expectedVersion: current(store).version, idempotencyKey: "retry-with-reservation", actor });
     expect(current(store)).toMatchObject({ status: "needs_attention", scheduledRetry: null });
@@ -1108,7 +1123,7 @@ describe("authoritative FlowEngine", () => {
   });
 
   it("waits for Task fan-in, accepts each child once, and rolls its budget into the parent", () => {
-    const { store, engine, actor, runId } = engineHarness();
+    const { store, engine, actor, runId } = engineHarness(subflowOnlyWorkflow());
     const scheduled = engine.handle({ type: "ScheduleTaskFanOut", runId, expectedVersion: current(store).version, idempotencyKey: "fanout-rollup", actor }).response as { children: Array<{ taskId: typeof ids.task; childRunId: typeof ids.childRun; budget: typeof initialBudget }> };
     const parent = current(store).binding;
     const childRunId = scheduled.children[0]!.childRunId;
@@ -1293,7 +1308,7 @@ describe("authoritative FlowEngine", () => {
 function dependencyFailureHarness(rule: { readonly policy: "block" | "skip" | "terminate" } | { readonly policy: "compensation"; readonly compensationTaskId: typeof ids.compensation } | { readonly policy: "waiver"; readonly requiredRole: string }) {
   const store = new TestFlowStore();
   const plan = dependencyPlan(rule.policy === "compensation");
-  const workflow = singleStepWorkflow();
+  const workflow = subflowOnlyWorkflow();
   const engine = new FlowEngine(store, {
     getWorkflowRevision: () => workflow,
     getExecutionPlan: () => plan,

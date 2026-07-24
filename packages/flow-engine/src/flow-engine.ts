@@ -332,6 +332,12 @@ export class FlowEngine {
   private scheduleTaskFanOut(command: Extract<FlowCommand, { type: "ScheduleTaskFanOut" }>, commandId: string, requestFingerprint: string) {
     const state = this.requireActiveRun(command.runId);
     if (state.binding.subjectKind !== "change") throw new Error("TASK_FANOUT_REQUIRES_ROOT_RUN");
+    const { step } = activeStep(state);
+    const workflow = this.requireWorkflow(state.binding.workflowRevisionId);
+    const definition = workflow.steps.find(({ stepId }) => stepId === step.stepId);
+    if (definition?.kind !== "subflow") {
+      throw new Error("TASK_FANOUT_REQUIRES_ACTIVE_SUBFLOW");
+    }
     const plan = this.requirePlan(state.binding.executionPlanId);
     const actual = this.store.childRuns(command.runId)
       .filter((child) => child.binding.subjectKind === "task")
