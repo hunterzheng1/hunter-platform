@@ -67,15 +67,14 @@ export class AttemptSettlementRunner {
     if (state === null) throw new Error("FLOW_RUN_NOT_FOUND");
     const assigned = activeAttempt(state);
     const attemptId = AttemptIdSchema.parse(assigned.attempt.attemptId);
-    let runtimeEvidenceHash = assigned.assignment.operationId;
+    const observation = await this.observations.observe({
+      runId,
+      attemptId,
+      operationId: assigned.operationId,
+    });
+    const runtimeEvidenceHash = observation.evidenceHash;
 
     if (assigned.attempt.executionStatus !== "returned") {
-      const observation = await this.observations.observe({
-        runId,
-        attemptId,
-        operationId: assigned.operationId,
-      });
-      runtimeEvidenceHash = observation.evidenceHash;
       this.commands.handle({
         type: "RecordExternalObservation",
         runId,

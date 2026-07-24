@@ -49,6 +49,28 @@ export class SqliteAttemptObservation implements AttemptObservationPort {
       ({ kind }) => kind === "session",
     );
     if (session === undefined) throw new Error("NATIVE_SESSION_RECEIPT_REQUIRED");
+    const observationId = OperationIdSchema.parse(
+      `opn_${canonicalSha256({
+        launchOperationId: launch.operationId,
+        attemptId: input.attemptId,
+        action: "settlement-observe",
+      }).slice(0, 24)}`,
+    );
+    const existingObservation = this.journal.findOperation(observationId);
+    if (existingObservation !== null) {
+      const operation = ExternalOperationSchema.parse(
+        existingObservation.operation,
+      );
+      if (
+        operation.operationType !== "session.observe"
+        || operation.runId !== input.runId
+        || operation.attemptId !== input.attemptId
+        || operation.payload.nativeSessionId !== session.referenceId
+      ) {
+        throw new Error("ATTEMPT_OBSERVATION_SCOPE_MISMATCH");
+      }
+      return this.toAttemptObservation(await this.deliver(operation));
+    }
     const controller = await this.leases.findActiveController(
       launch.projectId,
       NativeSessionIdSchema.parse(session.referenceId),
@@ -56,13 +78,7 @@ export class SqliteAttemptObservation implements AttemptObservationPort {
     if (controller === null) throw new Error("CONTROLLER_LEASE_REQUIRED");
     const observation = createExternalOperation({
       schemaVersion: 1,
-      operationId: OperationIdSchema.parse(
-        `opn_${canonicalSha256({
-          launchOperationId: launch.operationId,
-          attemptId: input.attemptId,
-          action: "settlement-observe",
-        }).slice(0, 24)}`,
-      ),
+      operationId: observationId,
       projectId: launch.projectId,
       runId: input.runId,
       attemptId: input.attemptId,
@@ -92,6 +108,12 @@ export class SqliteAttemptObservation implements AttemptObservationPort {
       response: { operationId: observation.operationId },
     });
     const receipt = await this.deliver(observation);
+    return this.toAttemptObservation(receipt);
+  }
+
+  private toAttemptObservation(
+    receipt: Awaited<ReturnType<SqliteAttemptObservation["deliver"]>>,
+  ): AttemptObservation {
     const fact = receipt.facts.some(({ kind }) => kind === "agent_returned")
       ? "agent_returned"
       : receipt.facts.some(({ kind }) => kind === "process_exited")
@@ -113,7 +135,14 @@ export class SqliteAttemptObservation implements AttemptObservationPort {
   private async deliver(operation: ExternalOperation) {
     for (let delivery = 0; delivery < 1_000; delivery += 1) {
       const existing = this.worker.resolveReceipt(operation);
-      if (existing !== null) return existing;
+      if (existing !== null) {
+        if (existing.operationStatus !== "completed") {
+          throw new Error(
+            `OPERATION_RECEIPT_${existing.operationStatus.toUpperCase()}`,
+          );
+        }
+        return existing;
+      }
       const row = this.journal.findOperation(operation.operationId);
       if (
         row !== null
