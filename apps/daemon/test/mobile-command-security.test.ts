@@ -11,7 +11,6 @@ import {
   DeviceStore,
   MobileCommandEnvelopeSchema,
   MobileCommandResultSchema,
-  MobileRunProjectionSchema,
   PairingService,
   TokenService,
   createDeviceProofMessage,
@@ -61,6 +60,19 @@ const workflowPack = JSON.parse(
 const workflow = createWorkflowRevision(workflowPack.revision);
 const agentStep = workflow.steps.find(({ kind }) => kind === "agent")!;
 const gateStep = workflow.steps.find(({ kind }) => kind === "human_gate")!;
+const highRiskWorkflow = {
+  ...workflow,
+  steps: workflow.steps.map((step) =>
+    step.kind === "human_gate"
+      ? {
+          ...step,
+          permissionPolicy: {
+            decision: "require_approval" as const,
+            permissions: ["system.install"],
+          },
+        }
+      : step),
+};
 
 const principal: DeviceCommandPrincipal = {
   deviceId: DeviceIdSchema.parse("dvc_mobile00001"),
@@ -151,9 +163,22 @@ describe("mobile command transaction boundary", () => {
       operations: [],
       response: { seeded: true },
     });
+    const authorization = createMobileProjectionProvider({
+      flowStore,
+      repositories: {
+        getProject: (candidate) =>
+          candidate === projectId
+            ? { projectId, name: "Canonical mobile project" }
+            : null,
+        getWorkflowRevision: (candidate) =>
+          candidate === workflow.workflowRevisionId ? workflow : null,
+      },
+      allowedGatePermissions: ["workflow.approve-plan"],
+    });
     const gateway = new DeviceGateway({
       journal,
       commands: flowEngine,
+      authorization,
     });
     return {
       gateway,
@@ -192,6 +217,39 @@ describe("mobile command transaction boundary", () => {
     ]));
     expect(new Set(projections[0]!.commands.map(({ idempotencyKey }) => idempotencyKey)).size)
       .toBe(projections[0]!.commands.length);
+  });
+
+  it("never delivers an unknown or high-risk Gate as a mobile approval command", () => {
+    const { flowStore } = setup("approved");
+    const repositories = {
+      getProject: (candidate: typeof projectId) =>
+        candidate === projectId
+          ? { projectId, name: "Canonical mobile project" }
+          : null,
+      getWorkflowRevision: (candidate: string) =>
+        candidate === workflow.workflowRevisionId ? workflow : null,
+    };
+    const blocked = createMobileProjectionProvider({
+      flowStore,
+      repositories,
+    }).list([projectId]);
+    expect(blocked[0]?.currentStep).toBe("human_gate");
+    expect(blocked[0]?.commands).toEqual([]);
+
+    const explicitlyAllowed = createMobileProjectionProvider({
+      flowStore,
+      repositories,
+      allowedGatePermissions: ["workflow.approve-plan"],
+    }).list([projectId]);
+    expect(explicitlyAllowed[0]?.commands.map(({ action }) => action)).toEqual([
+      "approve_gate",
+      "reject_gate",
+    ]);
+    expect(() => createMobileProjectionProvider({
+      flowStore,
+      repositories,
+      allowedGatePermissions: ["system.install"],
+    })).toThrowError("MOBILE_GATE_PERMISSION_NOT_SAFE");
   });
 
   it("returns the original receipt for the same key and fingerprint and advances once", () => {
@@ -364,6 +422,9 @@ describe("remote device HTTP boundary", () => {
       maxRequestsPerWindow: 20,
       rateWindowMs: 60_000,
     },
+    seedGate = false,
+    workflowForRun = workflow,
+    allowedGatePermissions: readonly string[] = [],
   ) {
     database = new DatabaseSync(":memory:");
     const journal = new SqliteOperationJournal(database);
@@ -409,7 +470,7 @@ describe("remote device HTTP boundary", () => {
     const flowStore = new SqliteFlowStore(database, journal, () => now);
     const flowEngine = new FlowEngine(flowStore, {
       getWorkflowRevision: (candidate) =>
-        candidate === workflow.workflowRevisionId ? workflow : null,
+        candidate === workflowForRun.workflowRevisionId ? workflowForRun : null,
       getExecutionPlan: () => null,
       getRequirementRevision: () => null,
     });
@@ -420,7 +481,7 @@ describe("remote device HTTP boundary", () => {
       requirementRevisionIds: [
         RequirementRevisionIdSchema.parse("rrv_mobilerevision01"),
       ],
-      workflowRevisionId: workflow.workflowRevisionId,
+      workflowRevisionId: workflowForRun.workflowRevisionId,
       policySnapshot: { snapshotHash: "a".repeat(64), policyVersion: 1 },
       initialBudget: {
         maxAttempts: 5,
@@ -435,6 +496,9 @@ describe("remote device HTTP boundary", () => {
       executionPlanId: ExecutionPlanIdSchema.parse("epl_mobileplan01"),
       taskGraphFingerprint: "b".repeat(64),
     });
+    const selectedStep = workflowForRun.steps.find(
+      ({ kind }) => kind === (seedGate ? "human_gate" : "agent"),
+    )!;
     journal.commitCommand({
       commandId: "seed-remote-run",
       requestFingerprint: createHash("sha256").update("seed-remote-run").digest("hex"),
@@ -447,11 +511,20 @@ describe("remote device HTTP boundary", () => {
         {
           type: "StepActivated" as const,
           stepRunId,
-          stepId: agentStep.stepId,
+          stepId: selectedStep.stepId,
           attemptId,
           attemptNumber: 1,
           fixedContentHash: canonicalSha256({ runId, stepRunId }),
         },
+        ...(seedGate
+          ? [{
+              type: "ExternalObservationRecorded" as const,
+              stepRunId,
+              attemptId,
+              fact: "agent_returned" as const,
+              executionStatus: "returned" as const,
+            }]
+          : []),
       ].map((flowEvent, index) => ({
         eventId: `evt_remote_seed000${index + 1}`,
         eventType: "FlowEvent",
@@ -462,37 +535,29 @@ describe("remote device HTTP boundary", () => {
       operations: [],
       response: {},
     });
+    const projections = createMobileProjectionProvider({
+      flowStore,
+      repositories: {
+        getProject: (candidate) =>
+          candidate === projectId ? { projectId, name: "Mobile project" } : null,
+        getWorkflowRevision: (candidate) =>
+          candidate === workflowForRun.workflowRevisionId
+            ? workflowForRun
+            : null,
+      },
+      allowedGatePermissions,
+    });
     const gateway = new DeviceGateway({
       journal,
       commands: flowEngine,
+      authorization: projections,
     });
     const app = buildRemoteDeviceApp({
       tokens,
       pairing,
       gateway,
       eventStream: new DurableEventStream(new EventLedgerReader(database)),
-      projections: {
-        list: (authorizedProjectIds) =>
-          authorizedProjectIds.includes(projectId)
-            ? [MobileRunProjectionSchema.parse({
-                projectId,
-                runId,
-                projectName: "Mobile project",
-                currentStep: "Planning agent",
-                attention: "Run is active",
-                connection: "online",
-                commands: [{
-                  projectId,
-                  runId,
-                  stepRunId,
-                  expectedVersion: 2,
-                  idempotencyKey: "projection-pause-command-0001",
-                  action: "pause_run",
-                  payload: {},
-                }],
-              })]
-            : [],
-      },
+      projections,
       allowedHosts: ["remote.hunter"],
       allowedOrigins: ["https://phone.example"],
       limits,
@@ -554,6 +619,8 @@ describe("remote device HTTP boundary", () => {
       tokens,
       pairing,
       gateway,
+      flowStore,
+      gateId: seedGate ? flowEngine.activeHumanGateId(runId) : undefined,
     };
   }
 
@@ -819,6 +886,118 @@ describe("remote device HTTP boundary", () => {
     await app.close();
   });
 
+  it("rejects a signed crafted high-risk Gate even when a safe mobile permission is allowlisted", async () => {
+    const {
+      app,
+      credentials,
+      signRequest,
+      flowStore,
+      gateId,
+    } = await setupRemote(
+      undefined,
+      true,
+      highRiskWorkflow,
+      ["workflow.approve-plan"],
+    );
+    const projectionUrl = `/api/v1/mobile/runs?projectId=${projectId}`;
+    const projectionResponse = await app.inject({
+      method: "GET",
+      url: projectionUrl,
+      headers: signRequest({
+        accessToken: credentials.accessToken,
+        method: "GET",
+        url: projectionUrl,
+        body: undefined,
+        nonce: "remote-hidden-gate-projection-nonce-0001",
+      }),
+    });
+    expect(projectionResponse.statusCode).toBe(200);
+    expect(projectionResponse.json()).toEqual([
+      expect.objectContaining({
+        projectId,
+        runId,
+        currentStep: "human_gate",
+        commands: [],
+      }),
+    ]);
+    const command = MobileCommandEnvelopeSchema.parse({
+      projectId,
+      runId,
+      gateId,
+      expectedVersion: flowStore.loadRun(runId)!.version,
+      idempotencyKey: "remote-hidden-gate-command-0001",
+      action: "approve_gate",
+      payload: {},
+    });
+    const url = "/api/v1/mobile/commands";
+    const response = await app.inject({
+      method: "POST",
+      url,
+      headers: signRequest({
+        accessToken: credentials.accessToken,
+        method: "POST",
+        url,
+        body: command,
+        nonce: "remote-hidden-gate-nonce-0001",
+      }),
+      payload: command,
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).toEqual({ code: "DEVICE_GATE_FORBIDDEN" });
+    expect(flowStore.loadRun(runId)!.version).toBe(command.expectedVersion);
+    expect(
+      (
+        database!
+          .prepare(
+            "SELECT COUNT(*) AS count FROM command_receipts WHERE command_id = ?",
+          )
+          .get(`ApplyRunControl:${command.idempotencyKey}`) as { count: number }
+      ).count,
+    ).toBe(0);
+    const audit = database!
+      .prepare(
+        "SELECT event_data FROM events WHERE event_type = 'DevicePermissionDecisionRecorded'",
+      )
+      .get() as { readonly event_data: string } | undefined;
+    expect(JSON.parse(audit?.event_data ?? "{}")).toEqual({
+      schemaVersion: 1,
+      decision: "deny",
+      reasonCode: "DEVICE_GATE_FORBIDDEN",
+      action: "approve_gate",
+      deviceId: expect.any(String),
+      projectId,
+      runId,
+      targetKind: "gate",
+    });
+    expect(audit?.event_data).not.toContain("system.install");
+    expect(audit?.event_data).not.toContain("workflow.approve-plan");
+    await app.close();
+  });
+
+  it("does not expose desktop Artifact, arbitrary shell, path, URL, or Provider routes remotely", async () => {
+    const { app } = await setupRemote();
+    for (const url of [
+      "/api/v1/artifacts/art_mobile00002/pages?projectId=prj_mobile00002",
+      "/api/v1/mobile/shell",
+      "/api/v1/mobile/files?path=C%3A%5Cprivate",
+      "/api/v1/mobile/open?url=https%3A%2F%2Fprovider.invalid",
+      "/api/v1/mobile/providers/codex/resume",
+    ]) {
+      const response = await app.inject({
+        method: "GET",
+        url,
+        headers: {
+          host: "remote.hunter",
+          origin: "https://phone.example",
+        },
+      });
+      expect(response.statusCode, url).toBe(404);
+      expect(response.json()).toEqual({ code: "REMOTE_ROUTE_NOT_FOUND" });
+    }
+    await app.close();
+  });
+
   it("rejects revoked-token replay and unauthenticated SSE", async () => {
     const { app, store, device, credentials, signRequest } = await setupRemote();
     const url = `/api/v1/mobile/events?projectId=${projectId}`;
@@ -982,6 +1161,21 @@ describe("remote device HTTP boundary", () => {
         allowedOrigins: ["https://phone.example"],
       } as never),
     ).toThrowError("REMOTE_HTTPS_REQUIRED");
+    expect(() =>
+      buildRemoteDeviceApp({
+        https: {},
+        allowedHosts: ["remote.hunter"],
+        allowedOrigins: ["https://phone.example"],
+      } as never),
+    ).toThrowError("REMOTE_DEVICE_IDENTITY_REQUIRED");
+    await expect(startRemoteTlsListener({
+      enabled: true,
+      host: "0.0.0.0",
+      port: 0,
+      key: "",
+      cert: "",
+      buildApp: () => remote.app,
+    })).rejects.toThrowError("REMOTE_TLS_MATERIAL_REQUIRED");
     await remote.app.close();
   });
 

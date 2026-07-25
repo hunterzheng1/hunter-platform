@@ -13,6 +13,9 @@
 | `LocalPathRef` | 仅在指定 DeviceBinding 内有效的本地路径引用。 |
 | `ProjectEnvironment` | Project 在某台 Device 上运行所需的非秘密环境配置引用。 |
 | `ProjectDashboard` | 聚合 Project 的 Requirement、Change、Run、Artifact 和待处理事项的只读投影。 |
+| `MobileStepKind` | 远程只读投影中的 Provider-neutral 步骤类别；只允许 `agent`、`command`、`verify`、`human_gate`、`context`、`subflow`，不得携带 executor selector。 |
+| `MobileCommandOutboxEntry` | 设备本地保存的未确认移动命令，包含完整命令、缓存时间和提交时的 expected version；Host receipt 到达前不表示成功。 |
+| `MobileGatePermissionAllowlist` | 同时约束移动 Gate 投影和服务端命令执行的 fail-closed 权限集合；只接受 canonical low/medium-risk catalog 中的权限，客户端不可扩宽。 |
 
 ## Avoid
 
@@ -24,3 +27,5 @@
 | 假定所有设备具有相同路径 | 每台 Device 独立的 `DeviceBinding` |
 | 让 UI 直接修改 Workbench 数据表 | 通过 Workbench 模块接口或命令 |
 | 在 Workbench 中保存 Agent 私有 Session 状态 | Runtime 的 `NativeSessionRef` |
+| 在移动投影中暴露 Provider selector、任意路径、URL 或私有操作 | 使用固定 `MobileStepKind` 与严格 `MobileCommandEnvelope` |
+| 只靠隐藏移动按钮授权 Gate | 投影与事务内执行共同使用 `MobileGatePermissionAllowlist` |

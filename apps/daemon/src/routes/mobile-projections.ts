@@ -1,7 +1,9 @@
 import {
   MobileRunProjectionSchema,
+  MobileSafeGatePermissionSchema,
   type MobileCommandEnvelope,
   type MobileRunProjection,
+  type DeviceCommandAuthorization,
 } from "@hunter/device-gateway";
 import {
   canonicalSha256,
@@ -23,7 +25,7 @@ export interface MobileProjectionRepositories {
   getWorkflowRevision(workflowRevisionId: string): Readonly<WorkflowRevision> | null;
 }
 
-export interface MobileProjectionProvider {
+export interface MobileProjectionProvider extends DeviceCommandAuthorization {
   list(authorizedProjectIds: readonly ProjectId[]): readonly MobileRunProjection[];
 }
 
@@ -44,6 +46,7 @@ function idempotencyKey(
 function commandsFor(
   run: WorkflowRunState,
   humanGate: boolean,
+  mobileGateAllowed: boolean,
 ): readonly MobileCommandEnvelope[] {
   const step = [...run.steps].reverse().find(({ conclusion }) => conclusion === "active");
   if (step === undefined) return [];
@@ -57,6 +60,7 @@ function commandsFor(
     && step.executionStatus === "returned"
     && step.verificationStatus === "pending"
   ) {
+    if (!mobileGateAllowed) return [];
     const gateId = deriveHumanGateId(run.binding.runId, step.stepRunId);
     return [
       {
@@ -106,8 +110,51 @@ function commandsFor(
 export function createMobileProjectionProvider(input: {
   readonly flowStore: MobileProjectionFlowStore;
   readonly repositories: MobileProjectionRepositories;
+  readonly allowedGatePermissions?: readonly string[] | undefined;
 }): MobileProjectionProvider {
+  const parsedAllowedGatePermissions = MobileSafeGatePermissionSchema
+    .array()
+    .max(32)
+    .safeParse(input.allowedGatePermissions ?? []);
+  if (!parsedAllowedGatePermissions.success) {
+    throw new Error("MOBILE_GATE_PERMISSION_NOT_SAFE");
+  }
+  const allowedGatePermissions = new Set<string>(
+    parsedAllowedGatePermissions.data,
+  );
+  const mobileGateAllowed = (
+    run: WorkflowRunState,
+    gateId: string,
+  ): boolean => {
+    const step = run.steps.find(
+      ({ stepRunId }) => deriveHumanGateId(run.binding.runId, stepRunId) === gateId,
+    );
+    const workflow = input.repositories.getWorkflowRevision(
+      run.binding.workflowRevisionId,
+    );
+    const definition = workflow?.steps.find(({ stepId }) => stepId === step?.stepId);
+    return definition?.kind === "human_gate"
+      && definition.verifier.kind === "human_receipt"
+      && definition.permissionPolicy.decision === "require_approval"
+      && definition.permissionPolicy.permissions.every((permission) =>
+        allowedGatePermissions.has(permission));
+  };
   return {
+    authorize(command: MobileCommandEnvelope) {
+      if (command.action !== "approve_gate" && command.action !== "reject_gate") {
+        return;
+      }
+      const run = input.flowStore
+        .allRuns()
+        .find(({ binding }) => binding.runId === command.runId);
+      if (
+        run === undefined
+        || run.binding.projectId !== command.projectId
+        || !mobileGateAllowed(run, command.gateId)
+      ) {
+        throw new Error("DEVICE_GATE_FORBIDDEN");
+      }
+    },
     list(authorizedProjectIds) {
       const allowed = new Set<ProjectId>(authorizedProjectIds);
       return input.flowStore
@@ -127,18 +174,23 @@ export function createMobileProjectionProvider(input: {
           if (project === null || workflow === null || step === undefined || definition === undefined) {
             return [];
           }
+          const gateId = deriveHumanGateId(run.binding.runId, step.stepRunId);
           return [MobileRunProjectionSchema.parse({
             projectId: run.binding.projectId,
             runId: run.binding.runId,
             projectName: project.name,
-            currentStep: `${definition.kind}:${definition.executor.selector}`,
+            currentStep: definition.kind,
             attention: run.status === "waiting_approval"
               ? "Approval required"
               : run.status === "needs_attention"
                 ? "Run needs attention"
                 : `Run is ${run.status}`,
             connection: "online",
-            commands: commandsFor(run, definition.verifier.kind === "human_receipt"),
+            commands: commandsFor(
+              run,
+              definition.verifier.kind === "human_receipt",
+              mobileGateAllowed(run, gateId),
+            ),
           })];
         });
     },

@@ -1,4 +1,8 @@
-import type { DeviceId, ProjectId } from "@hunter/domain";
+import {
+  canonicalSha256,
+  type DeviceId,
+  type ProjectId,
+} from "@hunter/domain";
 import type {
   ApplyRunControlCommand,
   FlowCommandHandler,
@@ -23,6 +27,14 @@ export interface DeviceCommandPrincipal {
 export interface DeviceGatewayOptions {
   readonly journal: SqliteOperationJournal;
   readonly commands: FlowCommandHandler;
+  readonly authorization: DeviceCommandAuthorization;
+}
+
+export interface DeviceCommandAuthorization {
+  authorize(
+    command: MobileCommandEnvelope,
+    principal: DeviceCommandPrincipal,
+  ): void;
 }
 
 const REQUIRED_SCOPE: Readonly<Record<MobileCommandAction, MobileScope>> = {
@@ -112,12 +124,74 @@ export class DeviceGateway {
 
   public execute(candidate: unknown, principal: DeviceCommandPrincipal): MobileCommandResult {
     const command = MobileCommandEnvelopeSchema.parse(candidate);
-    return this.options.journal.runInImmediateTransaction(() => {
-      authorize(command, principal);
-      return {
-        status: "accepted",
-        receipt: this.options.commands.handle(translate(command, principal)),
-      };
+    try {
+      return this.options.journal.runInImmediateTransaction(() => {
+        authorize(command, principal);
+        this.options.authorization.authorize(command, principal);
+        return {
+          status: "accepted",
+          receipt: this.options.commands.handle(translate(command, principal)),
+        };
+      });
+    } catch (error) {
+      if (
+        error instanceof Error
+        && [
+          "DEVICE_PROJECT_FORBIDDEN",
+          "DEVICE_SCOPE_FORBIDDEN",
+          "DEVICE_GATE_FORBIDDEN",
+        ].includes(error.message)
+      ) {
+        this.recordAuthorizationDenial(command, principal, error.message);
+      }
+      throw error;
+    }
+  }
+
+  private recordAuthorizationDenial(
+    command: MobileCommandEnvelope,
+    principal: DeviceCommandPrincipal,
+    reasonCode: string,
+  ): void {
+    const decision = {
+      schemaVersion: 1,
+      decision: "deny" as const,
+      reasonCode,
+      action: command.action,
+      deviceId: principal.deviceId,
+      projectId: command.projectId,
+      runId: command.runId,
+      targetKind: "gateId" in command ? "gate" as const : "step" as const,
+    };
+    const fingerprint = canonicalSha256({
+      ...decision,
+      idempotencyKey: command.idempotencyKey,
+      expectedVersion: command.expectedVersion,
+    });
+    const aggregateId = `device-permission-audit:${command.projectId}`;
+    const occurredAt = new Date().toISOString();
+    this.options.journal.commitCommand({
+      commandId: `DevicePermissionDecision:${fingerprint}`,
+      requestFingerprint: fingerprint,
+      projectId: command.projectId,
+      aggregateId,
+      expectedVersion: this.options.journal.aggregateVersion(aggregateId),
+      actor: {
+        actorId: `device:${principal.deviceId}`,
+        correlationId: command.idempotencyKey,
+      },
+      events: [{
+        eventId: `evt_device_permission_${fingerprint.slice(0, 24)}`,
+        eventType: "DevicePermissionDecisionRecorded",
+        eventData: decision,
+        schemaVersion: 1,
+        occurredAt,
+      }],
+      operations: [],
+      response: {
+        status: "denied",
+        reasonCode,
+      },
     });
   }
 }

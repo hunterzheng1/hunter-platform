@@ -18,6 +18,13 @@ export type TerminalMobileCommandReceipt = MobileCommandResult;
 
 export interface MobileCommandOutboxOptions {
   readonly indexedDB: IDBFactory;
+  readonly now?: (() => Date) | undefined;
+}
+
+export interface PendingMobileCommand {
+  readonly command: MobileCommandEnvelope;
+  readonly cachedAt: string;
+  readonly confirmation: "unconfirmed";
 }
 
 function canonicalJson(value: unknown): string {
@@ -74,7 +81,7 @@ export class MobileCommandOutbox {
     return receipt;
   }
 
-  public async pending(): Promise<readonly MobileCommandEnvelope[]> {
+  public async pending(): Promise<readonly PendingMobileCommand[]> {
     const database = await openDeviceVault(this.options.indexedDB);
     try {
       const transaction = database.transaction("command-outbox", "readonly");
@@ -84,7 +91,11 @@ export class MobileCommandOutbox {
       await transactionDone(transaction);
       return records
         .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
-        .map((record) => MobileCommandEnvelopeSchema.parse(record.command));
+        .map((record) => ({
+          command: MobileCommandEnvelopeSchema.parse(record.command),
+          cachedAt: record.createdAt,
+          confirmation: "unconfirmed" as const,
+        }));
     } finally {
       database.close();
     }
@@ -104,7 +115,7 @@ export class MobileCommandOutbox {
         idempotencyKey: command.idempotencyKey,
         fingerprint,
         command,
-        createdAt: new Date().toISOString(),
+        createdAt: (this.options.now?.() ?? new Date()).toISOString(),
       } satisfies CommandRecord);
       await transactionDone(transaction);
     } finally {

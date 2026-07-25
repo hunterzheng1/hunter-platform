@@ -13,6 +13,7 @@ import type { MobileCommandOutbox } from "./command-outbox.js";
 import type { MobileRuntimeSnapshot } from "./mobile-runtime.js";
 
 export interface MobileApplicationRuntime {
+  snapshot?(): MobileRuntimeSnapshot;
   connect(): Promise<MobileRuntimeSnapshot>;
   pollEvents(): Promise<MobileRuntimeSnapshot>;
   beginPairing(input: {
@@ -38,7 +39,7 @@ export function MobileApplication({
   outbox,
 }: {
   readonly runtime: MobileApplicationRuntime;
-  readonly outbox: Pick<MobileCommandOutbox, "submit">;
+  readonly outbox: Pick<MobileCommandOutbox, "pending" | "submit">;
 }) {
   const [snapshot, setSnapshot] = useState<MobileRuntimeSnapshot>();
   const [pairingId, setPairingId] = useState("");
@@ -65,11 +66,13 @@ export function MobileApplication({
     };
   }, [runtime]);
   useEffect(() => {
-    if (snapshot?.state !== "connected") return;
+    if (snapshot?.state !== "connected" && snapshot?.state !== "offline") return;
     let active = true;
     const poll = async () => {
       try {
-        const latest = await runtime.pollEvents();
+        const latest = snapshot.state === "offline"
+          ? await runtime.connect()
+          : await runtime.pollEvents();
         if (active) setSnapshot(latest);
       } catch {
         // Preserve the last authenticated projection across transient network loss.
@@ -137,8 +140,17 @@ export function MobileApplication({
   return (
     <MobileCockpitWithOutbox
       runs={snapshot.runs}
+      offline={snapshot.state === "offline"}
       outbox={outbox}
-      transport={async (command) => await runtime.execute(command)}
+      transport={async (command) => {
+        try {
+          return await runtime.execute(command);
+        } catch (error) {
+          const latest = runtime.snapshot?.();
+          if (latest !== undefined) setSnapshot(latest);
+          throw error;
+        }
+      }}
     />
   );
 }

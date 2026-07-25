@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   MobileCommandEnvelopeSchema,
+  MobileSafeGatePermissionSchema,
   MobileScopeSetSchema,
   MobileRunProjectionSchema,
+  classifyMobileGatePermissionRisk,
 } from "./mobile-contracts.js";
 
 const projectId = "prj_mobile00001";
@@ -97,7 +99,7 @@ describe("mobile public contracts", () => {
       projectId,
       runId,
       projectName: "Hunter",
-      currentStep: "approve_plan",
+      currentStep: "human_gate",
       attention: "等待批准",
       connection: "online",
       commands: [command({
@@ -111,6 +113,67 @@ describe("mobile public contracts", () => {
     expect(MobileRunProjectionSchema.safeParse({
       ...projection,
       commands: [command({ projectId: "prj_mobile00002" })],
+    }).success).toBe(false);
+  });
+
+  it("classifies only canonical low or medium permissions as mobile-safe", () => {
+    expect(MobileSafeGatePermissionSchema.parse("workflow.approve-plan")).toBe(
+      "workflow.approve-plan",
+    );
+    expect(classifyMobileGatePermissionRisk("workflow.approve-plan")).toBe("medium");
+    expect(classifyMobileGatePermissionRisk("system.install")).toBe("high");
+    expect(classifyMobileGatePermissionRisk("future.unknown")).toBe("unknown");
+    expect(MobileSafeGatePermissionSchema.safeParse("system.install").success).toBe(false);
+    expect(MobileSafeGatePermissionSchema.safeParse("future.unknown").success).toBe(false);
+  });
+
+  it("requires a cache timestamp only for an offline projection", () => {
+    const projection = {
+      projectId,
+      runId,
+      projectName: "Hunter",
+      currentStep: "human_gate",
+      attention: "等待批准",
+      connection: "online",
+      commands: [],
+    };
+    expect(MobileRunProjectionSchema.safeParse({
+      ...projection,
+      connection: "offline",
+    }).success).toBe(false);
+    expect(MobileRunProjectionSchema.safeParse({
+      ...projection,
+      connection: "offline",
+      cachedAt: "2026-07-25T01:02:03.000Z",
+    }).success).toBe(true);
+    expect(MobileRunProjectionSchema.safeParse({
+      ...projection,
+      cachedAt: "2026-07-25T01:02:03.000Z",
+    }).success).toBe(false);
+  });
+
+  it.each([
+    ["arbitrary shell", { ...command(), action: "shell", payload: { command: "whoami" } }],
+    ["absolute path", { ...command(), path: "C:\\private\\source" }],
+    ["arbitrary URL", { ...command(), url: "https://provider.invalid/session" }],
+    ["provider-private operation", { ...command(), providerOperation: "codex.resume" }],
+  ])("rejects %s input at the public mobile command boundary", (_name, candidate) => {
+    expect(MobileCommandEnvelopeSchema.safeParse(candidate).success).toBe(false);
+  });
+
+  it.each([
+    "agent:provider-private-selector",
+    "C:\\private\\workspace",
+    "https://provider.invalid/session",
+  ])("rejects non-neutral current Step text %j", (currentStep) => {
+    expect(MobileRunProjectionSchema.safeParse({
+      projectId,
+      runId,
+      projectName: "Hunter",
+      currentStep,
+      attention: "等待批准",
+      connection: "online",
+      commands: [],
     }).success).toBe(false);
   });
 });
