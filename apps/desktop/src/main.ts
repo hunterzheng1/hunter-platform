@@ -14,6 +14,12 @@ import {
   DesktopDaemonClient,
   installDesktopIpcHandlers,
 } from "./ipc.js";
+import {
+  acquireDesktopInstance,
+  isRendererFailure,
+  ownsDesktopExit,
+  OwnedDesktopProcessLifecycle,
+} from "./install-lifecycle.js";
 
 function packagedResource(relativePath: string): string {
   if (app.isPackaged) return join(process.resourcesPath, relativePath);
@@ -34,6 +40,12 @@ async function createMainWindow(): Promise<BrowserWindow> {
       ...LOCKED_DOWN_WEB_PREFERENCES,
       preload: join(app.getAppPath(), "dist", "preload.cjs"),
     },
+  });
+  window.webContents.once("render-process-gone", (_event, details) => {
+    if (!isRendererFailure(details.reason)) return;
+    void lifecycle.stop("renderer_crashed").then((receipt) => {
+      if (ownsDesktopExit(receipt)) app.exit(1);
+    }).catch(() => app.exit(1));
   });
 
   installWindowBoundary(
@@ -60,6 +72,11 @@ async function createMainWindow(): Promise<BrowserWindow> {
 }
 
 let supervisor: DaemonSupervisor | undefined;
+let mainWindow: BrowserWindow | undefined;
+const lifecycle = new OwnedDesktopProcessLifecycle(
+  async () => await supervisor?.stop(),
+);
+let normalShutdownRequested = false;
 
 async function startApplication(): Promise<void> {
   const capability = randomBytes(32).toString("base64url");
@@ -79,18 +96,50 @@ async function startApplication(): Promise<void> {
     (request, listener, signal) =>
       client.subscribeEvents(request, listener, signal),
   );
-  await createMainWindow();
+  mainWindow = await createMainWindow();
+  mainWindow.once("closed", () => {
+    mainWindow = undefined;
+  });
 }
 
-app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) void createMainWindow();
-});
-app.on("window-all-closed", () => {
-  supervisor?.stop();
-  app.quit();
-});
+function focusExistingWindow(): void {
+  const existing = mainWindow ?? BrowserWindow.getAllWindows()[0];
+  if (existing === undefined) return;
+  if (existing.isMinimized()) existing.restore();
+  existing.show();
+  existing.focus();
+}
 
-void app.whenReady().then(startApplication).catch(() => {
-  supervisor?.stop();
-  app.exit(1);
-});
+if (acquireDesktopInstance(app, focusExistingWindow)) {
+  app.on("activate", () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      void createMainWindow().then((window) => {
+        mainWindow = window;
+      });
+    } else {
+      focusExistingWindow();
+    }
+  });
+  app.on("before-quit", (event) => {
+    event.preventDefault();
+    if (normalShutdownRequested) return;
+    normalShutdownRequested = true;
+    void lifecycle.stop("normal_exit")
+      .then((receipt) => {
+        if (ownsDesktopExit(receipt)) app.exit(0);
+      })
+      .catch(() => app.exit(1));
+  });
+  app.on("window-all-closed", () => {
+    app.quit();
+  });
+
+  void app.whenReady().then(startApplication).catch(async () => {
+    try {
+      const receipt = await lifecycle.stop("daemon_start_failed");
+      if (ownsDesktopExit(receipt)) app.exit(1);
+    } catch {
+      app.exit(1);
+    }
+  });
+}

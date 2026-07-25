@@ -15,8 +15,9 @@
     "build:resources": "npm run build -w @hunter/web",
     "smoke:preload": "electron scripts/verify-preload.mjs",
     "smoke:sidecar": "node scripts/verify-sidecar.mjs",
+    "smoke:install-lifecycle": "node scripts/verify-install-lifecycle.mjs",
     "typecheck": "tsc -b --pretty false",
-    "pack:win": "npm run build:resources && npm run build && npm run smoke:sidecar && npm run smoke:preload && electron-builder --win nsis --x64"
+    "pack:win": "npm run build:resources && npm run build && npm run smoke:sidecar && npm run smoke:preload && electron-builder --win nsis --x64 && npm run smoke:install-lifecycle"
   },
   "devDependencies": {
     "electron": "41.10.2",
@@ -65,7 +66,8 @@
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false
     }
   }
 }

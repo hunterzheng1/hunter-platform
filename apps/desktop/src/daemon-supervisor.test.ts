@@ -68,20 +68,22 @@ describe("DaemonSupervisor", () => {
     );
   });
 
-  it("terminates only its owned child once and waits for exit before restarting", () => {
+  it("terminates only its owned child once and waits for exit before restarting", async () => {
     const first = new FakeChild();
     const second = new FakeChild();
     const spawn = vi.fn().mockReturnValueOnce(first).mockReturnValueOnce(second) as unknown as SpawnDaemon;
     const supervisor = new DaemonSupervisor(spawn, "daemon.js", "electron.exe");
 
     expect(supervisor.start()).toBe(first);
-    supervisor.stop();
-    supervisor.stop();
+    const stopping = supervisor.stop();
+    expect(supervisor.stop()).toBe(stopping);
     expect(first.kill).toHaveBeenCalledTimes(1);
     expect(first.kill).toHaveBeenCalledWith("SIGTERM");
     expect(supervisor.start()).toBe(first);
 
     first.emit("exit", 0, null);
+    first.emit("close", 0, null);
+    await expect(stopping).resolves.toBeUndefined();
     expect(supervisor.start()).toBe(second);
     expect(spawn).toHaveBeenCalledTimes(2);
   });
@@ -102,7 +104,7 @@ describe("DaemonSupervisor", () => {
     expect(supervisor.start()).toBe(replacement);
   });
 
-  it("retains ownership after a post-spawn process error until the child exits", () => {
+  it("retains ownership after a post-spawn process error until the child exits", async () => {
     const running = new FakeChild();
     const replacement = new FakeChild();
     const spawn = vi.fn().mockReturnValueOnce(running).mockReturnValueOnce(replacement) as unknown as SpawnDaemon;
@@ -114,11 +116,76 @@ describe("DaemonSupervisor", () => {
 
     expect(supervisor.start()).toBe(running);
     expect(spawn).toHaveBeenCalledOnce();
-    supervisor.stop();
+    const stopping = supervisor.stop();
     expect(running.kill).toHaveBeenCalledWith("SIGTERM");
 
     running.emit("exit", 1, null);
+    running.emit("close", 1, null);
+    await stopping;
     expect(supervisor.start()).toBe(replacement);
+  });
+
+  it("does not report cleanup before close and escalates an unresponsive owned child", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new FakeChild();
+      child.kill.mockImplementation((signal?: NodeJS.Signals | number) => {
+        if (signal === "SIGKILL") {
+          queueMicrotask(() => child.emit("close", 1, "SIGKILL"));
+        }
+        return true;
+      });
+      const spawn = vi.fn(() => child) as unknown as SpawnDaemon;
+      const supervisor = new DaemonSupervisor(
+        spawn,
+        "daemon.js",
+        "electron.exe",
+      );
+      supervisor.start();
+
+      const stopping = supervisor.stop();
+      let settled = false;
+      void stopping.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(stopping).resolves.toBeUndefined();
+      expect(child.kill).toHaveBeenLastCalledWith("SIGKILL");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("allows another owned-process cleanup attempt after a stop timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new FakeChild();
+      const spawn = vi.fn(() => child) as unknown as SpawnDaemon;
+      const supervisor = new DaemonSupervisor(
+        spawn,
+        "daemon.js",
+        "electron.exe",
+      );
+      supervisor.start();
+
+      const first = supervisor.stop();
+      const firstRejection = expect(first).rejects.toThrowError(
+        "DAEMON_STOP_TIMEOUT",
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      await firstRejection;
+
+      const second = supervisor.stop();
+      expect(second).not.toBe(first);
+      child.emit("close", 1, "SIGKILL");
+      await expect(second).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not retain a child when spawn throws synchronously", () => {
