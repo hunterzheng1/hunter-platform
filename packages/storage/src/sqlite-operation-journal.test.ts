@@ -225,4 +225,49 @@ describe("SqliteOperationJournal", () => {
     expect(db.prepare("SELECT COUNT(*) AS count FROM command_receipts").get()).toEqual({ count: 0 });
     expect(db.prepare("SELECT COUNT(*) AS count FROM outbox").get()).toEqual({ count: 0 });
   });
+
+  it("preserves the original storage error when SQLite already ended the transaction", () => {
+    const { database: db, journal } = setup();
+
+    expect(() =>
+      journal.runInImmediateTransaction(() => {
+        db.exec("ROLLBACK");
+        throw new Error("SQLITE_FULL");
+      }),
+    ).toThrowError("SQLITE_FULL");
+    expect(db.isTransaction).toBe(false);
+  });
+
+  it("injects a real failure immediately before commit and rolls back atomically", () => {
+    const { database: db } = setup();
+    const journal = new SqliteOperationJournal(db, {
+      transactionFault: (point) => {
+        if (point === "before_commit") throw new Error("INJECTED_BEFORE_COMMIT");
+      },
+    });
+
+    expect(() => journal.commitCommand(command())).toThrowError(
+      "INJECTED_BEFORE_COMMIT",
+    );
+    expect(db.prepare("SELECT COUNT(*) AS count FROM events").get()).toEqual({
+      count: 0,
+    });
+  });
+
+  it("injects after durable commit without rolling the committed command back", () => {
+    const { database: db } = setup();
+    const journal = new SqliteOperationJournal(db, {
+      transactionFault: (point) => {
+        if (point === "after_commit") throw new Error("INJECTED_AFTER_COMMIT");
+      },
+    });
+
+    expect(() => journal.commitCommand(command())).toThrowError(
+      "INJECTED_AFTER_COMMIT",
+    );
+    expect(db.prepare("SELECT COUNT(*) AS count FROM events").get()).toEqual({
+      count: 2,
+    });
+    expect(db.isTransaction).toBe(false);
+  });
 });

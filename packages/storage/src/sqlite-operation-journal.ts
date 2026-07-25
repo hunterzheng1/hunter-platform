@@ -67,6 +67,9 @@ export interface TerminalRunArchiveSchedule {
 
 export interface SqliteOperationJournalOptions {
   readonly scheduleTerminalRunArchive?: ((input: TerminalRunArchiveSchedule) => void) | undefined;
+  readonly transactionFault?: ((
+    point: "before_commit" | "after_commit",
+  ) => void) | undefined;
 }
 
 export type OutboxOperationStatus =
@@ -184,10 +187,12 @@ export class SqliteOperationJournal {
     this.transactionDepth += 1;
     try {
       const result = work();
+      this.options.transactionFault?.("before_commit");
       this.database.exec("COMMIT");
+      this.options.transactionFault?.("after_commit");
       return result;
     } catch (error) {
-      this.database.exec("ROLLBACK");
+      if (this.database.isTransaction) this.database.exec("ROLLBACK");
       throw error;
     } finally {
       this.transactionDepth -= 1;

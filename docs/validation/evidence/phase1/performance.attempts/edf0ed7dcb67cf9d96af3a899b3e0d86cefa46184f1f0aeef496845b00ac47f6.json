@@ -1,0 +1,388 @@
+{
+  "schemaVersion": 1,
+  "proofScope": "contract_only",
+  "dataset": {
+    "schemaVersion": 1,
+    "datasetId": "phase1-fixed-v1",
+    "seed": 1213550164,
+    "fakeClockStart": "2026-07-25T00:00:00.000Z",
+    "projectCount": 64,
+    "runCount": 128,
+    "stepsPerRun": 14,
+    "readonlyWaitingSteps": 10,
+    "activeFakeSteps": 4,
+    "benchmarkWarmupSamples": 5,
+    "benchmarkMeasuredSamples": 30,
+    "plannedSoakDurationMs": 86400000,
+    "soakCycleIntervalMs": 60000,
+    "restartEveryCycles": 5,
+    "archiveEveryCycles": 10,
+    "rebuildEveryCycles": 30,
+    "loopEveryCycles": 1,
+    "faultMatrixEveryCycles": 60,
+    "maxHeapGrowthBytes": 268435456,
+    "maxDatabaseGrowthPerCycleBytes": 262144
+  },
+  "host": {
+    "platform": "win32",
+    "release": "10.0.26200",
+    "architecture": "x64",
+    "cpuModel": "13th Gen Intel(R) Core(TM) i5-13490F",
+    "logicalCores": 16,
+    "totalMemoryBytes": 34164097024,
+    "nodeVersion": "v24.14.0"
+  },
+  "notes": [
+    "React component measurements use local JSDOM and deterministic Fake data.",
+    "Fake Runtime proves Hunter contracts only; no real Provider is measured.",
+    "Failures are retained as separate fault-history entries and are never rewritten."
+  ],
+  "status": "PASS",
+  "measuredAt": "2026-07-25T03:29:48.033Z",
+  "metrics": {
+    "projectListInteractive": {
+      "count": 30,
+      "minMs": 5.925899999999956,
+      "p50Ms": 12.968700000000126,
+      "p95Ms": 18.85669999999982,
+      "maxMs": 20.815200000000004,
+      "targetMs": 1000,
+      "status": "PASS"
+    },
+    "runPageInteractive": {
+      "count": 30,
+      "minMs": 2.2157999999999447,
+      "p50Ms": 2.59719999999993,
+      "p95Ms": 8.301799999999957,
+      "maxMs": 8.767799999999852,
+      "targetMs": 1000,
+      "status": "PASS"
+    },
+    "eventToUiVisible": {
+      "count": 30,
+      "minMs": 0.5326000000000022,
+      "p50Ms": 1.0829000000001088,
+      "p95Ms": 2.22829999999999,
+      "maxMs": 2.3119000000001506,
+      "targetMs": 500,
+      "status": "PASS"
+    },
+    "concurrentWorkload": {
+      "count": 30,
+      "minMs": 0.45020000000022264,
+      "p50Ms": 0.5543999999999869,
+      "p95Ms": 0.8468000000002576,
+      "maxMs": 0.8486000000002605,
+      "targetMs": 500,
+      "status": "PASS"
+    }
+  },
+  "faultAttempts": [
+    {
+      "attemptId": "fat_crash_before_commit_1",
+      "scenario": "crash_before_commit",
+      "status": "PASS",
+      "expected": "pre-commit crash leaves no durable event; recovery commits once",
+      "observed": "0 events before recovery; 1 event after recovery",
+      "elapsedMs": 58.39899999999989,
+      "externalOperationCount": 0,
+      "duplicateExternalOperationCount": 0,
+      "falseSuccessCount": 0,
+      "failureHistoryPreserved": true,
+      "history": [
+        {
+          "sequence": 1,
+          "outcome": "INJECTED_FAILURE",
+          "code": "INJECTED_BEFORE_COMMIT",
+          "observedAt": "2026-07-25T00:00:00.000Z"
+        },
+        {
+          "sequence": 2,
+          "outcome": "RECOVERY_PASS",
+          "code": "RECOVERY_COMMITTED_ONCE",
+          "observedAt": "2026-07-25T00:00:01.000Z"
+        }
+      ]
+    },
+    {
+      "attemptId": "fat_crash_after_commit_2",
+      "scenario": "crash_after_commit",
+      "status": "PASS",
+      "expected": "post-commit crash replays the receipt without a duplicate event",
+      "observed": "injected post-commit loss followed by one durable event",
+      "elapsedMs": 53.522699999999986,
+      "externalOperationCount": 0,
+      "duplicateExternalOperationCount": 0,
+      "falseSuccessCount": 0,
+      "failureHistoryPreserved": true,
+      "history": [
+        {
+          "sequence": 1,
+          "outcome": "INJECTED_FAILURE",
+          "code": "INJECTED_AFTER_COMMIT",
+          "observedAt": "2026-07-25T00:00:00.000Z"
+        },
+        {
+          "sequence": 2,
+          "outcome": "RECOVERY_PASS",
+          "code": "RECEIPT_REPLAYED_WITHOUT_DUPLICATE",
+          "observedAt": "2026-07-25T00:00:01.000Z"
+        }
+      ]
+    },
+    {
+      "attemptId": "fat_crash_before_dispatch_3",
+      "scenario": "crash_before_dispatch",
+      "status": "PASS",
+      "expected": "injected crash is preserved and recovery converges without duplicate external operation",
+      "observed": "INJECTED_FAULT:AFTER_COMMAND_COMMIT_BEFORE_PROVIDER_CALL -> completed:completed",
+      "elapsedMs": 70.38120000000026,
+      "externalOperationCount": 1,
+      "duplicateExternalOperationCount": 0,
+      "falseSuccessCount": 0,
+      "failureHistoryPreserved": true,
+      "history": [
+        {
+          "sequence": 1,
+          "outcome": "INJECTED_FAILURE",
+          "code": "INJECTED_FAULT:AFTER_COMMAND_COMMIT_BEFORE_PROVIDER_CALL",
+          "observedAt": "2026-07-25T00:00:00.000Z"
+        },
+        {
+          "sequence": 2,
+          "outcome": "RECOVERY_PASS",
+          "code": "RECOVERY_COMPLETED",
+          "observedAt": "2026-07-25T00:00:01.000Z"
+        }
+      ]
+    },
+    {
+      "attemptId": "fat_crash_after_dispatch_4",
+      "scenario": "crash_after_dispatch",
+      "status": "PASS",
+      "expected": "injected crash is preserved and recovery converges without duplicate external operation",
+      "observed": "INJECTED_FAULT:AFTER_PROVIDER_SUCCESS_BEFORE_RECEIPT_COMMIT -> needs_attention:needs_attention",
+      "elapsedMs": 71.0616,
+      "externalOperationCount": 1,
+      "duplicateExternalOperationCount": 0,
+      "falseSuccessCount": 0,
+      "failureHistoryPreserved": true,
+      "history": [
+        {
+          "sequence": 1,
+          "outcome": "INJECTED_FAILURE",
+          "code": "INJECTED_FAULT:AFTER_PROVIDER_SUCCESS_BEFORE_RECEIPT_COMMIT",
+          "observedAt": "2026-07-25T00:00:00.000Z"
+        },
+        {
+          "sequence": 2,
+          "outcome": "RECOVERY_PASS",
+          "code": "RECOVERY_NEEDS_ATTENTION",
+          "observedAt": "2026-07-25T00:00:01.000Z"
+        }
+      ]
+    },
+    {
+      "attemptId": "fat_crash_before_receipt_5",
+      "scenario": "crash_before_receipt",
+      "status": "PASS",
+      "expected": "injected crash is preserved and recovery converges without duplicate external operation",
+      "observed": "INJECTED_FAULT:AFTER_PROVIDER_SUCCESS_BEFORE_RECEIPT_COMMIT -> completed:completed",
+      "elapsedMs": 70.78580000000011,
+      "externalOperationCount": 1,
+      "duplicateExternalOperationCount": 0,
+      "falseSuccessCount": 0,
+      "failureHistoryPreserved": true,
+      "history": [
+        {
+          "sequence": 1,
+          "outcome": "INJECTED_FAILURE",
+          "code": "INJECTED_FAULT:AFTER_PROVIDER_SUCCESS_BEFORE_RECEIPT_COMMIT",
+          "observedAt": "2026-07-25T00:00:00.000Z"
+        },
+        {
+          "sequence": 2,
+          "outcome": "RECOVERY_PASS",
+          "code": "RECOVERY_COMPLETED",
+          "observedAt": "2026-07-25T00:00:01.000Z"
+        }
+      ]
+    },
+    {
+      "attemptId": "fat_crash_after_receipt_6",
+      "scenario": "crash_after_receipt",
+      "status": "PASS",
+      "expected": "injected crash is preserved and recovery converges without duplicate external operation",
+      "observed": "INJECTED_FAULT:AFTER_RECEIPT_COMMIT_BEFORE_OUTBOX_COMPLETE -> idle:completed",
+      "elapsedMs": 61.67399999999998,
+      "externalOperationCount": 1,
+      "duplicateExternalOperationCount": 0,
+      "falseSuccessCount": 0,
+      "failureHistoryPreserved": true,
+      "history": [
+        {
+          "sequence": 1,
+          "outcome": "INJECTED_FAILURE",
+          "code": "INJECTED_FAULT:AFTER_RECEIPT_COMMIT_BEFORE_OUTBOX_COMPLETE",
+          "observedAt": "2026-07-25T00:00:00.000Z"
+        },
+        {
+          "sequence": 2,
+          "outcome": "RECOVERY_PASS",
+          "code": "RECOVERY_IDLE",
+          "observedAt": "2026-07-25T00:00:01.000Z"
+        }
+      ]
+    },
+    {
+      "attemptId": "fat_projection_loss_7",
+      "scenario": "projection_loss",
+      "status": "PASS",
+      "expected": "projection deletion is visible and rebuild restores ledger truth",
+      "observed": "projection emptied then rebuilt byte-for-byte",
+      "elapsedMs": 69.16830000000027,
+      "externalOperationCount": 0,
+      "duplicateExternalOperationCount": 0,
+      "falseSuccessCount": 0,
+      "failureHistoryPreserved": true,
+      "history": [
+        {
+          "sequence": 1,
+          "outcome": "INJECTED_FAILURE",
+          "code": "PROJECTION_DELETED",
+          "observedAt": "2026-07-25T00:00:00.000Z"
+        },
+        {
+          "sequence": 2,
+          "outcome": "RECOVERY_PASS",
+          "code": "PROJECTION_REBUILT_FROM_LEDGER",
+          "observedAt": "2026-07-25T00:00:01.000Z"
+        }
+      ]
+    },
+    {
+      "attemptId": "fat_archive_interrupted_8",
+      "scenario": "archive_interrupted",
+      "status": "PASS",
+      "expected": "published manifest is recovered exactly once after interruption",
+      "observed": "INJECTED_AFTER_MANIFEST_PUBLICATION -> completed with one manifest and two attempts",
+      "elapsedMs": 81.05119999999988,
+      "externalOperationCount": 0,
+      "duplicateExternalOperationCount": 0,
+      "falseSuccessCount": 0,
+      "failureHistoryPreserved": true,
+      "history": [
+        {
+          "sequence": 1,
+          "outcome": "INJECTED_FAILURE",
+          "code": "INJECTED_AFTER_MANIFEST_PUBLICATION",
+          "observedAt": "2026-07-25T00:00:00.000Z"
+        },
+        {
+          "sequence": 2,
+          "outcome": "RECOVERY_PASS",
+          "code": "ARCHIVE_RECOVERED_EXACTLY_ONCE",
+          "observedAt": "2026-07-25T00:00:01.000Z"
+        }
+      ]
+    },
+    {
+      "attemptId": "fat_disk_full_9",
+      "scenario": "disk_full",
+      "status": "PASS",
+      "expected": "SQLITE_FULL rolls back the command and later recovery is explicit",
+      "observed": "large commit rejected with zero events; bounded commit later accepted",
+      "elapsedMs": 92.95860000000039,
+      "externalOperationCount": 0,
+      "duplicateExternalOperationCount": 0,
+      "falseSuccessCount": 0,
+      "failureHistoryPreserved": true,
+      "history": [
+        {
+          "sequence": 1,
+          "outcome": "EXPECTED_REJECTION",
+          "code": "SQLITE_FULL",
+          "observedAt": "2026-07-25T00:00:00.000Z"
+        },
+        {
+          "sequence": 2,
+          "outcome": "RECOVERY_PASS",
+          "code": "CAPACITY_RESTORED_COMMIT_ACCEPTED",
+          "observedAt": "2026-07-25T00:00:01.000Z"
+        }
+      ]
+    },
+    {
+      "attemptId": "fat_read_only_10",
+      "scenario": "read_only",
+      "status": "PASS",
+      "expected": "read-only storage rejects mutation without inferred success",
+      "observed": "read-only command rejected; explicit writable recovery accepted",
+      "elapsedMs": 55.423599999999624,
+      "externalOperationCount": 0,
+      "duplicateExternalOperationCount": 0,
+      "falseSuccessCount": 0,
+      "failureHistoryPreserved": true,
+      "history": [
+        {
+          "sequence": 1,
+          "outcome": "EXPECTED_REJECTION",
+          "code": "SQLITE_READONLY",
+          "observedAt": "2026-07-25T00:00:00.000Z"
+        },
+        {
+          "sequence": 2,
+          "outcome": "RECOVERY_PASS",
+          "code": "WRITABLE_COMMIT_ACCEPTED",
+          "observedAt": "2026-07-25T00:00:01.000Z"
+        }
+      ]
+    },
+    {
+      "attemptId": "fat_sse_gap_11",
+      "scenario": "sse_gap",
+      "status": "PASS",
+      "expected": "retention gap requires snapshot replacement before resume",
+      "observed": "EVENT_CURSOR_GAP -> snapshot cursor 1 -> replay ok",
+      "elapsedMs": 60.23849999999993,
+      "externalOperationCount": 0,
+      "duplicateExternalOperationCount": 0,
+      "falseSuccessCount": 0,
+      "failureHistoryPreserved": true,
+      "history": [
+        {
+          "sequence": 1,
+          "outcome": "EXPECTED_REJECTION",
+          "code": "EVENT_CURSOR_GAP",
+          "observedAt": "2026-07-25T00:00:00.000Z"
+        },
+        {
+          "sequence": 2,
+          "outcome": "RECOVERY_PASS",
+          "code": "SNAPSHOT_REPLACED_AND_RESUMED",
+          "observedAt": "2026-07-25T00:00:01.000Z"
+        }
+      ]
+    },
+    {
+      "attemptId": "fat_mobile_replay_12",
+      "scenario": "mobile_replay",
+      "status": "PASS",
+      "expected": "same mobile idempotency key returns one durable receipt",
+      "observed": "two deliveries returned one identical command receipt",
+      "elapsedMs": 60.19240000000036,
+      "externalOperationCount": 0,
+      "duplicateExternalOperationCount": 0,
+      "falseSuccessCount": 0,
+      "failureHistoryPreserved": true,
+      "history": [
+        {
+          "sequence": 1,
+          "outcome": "OBSERVED_PASS",
+          "code": "MOBILE_REPLAY_RETURNED_ORIGINAL_RECEIPT",
+          "observedAt": "2026-07-25T00:00:00.000Z"
+        }
+      ]
+    }
+  ]
+}

@@ -114,4 +114,8 @@ export class FakeRuntime implements ExternalOperationHandler {
   get nativeEffectCount(): number {
     return this.#executions.size;
   }
+
+  operationIds(): readonly string[] {
+    return [...this.#executions.keys()].sort();
+  }
 }
