@@ -32,7 +32,7 @@ const ReadinessSchema = z.strictObject({
 export class DaemonSupervisor {
   private child: ChildProcess | undefined;
   private protectedStart: Promise<{ readonly child: ChildProcess; readonly port: number }> | undefined;
-  private readonly stopRequested = new WeakSet<ChildProcess>();
+  private readonly stopCompletions = new WeakMap<ChildProcess, Promise<void>>();
 
   constructor(
     private readonly spawn: SpawnDaemon = nodeSpawn,
@@ -89,10 +89,7 @@ export class DaemonSupervisor {
     const promise = new Promise<{ readonly child: ChildProcess; readonly port: number }>(
       (resolve, reject) => {
         if (child.stdin === null || child.stdout === null) {
-          if (!this.stopRequested.has(child)) {
-            this.stopRequested.add(child);
-            child.kill("SIGTERM");
-          }
+          void this.requestStop(child).catch(() => undefined);
           reject(new Error("DAEMON_PROTECTED_PIPE_MISSING"));
           return;
         }
@@ -109,10 +106,7 @@ export class DaemonSupervisor {
         };
         const fail = (error: Error) => {
           cleanup();
-          if (!this.stopRequested.has(child)) {
-            this.stopRequested.add(child);
-            child.kill("SIGTERM");
-          }
+          void this.requestStop(child).catch(() => undefined);
           reject(error);
         };
         function onError() {
@@ -158,10 +152,71 @@ export class DaemonSupervisor {
     return promise;
   }
 
-  stop(): void {
+  private requestStop(child: ChildProcess): Promise<void> {
+    const existing = this.stopCompletions.get(child);
+    if (existing !== undefined) return existing;
+    if (child.exitCode !== null && child.exitCode !== undefined) {
+      return Promise.resolve();
+    }
+    const completion = new Promise<void>((resolve, reject) => {
+      const timers: {
+        escalation?: NodeJS.Timeout | undefined;
+        failure?: NodeJS.Timeout | undefined;
+      } = {};
+      let closed = false;
+      const cleanup = () => {
+        if (timers.escalation !== undefined) {
+          clearTimeout(timers.escalation);
+        }
+        if (timers.failure !== undefined) clearTimeout(timers.failure);
+        child.off("close", onClose);
+      };
+      const onClose = () => {
+        closed = true;
+        cleanup();
+        resolve();
+      };
+      const force = () => {
+        if (closed) return;
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // The final close event remains authoritative.
+        }
+        if (closed) return;
+        timers.failure = setTimeout(() => {
+          cleanup();
+          reject(new Error("DAEMON_STOP_TIMEOUT"));
+        }, 5_000);
+        timers.failure.unref();
+      };
+      child.once("close", onClose);
+      let terminationRequested = false;
+      try {
+        terminationRequested = child.kill("SIGTERM");
+      } catch {
+        // Escalate below; a thrown request is not proof of termination.
+      }
+      if (closed) return;
+      if (!terminationRequested) {
+        force();
+        return;
+      }
+      timers.escalation = setTimeout(force, 5_000);
+      timers.escalation.unref();
+    });
+    this.stopCompletions.set(child, completion);
+    void completion.catch(() => {
+      if (this.stopCompletions.get(child) === completion) {
+        this.stopCompletions.delete(child);
+      }
+    });
+    return completion;
+  }
+
+  stop(): Promise<void> {
     const ownedChild = this.child;
-    if (ownedChild === undefined || this.stopRequested.has(ownedChild)) return;
-    this.stopRequested.add(ownedChild);
-    ownedChild.kill("SIGTERM");
+    if (ownedChild === undefined) return Promise.resolve();
+    return this.requestStop(ownedChild);
   }
 }

@@ -56,6 +56,9 @@ for (const forbidden of [
   "deterministic-contract-fixture-v1",
   "fake-runtime-scenario",
   "E2E contract workflow",
+  "FakeRuntime",
+  "fake-runtime.js",
+  "@hunter/testkit",
 ]) {
   if (daemonBundle.includes(forbidden)) {
     throw new Error("PRODUCTION_BUNDLE_CONTAINS_E2E_FIXTURE");
