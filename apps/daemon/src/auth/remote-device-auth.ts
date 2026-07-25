@@ -81,6 +81,15 @@ function authStatus(error: unknown): number {
 
 export function buildRemoteDeviceApp(options: RemoteDeviceAppOptions): FastifyInstance {
   if (options.https === undefined) throw new Error("REMOTE_HTTPS_REQUIRED");
+  if (
+    options.tokens === undefined
+    || options.pairing === undefined
+    || options.gateway === undefined
+    || options.eventStream === undefined
+    || options.projections === undefined
+  ) {
+    throw new Error("REMOTE_DEVICE_IDENTITY_REQUIRED");
+  }
   const baseOptions = {
     bodyLimit: options.limits?.bodyLimit ?? 64 * 1024,
     requestTimeout: options.limits?.requestTimeoutMs ?? 30_000,

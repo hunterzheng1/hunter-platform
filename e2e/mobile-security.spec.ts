@@ -97,4 +97,52 @@ test("remote mobile stays fail-closed without desktop pairing or explicit enable
     sessionKeys: [],
     databases: [],
   });
+  const results = await page.evaluate(async () => {
+    const candidates = [
+      "/api/v1/mobile/shell",
+      "/api/v1/mobile/files",
+      "/api/v1/mobile/open",
+      "/api/v1/mobile/artifacts",
+      "/api/v1/mobile/providers/codex/resume",
+    ];
+    return await Promise.all(candidates.map(async (url) => {
+      const response = await fetch(url, {
+        method: "POST",
+        credentials: "omit",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          command: "whoami",
+          path: "C:\\private",
+          url: "https://provider.invalid",
+          providerOperation: "codex.resume",
+        }),
+      });
+      const responseText = await response.text();
+      return {
+        url,
+        acceptedAsOperation:
+          response.ok
+          && (response.headers.get("content-type") ?? "").includes(
+            "application/json",
+          ),
+        reflectedPayload:
+          responseText.includes("whoami")
+          || responseText.includes("C:\\private")
+          || responseText.includes("provider.invalid")
+          || responseText.includes("codex.resume"),
+      };
+    }));
+  });
+
+  expect(results).toEqual([
+    { url: "/api/v1/mobile/shell", acceptedAsOperation: false, reflectedPayload: false },
+    { url: "/api/v1/mobile/files", acceptedAsOperation: false, reflectedPayload: false },
+    { url: "/api/v1/mobile/open", acceptedAsOperation: false, reflectedPayload: false },
+    { url: "/api/v1/mobile/artifacts", acceptedAsOperation: false, reflectedPayload: false },
+    {
+      url: "/api/v1/mobile/providers/codex/resume",
+      acceptedAsOperation: false,
+      reflectedPayload: false,
+    },
+  ]);
 });

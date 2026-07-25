@@ -34,6 +34,52 @@ export const MobileCommandActionSchema = z.enum([
 ]);
 export type MobileCommandAction = z.infer<typeof MobileCommandActionSchema>;
 
+export const MobileStepKindSchema = z.enum([
+  "agent",
+  "command",
+  "verify",
+  "human_gate",
+  "context",
+  "subflow",
+]);
+export type MobileStepKind = z.infer<typeof MobileStepKindSchema>;
+
+export const MobileGatePermissionRiskSchema = z.enum([
+  "low",
+  "medium",
+  "high",
+  "unknown",
+]);
+export type MobileGatePermissionRisk = z.infer<
+  typeof MobileGatePermissionRiskSchema
+>;
+
+const MOBILE_GATE_PERMISSION_RISKS: Readonly<
+  Record<string, Exclude<MobileGatePermissionRisk, "unknown">>
+> = Object.freeze({
+  "workflow.approve-plan": "medium",
+  "filesystem.outside-project": "high",
+  "credentials.undeclared": "high",
+  "filesystem.destructive": "high",
+  "system.install": "high",
+  "remote.mutate": "high",
+  "permissions.bypass": "high",
+  "mobile.high-risk-command": "high",
+});
+
+export function classifyMobileGatePermissionRisk(
+  permission: string,
+): MobileGatePermissionRisk {
+  return MOBILE_GATE_PERMISSION_RISKS[permission] ?? "unknown";
+}
+
+export const MobileSafeGatePermissionSchema = z.enum([
+  "workflow.approve-plan",
+]);
+export type MobileSafeGatePermission = z.infer<
+  typeof MobileSafeGatePermissionSchema
+>;
+
 const ExpectedVersionSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const IdempotencyKeySchema = z.string().trim().min(8).max(128).regex(/^[A-Za-z0-9._:-]+$/u);
 const EmptyPayloadSchema = z.strictObject({});
@@ -78,15 +124,27 @@ export const MobileCommandResultSchema = z.strictObject({
 });
 export type MobileCommandResult = z.infer<typeof MobileCommandResultSchema>;
 
-export const MobileRunProjectionSchema = z.strictObject({
+const mobileRunProjectionShape = {
   projectId: ProjectIdSchema,
   runId: RunIdSchema,
   projectName: z.string().trim().min(1).max(120),
-  currentStep: z.string().trim().min(1).max(200),
+  currentStep: MobileStepKindSchema,
   attention: z.string().trim().min(1).max(500),
-  connection: z.enum(["online", "offline"]),
   commands: z.array(MobileCommandEnvelopeSchema).max(6),
-}).superRefine((projection, context) => {
+};
+
+export const MobileRunProjectionSchema = z.discriminatedUnion("connection", [
+  z.strictObject({
+    ...mobileRunProjectionShape,
+    connection: z.literal("online"),
+    cachedAt: z.never().optional(),
+  }),
+  z.strictObject({
+    ...mobileRunProjectionShape,
+    connection: z.literal("offline"),
+    cachedAt: z.string().datetime({ offset: true }),
+  }),
+]).superRefine((projection, context) => {
   const keys = new Set<string>();
   projection.commands.forEach((command, index) => {
     if (command.projectId !== projection.projectId || command.runId !== projection.runId) {

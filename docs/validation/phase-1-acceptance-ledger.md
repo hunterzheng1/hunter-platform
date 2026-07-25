@@ -45,6 +45,10 @@
   123 files / 1051 tests 及全部验证脚本、build 通过。该结果为
   `CONTRACT_ONLY`，不证明真实
   Agent 抗 Prompt Injection。
+- Task 9：默认关闭的 TLS/device identity 远程边界、撤销/过期/refresh/proof
+  重放负例、带时间和 expected version 的未确认 outbox、retention gap 原子
+  snapshot resync、Gate permission allowlist 与 Provider-neutral 移动投影已通过
+  Fake device 和浏览器 fixture。真实手机仍为 `NOT_PROVEN`。
 
 ## 逐项台账
 
@@ -74,8 +78,8 @@
 | S-03 | CONTRACT_ONLY | 临时 SQLite/文件/CAS fixture | [Task 4 backup/restore](phase-1-backup-restore.md) | Gate R 用脱敏真实规模数据重跑隔离恢复 | Storage |
 | K-01 | CONTRACT_ONLY | Archive worker | [Vertical slice acceptance](vertical-slice-acceptance.md) | H4 覆盖所有终态 outcome 和 crash resume | Knowledge |
 | K-02 | CONTRACT_ONLY | Knowledge selection receipt + Handoff data boundary | [Task 8 Knowledge safety](phase-1-knowledge-handoff-safety.md) | Gate R 用真实 Connector 验证来源呈现、预算和 verifier 行为 | Knowledge |
-| M-01 | NOT_PROVEN | PWA contract/viewport only | [Task 17 evidence](first-vertical-slice-task17.md) | Gate R 在真实手机验证查看、锁屏、弱网和缓存时间 | Device |
-| M-02 | CONTRACT_ONLY | Fake device security E2E | [Task 17 evidence](first-vertical-slice-task17.md) | Gate R 用真实设备验证审批、撤销和离线重复请求 | Device |
+| M-01 | NOT_PROVEN | PWA contract/viewport、带时间的离线 Run cache；Artifact 摘要未实现 | [Task 9 mobile safety](phase-1-mobile-offline-safety.md) | Gate R 在真实手机验证查看、锁屏、弱网、缓存时间和 Artifact 摘要 | Device |
+| M-02 | CONTRACT_ONLY | Fake device security E2E、Gate allowlist、幂等 outbox | [Task 9 mobile safety](phase-1-mobile-offline-safety.md) | Gate R 用真实设备验证审批、撤销和离线重复请求 | Device |
 | SEC-01 | CONTRACT_ONLY | 临时 database/log/export/prompt/diagnostic fixture | [Task 5 diagnostics](phase-1-diagnostic-bundle.md) | Gate R 对真实生产输出逐字节重跑 canary | Security |
 | SEC-02 | CONTRACT_ONLY | Policy/negative scan | [Foundation gate](foundation-local-gate.md) | Gate R 检查真实 Provider 默认权限和高危 Gate | Security |
 | LNX-01 | PASS | `54f5d90` Ubuntu CI | [Phase 1 baseline](phase-1-hardening-baseline.md) | 每个后续 HEAD 继续运行 Ubuntu quality/vertical-slice | CI |
@@ -84,7 +88,7 @@
 | GOLDEN-03 | CONTRACT_ONLY | Fake verifier/Loop | [Vertical slice acceptance](vertical-slice-acceptance.md) | H4 统一预算、失败 Evidence 和归档历史检查 | Flow |
 | GOLDEN-04 | NOT_PROVEN | Cursor 未完成真实 handoff | [Phase 0 decision](phase-0-decision.md) | Gate R 需要 Windows workspace、人工修改和 verifier receipt | Connectors |
 | GOLDEN-05 | CONTRACT_ONLY | Fake recovery | [Runtime reliability](runtime-reliability.md) | Gate R 强制重启真实 Provider 并证明无重复 Session | Runtime |
-| GOLDEN-06 | NOT_PROVEN | Fake device only | [Task 17 evidence](first-vertical-slice-task17.md) | Gate R 在真实手机执行普通/高风险 Gate 与断网重放 | Device |
+| GOLDEN-06 | NOT_PROVEN | Fake device + 浏览器 fixture；未知/高风险 Gate 默认不下发 | [Task 9 mobile safety](phase-1-mobile-offline-safety.md) | Gate R 在真实手机执行普通/高风险 Gate 与断网重放 | Device |
 | NFR-REL-01 | CONTRACT_ONLY | Event actor/correlation | [Foundation gate](foundation-local-gate.md) | H4 对所有命令投影做覆盖检查 | Storage |
 | NFR-REL-02 | CONTRACT_ONLY | Fault injection/Fake | [Runtime reliability](runtime-reliability.md) | Gate R 对真实 side effect 重复同一矩阵 | Runtime |
 | NFR-REL-03 | CONTRACT_ONLY | 一致性 manifest/隔离恢复 fixture | [Task 4 backup/restore](phase-1-backup-restore.md) | Gate R 验证真实规模、介质故障和保留策略 | Storage |
@@ -108,7 +112,7 @@
 | BLOCK-05 | CONTRACT_ONLY | canonical Hunter state | [ADR-0005](../adr/0005-orca-runtime-integration.md) | 持续扫描公共类型和持久层 Provider 私有字段 | Architecture |
 | BLOCK-06 | NOT_PROVEN | Cursor 仅候选 | [Phase 0 decision](phase-0-decision.md) | 真实 receipt 前禁止宣传可控 Session | Product |
 | BLOCK-07 | CONTRACT_ONLY | 五类临时输出逐字节 canary | [Task 5 diagnostics](phase-1-diagnostic-bundle.md) | Gate R 扫描真实数据库、日志、导出和 Prompt 路径 | Security |
-| BLOCK-08 | CONTRACT_ONLY | device scope/policy | [Task 17 evidence](first-vertical-slice-task17.md) | Gate R 用真实设备验证不能绕过高危策略 | Device |
+| BLOCK-08 | CONTRACT_ONLY | device scope、proof replay、Gate permission allowlist、任意移动 operation 拒绝 | [Task 9 mobile safety](phase-1-mobile-offline-safety.md) | Gate R 用真实设备验证不能绕过高危策略 | Device |
 | BLOCK-09 | CONTRACT_ONLY | Archive/Knowledge/CAS 对账 | [Task 4 backup/restore](phase-1-backup-restore.md) | Gate R 用真实归档重跑 hash/缺失故障矩阵 | Knowledge |
 | BLOCK-10 | CONTRACT_ONLY | 状态过滤、冲突降级、预算和 untrusted-data boundary | [Task 8 Knowledge safety](phase-1-knowledge-handoff-safety.md) | Gate R 用真实 Agent/Connector 重跑恶意来源与权限负例 | Knowledge |
 | SUP-01 | NOT_PROVEN | 当前 npm install 摘要为 3 high | [Task 3 migration evidence](phase-1-versioned-migrations.md) | 分类 production reachability、修复版本和破坏性升级风险 | Security |

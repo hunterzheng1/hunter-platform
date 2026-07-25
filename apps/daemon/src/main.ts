@@ -38,6 +38,7 @@ export type RemoteDaemonOptions =
       readonly issuer: string;
       readonly allowedHosts: readonly string[];
       readonly allowedOrigins: readonly string[];
+      readonly allowedGatePermissions?: readonly string[] | undefined;
       readonly signingSecretRef: string;
       readonly tlsKeyRef: string;
       readonly tlsCertRef: string;
@@ -143,16 +144,20 @@ export async function startDaemon(options: DaemonStartOptions) {
           signingSecretRef: options.remote.signingSecretRef,
           secretStore: options.secretStore,
         });
+    const projections = createMobileProjectionProvider({
+      flowStore: services.flowStore,
+      repositories: services.repositories,
+      allowedGatePermissions: options.remote?.enabled === true
+        ? options.remote.allowedGatePermissions ?? []
+        : [],
+    });
     const gateway = deviceStore === undefined
       ? undefined
       : new DeviceGateway({
           journal: services.journal,
           commands: services.flowEngine,
+          authorization: projections,
         });
-    const projections = createMobileProjectionProvider({
-      flowStore: services.flowStore,
-      repositories: services.repositories,
-    });
     database.prepare(
       `INSERT INTO storage_metadata(metadata_key, metadata_value, updated_at)
        VALUES ('local_secret_ref', ?, ?)

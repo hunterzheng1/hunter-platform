@@ -47,6 +47,7 @@ const PairingSubmissionResponseSchema = z.strictObject({
 
 export type MobileRuntimeSnapshot =
   | { readonly state: "unpaired" }
+  | { readonly state: "offline"; readonly runs: readonly MobileRunProjection[] }
   | { readonly state: "connected"; readonly runs: readonly MobileRunProjection[] };
 
 export interface MobileRuntimeOptions {
@@ -89,6 +90,23 @@ function canonicalJson(value: unknown): string {
     .join(",")}}`;
 }
 
+class MobileHttpStatusError extends Error {
+  public constructor(public readonly status: number) {
+    super(`MOBILE_REQUEST_FAILED_${status}`);
+  }
+}
+
+function isTransientAvailabilityError(error: unknown): boolean {
+  return error instanceof TypeError
+    || (
+      error instanceof MobileHttpStatusError
+      && (
+        [408, 425, 429].includes(error.status)
+        || error.status >= 500
+      )
+    );
+}
+
 export class MobileRuntime {
   private readonly apiOrigin: string;
   private readonly projectIds: readonly ProjectId[];
@@ -96,6 +114,7 @@ export class MobileRuntime {
   private readonly nonce: () => string;
   private readonly eventCursors = new Map<ProjectId, number>();
   private accessToken: string | undefined;
+  private lastSuccessfulSnapshotAt: string | undefined;
   private current: MobileRuntimeSnapshot = { state: "unpaired" };
 
   public constructor(private readonly options: MobileRuntimeOptions) {
@@ -116,29 +135,37 @@ export class MobileRuntime {
       this.current = { state: "unpaired" };
       return this.current;
     }
-    const timestamp = this.now().toISOString();
-    const rotated = await this.options.vault.rotate({
-      timestamp,
-      nonce: this.nonce(),
-      transport: async (request) => {
-        const response = await this.options.fetch(
-          `${this.apiOrigin}/api/v1/mobile/refresh`,
-          {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(request),
-            credentials: "omit",
-            cache: "no-store",
-          },
-        );
-        if (!response.ok) throw new Error(`MOBILE_REFRESH_FAILED_${response.status}`);
-        return TokenRotationResponseSchema.parse(await response.json());
-      },
-    });
-    this.accessToken = rotated.accessToken;
-    const runs = await this.loadRuns();
-    this.current = { state: "connected", runs };
-    return this.current;
+    try {
+      await this.rotateAccessToken();
+      this.current = {
+        state: "connected",
+        runs: await this.loadOnlineRuns(),
+      };
+      return this.current;
+    } catch (error) {
+      if (!isTransientAvailabilityError(error)) {
+        if (
+          error instanceof MobileHttpStatusError
+          && [401, 403].includes(error.status)
+        ) {
+          await this.revokeLocalPairing();
+          return this.current;
+        }
+        throw error;
+      }
+      this.accessToken = undefined;
+      const cachedAt = this.lastSuccessfulSnapshotAt ?? this.now().toISOString();
+      const runs = this.current.state === "unpaired"
+        ? []
+        : this.current.runs.map((run) =>
+            MobileRunProjectionSchema.parse({
+              ...run,
+              connection: "offline",
+              cachedAt: run.connection === "offline" ? run.cachedAt : cachedAt,
+            }));
+      this.current = { state: "offline", runs };
+      return this.current;
+    }
   }
 
   public async execute(candidate: unknown): Promise<MobileCommandResult> {
@@ -239,41 +266,72 @@ export class MobileRuntime {
       refreshCredential: credentials.refreshCredential,
     });
     this.accessToken = credentials.accessToken;
-    this.current = { state: "connected", runs: await this.loadRuns() };
+    this.current = {
+      state: "connected",
+      runs: await this.loadOnlineRuns(),
+    };
     return this.current;
   }
 
   public async pollEvents(): Promise<MobileRuntimeSnapshot> {
+    if (this.current.state === "unpaired") return this.current;
     if (this.current.state !== "connected" || this.accessToken === undefined) {
       throw new Error("PAIRING_REQUIRED");
     }
-    let reload = false;
-    for (const projectId of this.projectIds) {
-      const cursor = this.eventCursors.get(projectId) ?? 0;
-      const path = `/api/v1/mobile/events?projectId=${encodeURIComponent(projectId)}&cursor=${cursor}&once=1`;
-      const response = await this.signedFetch("GET", path, undefined, true);
-      if (response.status === 409) {
-        const gap = EventCursorGapSchema.parse(await response.json());
-        this.eventCursors.set(projectId, gap.highWaterPosition);
-        reload = true;
-        continue;
+    const pendingCursors = new Map<ProjectId, number>();
+    try {
+      let reload = this.current.runs.some(({ connection }) => connection === "offline");
+      for (const projectId of this.projectIds) {
+        const cursor = this.eventCursors.get(projectId) ?? 0;
+        const path = `/api/v1/mobile/events?projectId=${encodeURIComponent(projectId)}&cursor=${cursor}&once=1`;
+        const response = await this.signedFetch("GET", path, undefined, true);
+        if (response.status === 409) {
+          const gap = EventCursorGapSchema.parse(await response.json());
+          pendingCursors.set(projectId, gap.highWaterPosition);
+          reload = true;
+          continue;
+        }
+        const text = await response.text();
+        const positions = [...text.matchAll(/^id: ([0-9]+)$/gmu)].map((match) => {
+          const position = Number(match[1]);
+          if (!Number.isSafeInteger(position)) throw new Error("EVENT_CURSOR_INVALID");
+          return position;
+        });
+        const nextCursor = Math.max(cursor, ...positions);
+        if (nextCursor > cursor) {
+          pendingCursors.set(projectId, nextCursor);
+          reload = true;
+        }
       }
-      const text = await response.text();
-      const positions = [...text.matchAll(/^id: ([0-9]+)$/gmu)].map((match) => {
-        const position = Number(match[1]);
-        if (!Number.isSafeInteger(position)) throw new Error("EVENT_CURSOR_INVALID");
-        return position;
-      });
-      const nextCursor = Math.max(cursor, ...positions);
-      if (nextCursor > cursor) {
-        this.eventCursors.set(projectId, nextCursor);
-        reload = true;
+      if (reload) {
+        const runs = await this.loadOnlineRuns();
+        for (const [projectId, cursor] of pendingCursors) {
+          this.eventCursors.set(projectId, cursor);
+        }
+        this.current = { state: "connected", runs };
       }
+      return this.current;
+    } catch (error) {
+      if (this.snapshot().state === "unpaired") return this.snapshot();
+      if (!isTransientAvailabilityError(error)) throw error;
+      const cachedAt = this.lastSuccessfulSnapshotAt ?? this.now().toISOString();
+      this.current = {
+        state: "connected",
+        runs: this.current.runs.map((run) =>
+          MobileRunProjectionSchema.parse({
+            ...run,
+            connection: "offline",
+            cachedAt,
+          })),
+      };
+      return this.current;
     }
-    if (reload) {
-      this.current = { state: "connected", runs: await this.loadRuns() };
-    }
-    return this.current;
+  }
+
+  private async loadOnlineRuns(): Promise<readonly MobileRunProjection[]> {
+    const runs = await this.loadRuns();
+    this.lastSuccessfulSnapshotAt = this.now().toISOString();
+    return runs;
   }
 
   private async loadRuns(): Promise<readonly MobileRunProjection[]> {
@@ -288,11 +346,41 @@ export class MobileRuntime {
     ).flat();
   }
 
+  private async rotateAccessToken(): Promise<void> {
+    const timestamp = this.now().toISOString();
+    const rotated = await this.options.vault.rotate({
+      timestamp,
+      nonce: this.nonce(),
+      transport: async (request) => {
+        const response = await this.options.fetch(
+          `${this.apiOrigin}/api/v1/mobile/refresh`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(request),
+            credentials: "omit",
+            cache: "no-store",
+          },
+        );
+        if (!response.ok) throw new MobileHttpStatusError(response.status);
+        return TokenRotationResponseSchema.parse(await response.json());
+      },
+    });
+    this.accessToken = rotated.accessToken;
+  }
+
+  private async revokeLocalPairing(): Promise<void> {
+    await this.options.vault.revoke();
+    this.accessToken = undefined;
+    this.current = { state: "unpaired" };
+  }
+
   private async signedFetch(
     method: "GET" | "POST",
     path: string,
     body?: MobileCommandEnvelope,
     allowConflict = false,
+    retryUnauthorized = true,
   ): Promise<Response> {
     const accessToken = this.accessToken;
     const binding = this.options.vault.snapshot();
@@ -326,8 +414,33 @@ export class MobileRuntime {
       credentials: "omit",
       cache: "no-store",
     });
+    if (response.status === 401 && retryUnauthorized) {
+      try {
+        await this.rotateAccessToken();
+      } catch (error) {
+        if (
+          error instanceof MobileHttpStatusError
+          && [401, 403].includes(error.status)
+        ) {
+          await this.revokeLocalPairing();
+          throw new Error("PAIRING_REQUIRED");
+        }
+        throw error;
+      }
+      return await this.signedFetch(
+        method,
+        path,
+        body,
+        allowConflict,
+        false,
+      );
+    }
+    if (response.status === 401) {
+      await this.revokeLocalPairing();
+      throw new Error("PAIRING_REQUIRED");
+    }
     if (!response.ok && !(allowConflict && response.status === 409)) {
-      throw new Error(`MOBILE_REQUEST_FAILED_${response.status}`);
+      throw new MobileHttpStatusError(response.status);
     }
     return response;
   }

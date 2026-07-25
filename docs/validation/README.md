@@ -19,6 +19,7 @@ record should retain a hash and a safe summary.
 
 Current records:
 
+- [`phase-1-mobile-offline-safety.md`](phase-1-mobile-offline-safety.md) — Task 9 device revocation/replay regression, timed offline outbox, atomic retention resync, mobile Gate allowlist, and provider-neutral remote surface.
 - [`phase-1-knowledge-handoff-safety.md`](phase-1-knowledge-handoff-safety.md) — Task 8 provider-neutral selection receipts, conflict/budget policy, untrusted-data Handoff boundary, Cursor contract-only fixture, and provenance display.
 - [`phase-1-resource-bounds.md`](phase-1-resource-bounds.md) — Task 7 bounded Artifact pages, retention resync, logical quotas, protected evidence, slow-client backpressure, and fixed 10+4 Fake workload evidence.
 - [`phase-1-attention-actions.md`](phase-1-attention-actions.md) — Task 6 provider-neutral Attention projection, receipt-derived recovery actions, audited human observations, and append-only recovery Attempt evidence.

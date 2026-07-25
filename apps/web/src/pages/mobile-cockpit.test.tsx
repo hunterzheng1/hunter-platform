@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   MobileCommandEnvelopeSchema,
+  MobileRunProjectionSchema,
   type MobileCommandEnvelope,
   type MobileRunProjection,
 } from "@hunter/device-gateway";
@@ -25,17 +26,17 @@ const approveCommand = MobileCommandEnvelopeSchema.parse({
   payload: {},
 });
 
-function run(overrides: Partial<MobileRunProjection> = {}): MobileRunProjection {
-  return {
+function run(overrides: Record<string, unknown> = {}): MobileRunProjection {
+  return MobileRunProjectionSchema.parse({
     projectId: approveCommand.projectId,
     runId: approveCommand.runId,
     projectName: "Hunter",
-    currentStep: "approve_plan",
+    currentStep: "human_gate",
     attention: "等待批准",
     connection: "online",
     commands: [approveCommand],
     ...overrides,
-  };
+  });
 }
 
 describe("MobileCockpit", () => {
@@ -43,13 +44,14 @@ describe("MobileCockpit", () => {
     const onCommand = vi.fn(async (command: MobileCommandEnvelope) => {
       void command;
     });
-    render(<MobileCockpit runs={[run()]} onCommand={onCommand} />);
+    const projection = run();
+    render(<MobileCockpit runs={[projection]} onCommand={onCommand} />);
 
     expect(screen.getByText("等待批准")).not.toBeNull();
-    expect(screen.getByText("approve_plan")).not.toBeNull();
+    expect(screen.getByText("人工审批")).not.toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "批准" }));
     expect(onCommand).toHaveBeenCalledWith(approveCommand);
-    expect(onCommand.mock.calls[0]![0]).toBe(approveCommand);
+    expect(onCommand.mock.calls[0]![0]).toBe(projection.commands[0]);
     for (const forbidden of ["编辑工作流", "权限策略", "打开终端", "完整源码"]) {
       expect(screen.queryByText(forbidden)).toBeNull();
     }
@@ -61,14 +63,42 @@ describe("MobileCockpit", () => {
       finish = resolve;
     });
     const onCommand = vi.fn(() => pending);
-    const { rerender } = render(<MobileCockpit runs={[run()]} onCommand={onCommand} />);
+    const { rerender } = render(
+      <MobileCockpit
+        runs={[run()]}
+        pendingCommands={[]}
+        onCommand={onCommand}
+      />,
+    );
     fireEvent.click(screen.getByRole("button", { name: "批准" }));
     expect(await screen.findByText("正在提交命令，请勿重复操作。")).not.toBeNull();
     expect(screen.getByRole("button", { name: "批准" })).toHaveProperty("disabled", true);
     finish?.();
 
-    rerender(<MobileCockpit runs={[run({ connection: "offline" })]} onCommand={vi.fn(async () => undefined)} />);
+    rerender(
+      <MobileCockpit
+        runs={[run({
+          connection: "offline",
+          cachedAt: "2026-07-25T01:00:00.000Z",
+        })]}
+        pendingCommands={[
+          {
+            command: approveCommand,
+            cachedAt: "2026-07-25T01:02:03.000Z",
+            confirmation: "unconfirmed",
+          },
+        ]}
+        onCommand={vi.fn(async () => undefined)}
+      />,
+    );
     expect(await screen.findByText("主机离线；当前内容仅供查看。")).not.toBeNull();
+    expect(screen.getByText(/缓存摘要时间/u).textContent).toContain(
+      "2026-07-25T01:00:00.000Z",
+    );
+    expect(screen.getByText(/未确认/u).textContent).toContain("expected version 3");
+    expect(screen.getByText(/未确认/u).textContent).toContain(
+      "2026-07-25T01:02:03.000Z",
+    );
     expect(screen.getByRole("button", { name: "批准" })).toHaveProperty("disabled", true);
   });
 
@@ -103,6 +133,7 @@ describe("MobileCockpit", () => {
       };
     });
     const outbox = {
+      pending: vi.fn(async () => []),
       submit: vi.fn(async (
         command: MobileCommandEnvelope,
         suppliedTransport: typeof transport,

@@ -18,7 +18,10 @@ const command = MobileCommandEnvelopeSchema.parse({
 
 describe("mobile command outbox", () => {
   it("keeps the exact envelope after a transport failure and deletes it only after a terminal receipt", async () => {
-    const outbox = new MobileCommandOutbox({ indexedDB: new IDBFactory() });
+    const outbox = new MobileCommandOutbox({
+      indexedDB: new IDBFactory(),
+      now: () => new Date("2026-07-25T01:02:03.000Z"),
+    });
     let firstAttempt: unknown;
     await expect(
       outbox.submit(command, async (candidate) => {
@@ -28,7 +31,13 @@ describe("mobile command outbox", () => {
     ).rejects.toThrow("offline");
 
     expect(firstAttempt).toEqual(command);
-    expect(await outbox.pending()).toEqual([command]);
+    expect(await outbox.pending()).toEqual([
+      {
+        command,
+        cachedAt: "2026-07-25T01:02:03.000Z",
+        confirmation: "unconfirmed",
+      },
+    ]);
 
     let retryAttempt: unknown;
     const terminal = await outbox.retry(command.idempotencyKey, async (candidate) => {
@@ -61,6 +70,11 @@ describe("mobile command outbox", () => {
         async () => ({ status: "accepted", receipt: {} }),
       ),
     ).rejects.toThrow("IDEMPOTENCY_KEY_REUSED");
-    expect(await outbox.pending()).toEqual([command]);
+    expect(await outbox.pending()).toEqual([
+      expect.objectContaining({
+        command,
+        confirmation: "unconfirmed",
+      }),
+    ]);
   });
 });
