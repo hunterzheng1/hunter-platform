@@ -173,4 +173,12 @@ describe("Phase 1 acceptance ledger", () => {
     });
     expect(byId.get("SUP-02")?.nextAction).toContain("明确授权");
   });
+
+  it("does not defer any H0-H4 acceptance work beyond the H4 candidate", () => {
+    const rows = parseRows(readFileSync(LEDGER_URL, "utf8"));
+
+    for (const row of rows) {
+      expect(row.nextAction, row.id).not.toMatch(/^H[0-4]\b/u);
+    }
+  });
 });

@@ -3,6 +3,8 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   AgentProfileIdSchema,
   ProjectIdSchema,
+  WorkflowRevisionIdSchema,
+  appendRepositoryBinding,
   createChangeRevision,
   createExecutionPlan,
   createProject,
@@ -46,10 +48,36 @@ export class SqliteDefinitionRepository {
   public constructor(private readonly database: DatabaseSync) {}
 
   public getProject(projectId: ProjectId): Readonly<Project> | null {
-    return this.latest(["ProjectCreated"], (data) => {
-      const project = createProject(object(data, "PROJECT_EVENT_INVALID").project);
-      return project.projectId === projectId ? project : null;
-    });
+    const rows = this.database.prepare(
+      `SELECT event_type, event_data
+         FROM events
+        WHERE (aggregate_id = ? AND event_type = 'ProjectCreated')
+           OR (aggregate_id = ? AND event_type = 'RepositoryBound')
+        ORDER BY position`,
+    ).all(
+      `project:${projectId}`,
+      `project-repositories:${projectId}`,
+    ) as unknown as EventRow[];
+    let project: Readonly<Project> | null = null;
+    for (const row of rows) {
+      const data = object(
+        JSON.parse(row.event_data) as unknown,
+        "PROJECT_EVENT_INVALID",
+      );
+      if (row.event_type === "ProjectCreated") {
+        const created = createProject(data.project);
+        if (created.projectId === projectId) project = created;
+        continue;
+      }
+      if (project === null || data.projectId !== projectId) {
+        throw new Error("PROJECT_REPOSITORY_EVENT_ORDER_INVALID");
+      }
+      project = appendRepositoryBinding(project, {
+        repositoryBinding: data.repositoryBinding,
+        deviceBinding: data.deviceBinding,
+      });
+    }
+    return project;
   }
 
   public getRequirementRevision(revisionId: RequirementRevisionId): Readonly<RequirementRevision> | null {
@@ -82,6 +110,28 @@ export class SqliteDefinitionRepository {
         throw new Error("EXECUTION_PLAN_FINGERPRINT_MISMATCH");
       }
       return plan.executionPlanId === executionPlanId ? plan : null;
+    });
+  }
+
+  public getExecutionPlanWorkflowRevisionId(
+    executionPlanId: ExecutionPlanId | string,
+  ): WorkflowRevisionId | null {
+    return this.latest(["ExecutionPlanPublished"], (data) => {
+      const record = object(data, "EXECUTION_PLAN_EVENT_INVALID");
+      if (record.executionPlanId !== executionPlanId) return null;
+      const stored = object(
+        record.executionPlan,
+        "EXECUTION_PLAN_INVALID",
+      );
+      if (stored.executionPlanId !== executionPlanId) {
+        throw new Error("EXECUTION_PLAN_EVENT_ID_MISMATCH");
+      }
+      if (record.rootWorkflowRevisionId === undefined) {
+        throw new Error("EXECUTION_PLAN_WORKFLOW_REVISION_NOT_PINNED");
+      }
+      return WorkflowRevisionIdSchema.parse(
+        record.rootWorkflowRevisionId,
+      );
     });
   }
 

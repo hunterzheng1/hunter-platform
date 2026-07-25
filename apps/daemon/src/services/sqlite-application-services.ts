@@ -320,47 +320,25 @@ export function createSqliteApplicationServices(input: {
   const persistedDeviceBindingFor = (
     operation: Extract<ExternalOperation, { operationType: "workspace.prepare" }>,
   ) => {
-    const rows = input.database.prepare(
-      `SELECT event_data
-         FROM events
-        WHERE aggregate_id = ? AND event_type = 'ProjectCreated'
-        ORDER BY position DESC`,
-    ).all(`project:${operation.projectId}`) as Array<{ event_data: string }>;
-    for (const row of rows) {
-      try {
-        const eventData = JSON.parse(row.event_data) as {
-          readonly projectId?: unknown;
-          readonly project?: unknown;
-        };
-        const project = createProject(eventData.project);
-        if (
-          project.projectId !== operation.projectId
-          || eventData.projectId !== operation.projectId
-          || !project.repositoryBindings.some(
-            ({ repositoryId }) =>
-              repositoryId === operation.payload.repositoryId,
-          )
-        ) {
-          continue;
-        }
-        const binding = project.deviceBindings.find(
-          ({ deviceBindingId }) =>
-            deviceBindingId === operation.payload.deviceBindingId,
-        );
-        if (
-          binding === undefined
-          || binding.repositoryId !== operation.payload.repositoryId
-          || binding.availability !== "available"
-          || !isAbsolute(binding.localPath)
-        ) {
-          continue;
-        }
-        return binding;
-      } catch {
-        continue;
-      }
+    const project = repositories.getProject(operation.projectId);
+    const binding = project?.deviceBindings.find(
+      ({ deviceBindingId }) =>
+        deviceBindingId === operation.payload.deviceBindingId,
+    );
+    if (
+      project === null
+      || !project.repositoryBindings.some(
+        ({ repositoryId }) =>
+          repositoryId === operation.payload.repositoryId,
+      )
+      || binding === undefined
+      || binding.repositoryId !== operation.payload.repositoryId
+      || binding.availability !== "available"
+      || !isAbsolute(binding.localPath)
+    ) {
+      throw new Error("PERSISTED_DEVICE_BINDING_SCOPE_REQUIRED");
     }
-    throw new Error("PERSISTED_DEVICE_BINDING_SCOPE_REQUIRED");
+    return binding;
   };
   const inspectGitWorkspace = (
     workspacePath: string,

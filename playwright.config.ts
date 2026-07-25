@@ -2,6 +2,8 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "e2e",
+  testMatch: "**/*.spec.ts",
+  globalSetup: "./scripts/e2e-suite-lifecycle.ts",
   fullyParallel: false,
   retries: 0,
   outputDir: ".hunter-e2e/test-results",
@@ -19,7 +21,15 @@ export default defineConfig({
     gracefulShutdown: { signal: "SIGTERM", timeout: 10_000 },
   },
   projects: [
-    { name: "chromium", use: devices["Desktop Chrome"] },
-    { name: "mobile", use: devices["Pixel 7"] },
+    {
+      name: "chromium",
+      testIgnore: "**/mobile-security.spec.ts",
+      use: devices["Desktop Chrome"],
+    },
+    {
+      name: "mobile",
+      testMatch: "**/mobile-security.spec.ts",
+      use: devices["Pixel 7"],
+    },
   ],
 });

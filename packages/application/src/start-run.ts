@@ -36,6 +36,9 @@ export type StartRunPublicCommand = z.infer<typeof StartRunPublicCommandSchema>;
 export interface StartRunRepositories {
   getProject(projectId: ProjectId): Readonly<Project> | null;
   getExecutionPlan(executionPlanId: ExecutionPlanId): Readonly<ExecutionPlan> | null;
+  getExecutionPlanWorkflowRevisionId(
+    executionPlanId: ExecutionPlanId,
+  ): WorkflowRevisionId | null;
   getChangeRevision(changeRevisionId: ChangeRevisionId): Readonly<ChangeRevision> | null;
   getRequirementRevision(
     requirementRevisionId: RequirementRevisionId,
@@ -55,6 +58,13 @@ export class StartRunService {
     const command = StartRunPublicCommandSchema.parse(commandInput);
     const plan = this.repositories.getExecutionPlan(command.executionPlanId);
     if (plan === null) throw new Error("EXECUTION_PLAN_NOT_FOUND");
+    const pinnedWorkflowRevisionId =
+      this.repositories.getExecutionPlanWorkflowRevisionId(
+        plan.executionPlanId,
+      );
+    if (pinnedWorkflowRevisionId !== command.workflowRevisionId) {
+      throw new Error("EXECUTION_PLAN_WORKFLOW_REVISION_MISMATCH");
+    }
     const project = this.repositories.getProject(plan.projectId);
     if (project === null) throw new Error("RUN_PROJECT_NOT_FOUND");
     const change = this.repositories.getChangeRevision(plan.changeRevisionId);

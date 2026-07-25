@@ -52,6 +52,6 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test -- --configLoader native --no-file-parallelism --testTimeout 60000
-      - run: npx playwright test e2e/vertical-slice.spec.ts --project=chromium
+      - run: npx playwright test --project=chromium
       - if: runner.os == 'Windows'
         run: npm run pack:win -w @hunter/desktop
