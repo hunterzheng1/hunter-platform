@@ -11,6 +11,10 @@ import {
   type WorkspaceId,
 } from "@hunter/domain";
 import {
+  KnowledgeHandoffBundleSchema,
+  type KnowledgeHandoffBundle,
+} from "@hunter/knowledge";
+import {
   ExternalOperationSchema,
   type ExternalOperation,
   type ExternalOperationHandler,
@@ -45,6 +49,7 @@ const CandidateRequestSchema = z.strictObject({
   profileId: AgentProfileIdSchema,
   workspaceId: WorkspaceIdSchema,
   prompt: z.string(),
+  knowledgeHandoff: KnowledgeHandoffBundleSchema.optional(),
 });
 
 const RelativeTaskPackPathSchema = z
@@ -150,6 +155,7 @@ export interface CursorHandoffCandidateRequest {
   readonly profileId: AgentProfileId;
   readonly workspaceId: WorkspaceId;
   readonly prompt: string;
+  readonly knowledgeHandoff?: KnowledgeHandoffBundle | undefined;
 }
 
 type FrozenOptions = z.infer<typeof CandidateOptionsSchema>;
@@ -291,6 +297,7 @@ function requestFingerprint(input: ParsedRequest): string {
         profileId: input.profileId,
         prompt: input.prompt,
         workspaceId: input.workspaceId,
+        knowledgeHandoff: input.knowledgeHandoff,
       }),
       "utf8",
     )
@@ -314,6 +321,7 @@ export class CursorHandoffCandidate
       readonly taskPackInputFor: (operation: ExternalOperation) => {
         readonly profileId: AgentProfileId;
         readonly prompt: string;
+        readonly knowledgeHandoff?: KnowledgeHandoffBundle | undefined;
       } | null;
       readonly observeTaskPack?: (observation: {
         readonly operationId: OperationId;
@@ -348,6 +356,7 @@ export class CursorHandoffCandidate
         profileId: taskPackInput.profileId,
         workspaceId: operation.payload.workspaceId,
         prompt: taskPackInput.prompt,
+        knowledgeHandoff: taskPackInput.knowledgeHandoff,
       });
       const writeValue = await this.call({
         fixtureKind: FIXTURE_KIND,
@@ -424,6 +433,7 @@ export class CursorHandoffCandidate
       profileId: taskPackInput.profileId,
       workspaceId: operation.payload.workspaceId,
       prompt: taskPackInput.prompt,
+      knowledgeHandoff: taskPackInput.knowledgeHandoff,
     });
     const observation = await observeTaskPack({
       operationId: operation.operationId,

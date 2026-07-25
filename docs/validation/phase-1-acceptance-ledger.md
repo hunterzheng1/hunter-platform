@@ -37,6 +37,14 @@
   receipt-bound action、人工观察/人工 verifier 审计、真实 ledger 幂等重放和
   append-only recovery Attempt 已通过本机全量 114 files / 1004 tests。该结果为
   `CONTRACT_ONLY`，不代表真实 Provider 的 observe/retry 已通过。
+- Task 7：有界 Artifact 分页、retention resync、逻辑配额、核心 receipt reserve
+  和慢消费者背压已通过固定 10+4 Fake 负载；真实规模性能仍为 `NOT_RUN`。
+- Task 8：active/superseded/withdrawn、failed Archive、冲突显式选择、三维预算、
+  hash-bound receipt、恶意正文数据边界和 Workbench 来源展示已通过精确 fixture。
+  根门禁沙箱内首轮因 Windows `EPERM` 阻断；审查修正后同命令沙箱外重跑
+  123 files / 1051 tests 及全部验证脚本、build 通过。该结果为
+  `CONTRACT_ONLY`，不证明真实
+  Agent 抗 Prompt Injection。
 
 ## 逐项台账
 
@@ -65,7 +73,7 @@
 | S-02 | CONTRACT_ONLY | Startup recovery/Fake | [PR #5 readiness](first-vertical-slice-pr5-readiness.md) | Gate R 重连真实 session 或保持 needs_attention | Storage |
 | S-03 | CONTRACT_ONLY | 临时 SQLite/文件/CAS fixture | [Task 4 backup/restore](phase-1-backup-restore.md) | Gate R 用脱敏真实规模数据重跑隔离恢复 | Storage |
 | K-01 | CONTRACT_ONLY | Archive worker | [Vertical slice acceptance](vertical-slice-acceptance.md) | H4 覆盖所有终态 outcome 和 crash resume | Knowledge |
-| K-02 | CONTRACT_ONLY | Knowledge resolver | [Vertical slice acceptance](vertical-slice-acceptance.md) | H2 加入冲突降级和 Prompt injection 语料 | Knowledge |
+| K-02 | CONTRACT_ONLY | Knowledge selection receipt + Handoff data boundary | [Task 8 Knowledge safety](phase-1-knowledge-handoff-safety.md) | Gate R 用真实 Connector 验证来源呈现、预算和 verifier 行为 | Knowledge |
 | M-01 | NOT_PROVEN | PWA contract/viewport only | [Task 17 evidence](first-vertical-slice-task17.md) | Gate R 在真实手机验证查看、锁屏、弱网和缓存时间 | Device |
 | M-02 | CONTRACT_ONLY | Fake device security E2E | [Task 17 evidence](first-vertical-slice-task17.md) | Gate R 用真实设备验证审批、撤销和离线重复请求 | Device |
 | SEC-01 | CONTRACT_ONLY | 临时 database/log/export/prompt/diagnostic fixture | [Task 5 diagnostics](phase-1-diagnostic-bundle.md) | Gate R 对真实生产输出逐字节重跑 canary | Security |
@@ -102,7 +110,7 @@
 | BLOCK-07 | CONTRACT_ONLY | 五类临时输出逐字节 canary | [Task 5 diagnostics](phase-1-diagnostic-bundle.md) | Gate R 扫描真实数据库、日志、导出和 Prompt 路径 | Security |
 | BLOCK-08 | CONTRACT_ONLY | device scope/policy | [Task 17 evidence](first-vertical-slice-task17.md) | Gate R 用真实设备验证不能绕过高危策略 | Device |
 | BLOCK-09 | CONTRACT_ONLY | Archive/Knowledge/CAS 对账 | [Task 4 backup/restore](phase-1-backup-restore.md) | Gate R 用真实归档重跑 hash/缺失故障矩阵 | Knowledge |
-| BLOCK-10 | CONTRACT_ONLY | active/verified policy | [Vertical slice acceptance](vertical-slice-acceptance.md) | H2 增加 superseded/withdrawn、冲突和 injection 测试 | Knowledge |
+| BLOCK-10 | CONTRACT_ONLY | 状态过滤、冲突降级、预算和 untrusted-data boundary | [Task 8 Knowledge safety](phase-1-knowledge-handoff-safety.md) | Gate R 用真实 Agent/Connector 重跑恶意来源与权限负例 | Knowledge |
 | SUP-01 | NOT_PROVEN | 当前 npm install 摘要为 3 high | [Task 3 migration evidence](phase-1-versioned-migrations.md) | 分类 production reachability、修复版本和破坏性升级风险 | Security |
 | SUP-02 | NOT_RUN | registry audit 未授权 | [Phase 1 baseline](phase-1-hardening-baseline.md) | 用户明确授权发送依赖元数据后运行并保存脱敏摘要 | Owner/Security |
 

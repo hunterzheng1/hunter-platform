@@ -6,20 +6,40 @@ type KnowledgeApi = Pick<HunterApi, "getKnowledge">;
 
 function provenanceFor(
   entry: KnowledgeResponse["entries"][number],
-): { readonly label: string; readonly digest?: string } {
+): {
+  readonly typeLabel: string;
+  readonly statusLabel: string;
+  readonly label: string;
+  readonly notice?: string;
+  readonly digest?: string;
+} {
+  const statusLabel = entry.status === "active"
+    ? "Active"
+    : entry.status === "superseded"
+      ? "Superseded"
+      : "Withdrawn";
   switch (entry.level) {
     case "authoritative":
       return {
-        label: `requirement_revision · ${entry.source.requirementRevisionId}`,
+        typeLabel: "Approved requirement",
+        statusLabel,
+        label: `Requirement revision · ${entry.source.requirementRevisionId}`,
       };
     case "experiential":
       return {
-        label: `evidence · ${entry.source.evidenceId}`,
+        typeLabel: "Verified experience",
+        statusLabel,
+        label: `Evidence · ${entry.source.evidenceId}`,
         digest: `sha256:${entry.source.contentHash}`,
       };
     case "historical":
       return {
-        label: `archive · ${entry.source.runId}`,
+        typeLabel: "Run history",
+        statusLabel,
+        label: `Run · ${entry.source.runId}`,
+        ...(entry.source.outcome === "failed"
+          ? { notice: "Failed Run history · reference only" }
+          : {}),
         digest: `sha256:${entry.source.manifestHash}`,
       };
   }
@@ -76,8 +96,11 @@ export function KnowledgePage({
               <li className="project-row" key={entry.entryId}>
                 <div>
                   <strong>{entry.summary}</strong>
-                  <span>{entry.level} · {entry.status}</span>
+                  <span>{provenance.typeLabel} · {provenance.statusLabel}</span>
                   <p>{entry.body}</p>
+                  {provenance.notice === undefined
+                    ? null
+                    : <p>{provenance.notice}</p>}
                   <footer>
                     <span>{provenance.label}</span>
                     {provenance.digest === undefined

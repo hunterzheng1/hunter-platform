@@ -44,7 +44,7 @@ describe("KnowledgePage", () => {
             type: "archive" as const,
             projectId: ProjectIdSchema.parse("prj_knowledge_page"),
             runId: RunIdSchema.parse("run_knowledge_page"),
-            outcome: "succeeded" as const,
+            outcome: "failed" as const,
             manifestSchemaVersion: 2 as const,
             manifestHash: "a".repeat(64),
             manifestRef: `cas:sha256:${"a".repeat(64)}`,
@@ -62,11 +62,12 @@ describe("KnowledgePage", () => {
     );
 
     expect(await screen.findByRole("heading", { name: "Knowledge" })).not.toBeNull();
-    expect(screen.getByText("authoritative · active")).not.toBeNull();
-    expect(screen.getByText("requirement_revision · rrv_knowledge_page")).not.toBeNull();
+    expect(screen.getByText("Approved requirement · Active")).not.toBeNull();
+    expect(screen.getByText("Requirement revision · rrv_knowledge_page")).not.toBeNull();
     expect(screen.getByText("Archived succeeded Run.")).not.toBeNull();
-    expect(screen.getByText("historical · active")).not.toBeNull();
-    expect(screen.getByText("archive · run_knowledge_page")).not.toBeNull();
+    expect(screen.getByText("Run history · Active")).not.toBeNull();
+    expect(screen.getByText("Run · run_knowledge_page")).not.toBeNull();
+    expect(screen.getByText("Failed Run history · reference only")).not.toBeNull();
     expect(screen.getByText(`sha256:${"a".repeat(64)}`)).not.toBeNull();
     expect(api.getKnowledge).toHaveBeenCalledWith("prj_knowledge_page", true);
   });

@@ -7,6 +7,10 @@ import {
   type OperationId,
   type WorkspaceId,
 } from "@hunter/domain";
+import {
+  KnowledgeHandoffBundleSchema,
+  type KnowledgeHandoffBundle,
+} from "@hunter/knowledge";
 import { decodeExternalId } from "@hunter/runtime-contracts";
 import { z } from "zod";
 
@@ -20,6 +24,7 @@ const TaskPackInputSchema = z.strictObject({
   profileId: AgentProfileIdSchema,
   workspaceId: WorkspaceIdSchema,
   prompt: z.string(),
+  knowledgeHandoff: KnowledgeHandoffBundleSchema.optional(),
 });
 
 const TaskPackSchema = z.strictObject({
@@ -43,6 +48,7 @@ export interface CursorTaskPackInput {
   readonly profileId: AgentProfileId;
   readonly workspaceId: WorkspaceId;
   readonly prompt: string;
+  readonly knowledgeHandoff?: KnowledgeHandoffBundle | undefined;
 }
 
 export type CursorTaskPack = z.infer<typeof TaskPackSchema>;
@@ -104,6 +110,16 @@ export function renderTaskPack(value: CursorTaskPackInput): CursorTaskPack {
   const prompt = parsePrompt(input.prompt);
   const relativePath = taskPackRelativePath(input.operationId);
   const encodedPrompt = encodePromptAsSafeJson(prompt);
+  const knowledgeSection = input.knowledgeHandoff === undefined
+    ? []
+    : [
+      "## Knowledge reference data",
+      "",
+      `Selection: ${input.knowledgeHandoff.selectionHash}`,
+      "",
+      input.knowledgeHandoff.content,
+      "",
+    ];
   const content = [
     "# Hunter Cursor Task Handoff",
     "",
@@ -118,6 +134,7 @@ export function renderTaskPack(value: CursorTaskPackInput): CursorTaskPack {
     "",
     `    ${encodedPrompt}`,
     "",
+    ...knowledgeSection,
     "## Completion",
     "",
     "Return to Hunter with a manual completion declaration.",

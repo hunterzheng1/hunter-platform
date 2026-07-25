@@ -8,7 +8,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   KnowledgeEntrySchema,
+  KNOWLEDGE_HANDOFF_MIN_CONTENT_BYTES,
   KnowledgeResolver,
+  renderKnowledgeHandoff,
   type KnowledgeEntry,
   type KnowledgeReadStore,
 } from "./index.js";
@@ -70,6 +72,7 @@ function experiential(
 function historical(
   suffix: string,
   status: KnowledgeEntry["status"] = "active",
+  outcome: "succeeded" | "failed" | "canceled" = "canceled",
 ): KnowledgeEntry {
   const hash = "c".repeat(64);
   return KnowledgeEntrySchema.parse({
@@ -81,7 +84,7 @@ function historical(
       type: "archive",
       projectId,
       runId: RunIdSchema.parse(`run_source_${suffix}`),
-      outcome: "canceled",
+      outcome,
       manifestSchemaVersion: 2,
       manifestHash: hash,
       manifestRef: `cas:sha256:${hash}`,
@@ -104,6 +107,342 @@ class TestOnlyKnowledgeReadStore implements KnowledgeReadStore {
 }
 
 describe("KnowledgeResolver", () => {
+  it("returns an auditable Handoff selection receipt for every candidate", async () => {
+    const selected = authoritative("handoff_rule");
+    const superseded = experiential(
+      "handoff_superseded",
+      "superseded",
+    );
+    const failedArchive = historical(
+      "handoff_failed",
+      "active",
+      "failed",
+    );
+    const resolver = new KnowledgeResolver(
+      new TestOnlyKnowledgeReadStore([
+        failedArchive,
+        superseded,
+        selected,
+      ]),
+    ) as KnowledgeResolver & {
+      selectForHandoff(input: unknown): Promise<{
+        readonly entries: readonly KnowledgeEntry[];
+        readonly receipt: {
+          readonly schemaVersion: 1;
+          readonly projectId: string;
+          readonly selectedEntryIds: readonly string[];
+          readonly candidates: readonly {
+            readonly entryId: string;
+            readonly decision: "selected" | "excluded";
+            readonly reason: string;
+            readonly authority: string;
+            readonly confidence: string | null;
+            readonly validity: string;
+            readonly contentHash: string;
+          }[];
+          readonly selectionHash: string;
+        };
+      }>;
+    };
+
+    const result = await resolver.selectForHandoff({
+      projectId,
+      budget: {
+        maxItems: 8,
+        maxBytes: 16_384,
+        maxTokens: 16_384,
+      },
+    });
+
+    expect(result.entries.map(({ entryId }) => entryId)).toEqual([
+      selected.entryId,
+    ]);
+    expect(result.receipt).toMatchObject({
+      schemaVersion: 1,
+      projectId,
+      selectedEntryIds: [selected.entryId],
+      candidates: [
+        {
+          entryId: selected.entryId,
+          decision: "selected",
+          reason: "selected_by_policy",
+          authority: "authoritative",
+          confidence: null,
+          validity: "active",
+          scope: { projectId },
+          source: {
+            type: "requirement_revision",
+            referenceId: "rrv_source_handoff_rule",
+          },
+          contentHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        },
+        {
+          entryId: superseded.entryId,
+          decision: "excluded",
+          reason: "status_superseded",
+          authority: "experiential",
+          confidence: "high",
+          validity: "superseded",
+          scope: { projectId },
+          source: {
+            type: "evidence",
+            referenceId: "evd_source_handoff_superseded",
+          },
+          contentHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        },
+        {
+          entryId: failedArchive.entryId,
+          decision: "excluded",
+          reason: "failed_archive_historical_only",
+          authority: "historical",
+          confidence: null,
+          validity: "active",
+          scope: { projectId },
+          source: {
+            type: "archive",
+            referenceId: "run_source_handoff_failed",
+          },
+          contentHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        },
+      ],
+      selectionHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+  });
+
+  it("omits whole entries at the item budget while retaining their references", async () => {
+    const first = authoritative("budget_a");
+    const second = authoritative("budget_b");
+
+    const result = await new KnowledgeResolver(
+      new TestOnlyKnowledgeReadStore([second, first]),
+    ).selectForHandoff({
+      projectId,
+      budget: {
+        maxItems: 1,
+        maxBytes: 16_384,
+        maxTokens: 16_384,
+      },
+    });
+
+    expect(result.entries.map(({ entryId }) => entryId)).toEqual([
+      first.entryId,
+    ]);
+    expect(result.receipt.candidates.find(({ entryId }) =>
+      entryId === second.entryId
+    )).toMatchObject({
+      decision: "excluded",
+      reason: "budget_items_exhausted",
+    });
+    expect(result.receipt).toMatchObject({
+      budget: {
+        maxItems: 1,
+        maxBytes: 16_384,
+        maxTokens: 16_384,
+        usedItems: 1,
+        truncated: true,
+        omittedEntryIds: [second.entryId],
+      },
+    });
+  });
+
+  it.each([
+    {
+      label: "byte",
+      budget: {
+        maxItems: 8,
+        maxBytes: KNOWLEDGE_HANDOFF_MIN_CONTENT_BYTES,
+        maxTokens: 16_384,
+      },
+      reason: "budget_bytes_exhausted",
+    },
+    {
+      label: "token",
+      budget: {
+        maxItems: 8,
+        maxBytes: 16_384,
+        maxTokens: KNOWLEDGE_HANDOFF_MIN_CONTENT_BYTES,
+      },
+      reason: "budget_tokens_exhausted",
+    },
+  ])(
+    "explains $label budget truncation without partially injecting an entry",
+    async ({ label, budget, reason }) => {
+      const entry = authoritative(`budget_${label}`);
+      const result = await new KnowledgeResolver(
+        new TestOnlyKnowledgeReadStore([entry]),
+      ).selectForHandoff({ projectId, budget });
+
+      expect(result.entries).toEqual([]);
+      expect(result.receipt.candidates).toEqual([
+        expect.objectContaining({
+          entryId: entry.entryId,
+          decision: "excluded",
+          reason,
+        }),
+      ]);
+      expect(result.receipt.budget).toMatchObject({
+        usedItems: 0,
+        usedBytes: KNOWLEDGE_HANDOFF_MIN_CONTENT_BYTES,
+        usedTokens: KNOWLEDGE_HANDOFF_MIN_CONTENT_BYTES,
+        truncated: true,
+        omittedEntryIds: [entry.entryId],
+      });
+    },
+  );
+
+  it("applies byte/token budget to the exact rendered Handoff envelope", async () => {
+    const entry = KnowledgeEntrySchema.parse({
+      ...authoritative("rendered_budget"),
+      body: "x".repeat(300),
+    });
+    const result = await new KnowledgeResolver(
+      new TestOnlyKnowledgeReadStore([entry]),
+    ).selectForHandoff({
+      projectId,
+      budget: {
+        maxItems: 8,
+        maxBytes: 512,
+        maxTokens: 512,
+      },
+    });
+    const bundle = renderKnowledgeHandoff(result);
+
+    expect(bundle.byteLength).toBeLessThanOrEqual(512);
+    expect(bundle.tokenEstimate).toBeLessThanOrEqual(512);
+    expect(result.receipt.budget.usedBytes).toBe(bundle.byteLength);
+    expect(result.receipt.budget.usedTokens).toBe(bundle.tokenEstimate);
+    expect(result.receipt.budget.truncated).toBe(true);
+    expect(result.receipt.budget.omittedEntryIds).toEqual([entry.entryId]);
+  });
+
+  it("downgrades conflicting active claims until one entry is explicitly selected", async () => {
+    const first = KnowledgeEntrySchema.parse({
+      ...authoritative("conflict_a"),
+      summary: "Use the project release policy.",
+      body: "Require a verifier before release.",
+    });
+    const second = KnowledgeEntrySchema.parse({
+      ...experiential("conflict_b"),
+      summary: "Use the project release policy.",
+      body: "Skip verification for small releases.",
+    });
+
+    const result = await new KnowledgeResolver(
+      new TestOnlyKnowledgeReadStore([second, first]),
+    ).selectForHandoff({
+      projectId,
+      budget: {
+        maxItems: 8,
+        maxBytes: 16_384,
+        maxTokens: 16_384,
+      },
+    });
+
+    expect(result.entries).toEqual([]);
+    expect(result.receipt).toMatchObject({
+      requiresExplicitSelection: true,
+      conflicts: [{
+        claimHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        entryIds: [first.entryId, second.entryId],
+        resolution: "explicit_selection_required",
+      }],
+    });
+    expect(result.receipt.candidates).toEqual([
+      expect.objectContaining({
+        entryId: first.entryId,
+        decision: "excluded",
+        reason: "conflict_requires_selection",
+      }),
+      expect.objectContaining({
+        entryId: second.entryId,
+        decision: "excluded",
+        reason: "conflict_requires_selection",
+      }),
+    ]);
+  });
+
+  it("selects exactly one explicitly chosen conflicting claim and audits the resolution", async () => {
+    const first = KnowledgeEntrySchema.parse({
+      ...authoritative("explicit_a"),
+      summary: "Use the project release policy.",
+      body: "Require a verifier before release.",
+    });
+    const second = KnowledgeEntrySchema.parse({
+      ...experiential("explicit_b"),
+      summary: "Use the project release policy.",
+      body: "Skip verification for small releases.",
+    });
+
+    const result = await new KnowledgeResolver(
+      new TestOnlyKnowledgeReadStore([second, first]),
+    ).selectForHandoff({
+      projectId,
+      explicitEntryIds: [first.entryId],
+      budget: {
+        maxItems: 8,
+        maxBytes: 16_384,
+        maxTokens: 16_384,
+      },
+    });
+
+    expect(result.entries.map(({ entryId }) => entryId)).toEqual([
+      first.entryId,
+    ]);
+    expect(result.receipt).toMatchObject({
+      requiresExplicitSelection: false,
+      selectedEntryIds: [first.entryId],
+      conflicts: [{
+        entryIds: [first.entryId, second.entryId],
+        resolution: "explicit_selection",
+        selectedEntryId: first.entryId,
+      }],
+    });
+    expect(result.receipt.candidates).toEqual([
+      expect.objectContaining({
+        entryId: first.entryId,
+        decision: "selected",
+        reason: "explicit_conflict_selection",
+      }),
+      expect.objectContaining({
+        entryId: second.entryId,
+        decision: "excluded",
+        reason: "conflict_not_selected",
+      }),
+    ]);
+  });
+
+  it("keeps selection stable across store order and rejects Provider-specific policy", async () => {
+    const first = authoritative("provider_neutral_a");
+    const second = experiential("provider_neutral_b");
+    const budget = {
+      maxItems: 8,
+      maxBytes: 16_384,
+      maxTokens: 16_384,
+    };
+    const forward = await new KnowledgeResolver(
+      new TestOnlyKnowledgeReadStore([first, second]),
+    ).selectForHandoff({ projectId, budget });
+    const reverse = await new KnowledgeResolver(
+      new TestOnlyKnowledgeReadStore([second, first]),
+    ).selectForHandoff({ projectId, budget });
+
+    expect(reverse).toEqual(forward);
+    expect(JSON.stringify(forward.receipt)).not.toMatch(
+      /\b(?:orca|codex|codebuddy|cursor|goose|provider|terminal|gui)\b/iu,
+    );
+    expect(Object.isFrozen(forward)).toBe(true);
+    expect(Object.isFrozen(forward.receipt.candidates)).toBe(true);
+    await expect(
+      new KnowledgeResolver(
+        new TestOnlyKnowledgeReadStore([first, second]),
+      ).selectForHandoff({
+        projectId,
+        budget,
+        runtimeProviderId: "private",
+      }),
+    ).rejects.toThrow();
+  });
+
   it("defaults to active authoritative and experiential knowledge for the exact Project", async () => {
     const store = new TestOnlyKnowledgeReadStore([
       historical("history_a"),
