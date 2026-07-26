@@ -26,7 +26,8 @@
 - GREEN：修正 parser 后精确测试 3/3 通过；
 - 根门禁：`npm run verify:foundation` PASS，102 test files / 878 tests；
 - Task 2 基线的 `npm install` 报告 4 个 high severity 摘要；Task 3 精确升级
-  Electron 后当前锁文件报告 3 个，未运行 registry audit。
+  Electron 后当时锁文件报告 3 个；Task 11 当前 `npm install` 的 registry 摘要
+  报告 22 个 high severity，尚未分类 production reachability 或修复风险。
 - Task 4：在线 SQLite snapshot、版本化 manifest、CAS/path/hash 负例与隔离恢复
   演练 19/19 通过；根门禁 106 files / 932 tests 通过。该结果仍为
   `CONTRACT_ONLY`，未在真实用户数据或灾备介质上运行。
@@ -49,6 +50,19 @@
   重放负例、带时间和 expected version 的未确认 outbox、retention gap 原子
   snapshot resync、Gate permission allowlist 与 Provider-neutral 移动投影已通过
   Fake device 和浏览器 fixture。真实手机仍为 `NOT_PROVEN`。
+- Task 10：unsigned NSIS 元数据、临时 packaged-app 启动/退出、迁移和 backup
+  gate、保留 user data 的卸载策略及 owned sidecar cleanup 已通过 Windows
+  lifecycle fixture；签名、SmartScreen、真实升级安装和发布仍未证明。
+- Task 11：固定数据集本机 benchmark 的四项阈值和 12 项故障矩阵通过；
+  smoke 保持 `NOT_PROVEN`。前三次未完成 full attempt 和第四次两次 Windows
+  evidence rename 失败均按原始 envelope 保留；第四次通过两次合法 recovery
+  restart 收敛后，在冻结 revision `19f4870` 上真实运行 86,410,499 ms、完成
+  1,442 cycle。计划/恢复/总重启为 288/2/290，archive/rebuild/loop/fault
+  matrix 为 144/48/1,442/24；288 个故障 attempt 全部通过且失败历史保留，
+  receipt/outbox/Fake Provider effect 一一对账，五项检查全 true。六个精确
+  测试文件 46/46 通过；`npm run verify:foundation` 在隔离外完整重跑
+  129 files / 1,130 tests 及全部验证脚本、build 通过。NFR-REL-04 因而提升为
+  `CONTRACT_ONLY`，不证明真实 Provider、真实设备或生产规模。
 
 ## 逐项台账
 
@@ -92,10 +106,10 @@
 | NFR-REL-01 | CONTRACT_ONLY | Event actor/correlation | [Foundation gate](foundation-local-gate.md) | H4 对所有命令投影做覆盖检查 | Storage |
 | NFR-REL-02 | CONTRACT_ONLY | Fault injection/Fake | [Runtime reliability](runtime-reliability.md) | Gate R 对真实 side effect 重复同一矩阵 | Runtime |
 | NFR-REL-03 | CONTRACT_ONLY | 一致性 manifest/隔离恢复 fixture | [Task 4 backup/restore](phase-1-backup-restore.md) | Gate R 验证真实规模、介质故障和保留策略 | Storage |
-| NFR-REL-04 | NOT_RUN | 尚无 24h 证据 | [Phase 1 plan](../plans/2026-07-24-phase-1-product-hardening.md) | H3 固定 seed 运行 24h soak 并保留全部 attempt | Testkit |
-| NFR-PERF-01 | NOT_RUN | Project/Run 页面未测量 | [Acceptance source](../08-user-stories-and-acceptance.md) | H3 冻结 dataset 并测量 1 秒可交互目标 | Performance |
-| NFR-PERF-02 | NOT_RUN | Event 到 UI 未测量 | [Acceptance source](../08-user-stories-and-acceptance.md) | H3 测量本机 p50/p95 与小于 500ms 目标 | Performance |
-| NFR-PERF-03 | NOT_RUN | 10 read-only + 4 active Fake 仅验证有界资源契约，未测吞吐或延迟 | [Task 7 resource bounds](phase-1-resource-bounds.md) | H3 以冻结数据集运行并发 load fixture 并记录 p50/p95 | Performance |
+| NFR-REL-04 | CONTRACT_ONLY | 三次未完成 full attempt 均保留；第四次在冻结源码上运行 86,410,499 ms、1,442 cycle，精确调度、24 轮故障矩阵和五项检查全部通过 | [Task 11 soak](phase-1-soak.md) | Gate R 用真实 Provider、真实设备和生产规模重复长时故障与恢复矩阵 | Testkit |
+| NFR-PERF-01 | CONTRACT_ONLY | JSDOM + 固定 64 Projects / 14 Steps，p95 分别 26.035 / 9.960 ms | [Task 11 performance](phase-1-performance.md) | Gate R 在真实浏览器和生产规模重跑 1 秒目标 | Performance |
+| NFR-PERF-02 | CONTRACT_ONLY | ledger → reader → durable SSE → 本地 JSDOM UI，p95 114.431 ms | [Task 11 performance](phase-1-performance.md) | Gate R 在真实浏览器、真实设备和真实 Provider 重跑 500ms 目标 | Performance |
+| NFR-PERF-03 | CONTRACT_ONLY | 128 历史 Runs + 固定 10 read/wait + 4 端到端关联 active Fake，p95 13.404 ms | [Task 11 performance](phase-1-performance.md) | Gate R 用真实 Provider 和持续负载验证吞吐、延迟及公平性 | Performance |
 | NFR-PERF-04 | CONTRACT_ONLY | 大日志有界分页、逻辑配额、保留点和慢客户端背压 | [Task 7 resource bounds](phase-1-resource-bounds.md) | Gate R 验证真实规模、磁盘水位和长时慢客户端恢复 | Storage/UI |
 | NFR-PORT-01 | CONTRACT_ONLY | 可读文件 + manifest 恢复 | [Task 4 backup/restore](phase-1-backup-restore.md) | Gate R 在独立安装环境验证读取与迁移 | Knowledge |
 | NFR-PORT-02 | NOT_RUN | Export/Import 未产品化 | [Roadmap](../09-migration-and-roadmap.md) | 保持 Phase 2，除非 H1 备份恢复直接需要 | Product |
@@ -115,8 +129,8 @@
 | BLOCK-08 | CONTRACT_ONLY | device scope、proof replay、Gate permission allowlist、任意移动 operation 拒绝 | [Task 9 mobile safety](phase-1-mobile-offline-safety.md) | Gate R 用真实设备验证不能绕过高危策略 | Device |
 | BLOCK-09 | CONTRACT_ONLY | Archive/Knowledge/CAS 对账 | [Task 4 backup/restore](phase-1-backup-restore.md) | Gate R 用真实归档重跑 hash/缺失故障矩阵 | Knowledge |
 | BLOCK-10 | CONTRACT_ONLY | 状态过滤、冲突降级、预算和 untrusted-data boundary | [Task 8 Knowledge safety](phase-1-knowledge-handoff-safety.md) | Gate R 用真实 Agent/Connector 重跑恶意来源与权限负例 | Knowledge |
-| SUP-01 | NOT_PROVEN | 当前 npm install 摘要为 3 high | [Task 3 migration evidence](phase-1-versioned-migrations.md) | 分类 production reachability、修复版本和破坏性升级风险 | Security |
-| SUP-02 | NOT_RUN | registry audit 未授权 | [Phase 1 baseline](phase-1-hardening-baseline.md) | 用户明确授权发送依赖元数据后运行并保存脱敏摘要 | Owner/Security |
+| SUP-01 | NOT_PROVEN | 2026-07-25 `npm install` registry 摘要为 22 high，未分类可达性 | [Task 11 performance](phase-1-performance.md) | 分类 production reachability、修复版本和破坏性升级风险；禁止无评估 force fix | Security |
+| SUP-02 | NOT_RUN | 未运行详细 registry audit；`npm install` 的摘要不能替代逐项审计 | [Phase 1 baseline](phase-1-hardening-baseline.md) | 用户明确授权发送依赖元数据后保存无凭据逐项摘要并由 Security 评估，不自动执行破坏性升级 | Owner/Security |
 
 ## 当前结论
 
@@ -124,5 +138,5 @@
 - 其余产品链路最高为 `CONTRACT_ONLY`；
 - Orca 只有 runtime discovery 原子项通过，Provider 采用仍为 `NOT_PROVEN`；
 - Codex、CodeBuddy、Cursor 和真实移动设备均没有完整 Phase 1 通过证据；
-- 3 个 high severity 依赖项尚未分类，不能写成已修复或可利用；
+- 当前 registry 摘要的 22 个 high severity 依赖项尚未分类，不能写成已修复或可利用；
 - 生产 Provider、代码签名、分发和发布保持阻断。

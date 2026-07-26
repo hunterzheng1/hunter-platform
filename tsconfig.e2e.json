@@ -4,12 +4,19 @@
     "composite": false,
     "declaration": false,
     "declarationMap": false,
-    "noEmit": true
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"]
   },
   "include": [
     "e2e/**/*.ts",
     "playwright.config.ts",
     "scripts/e2e-*.ts",
+    "scripts/benchmark-phase1.ts",
+    "scripts/benchmark-phase1.test.ts",
+    "scripts/phase1-*.ts",
+    "scripts/soak-phase1.ts",
+    "scripts/soak-phase1.test.ts",
     "scripts/start-e2e-launcher.ts"
   ]
 }

@@ -1,0 +1,1124 @@
+{
+  "schemaVersion": 1,
+  "proofScope": "contract_only",
+  "build": {
+    "productVersion": "0.0.0",
+    "baseRevision": "0087fe4736580fadd6a47b338bd16f8cc2869df7",
+    "sourceDigest": "40efe43fe9e40c5b1d9c789fa28621cb883a1acc292476e43be1170ec08df1f0"
+  },
+  "dataset": {
+    "schemaVersion": 1,
+    "datasetId": "phase1-fixed-v1",
+    "seed": 1213550164,
+    "fakeClockStart": "2026-07-25T00:00:00.000Z",
+    "projectCount": 64,
+    "runCount": 128,
+    "stepsPerRun": 14,
+    "readonlyWaitingSteps": 10,
+    "activeFakeSteps": 4,
+    "benchmarkWarmupSamples": 5,
+    "benchmarkMeasuredSamples": 30,
+    "plannedSoakDurationMs": 86400000,
+    "soakCycleIntervalMs": 60000,
+    "restartEveryCycles": 5,
+    "archiveEveryCycles": 10,
+    "rebuildEveryCycles": 30,
+    "loopEveryCycles": 1,
+    "faultMatrixEveryCycles": 60,
+    "maxHeapGrowthBytes": 268435456,
+    "maxRssGrowthBytes": 536870912,
+    "maxDatabaseGrowthPerCycleBytes": 262144,
+    "maxDatabaseBytes": 536870912,
+    "maxArchiveBytes": 67108864,
+    "maxCheckpointBytes": 16777216
+  },
+  "host": {
+    "platform": "win32",
+    "release": "10.0.26200",
+    "architecture": "x64",
+    "cpuModel": "13th Gen Intel(R) Core(TM) i5-13490F",
+    "logicalCores": 16,
+    "totalMemoryBytes": 34164097024,
+    "nodeVersion": "v24.14.0"
+  },
+  "notes": [
+    "Full mode uses actual monotonic wall time for the 24-hour gate.",
+    "Domain timestamps use the fixed Fake clock; host paths and environment variables are not recorded.",
+    "Fake Runtime proves Hunter contracts only and does not validate any real Provider.",
+    "A failed cycle stops the run; it is never automatically rerun as PASS."
+  ],
+  "status": "NOT_PROVEN",
+  "execution": {
+    "mode": "full",
+    "cycleIntervalMs": 60000,
+    "restartEveryCycles": 5,
+    "archiveEveryCycles": 10,
+    "rebuildEveryCycles": 30,
+    "loopEveryCycles": 1,
+    "faultMatrixEveryCycles": 60
+  },
+  "startedAt": "2026-07-25T06:28:47.516Z",
+  "completedAt": "2026-07-25T07:38:48.048Z",
+  "elapsedMs": 4200533,
+  "cycleCount": 71,
+  "restartCount": 14,
+  "archiveCount": 7,
+  "rebuildCount": 2,
+  "loopCount": 71,
+  "faultMatrixCount": 1,
+  "faultAttempts": [
+    {
+      "attemptId": "fat_soak0001_crash_before_commit_1",
+      "scenario": "crash_before_commit",
+      "status": "PASS",
+      "expected": "connection loss before commit rolls back, then recovery commits once",
+      "observed": "INJECTED_BEFORE_COMMIT; durable events 0 before recovery and 1 after",
+      "elapsedMs": 68.86639999970794,
+      "externalOperationCount": 0,
+      "duplicateExternalOperationCount": 0,
+      "falseSuccessCount": 0,
+      "failureHistoryPreserved": true,
+      "history": [
+        {
+          "sequence": 1,
+          "outcome": "INJECTED_FAILURE",
+          "code": "INJECTED_BEFORE_COMMIT",
+          "observedAt": "2026-07-25T00:00:00.000Z"
+        },
+        {
+          "sequence": 2,
+          "outcome": "RECOVERY_PASS",
+          "code": "RECOVERY_COMMITTED_ONCE",
+          "observedAt": "2026-07-25T00:00:01.000Z"
+        }
+      ]
+    },
+    {
+      "attemptId": "fat_soak0001_crash_after_commit_2",
+      "scenario": "crash_after_commit",
+      "status": "PASS",
+      "expected": "connection loss after commit replays the durable receipt without duplication",
+      "observed": "INJECTED_AFTER_COMMIT; durable events 1 before recovery and 1 after",
+      "elapsedMs": 62.14509999984875,
+      "externalOperationCount": 0,
+      "duplicateExternalOperationCount": 0,
+      "falseSuccessCount": 0,
+      "failureHistoryPreserved": true,
+      "history": [
+        {
+          "sequence": 1,
+          "outcome": "INJECTED_FAILURE",
+          "code": "INJECTED_AFTER_COMMIT",
+          "observedAt": "2026-07-25T00:00:00.000Z"
+        },
+        {
+          "sequence": 2,
+          "outcome": "RECOVERY_PASS",
+          "code": "RECEIPT_REPLAYED_WITHOUT_DUPLICATE",
+          "observedAt": "2026-07-25T00:00:01.000Z"
+        }
+      ]
+    },
+    {
+      "attemptId": "fat_soak0001_crash_before_dispatch_3",
+      "scenario": "crash_before_dispatch",
+      "status": "PASS",
+      "expected": "injected crash is preserved and recovery converges without duplicate external operation",
+      "observed": "INJECTED_FAULT:AFTER_COMMAND_COMMIT_BEFORE_PROVIDER_CALL -> completed:completed",
+      "elapsedMs": 69.40299999993294,
+      "externalOperationCount": 1,
+      "duplicateExternalOperationCount": 0,
+      "falseSuccessCount": 0,
+      "failureHistoryPreserved": true,
+      "history": [
+        {
+          "sequence": 1,
+          "outcome": "INJECTED_FAILURE",
+          "code": "INJECTED_FAULT:AFTER_COMMAND_COMMIT_BEFORE_PROVIDER_CALL",
+          "observedAt": "2026-07-25T00:00:00.000Z"
+        },
+        {
+          "sequence": 2,
+          "outcome": "RECOVERY_PASS",
+          "code": "RECOVERY_COMPLETED",
+          "observedAt": "2026-07-25T00:00:01.000Z"
+        }
+      ]
+    },
+    {
+      "attemptId": "fat_soak0001_crash_after_dispatch_4",
+      "scenario": "crash_after_dispatch",
+      "status": "PASS",
+      "expected": "injected crash is preserved and recovery converges without duplicate external operation",
+      "observed": "INJECTED_FAULT:AFTER_PROVIDER_SUCCESS_BEFORE_RECEIPT_COMMIT -> needs_attention:needs_attention",
+      "elapsedMs": 69.78389999968931,
+      "externalOperationCount": 1,
+      "duplicateExternalOperationCount": 0,
+      "falseSuccessCount": 0,
+      "failureHistoryPreserved": true,
+      "history": [
+        {
+          "sequence": 1,
+          "outcome": "INJECTED_FAILURE",
+          "code": "INJECTED_FAULT:AFTER_PROVIDER_SUCCESS_BEFORE_RECEIPT_COMMIT",
+          "observedAt": "2026-07-25T00:00:00.000Z"
+        },
+        {
+          "sequence": 2,
+          "outcome": "RECOVERY_PASS",
+          "code": "RECOVERY_NEEDS_ATTENTION",
+          "observedAt": "2026-07-25T00:00:01.000Z"
+        }
+      ]
+    },
+    {
+      "attemptId": "fat_soak0001_crash_before_receipt_5",
+      "scenario": "crash_before_receipt",
+      "status": "PASS",
+      "expected": "injected crash is preserved and recovery converges without duplicate external operation",
+      "observed": "INJECTED_FAULT:AFTER_PROVIDER_SUCCESS_BEFORE_RECEIPT_COMMIT -> completed:completed",
+      "elapsedMs": 74.85870000021532,
+      "externalOperationCount": 1,
+      "duplicateExternalOperationCount": 0,
+      "falseSuccessCount": 0,
+      "failureHistoryPreserved": true,
+      "history": [
+        {
+          "sequence": 1,
+          "outcome": "INJECTED_FAILURE",
+          "code": "INJECTED_FAULT:AFTER_PROVIDER_SUCCESS_BEFORE_RECEIPT_COMMIT",
+          "observedAt": "2026-07-25T00:00:00.000Z"
+        },
+        {
+          "sequence": 2,
+          "outcome": "RECOVERY_PASS",
+          "code": "RECOVERY_COMPLETED",
+          "observedAt": "2026-07-25T00:00:01.000Z"
+        }
+      ]
+    },
+    {
+      "attemptId": "fat_soak0001_crash_after_receipt_6",
+      "scenario": "crash_after_receipt",
+      "status": "PASS",
+      "expected": "injected crash is preserved and recovery converges without duplicate external operation",
+      "observed": "INJECTED_FAULT:AFTER_RECEIPT_COMMIT_BEFORE_OUTBOX_COMPLETE -> idle:completed",
+      "elapsedMs": 59.99890000000596,
+      "externalOperationCount": 1,
+      "duplicateExternalOperationCount": 0,
+      "falseSuccessCount": 0,
+      "failureHistoryPreserved": true,
+      "history": [
+        {
+          "sequence": 1,
+          "outcome": "INJECTED_FAILURE",
+          "code": "INJECTED_FAULT:AFTER_RECEIPT_COMMIT_BEFORE_OUTBOX_COMPLETE",
+          "observedAt": "2026-07-25T00:00:00.000Z"
+        },
+        {
+          "sequence": 2,
+          "outcome": "RECOVERY_PASS",
+          "code": "RECOVERY_IDLE",
+          "observedAt": "2026-07-25T00:00:01.000Z"
+        }
+      ]
+    },
+    {
+      "attemptId": "fat_soak0001_projection_loss_7",
+      "scenario": "projection_loss",
+      "status": "PASS",
+      "expected": "projection deletion is visible and rebuild restores ledger truth",
+      "observed": "projection emptied then rebuilt byte-for-byte",
+      "elapsedMs": 63.91009999997914,
+      "externalOperationCount": 0,
+      "duplicateExternalOperationCount": 0,
+      "falseSuccessCount": 0,
+      "failureHistoryPreserved": true,
+      "history": [
+        {
+          "sequence": 1,
+          "outcome": "INJECTED_FAILURE",
+          "code": "PROJECTION_DELETED",
+          "observedAt": "2026-07-25T00:00:00.000Z"
+        },
+        {
+          "sequence": 2,
+          "outcome": "RECOVERY_PASS",
+          "code": "PROJECTION_REBUILT_FROM_LEDGER",
+          "observedAt": "2026-07-25T00:00:01.000Z"
+        }
+      ]
+    },
+    {
+      "attemptId": "fat_soak0001_archive_interrupted_8",
+      "scenario": "archive_interrupted",
+      "status": "PASS",
+      "expected": "published manifest is recovered exactly once after interruption",
+      "observed": "INJECTED_AFTER_MANIFEST_PUBLICATION -> completed with one manifest and two attempts",
+      "elapsedMs": 73.18349999981001,
+      "externalOperationCount": 0,
+      "duplicateExternalOperationCount": 0,
+      "falseSuccessCount": 0,
+      "failureHistoryPreserved": true,
+      "history": [
+        {
+          "sequence": 1,
+          "outcome": "INJECTED_FAILURE",
+          "code": "INJECTED_AFTER_MANIFEST_PUBLICATION",
+          "observedAt": "2026-07-25T00:00:00.000Z"
+        },
+        {
+          "sequence": 2,
+          "outcome": "RECOVERY_PASS",
+          "code": "ARCHIVE_RECOVERED_EXACTLY_ONCE",
+          "observedAt": "2026-07-25T00:00:01.000Z"
+        }
+      ]
+    },
+    {
+      "attemptId": "fat_soak0001_disk_full_9",
+      "scenario": "disk_full",
+      "status": "PASS",
+      "expected": "SQLITE_FULL rolls back the command and later recovery is explicit",
+      "observed": "large commit rejected with zero events; bounded commit later accepted",
+      "elapsedMs": 71.78269999986514,
+      "externalOperationCount": 0,
+      "duplicateExternalOperationCount": 0,
+      "falseSuccessCount": 0,
+      "failureHistoryPreserved": true,
+      "history": [
+        {
+          "sequence": 1,
+          "outcome": "EXPECTED_REJECTION",
+          "code": "SQLITE_FULL",
+          "observedAt": "2026-07-25T00:00:00.000Z"
+        },
+        {
+          "sequence": 2,
+          "outcome": "RECOVERY_PASS",
+          "code": "CAPACITY_RESTORED_COMMIT_ACCEPTED",
+          "observedAt": "2026-07-25T00:00:01.000Z"
+        }
+      ]
+    },
+    {
+      "attemptId": "fat_soak0001_read_only_10",
+      "scenario": "read_only",
+      "status": "PASS",
+      "expected": "read-only storage rejects mutation without inferred success",
+      "observed": "read-only command rejected; explicit writable recovery accepted",
+      "elapsedMs": 57.20880000013858,
+      "externalOperationCount": 0,
+      "duplicateExternalOperationCount": 0,
+      "falseSuccessCount": 0,
+      "failureHistoryPreserved": true,
+      "history": [
+        {
+          "sequence": 1,
+          "outcome": "EXPECTED_REJECTION",
+          "code": "SQLITE_READONLY",
+          "observedAt": "2026-07-25T00:00:00.000Z"
+        },
+        {
+          "sequence": 2,
+          "outcome": "RECOVERY_PASS",
+          "code": "WRITABLE_COMMIT_ACCEPTED",
+          "observedAt": "2026-07-25T00:00:01.000Z"
+        }
+      ]
+    },
+    {
+      "attemptId": "fat_soak0001_sse_gap_11",
+      "scenario": "sse_gap",
+      "status": "PASS",
+      "expected": "retention gap requires snapshot replacement before resume",
+      "observed": "EVENT_CURSOR_GAP -> snapshot cursor 1 -> replay ok",
+      "elapsedMs": 54.88090000022203,
+      "externalOperationCount": 0,
+      "duplicateExternalOperationCount": 0,
+      "falseSuccessCount": 0,
+      "failureHistoryPreserved": true,
+      "history": [
+        {
+          "sequence": 1,
+          "outcome": "EXPECTED_REJECTION",
+          "code": "EVENT_CURSOR_GAP",
+          "observedAt": "2026-07-25T00:00:00.000Z"
+        },
+        {
+          "sequence": 2,
+          "outcome": "RECOVERY_PASS",
+          "code": "SNAPSHOT_REPLACED_AND_RESUMED",
+          "observedAt": "2026-07-25T00:00:01.000Z"
+        }
+      ]
+    },
+    {
+      "attemptId": "fat_soak0001_mobile_replay_12",
+      "scenario": "mobile_replay",
+      "status": "PASS",
+      "expected": "same mobile idempotency key returns one durable receipt",
+      "observed": "two deliveries returned one identical command receipt",
+      "elapsedMs": 56.7433999995701,
+      "externalOperationCount": 0,
+      "duplicateExternalOperationCount": 0,
+      "falseSuccessCount": 0,
+      "failureHistoryPreserved": true,
+      "history": [
+        {
+          "sequence": 1,
+          "outcome": "OBSERVED_PASS",
+          "code": "MOBILE_REPLAY_RETURNED_ORIGINAL_RECEIPT",
+          "observedAt": "2026-07-25T00:00:00.000Z"
+        }
+      ]
+    }
+  ],
+  "cycleAttempts": [
+    {
+      "sequence": 1,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:00:00.000Z",
+      "completedAt": "2026-07-25T00:01:00.000Z",
+      "operationId": "opn_phase1soak000001",
+      "errorCode": null,
+      "heapBytes": 66349768,
+      "databaseBytes": 625960
+    },
+    {
+      "sequence": 2,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:01:00.000Z",
+      "completedAt": "2026-07-25T00:02:00.000Z",
+      "operationId": "opn_phase1soak000002",
+      "errorCode": null,
+      "heapBytes": 46923352,
+      "databaseBytes": 811360
+    },
+    {
+      "sequence": 3,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:02:00.000Z",
+      "completedAt": "2026-07-25T00:03:00.000Z",
+      "operationId": "opn_phase1soak000003",
+      "errorCode": null,
+      "heapBytes": 47011728,
+      "databaseBytes": 1021480
+    },
+    {
+      "sequence": 4,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:03:00.000Z",
+      "completedAt": "2026-07-25T00:04:00.000Z",
+      "operationId": "opn_phase1soak000004",
+      "errorCode": null,
+      "heapBytes": 47208056,
+      "databaseBytes": 1215072
+    },
+    {
+      "sequence": 5,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:04:00.000Z",
+      "completedAt": "2026-07-25T00:05:00.000Z",
+      "operationId": "opn_phase1soak000005",
+      "errorCode": null,
+      "heapBytes": 47307352,
+      "databaseBytes": 1429312
+    },
+    {
+      "sequence": 6,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:05:00.000Z",
+      "completedAt": "2026-07-25T00:06:00.000Z",
+      "operationId": "opn_phase1soak000006",
+      "errorCode": null,
+      "heapBytes": 47112112,
+      "databaseBytes": 574600
+    },
+    {
+      "sequence": 7,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:06:00.000Z",
+      "completedAt": "2026-07-25T00:07:00.000Z",
+      "operationId": "opn_phase1soak000007",
+      "errorCode": null,
+      "heapBytes": 47010416,
+      "databaseBytes": 784720
+    },
+    {
+      "sequence": 8,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:07:00.000Z",
+      "completedAt": "2026-07-25T00:08:00.000Z",
+      "operationId": "opn_phase1soak000008",
+      "errorCode": null,
+      "heapBytes": 47885912,
+      "databaseBytes": 998960
+    },
+    {
+      "sequence": 9,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:08:00.000Z",
+      "completedAt": "2026-07-25T00:09:00.000Z",
+      "operationId": "opn_phase1soak000009",
+      "errorCode": null,
+      "heapBytes": 47874768,
+      "databaseBytes": 1196696
+    },
+    {
+      "sequence": 10,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:09:00.000Z",
+      "completedAt": "2026-07-25T00:10:00.000Z",
+      "operationId": "opn_phase1soak000010",
+      "errorCode": null,
+      "heapBytes": 48507872,
+      "databaseBytes": 1394456
+    },
+    {
+      "sequence": 11,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:10:00.000Z",
+      "completedAt": "2026-07-25T00:11:00.000Z",
+      "operationId": "opn_phase1soak000011",
+      "errorCode": null,
+      "heapBytes": 48339728,
+      "databaseBytes": 636088
+    },
+    {
+      "sequence": 12,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:11:00.000Z",
+      "completedAt": "2026-07-25T00:12:00.000Z",
+      "operationId": "opn_phase1soak000012",
+      "errorCode": null,
+      "heapBytes": 49273672,
+      "databaseBytes": 842088
+    },
+    {
+      "sequence": 13,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:12:00.000Z",
+      "completedAt": "2026-07-25T00:13:00.000Z",
+      "operationId": "opn_phase1soak000013",
+      "errorCode": null,
+      "heapBytes": 48454408,
+      "databaseBytes": 1035728
+    },
+    {
+      "sequence": 14,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:13:00.000Z",
+      "completedAt": "2026-07-25T00:14:00.000Z",
+      "operationId": "opn_phase1soak000014",
+      "errorCode": null,
+      "heapBytes": 48473872,
+      "databaseBytes": 1233464
+    },
+    {
+      "sequence": 15,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:14:00.000Z",
+      "completedAt": "2026-07-25T00:15:00.000Z",
+      "operationId": "opn_phase1soak000015",
+      "errorCode": null,
+      "heapBytes": 48543320,
+      "databaseBytes": 1451824
+    },
+    {
+      "sequence": 16,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:15:00.000Z",
+      "completedAt": "2026-07-25T00:16:00.000Z",
+      "operationId": "opn_phase1soak000016",
+      "errorCode": null,
+      "heapBytes": 48305424,
+      "databaseBytes": 689360
+    },
+    {
+      "sequence": 17,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:16:00.000Z",
+      "completedAt": "2026-07-25T00:17:00.000Z",
+      "operationId": "opn_phase1soak000017",
+      "errorCode": null,
+      "heapBytes": 48371008,
+      "databaseBytes": 895360
+    },
+    {
+      "sequence": 18,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:17:00.000Z",
+      "completedAt": "2026-07-25T00:18:00.000Z",
+      "operationId": "opn_phase1soak000018",
+      "errorCode": null,
+      "heapBytes": 49223680,
+      "databaseBytes": 1105480
+    },
+    {
+      "sequence": 19,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:18:00.000Z",
+      "completedAt": "2026-07-25T00:19:00.000Z",
+      "operationId": "opn_phase1soak000019",
+      "errorCode": null,
+      "heapBytes": 49124824,
+      "databaseBytes": 1327936
+    },
+    {
+      "sequence": 20,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:19:00.000Z",
+      "completedAt": "2026-07-25T00:20:00.000Z",
+      "operationId": "opn_phase1soak000020",
+      "errorCode": null,
+      "heapBytes": 48666888,
+      "databaseBytes": 1521576
+    },
+    {
+      "sequence": 21,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:20:00.000Z",
+      "completedAt": "2026-07-25T00:21:00.000Z",
+      "operationId": "opn_phase1soak000021",
+      "errorCode": null,
+      "heapBytes": 49320624,
+      "databaseBytes": 759088
+    },
+    {
+      "sequence": 22,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:21:00.000Z",
+      "completedAt": "2026-07-25T00:22:00.000Z",
+      "operationId": "opn_phase1soak000022",
+      "errorCode": null,
+      "heapBytes": 49283528,
+      "databaseBytes": 960968
+    },
+    {
+      "sequence": 23,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:22:00.000Z",
+      "completedAt": "2026-07-25T00:23:00.000Z",
+      "operationId": "opn_phase1soak000023",
+      "errorCode": null,
+      "heapBytes": 49363144,
+      "databaseBytes": 1154608
+    },
+    {
+      "sequence": 24,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:23:00.000Z",
+      "completedAt": "2026-07-25T00:24:00.000Z",
+      "operationId": "opn_phase1soak000024",
+      "errorCode": null,
+      "heapBytes": 49419328,
+      "databaseBytes": 1364704
+    },
+    {
+      "sequence": 25,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:24:00.000Z",
+      "completedAt": "2026-07-25T00:25:00.000Z",
+      "operationId": "opn_phase1soak000025",
+      "errorCode": null,
+      "heapBytes": 49474368,
+      "databaseBytes": 1583064
+    },
+    {
+      "sequence": 26,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:25:00.000Z",
+      "completedAt": "2026-07-25T00:26:00.000Z",
+      "operationId": "opn_phase1soak000026",
+      "errorCode": null,
+      "heapBytes": 49167448,
+      "databaseBytes": 795904
+    },
+    {
+      "sequence": 27,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:26:00.000Z",
+      "completedAt": "2026-07-25T00:27:00.000Z",
+      "operationId": "opn_phase1soak000027",
+      "errorCode": null,
+      "heapBytes": 50135240,
+      "databaseBytes": 997784
+    },
+    {
+      "sequence": 28,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:27:00.000Z",
+      "completedAt": "2026-07-25T00:28:00.000Z",
+      "operationId": "opn_phase1soak000028",
+      "errorCode": null,
+      "heapBytes": 50107288,
+      "databaseBytes": 1240864
+    },
+    {
+      "sequence": 29,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:28:00.000Z",
+      "completedAt": "2026-07-25T00:29:00.000Z",
+      "operationId": "opn_phase1soak000029",
+      "errorCode": null,
+      "heapBytes": 50113896,
+      "databaseBytes": 1446840
+    },
+    {
+      "sequence": 30,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:29:00.000Z",
+      "completedAt": "2026-07-25T00:30:00.000Z",
+      "operationId": "opn_phase1soak000030",
+      "errorCode": null,
+      "heapBytes": 49965280,
+      "databaseBytes": 1792920
+    },
+    {
+      "sequence": 31,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:30:00.000Z",
+      "completedAt": "2026-07-25T00:31:00.000Z",
+      "operationId": "opn_phase1soak000031",
+      "errorCode": null,
+      "heapBytes": 49759160,
+      "databaseBytes": 857320
+    },
+    {
+      "sequence": 32,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:31:00.000Z",
+      "completedAt": "2026-07-25T00:32:00.000Z",
+      "operationId": "opn_phase1soak000032",
+      "errorCode": null,
+      "heapBytes": 49775072,
+      "databaseBytes": 1075680
+    },
+    {
+      "sequence": 33,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:32:00.000Z",
+      "completedAt": "2026-07-25T00:33:00.000Z",
+      "operationId": "opn_phase1soak000033",
+      "errorCode": null,
+      "heapBytes": 49813800,
+      "databaseBytes": 1281680
+    },
+    {
+      "sequence": 34,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:33:00.000Z",
+      "completedAt": "2026-07-25T00:34:00.000Z",
+      "operationId": "opn_phase1soak000034",
+      "errorCode": null,
+      "heapBytes": 49871648,
+      "databaseBytes": 1487656
+    },
+    {
+      "sequence": 35,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:34:00.000Z",
+      "completedAt": "2026-07-25T00:35:00.000Z",
+      "operationId": "opn_phase1soak000035",
+      "errorCode": null,
+      "heapBytes": 50854872,
+      "databaseBytes": 1714256
+    },
+    {
+      "sequence": 36,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:35:00.000Z",
+      "completedAt": "2026-07-25T00:36:00.000Z",
+      "operationId": "opn_phase1soak000036",
+      "errorCode": null,
+      "heapBytes": 50647208,
+      "databaseBytes": 914712
+    },
+    {
+      "sequence": 37,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:36:00.000Z",
+      "completedAt": "2026-07-25T00:37:00.000Z",
+      "operationId": "opn_phase1soak000037",
+      "errorCode": null,
+      "heapBytes": 50687576,
+      "databaseBytes": 1120712
+    },
+    {
+      "sequence": 38,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:37:00.000Z",
+      "completedAt": "2026-07-25T00:38:00.000Z",
+      "operationId": "opn_phase1soak000038",
+      "errorCode": null,
+      "heapBytes": 50764624,
+      "databaseBytes": 1330832
+    },
+    {
+      "sequence": 39,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:38:00.000Z",
+      "completedAt": "2026-07-25T00:39:00.000Z",
+      "operationId": "opn_phase1soak000039",
+      "errorCode": null,
+      "heapBytes": 50843960,
+      "databaseBytes": 1536808
+    },
+    {
+      "sequence": 40,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:39:00.000Z",
+      "completedAt": "2026-07-25T00:40:00.000Z",
+      "operationId": "opn_phase1soak000040",
+      "errorCode": null,
+      "heapBytes": 50406864,
+      "databaseBytes": 1751048
+    },
+    {
+      "sequence": 41,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:40:00.000Z",
+      "completedAt": "2026-07-25T00:41:00.000Z",
+      "operationId": "opn_phase1soak000041",
+      "errorCode": null,
+      "heapBytes": 51249928,
+      "databaseBytes": 967960
+    },
+    {
+      "sequence": 42,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:41:00.000Z",
+      "completedAt": "2026-07-25T00:42:00.000Z",
+      "operationId": "opn_phase1soak000042",
+      "errorCode": null,
+      "heapBytes": 51354096,
+      "databaseBytes": 1202800
+    },
+    {
+      "sequence": 43,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:42:00.000Z",
+      "completedAt": "2026-07-25T00:43:00.000Z",
+      "operationId": "opn_phase1soak000043",
+      "errorCode": null,
+      "heapBytes": 51506992,
+      "databaseBytes": 1404680
+    },
+    {
+      "sequence": 44,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:43:00.000Z",
+      "completedAt": "2026-07-25T00:44:00.000Z",
+      "operationId": "opn_phase1soak000044",
+      "errorCode": null,
+      "heapBytes": 50743632,
+      "databaseBytes": 1614776
+    },
+    {
+      "sequence": 45,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:44:00.000Z",
+      "completedAt": "2026-07-25T00:45:00.000Z",
+      "operationId": "opn_phase1soak000045",
+      "errorCode": null,
+      "heapBytes": 50962448,
+      "databaseBytes": 1837256
+    },
+    {
+      "sequence": 46,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:45:00.000Z",
+      "completedAt": "2026-07-25T00:46:00.000Z",
+      "operationId": "opn_phase1soak000046",
+      "errorCode": null,
+      "heapBytes": 51870320,
+      "databaseBytes": 1017088
+    },
+    {
+      "sequence": 47,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:46:00.000Z",
+      "completedAt": "2026-07-25T00:47:00.000Z",
+      "operationId": "opn_phase1soak000047",
+      "errorCode": null,
+      "heapBytes": 51086824,
+      "databaseBytes": 1235448
+    },
+    {
+      "sequence": 48,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:47:00.000Z",
+      "completedAt": "2026-07-25T00:48:00.000Z",
+      "operationId": "opn_phase1soak000048",
+      "errorCode": null,
+      "heapBytes": 51267352,
+      "databaseBytes": 1470288
+    },
+    {
+      "sequence": 49,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:48:00.000Z",
+      "completedAt": "2026-07-25T00:49:00.000Z",
+      "operationId": "opn_phase1soak000049",
+      "errorCode": null,
+      "heapBytes": 51464352,
+      "databaseBytes": 1700984
+    },
+    {
+      "sequence": 50,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:49:00.000Z",
+      "completedAt": "2026-07-25T00:50:00.000Z",
+      "operationId": "opn_phase1soak000050",
+      "errorCode": null,
+      "heapBytes": 52159424,
+      "databaseBytes": 1906984
+    },
+    {
+      "sequence": 51,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:50:00.000Z",
+      "completedAt": "2026-07-25T00:51:00.000Z",
+      "operationId": "opn_phase1soak000051",
+      "errorCode": null,
+      "heapBytes": 52128560,
+      "databaseBytes": 1078600
+    },
+    {
+      "sequence": 52,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:51:00.000Z",
+      "completedAt": "2026-07-25T00:52:00.000Z",
+      "operationId": "opn_phase1soak000052",
+      "errorCode": null,
+      "heapBytes": 52407584,
+      "databaseBytes": 1284600
+    },
+    {
+      "sequence": 53,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:52:00.000Z",
+      "completedAt": "2026-07-25T00:53:00.000Z",
+      "operationId": "opn_phase1soak000053",
+      "errorCode": null,
+      "heapBytes": 51724320,
+      "databaseBytes": 1519440
+    },
+    {
+      "sequence": 54,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:53:00.000Z",
+      "completedAt": "2026-07-25T00:54:00.000Z",
+      "operationId": "opn_phase1soak000054",
+      "errorCode": null,
+      "heapBytes": 51964240,
+      "databaseBytes": 1746016
+    },
+    {
+      "sequence": 55,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:54:00.000Z",
+      "completedAt": "2026-07-25T00:55:00.000Z",
+      "operationId": "opn_phase1soak000055",
+      "errorCode": null,
+      "heapBytes": 52350400,
+      "databaseBytes": 2001456
+    },
+    {
+      "sequence": 56,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:55:00.000Z",
+      "completedAt": "2026-07-25T00:56:00.000Z",
+      "operationId": "opn_phase1soak000056",
+      "errorCode": null,
+      "heapBytes": 52541936,
+      "databaseBytes": 1119440
+    },
+    {
+      "sequence": 57,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:56:00.000Z",
+      "completedAt": "2026-07-25T00:57:00.000Z",
+      "operationId": "opn_phase1soak000057",
+      "errorCode": null,
+      "heapBytes": 52785672,
+      "databaseBytes": 1317200
+    },
+    {
+      "sequence": 58,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:57:00.000Z",
+      "completedAt": "2026-07-25T00:58:00.000Z",
+      "operationId": "opn_phase1soak000058",
+      "errorCode": null,
+      "heapBytes": 53052600,
+      "databaseBytes": 1556160
+    },
+    {
+      "sequence": 59,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:58:00.000Z",
+      "completedAt": "2026-07-25T00:59:00.000Z",
+      "operationId": "opn_phase1soak000059",
+      "errorCode": null,
+      "heapBytes": 52423080,
+      "databaseBytes": 1786856
+    },
+    {
+      "sequence": 60,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:59:00.000Z",
+      "completedAt": "2026-07-25T01:00:00.000Z",
+      "operationId": "opn_phase1soak000060",
+      "errorCode": null,
+      "heapBytes": 50421224,
+      "databaseBytes": 2293616
+    },
+    {
+      "sequence": 61,
+      "status": "PASS",
+      "startedAt": "2026-07-25T01:00:00.000Z",
+      "completedAt": "2026-07-25T01:01:00.000Z",
+      "operationId": "opn_phase1soak000061",
+      "errorCode": null,
+      "heapBytes": 51647568,
+      "databaseBytes": 1185072
+    },
+    {
+      "sequence": 62,
+      "status": "PASS",
+      "startedAt": "2026-07-25T01:01:00.000Z",
+      "completedAt": "2026-07-25T01:02:00.000Z",
+      "operationId": "opn_phase1soak000062",
+      "errorCode": null,
+      "heapBytes": 49176024,
+      "databaseBytes": 1403432
+    },
+    {
+      "sequence": 63,
+      "status": "PASS",
+      "startedAt": "2026-07-25T01:02:00.000Z",
+      "completedAt": "2026-07-25T01:03:00.000Z",
+      "operationId": "opn_phase1soak000063",
+      "errorCode": null,
+      "heapBytes": 49025440,
+      "databaseBytes": 1601192
+    },
+    {
+      "sequence": 64,
+      "status": "PASS",
+      "startedAt": "2026-07-25T01:03:00.000Z",
+      "completedAt": "2026-07-25T01:04:00.000Z",
+      "operationId": "opn_phase1soak000064",
+      "errorCode": null,
+      "heapBytes": 48681040,
+      "databaseBytes": 1803048
+    },
+    {
+      "sequence": 65,
+      "status": "PASS",
+      "startedAt": "2026-07-25T01:04:00.000Z",
+      "completedAt": "2026-07-25T01:05:00.000Z",
+      "operationId": "opn_phase1soak000065",
+      "errorCode": null,
+      "heapBytes": 49298064,
+      "databaseBytes": 2033768
+    },
+    {
+      "sequence": 66,
+      "status": "PASS",
+      "startedAt": "2026-07-25T01:05:00.000Z",
+      "completedAt": "2026-07-25T01:06:00.000Z",
+      "operationId": "opn_phase1soak000066",
+      "errorCode": null,
+      "heapBytes": 49712136,
+      "databaseBytes": 1221888
+    },
+    {
+      "sequence": 67,
+      "status": "PASS",
+      "startedAt": "2026-07-25T01:06:00.000Z",
+      "completedAt": "2026-07-25T01:07:00.000Z",
+      "operationId": "opn_phase1soak000067",
+      "errorCode": null,
+      "heapBytes": 49567096,
+      "databaseBytes": 1444368
+    },
+    {
+      "sequence": 68,
+      "status": "PASS",
+      "startedAt": "2026-07-25T01:07:00.000Z",
+      "completedAt": "2026-07-25T01:08:00.000Z",
+      "operationId": "opn_phase1soak000068",
+      "errorCode": null,
+      "heapBytes": 49224824,
+      "databaseBytes": 1666848
+    },
+    {
+      "sequence": 69,
+      "status": "PASS",
+      "startedAt": "2026-07-25T01:08:00.000Z",
+      "completedAt": "2026-07-25T01:09:00.000Z",
+      "operationId": "opn_phase1soak000069",
+      "errorCode": null,
+      "heapBytes": 49905280,
+      "databaseBytes": 1918144
+    },
+    {
+      "sequence": 70,
+      "status": "PASS",
+      "startedAt": "2026-07-25T01:09:00.000Z",
+      "completedAt": "2026-07-25T01:10:00.000Z",
+      "operationId": "opn_phase1soak000070",
+      "errorCode": null,
+      "heapBytes": 50066280,
+      "databaseBytes": 2132384
+    },
+    {
+      "sequence": 71,
+      "status": "PASS",
+      "startedAt": "2026-07-25T01:10:00.000Z",
+      "completedAt": "2026-07-25T01:11:00.000Z",
+      "operationId": "opn_phase1soak000071",
+      "errorCode": null,
+      "heapBytes": 50470184,
+      "databaseBytes": 1291640
+    }
+  ],
+  "resources": {
+    "initialHeapBytes": 63580712,
+    "peakHeapBytes": 66467080,
+    "finalHeapBytes": 50529120,
+    "initialRssBytes": 201617408,
+    "peakRssBytes": 202358784,
+    "finalRssBytes": 126205952,
+    "initialDatabaseBytes": 436440,
+    "peakDatabaseBytes": 2293616,
+    "finalDatabaseBytes": 1291640,
+    "peakArchiveBytes": 28140,
+    "finalArchiveBytes": 28140,
+    "peakCheckpointBytes": 34045,
+    "finalCheckpointBytes": 34045
+  },
+  "observations": {
+    "receiptCount": 85,
+    "providerInvocationCount": 85,
+    "providerNativeEffectCount": 85,
+    "completedOutboxCount": 85,
+    "totalOutboxCount": 85,
+    "restartOperationCount": 14,
+    "highWaterPosition": 312,
+    "projectionPosition": 312,
+    "archiveFileCount": 7,
+    "failedAttemptCount": 71,
+    "falseSuccessCount": 0
+  },
+  "checks": {
+    "noDuplicateExternalOperations": true,
+    "noFalseSuccess": true,
+    "boundedResourceGrowth": true,
+    "allStatesExplainable": true,
+    "failedAttemptsPreserved": true
+  }
+}

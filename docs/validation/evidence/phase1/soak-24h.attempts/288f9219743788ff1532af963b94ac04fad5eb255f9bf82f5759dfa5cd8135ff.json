@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "proofScope": "contract_only",
+  "build": {
+    "productVersion": "0.0.0",
+    "baseRevision": "8e77667d252a41b2f0e6936ce29676eb1f1b62f7",
+    "sourceDigest": "8e0a5ccc25aedf62258f0e175b18ac724f3704a9aaf5aed499b73be38baaca48"
+  },
+  "command": "soak",
+  "status": "NOT_PROVEN",
+  "observedAt": "2026-07-25T05:45:22.848Z",
+  "errorCode": "UNKNOWN_PHASE1_FAILURE"
+}

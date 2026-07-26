@@ -26,7 +26,7 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
-      - run: npm test
+      - run: npm test -- --configLoader native --no-file-parallelism --testTimeout 60000
       - run: npm run verify:rebuild
       - run: npm run verify:recovery
       - run: npm run build
@@ -51,7 +51,7 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run lint
       - run: npm run typecheck
-      - run: npm test
+      - run: npm test -- --configLoader native --no-file-parallelism --testTimeout 60000
       - run: npx playwright test e2e/vertical-slice.spec.ts --project=chromium
       - if: runner.os == 'Windows'
         run: npm run pack:win -w @hunter/desktop
