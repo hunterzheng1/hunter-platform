@@ -7,11 +7,11 @@
 - 原始证据：
   [`evidence/phase1/performance.json`](evidence/phase1/performance.json)
 - SHA-256：
-  `EF7ACE4AF5DF3036552989539F35FE4B543C9AF71C1BFA87F34C93104363B479`
+  `2F3FBB859B0CF57B1760ECCA049CF7335D95BFAA59ABD8FCF82C4B600C64977A`
 - 产品版本：`0.0.0`
-- 基线 revision：`0087fe4736580fadd6a47b338bd16f8cc2869df7`
+- 基线 revision：`19f4870d7f72ae8e5abc4ba1fd2401a377facbd8`
 - 源码 digest：
-  `40efe43fe9e40c5b1d9c789fa28621cb883a1acc292476e43be1170ec08df1f0`
+  `ac47e6fcb226e17f8864ceeb32304598d13e1b7d13b232cdf90c68a9f4a98b6d`
 
 ## 结论
 
@@ -21,10 +21,10 @@ Provider、真实浏览器或生产规模。
 
 | 指标 | 固定负载 | p95 | 阈值 | 结果 |
 |---|---|---:|---:|---|
-| Project 列表可交互 | 64 Projects | 17.835 ms | < 1,000 ms | PASS |
-| Run 页面可交互 | 14 Steps（10 read/wait + 4 active Fake） | 6.271 ms | < 1,000 ms | PASS |
-| Event 到本地 UI 可见 | ledger → reader → durable SSE → RunPage | 125.228 ms | < 500 ms | PASS |
-| 并发工作负载 | 128 历史 Runs + 10 read/wait + 4 active Fake | 19.913 ms | < 500 ms | PASS |
+| Project 列表可交互 | 64 Projects | 26.035 ms | < 1,000 ms | PASS |
+| Run 页面可交互 | 14 Steps（10 read/wait + 4 active Fake） | 9.960 ms | < 1,000 ms | PASS |
+| Event 到本地 UI 可见 | ledger → reader → durable SSE → RunPage | 114.431 ms | < 500 ms | PASS |
+| 并发工作负载 | 128 历史 Runs + 10 read/wait + 4 active Fake | 13.404 ms | < 500 ms | PASS |
 
 每项包含 5 次 warmup 和 30 次 measured sample；报告同时保留
 min、p50、p95 和 max。阈值由验收规范固定，运行器不能因未达标而降低阈值。

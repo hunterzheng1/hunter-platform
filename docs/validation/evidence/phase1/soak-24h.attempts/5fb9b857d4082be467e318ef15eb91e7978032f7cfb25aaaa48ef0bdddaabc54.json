@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "proofScope": "contract_only",
+  "build": {
+    "productVersion": "0.0.0",
+    "baseRevision": "19f4870d7f72ae8e5abc4ba1fd2401a377facbd8",
+    "sourceDigest": "ac47e6fcb226e17f8864ceeb32304598d13e1b7d13b232cdf90c68a9f4a98b6d"
+  },
+  "command": "soak",
+  "status": "NOT_PROVEN",
+  "observedAt": "2026-07-25T10:47:35.323Z",
+  "errorCode": "PHASE1_EVIDENCE_RENAME_FAILED"
+}

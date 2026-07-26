@@ -54,13 +54,15 @@
   gate、保留 user data 的卸载策略及 owned sidecar cleanup 已通过 Windows
   lifecycle fixture；签名、SmartScreen、真实升级安装和发布仍未证明。
 - Task 11：固定数据集本机 benchmark 的四项阈值和 12 项故障矩阵通过；
-  smoke 覆盖 loop、跨进程 restart workload、archive、rebuild 和持久 Provider
-  effect 对账，且严格保持 `NOT_PROVEN`。第一次 full 尝试在 24 个 durable cycle
-  后中断并保留失败 envelope；独立 checkpoint 与 Windows 原子写重试修复已通过
-  注入失败恢复测试。第二次 full 尝试跨过原停止点并完成 71 个 cycle，但收尾审计
-  发现 resolver 与 evidence schema 的调度计数判定不一致，且计划重启与恢复重启
-  尚未独立分账，因此主动停止并保留 `NOT_PROVEN` 证据；统一判定并加入重启分账后
-  的 24 小时窗口尚未完成，所以 NFR-REL-04 仍为 `NOT_PROVEN`。
+  smoke 保持 `NOT_PROVEN`。前三次未完成 full attempt 和第四次两次 Windows
+  evidence rename 失败均按原始 envelope 保留；第四次通过两次合法 recovery
+  restart 收敛后，在冻结 revision `19f4870` 上真实运行 86,410,499 ms、完成
+  1,442 cycle。计划/恢复/总重启为 288/2/290，archive/rebuild/loop/fault
+  matrix 为 144/48/1,442/24；288 个故障 attempt 全部通过且失败历史保留，
+  receipt/outbox/Fake Provider effect 一一对账，五项检查全 true。六个精确
+  测试文件 46/46 通过；`npm run verify:foundation` 在隔离外完整重跑
+  129 files / 1,130 tests 及全部验证脚本、build 通过。NFR-REL-04 因而提升为
+  `CONTRACT_ONLY`，不证明真实 Provider、真实设备或生产规模。
 
 ## 逐项台账
 
@@ -104,10 +106,10 @@
 | NFR-REL-01 | CONTRACT_ONLY | Event actor/correlation | [Foundation gate](foundation-local-gate.md) | H4 对所有命令投影做覆盖检查 | Storage |
 | NFR-REL-02 | CONTRACT_ONLY | Fault injection/Fake | [Runtime reliability](runtime-reliability.md) | Gate R 对真实 side effect 重复同一矩阵 | Runtime |
 | NFR-REL-03 | CONTRACT_ONLY | 一致性 manifest/隔离恢复 fixture | [Task 4 backup/restore](phase-1-backup-restore.md) | Gate R 验证真实规模、介质故障和保留策略 | Storage |
-| NFR-REL-04 | NOT_PROVEN | smoke 通过；两次 full attempt 均保留，第二次 71 cycle 因 resolver/schema 不一致与重启分账缺口而主动停止 | [Task 11 soak](phase-1-soak.md) | 在统一精确调度判定并加入重启分账的冻结源码上从零重跑完整 24h | Testkit |
-| NFR-PERF-01 | CONTRACT_ONLY | JSDOM + 固定 64 Projects / 14 Steps，p95 分别 17.835 / 6.271 ms | [Task 11 performance](phase-1-performance.md) | Gate R 在真实浏览器和生产规模重跑 1 秒目标 | Performance |
-| NFR-PERF-02 | CONTRACT_ONLY | ledger → reader → durable SSE → 本地 JSDOM UI，p95 125.228 ms | [Task 11 performance](phase-1-performance.md) | Gate R 在真实浏览器、真实设备和真实 Provider 重跑 500ms 目标 | Performance |
-| NFR-PERF-03 | CONTRACT_ONLY | 128 历史 Runs + 固定 10 read/wait + 4 端到端关联 active Fake，p95 19.913 ms | [Task 11 performance](phase-1-performance.md) | Gate R 用真实 Provider 和持续负载验证吞吐、延迟及公平性 | Performance |
+| NFR-REL-04 | CONTRACT_ONLY | 三次未完成 full attempt 均保留；第四次在冻结源码上运行 86,410,499 ms、1,442 cycle，精确调度、24 轮故障矩阵和五项检查全部通过 | [Task 11 soak](phase-1-soak.md) | Gate R 用真实 Provider、真实设备和生产规模重复长时故障与恢复矩阵 | Testkit |
+| NFR-PERF-01 | CONTRACT_ONLY | JSDOM + 固定 64 Projects / 14 Steps，p95 分别 26.035 / 9.960 ms | [Task 11 performance](phase-1-performance.md) | Gate R 在真实浏览器和生产规模重跑 1 秒目标 | Performance |
+| NFR-PERF-02 | CONTRACT_ONLY | ledger → reader → durable SSE → 本地 JSDOM UI，p95 114.431 ms | [Task 11 performance](phase-1-performance.md) | Gate R 在真实浏览器、真实设备和真实 Provider 重跑 500ms 目标 | Performance |
+| NFR-PERF-03 | CONTRACT_ONLY | 128 历史 Runs + 固定 10 read/wait + 4 端到端关联 active Fake，p95 13.404 ms | [Task 11 performance](phase-1-performance.md) | Gate R 用真实 Provider 和持续负载验证吞吐、延迟及公平性 | Performance |
 | NFR-PERF-04 | CONTRACT_ONLY | 大日志有界分页、逻辑配额、保留点和慢客户端背压 | [Task 7 resource bounds](phase-1-resource-bounds.md) | Gate R 验证真实规模、磁盘水位和长时慢客户端恢复 | Storage/UI |
 | NFR-PORT-01 | CONTRACT_ONLY | 可读文件 + manifest 恢复 | [Task 4 backup/restore](phase-1-backup-restore.md) | Gate R 在独立安装环境验证读取与迁移 | Knowledge |
 | NFR-PORT-02 | NOT_RUN | Export/Import 未产品化 | [Roadmap](../09-migration-and-roadmap.md) | 保持 Phase 2，除非 H1 备份恢复直接需要 | Product |

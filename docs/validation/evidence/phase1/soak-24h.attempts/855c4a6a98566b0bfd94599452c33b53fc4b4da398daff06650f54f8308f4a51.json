@@ -1,0 +1,649 @@
+{
+  "schemaVersion": 1,
+  "proofScope": "contract_only",
+  "build": {
+    "productVersion": "0.0.0",
+    "baseRevision": "54c5d3a69aef58bdcf680484309f1e115fb35e76",
+    "sourceDigest": "5e30c4f7f68cbb665fe1fc3d28b64fea636c4f518a0af7450f4c28005071ac5f"
+  },
+  "dataset": {
+    "schemaVersion": 1,
+    "datasetId": "phase1-fixed-v1",
+    "seed": 1213550164,
+    "fakeClockStart": "2026-07-25T00:00:00.000Z",
+    "projectCount": 64,
+    "runCount": 128,
+    "stepsPerRun": 14,
+    "readonlyWaitingSteps": 10,
+    "activeFakeSteps": 4,
+    "benchmarkWarmupSamples": 5,
+    "benchmarkMeasuredSamples": 30,
+    "plannedSoakDurationMs": 86400000,
+    "soakCycleIntervalMs": 60000,
+    "restartEveryCycles": 5,
+    "archiveEveryCycles": 10,
+    "rebuildEveryCycles": 30,
+    "loopEveryCycles": 1,
+    "faultMatrixEveryCycles": 60,
+    "maxHeapGrowthBytes": 268435456,
+    "maxRssGrowthBytes": 536870912,
+    "maxDatabaseGrowthPerCycleBytes": 262144,
+    "maxDatabaseBytes": 536870912,
+    "maxArchiveBytes": 67108864,
+    "maxCheckpointBytes": 16777216
+  },
+  "host": {
+    "platform": "win32",
+    "release": "10.0.26200",
+    "architecture": "x64",
+    "cpuModel": "13th Gen Intel(R) Core(TM) i5-13490F",
+    "logicalCores": 16,
+    "totalMemoryBytes": 34164097024,
+    "nodeVersion": "v24.14.0"
+  },
+  "notes": [
+    "Full mode uses actual monotonic wall time for the 24-hour gate.",
+    "Domain timestamps use the fixed Fake clock; host paths and environment variables are not recorded.",
+    "Fake Runtime proves Hunter contracts only and does not validate any real Provider.",
+    "A failed cycle stops the run; it is never automatically rerun as PASS."
+  ],
+  "status": "NOT_PROVEN",
+  "execution": {
+    "mode": "full",
+    "cycleIntervalMs": 60000,
+    "restartEveryCycles": 5,
+    "archiveEveryCycles": 10,
+    "rebuildEveryCycles": 30,
+    "loopEveryCycles": 1,
+    "faultMatrixEveryCycles": 60
+  },
+  "startedAt": "2026-07-25T08:16:05.595Z",
+  "completedAt": "2026-07-25T09:09:08.455Z",
+  "elapsedMs": 3182859,
+  "cycleCount": 54,
+  "restartCount": 10,
+  "scheduledRestartCount": 10,
+  "recoveryRestartCount": 0,
+  "archiveCount": 5,
+  "rebuildCount": 1,
+  "loopCount": 54,
+  "faultMatrixCount": 0,
+  "faultAttempts": [],
+  "cycleAttempts": [
+    {
+      "sequence": 1,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:00:00.000Z",
+      "completedAt": "2026-07-25T00:01:00.000Z",
+      "operationId": "opn_phase1soak000001",
+      "errorCode": null,
+      "heapBytes": 66629552,
+      "databaseBytes": 625960
+    },
+    {
+      "sequence": 2,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:01:00.000Z",
+      "completedAt": "2026-07-25T00:02:00.000Z",
+      "operationId": "opn_phase1soak000002",
+      "errorCode": null,
+      "heapBytes": 46989640,
+      "databaseBytes": 811360
+    },
+    {
+      "sequence": 3,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:02:00.000Z",
+      "completedAt": "2026-07-25T00:03:00.000Z",
+      "operationId": "opn_phase1soak000003",
+      "errorCode": null,
+      "heapBytes": 47073720,
+      "databaseBytes": 1021480
+    },
+    {
+      "sequence": 4,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:03:00.000Z",
+      "completedAt": "2026-07-25T00:04:00.000Z",
+      "operationId": "opn_phase1soak000004",
+      "errorCode": null,
+      "heapBytes": 47292176,
+      "databaseBytes": 1215072
+    },
+    {
+      "sequence": 5,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:04:00.000Z",
+      "completedAt": "2026-07-25T00:05:00.000Z",
+      "operationId": "opn_phase1soak000005",
+      "errorCode": null,
+      "heapBytes": 47378280,
+      "databaseBytes": 1429312
+    },
+    {
+      "sequence": 6,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:05:00.000Z",
+      "completedAt": "2026-07-25T00:06:00.000Z",
+      "operationId": "opn_phase1soak000006",
+      "errorCode": null,
+      "heapBytes": 47123200,
+      "databaseBytes": 574600
+    },
+    {
+      "sequence": 7,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:06:00.000Z",
+      "completedAt": "2026-07-25T00:07:00.000Z",
+      "operationId": "opn_phase1soak000007",
+      "errorCode": null,
+      "heapBytes": 47989624,
+      "databaseBytes": 784720
+    },
+    {
+      "sequence": 8,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:07:00.000Z",
+      "completedAt": "2026-07-25T00:08:00.000Z",
+      "operationId": "opn_phase1soak000008",
+      "errorCode": null,
+      "heapBytes": 47917032,
+      "databaseBytes": 998960
+    },
+    {
+      "sequence": 9,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:08:00.000Z",
+      "completedAt": "2026-07-25T00:09:00.000Z",
+      "operationId": "opn_phase1soak000009",
+      "errorCode": null,
+      "heapBytes": 47907520,
+      "databaseBytes": 1196696
+    },
+    {
+      "sequence": 10,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:09:00.000Z",
+      "completedAt": "2026-07-25T00:10:00.000Z",
+      "operationId": "opn_phase1soak000010",
+      "errorCode": null,
+      "heapBytes": 48525072,
+      "databaseBytes": 1394456
+    },
+    {
+      "sequence": 11,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:10:00.000Z",
+      "completedAt": "2026-07-25T00:11:00.000Z",
+      "operationId": "opn_phase1soak000011",
+      "errorCode": null,
+      "heapBytes": 48400120,
+      "databaseBytes": 636088
+    },
+    {
+      "sequence": 12,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:11:00.000Z",
+      "completedAt": "2026-07-25T00:12:00.000Z",
+      "operationId": "opn_phase1soak000012",
+      "errorCode": null,
+      "heapBytes": 49337000,
+      "databaseBytes": 842088
+    },
+    {
+      "sequence": 13,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:12:00.000Z",
+      "completedAt": "2026-07-25T00:13:00.000Z",
+      "operationId": "opn_phase1soak000013",
+      "errorCode": null,
+      "heapBytes": 48482864,
+      "databaseBytes": 1035728
+    },
+    {
+      "sequence": 14,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:13:00.000Z",
+      "completedAt": "2026-07-25T00:14:00.000Z",
+      "operationId": "opn_phase1soak000014",
+      "errorCode": null,
+      "heapBytes": 48546376,
+      "databaseBytes": 1233464
+    },
+    {
+      "sequence": 15,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:14:00.000Z",
+      "completedAt": "2026-07-25T00:15:00.000Z",
+      "operationId": "opn_phase1soak000015",
+      "errorCode": null,
+      "heapBytes": 48605448,
+      "databaseBytes": 1451824
+    },
+    {
+      "sequence": 16,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:15:00.000Z",
+      "completedAt": "2026-07-25T00:16:00.000Z",
+      "operationId": "opn_phase1soak000016",
+      "errorCode": null,
+      "heapBytes": 48379752,
+      "databaseBytes": 689360
+    },
+    {
+      "sequence": 17,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:16:00.000Z",
+      "completedAt": "2026-07-25T00:17:00.000Z",
+      "operationId": "opn_phase1soak000017",
+      "errorCode": null,
+      "heapBytes": 48406144,
+      "databaseBytes": 895360
+    },
+    {
+      "sequence": 18,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:17:00.000Z",
+      "completedAt": "2026-07-25T00:18:00.000Z",
+      "operationId": "opn_phase1soak000018",
+      "errorCode": null,
+      "heapBytes": 48360864,
+      "databaseBytes": 1105480
+    },
+    {
+      "sequence": 19,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:18:00.000Z",
+      "completedAt": "2026-07-25T00:19:00.000Z",
+      "operationId": "opn_phase1soak000019",
+      "errorCode": null,
+      "heapBytes": 49192112,
+      "databaseBytes": 1327936
+    },
+    {
+      "sequence": 20,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:19:00.000Z",
+      "completedAt": "2026-07-25T00:20:00.000Z",
+      "operationId": "opn_phase1soak000020",
+      "errorCode": null,
+      "heapBytes": 48743904,
+      "databaseBytes": 1521576
+    },
+    {
+      "sequence": 21,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:20:00.000Z",
+      "completedAt": "2026-07-25T00:21:00.000Z",
+      "operationId": "opn_phase1soak000021",
+      "errorCode": null,
+      "heapBytes": 49391552,
+      "databaseBytes": 759088
+    },
+    {
+      "sequence": 22,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:21:00.000Z",
+      "completedAt": "2026-07-25T00:22:00.000Z",
+      "operationId": "opn_phase1soak000022",
+      "errorCode": null,
+      "heapBytes": 49345600,
+      "databaseBytes": 960968
+    },
+    {
+      "sequence": 23,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:22:00.000Z",
+      "completedAt": "2026-07-25T00:23:00.000Z",
+      "operationId": "opn_phase1soak000023",
+      "errorCode": null,
+      "heapBytes": 49421400,
+      "databaseBytes": 1154608
+    },
+    {
+      "sequence": 24,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:23:00.000Z",
+      "completedAt": "2026-07-25T00:24:00.000Z",
+      "operationId": "opn_phase1soak000024",
+      "errorCode": null,
+      "heapBytes": 49485840,
+      "databaseBytes": 1364704
+    },
+    {
+      "sequence": 25,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:24:00.000Z",
+      "completedAt": "2026-07-25T00:25:00.000Z",
+      "operationId": "opn_phase1soak000025",
+      "errorCode": null,
+      "heapBytes": 49539008,
+      "databaseBytes": 1583064
+    },
+    {
+      "sequence": 26,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:25:00.000Z",
+      "completedAt": "2026-07-25T00:26:00.000Z",
+      "operationId": "opn_phase1soak000026",
+      "errorCode": null,
+      "heapBytes": 49246352,
+      "databaseBytes": 795904
+    },
+    {
+      "sequence": 27,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:26:00.000Z",
+      "completedAt": "2026-07-25T00:27:00.000Z",
+      "operationId": "opn_phase1soak000027",
+      "errorCode": null,
+      "heapBytes": 50223288,
+      "databaseBytes": 997784
+    },
+    {
+      "sequence": 28,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:27:00.000Z",
+      "completedAt": "2026-07-25T00:28:00.000Z",
+      "operationId": "opn_phase1soak000028",
+      "errorCode": null,
+      "heapBytes": 50192880,
+      "databaseBytes": 1240864
+    },
+    {
+      "sequence": 29,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:28:00.000Z",
+      "completedAt": "2026-07-25T00:29:00.000Z",
+      "operationId": "opn_phase1soak000029",
+      "errorCode": null,
+      "heapBytes": 50202784,
+      "databaseBytes": 1446840
+    },
+    {
+      "sequence": 30,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:29:00.000Z",
+      "completedAt": "2026-07-25T00:30:00.000Z",
+      "operationId": "opn_phase1soak000030",
+      "errorCode": null,
+      "heapBytes": 50036240,
+      "databaseBytes": 1792920
+    },
+    {
+      "sequence": 31,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:30:00.000Z",
+      "completedAt": "2026-07-25T00:31:00.000Z",
+      "operationId": "opn_phase1soak000031",
+      "errorCode": null,
+      "heapBytes": 49831528,
+      "databaseBytes": 857320
+    },
+    {
+      "sequence": 32,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:31:00.000Z",
+      "completedAt": "2026-07-25T00:32:00.000Z",
+      "operationId": "opn_phase1soak000032",
+      "errorCode": null,
+      "heapBytes": 49846776,
+      "databaseBytes": 1075680
+    },
+    {
+      "sequence": 33,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:32:00.000Z",
+      "completedAt": "2026-07-25T00:33:00.000Z",
+      "operationId": "opn_phase1soak000033",
+      "errorCode": null,
+      "heapBytes": 49865040,
+      "databaseBytes": 1281680
+    },
+    {
+      "sequence": 34,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:33:00.000Z",
+      "completedAt": "2026-07-25T00:34:00.000Z",
+      "operationId": "opn_phase1soak000034",
+      "errorCode": null,
+      "heapBytes": 50849512,
+      "databaseBytes": 1487656
+    },
+    {
+      "sequence": 35,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:34:00.000Z",
+      "completedAt": "2026-07-25T00:35:00.000Z",
+      "operationId": "opn_phase1soak000035",
+      "errorCode": null,
+      "heapBytes": 50918816,
+      "databaseBytes": 1714256
+    },
+    {
+      "sequence": 36,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:35:00.000Z",
+      "completedAt": "2026-07-25T00:36:00.000Z",
+      "operationId": "opn_phase1soak000036",
+      "errorCode": null,
+      "heapBytes": 50718776,
+      "databaseBytes": 914712
+    },
+    {
+      "sequence": 37,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:36:00.000Z",
+      "completedAt": "2026-07-25T00:37:00.000Z",
+      "operationId": "opn_phase1soak000037",
+      "errorCode": null,
+      "heapBytes": 50759776,
+      "databaseBytes": 1120712
+    },
+    {
+      "sequence": 38,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:37:00.000Z",
+      "completedAt": "2026-07-25T00:38:00.000Z",
+      "operationId": "opn_phase1soak000038",
+      "errorCode": null,
+      "heapBytes": 50850952,
+      "databaseBytes": 1330832
+    },
+    {
+      "sequence": 39,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:38:00.000Z",
+      "completedAt": "2026-07-25T00:39:00.000Z",
+      "operationId": "opn_phase1soak000039",
+      "errorCode": null,
+      "heapBytes": 50932152,
+      "databaseBytes": 1536808
+    },
+    {
+      "sequence": 40,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:39:00.000Z",
+      "completedAt": "2026-07-25T00:40:00.000Z",
+      "operationId": "opn_phase1soak000040",
+      "errorCode": null,
+      "heapBytes": 50498984,
+      "databaseBytes": 1751048
+    },
+    {
+      "sequence": 41,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:40:00.000Z",
+      "completedAt": "2026-07-25T00:41:00.000Z",
+      "operationId": "opn_phase1soak000041",
+      "errorCode": null,
+      "heapBytes": 51360544,
+      "databaseBytes": 967960
+    },
+    {
+      "sequence": 42,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:41:00.000Z",
+      "completedAt": "2026-07-25T00:42:00.000Z",
+      "operationId": "opn_phase1soak000042",
+      "errorCode": null,
+      "heapBytes": 51455872,
+      "databaseBytes": 1202800
+    },
+    {
+      "sequence": 43,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:42:00.000Z",
+      "completedAt": "2026-07-25T00:43:00.000Z",
+      "operationId": "opn_phase1soak000043",
+      "errorCode": null,
+      "heapBytes": 51615456,
+      "databaseBytes": 1404680
+    },
+    {
+      "sequence": 44,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:43:00.000Z",
+      "completedAt": "2026-07-25T00:44:00.000Z",
+      "operationId": "opn_phase1soak000044",
+      "errorCode": null,
+      "heapBytes": 50831952,
+      "databaseBytes": 1614776
+    },
+    {
+      "sequence": 45,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:44:00.000Z",
+      "completedAt": "2026-07-25T00:45:00.000Z",
+      "operationId": "opn_phase1soak000045",
+      "errorCode": null,
+      "heapBytes": 51049736,
+      "databaseBytes": 1837256
+    },
+    {
+      "sequence": 46,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:45:00.000Z",
+      "completedAt": "2026-07-25T00:46:00.000Z",
+      "operationId": "opn_phase1soak000046",
+      "errorCode": null,
+      "heapBytes": 51952656,
+      "databaseBytes": 1017088
+    },
+    {
+      "sequence": 47,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:46:00.000Z",
+      "completedAt": "2026-07-25T00:47:00.000Z",
+      "operationId": "opn_phase1soak000047",
+      "errorCode": null,
+      "heapBytes": 51130896,
+      "databaseBytes": 1235448
+    },
+    {
+      "sequence": 48,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:47:00.000Z",
+      "completedAt": "2026-07-25T00:48:00.000Z",
+      "operationId": "opn_phase1soak000048",
+      "errorCode": null,
+      "heapBytes": 51307944,
+      "databaseBytes": 1470288
+    },
+    {
+      "sequence": 49,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:48:00.000Z",
+      "completedAt": "2026-07-25T00:49:00.000Z",
+      "operationId": "opn_phase1soak000049",
+      "errorCode": null,
+      "heapBytes": 51509488,
+      "databaseBytes": 1700984
+    },
+    {
+      "sequence": 50,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:49:00.000Z",
+      "completedAt": "2026-07-25T00:50:00.000Z",
+      "operationId": "opn_phase1soak000050",
+      "errorCode": null,
+      "heapBytes": 52221392,
+      "databaseBytes": 1906984
+    },
+    {
+      "sequence": 51,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:50:00.000Z",
+      "completedAt": "2026-07-25T00:51:00.000Z",
+      "operationId": "opn_phase1soak000051",
+      "errorCode": null,
+      "heapBytes": 52225032,
+      "databaseBytes": 1078600
+    },
+    {
+      "sequence": 52,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:51:00.000Z",
+      "completedAt": "2026-07-25T00:52:00.000Z",
+      "operationId": "opn_phase1soak000052",
+      "errorCode": null,
+      "heapBytes": 52504632,
+      "databaseBytes": 1284600
+    },
+    {
+      "sequence": 53,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:52:00.000Z",
+      "completedAt": "2026-07-25T00:53:00.000Z",
+      "operationId": "opn_phase1soak000053",
+      "errorCode": null,
+      "heapBytes": 51819512,
+      "databaseBytes": 1519440
+    },
+    {
+      "sequence": 54,
+      "status": "PASS",
+      "startedAt": "2026-07-25T00:53:00.000Z",
+      "completedAt": "2026-07-25T00:54:00.000Z",
+      "operationId": "opn_phase1soak000054",
+      "errorCode": null,
+      "heapBytes": 52063816,
+      "databaseBytes": 1746016
+    }
+  ],
+  "resources": {
+    "initialHeapBytes": 63853184,
+    "peakHeapBytes": 66746888,
+    "finalHeapBytes": 52107952,
+    "initialRssBytes": 202313728,
+    "peakRssBytes": 203018240,
+    "finalRssBytes": 86740992,
+    "initialDatabaseBytes": 436440,
+    "peakDatabaseBytes": 1906984,
+    "finalDatabaseBytes": 1746016,
+    "peakArchiveBytes": 20100,
+    "finalArchiveBytes": 20100,
+    "peakCheckpointBytes": 18622,
+    "finalCheckpointBytes": 18622
+  },
+  "observations": {
+    "receiptCount": 64,
+    "providerInvocationCount": 64,
+    "providerNativeEffectCount": 64,
+    "completedOutboxCount": 64,
+    "totalOutboxCount": 64,
+    "restartOperationCount": 10,
+    "highWaterPosition": 236,
+    "projectionPosition": 236,
+    "archiveFileCount": 5,
+    "failedAttemptCount": 54,
+    "falseSuccessCount": 0
+  },
+  "checks": {
+    "noDuplicateExternalOperations": true,
+    "noFalseSuccess": true,
+    "boundedResourceGrowth": true,
+    "allStatesExplainable": true,
+    "failedAttemptsPreserved": true
+  }
+}
