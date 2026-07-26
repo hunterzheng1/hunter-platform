@@ -156,3 +156,23 @@ Gate A、First Vertical Slice 的真实 Provider 集成与验收及真实 Provid
 自动临时无 remote Git fixture 中的 ephemeral、read-only thread 观察到带 request id 的 `item/commandExecution/requestApproval`，客户端发送匹配 id 的拒绝；旧收据没有保留足以证明该审批请求属于预期 thread/turn 的脱敏关联字段。另一个 turn 的 `turn/interrupt` response 成功，且匹配 thread/turn 最终报告 `status: interrupted`。Prompt、账号响应、raw JSONL、thread/turn id 和绝对用户路径均未写入 evidence，fixture 保持 Git clean 并被删除。
 
 但该 spike 实际运行三次，超过设计规定的两次真实调用上限；旧 cleanup 还只证明直接子进程退出，不能证明进程树已回收。attempt ledger 因此为 `conformance=FAIL`，`permission_events` 与结构化 `interrupt` 最终均为 `NOT_PROVEN`，不得用最后一次观察追溯补写 PASS。本机帮助仍将 app-server 标为 experimental，且该 Connector 不提供完整 WorkspaceProvider、restart/reconcile、移动访问或生产支持证据。Outcome 5 不变；Gate A、First Vertical Slice 的真实 Provider 集成与验收及真实 Provider 能力宣传继续阻断；生产签名、分发和发布继续阻断。该证据不阻断 Fake-only First Vertical Slice 的开发、自动验收或未签名 Windows NSIS 测试打包；不计算 L0-L3，不采用生产 Connector，不选择或 Fork Orca。
+
+## Gate R-1 后续证据（2026-07-26）
+
+Gate R-1 按批准顺序重跑本机真实 Runtime / Connector 发现与有界场景，详见
+[`gate-r1-runtime-connectors.md`](gate-r1-runtime-connectors.md) 与
+[`evidence/gate-r1/runtime-connectors.json`](evidence/gate-r1/runtime-connectors.json)。
+
+Orca 当前 ready 状态仍只证明 `discover_runtime=PASS`。公开 worktree create 面不能在创建前
+把 checkout 固定到 Hunter 自动创建的临时根目录，repo 面没有完整 registration cleanup；
+`open --json` launcher 超时未返回的失败历史也已保留。因此没有执行任何 Orca mutating
+scenario，Provider Gate A 仍为 `NOT_PROVEN`。
+
+Codex `0.144.6` 的新 read-only 临时 fixture attempt 中 create 超时，launch/send/interrupt
+不能由部分 JSONL observation、resume、process cleanup 或后续无残留检查追溯升级。CodeBuddy
+缺少 executable；Cursor 只完成外部 version/help 发现，没有 login/workspace/handoff receipt。
+三者均通过公共 `CapabilityProbeReceipt` → `computeCapabilityManifest` 路径得到 `NONE`，
+没有按产品名称计算等级。
+
+该证据不改变 Outcome 5，不选择或 Fork Orca，不采用真实 Provider，不解除真实设备、
+非玩具 Project、生产签名、分发或发布阻断。

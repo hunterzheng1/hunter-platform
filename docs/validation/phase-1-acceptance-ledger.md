@@ -87,6 +87,13 @@
   后者当时为 1,152/1,152 tests。沙箱外生成 `dist` 后，沙箱内 typecheck
   也因不能覆盖这些生成文件而 `EPERM`；最终审查重放修复后的沙箱外完整门禁为
   1,153/1,153 tests。环境失败均保留，不改写为 PASS。
+- Gate R-1：Orca ready 状态只使 `discover_runtime=PASS`，公开接口仍不能同时证明
+  创建前 fixture confinement 与完整 repo registration cleanup；`open --json` 启动
+  launcher 超过 90 秒未返回的历史保留。Codex `0.144.6` 在临时无 remote read-only
+  fixture 中复测时 create 超时，launch/send/interrupt 继续 `NOT_PROVEN`。CodeBuddy
+  executable 缺失；Cursor `3.10.20` 只完成外部 version/help 发现，未完成
+  login/workspace/handoff receipt。三者 manifest 均由公共 receipt 算法得到 `NONE`，
+  真实 Provider Gate A 保持 `NOT_PROVEN`。
 
 ## 逐项台账
 
@@ -106,11 +113,11 @@
 | W-04 | CONTRACT_ONLY | Deterministic Fake | [H4 candidate](phase-1-contract-only-candidate.md) | Gate R 对真实 Provider Evidence 重放做一致性对账 | Flow |
 | A-01 | CONTRACT_ONLY | Event/SQLite/Archive | [H4 candidate](phase-1-contract-only-candidate.md) | Gate R 证明真实失败 Attempt 在重启和归档后仍可查 | Storage |
 | A-02 | CONTRACT_ONLY | Independent verifier | [PR #5 readiness](first-vertical-slice-pr5-readiness.md) | Gate R 用真实 Connector 重复同一语义 | Flow |
-| X-01 | NOT_PROVEN | Direct/app-server 有界 spike | [Phase 0 decision](phase-0-decision.md) | 固定受支持接口并补 structured interrupt、权限和 cleanup 收据 | Runtime |
-| X-02 | NOT_PROVEN | 无完整固定版本收据 | [Phase 0 decision](phase-0-decision.md) | 用户完成合法安装/login 后运行 ACP/headless 原子场景 | Connectors |
-| X-03 | NOT_PROVEN | 无完整真实 workspace/handoff 收据 | [Phase 0 decision](phase-0-decision.md) | Windows 实机执行 workspace open、Handoff、Artifact 和 human receipt | Connectors |
+| X-01 | NOT_PROVEN | Gate R-1 Codex receipt-derived `NONE`；create 超时，interrupt 未证明 | [Gate R-1 runtime](gate-r1-runtime-connectors.md) | 固定受支持接口并补 structured launch/interrupt、权限和 cleanup 收据 | Runtime |
+| X-02 | NOT_PROVEN | Gate R-1 CodeBuddy receipt-derived `NONE`；executable 缺失 | [Gate R-1 runtime](gate-r1-runtime-connectors.md) | 用户完成合法安装/login 后运行 ACP/headless 原子场景 | Connectors |
+| X-03 | NOT_PROVEN | Gate R-1 Cursor receipt-derived `NONE`；仅 version/help 发现 | [Gate R-1 runtime](gate-r1-runtime-connectors.md) | Windows 实机执行 login、workspace open、Handoff、Artifact 和 human receipt | Connectors |
 | X-04 | CONTRACT_ONLY | Capability receipt/UI | [Vertical slice acceptance](vertical-slice-acceptance.md) | Gate R 由真实 capability receipt 验证降级文案 | Runtime |
-| O-01 | NOT_PROVEN | discover_runtime 通过，其余不足 | [Orca preflight](orca-windows-provider.md) | 等公开 fixture confinement、cleanup 与 restart 接口后重测 | Runtime |
+| O-01 | NOT_PROVEN | Gate R-1 `discover_runtime` 通过；launcher hang 与其余缺口保留 | [Gate R-1 runtime](gate-r1-runtime-connectors.md) | 等公开 fixture confinement、registration cleanup 与 restart 接口后重测 | Runtime |
 | S-01 | CONTRACT_ONLY | Durable operation/Fake | [Runtime reliability](runtime-reliability.md) | Gate R 在真实 Provider 启动前后注入崩溃 | Storage |
 | S-02 | CONTRACT_ONLY | Startup recovery/Fake | [PR #5 readiness](first-vertical-slice-pr5-readiness.md) | Gate R 重连真实 session 或保持 needs_attention | Storage |
 | S-03 | CONTRACT_ONLY | 临时 SQLite/文件/CAS fixture | [Task 4 backup/restore](phase-1-backup-restore.md) | Gate R 用脱敏真实规模数据重跑隔离恢复 | Storage |
@@ -161,7 +168,8 @@
 - H0 的本地门禁和固定 SHA 双平台 CI 已有真实 PASS；
 - 其余产品链路最高为 `CONTRACT_ONLY`；
 - Orca 只有 runtime discovery 原子项通过，Provider 采用仍为 `NOT_PROVEN`；
-- Codex、CodeBuddy、Cursor 和真实移动设备均没有完整 Phase 1 通过证据；
+- Codex、CodeBuddy、Cursor 的 Gate R-1 manifest 均为 receipt-derived `NONE`；真实移动
+  设备也没有完整 Phase 1 通过证据；
 - 当前 registry 摘要的 22 个 high severity 依赖项尚未分类，不能写成已修复或可利用；
 - Task 11 的 24h 与固定 SHA 双平台 CI 已完成，NFR-REL-04 仅冻结为
   `CONTRACT_ONLY`；

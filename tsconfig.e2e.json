@@ -14,6 +14,7 @@
     "scripts/e2e-*.ts",
     "scripts/benchmark-phase1.ts",
     "scripts/benchmark-phase1.test.ts",
+    "scripts/gate-r-*.ts",
     "scripts/phase1-*.ts",
     "scripts/soak-phase1.ts",
     "scripts/soak-phase1.test.ts",

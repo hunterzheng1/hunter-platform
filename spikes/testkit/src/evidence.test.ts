@@ -2,6 +2,7 @@ import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  EvidenceEnvelopeSchema,
   assertSafeEvidence,
   assertProbeWorkspace,
   createEvidenceEnvelope,
@@ -76,6 +77,34 @@ describe("phase 0 evidence", () => {
       2,
     );
     expect(() => assertSafeEvidence(safeSerialized)).not.toThrow();
+  });
+
+  it("allows absent runtime identifiers represented as null", () => {
+    const serialized = JSON.stringify({
+      stdout: JSON.stringify({
+        result: {
+          app: { pid: null },
+          runtime: { runtimeId: null },
+        },
+        _meta: { runtimeId: "[VOLATILE]" },
+      }),
+    });
+
+    expect(() => assertSafeEvidence(serialized)).not.toThrow();
+  });
+
+  it("rejects a Doctor envelope changed without recomputing its fingerprint", () => {
+    const envelope = createEvidenceEnvelope({
+      evidenceType: "phase0_environment_inventory",
+      generatedAt: "2026-07-26T00:00:00.000Z",
+      host: { platform: "win32", architecture: "x64", release: "10.0" },
+      probes: [],
+    });
+
+    expect(() => EvidenceEnvelopeSchema.parse({
+      ...envelope,
+      host: { ...envelope.host, release: "changed" },
+    })).toThrow();
   });
 
   it("creates a strict versioned envelope with a stable content fingerprint", () => {

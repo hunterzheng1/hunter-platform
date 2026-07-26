@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "gate_r_orca_open_launcher_attempt",
+  "recordedAt": "2026-07-26T15:28:00.518Z",
+  "attemptedAt": null,
+  "command": {
+    "executable": "[PRIVATE_PATH]",
+    "args": [
+      "open",
+      "--json"
+    ],
+    "cwdScope": "repository"
+  },
+  "durationLowerBoundMs": 90000,
+  "launcher": {
+    "outcome": "FAIL",
+    "timedOut": true,
+    "exitCode": null,
+    "outputCaptured": false,
+    "cleanup": "exact_launcher_terminated"
+  },
+  "runtimeAfterLauncher": {
+    "status": "ready",
+    "sourceEvidenceDigest": "98c55e25e03250cc47e5911275ae4c16920ddbe63c658211029247892940100c"
+  },
+  "mutationAttempted": false,
+  "stepSuccessInferred": false,
+  "redaction": {
+    "applied": true,
+    "schemaVersion": 1
+  },
+  "contentFingerprint": "b59bb1cfd1b5965e167c81109e4de3a05994b37a0570b8477f14df4e0291d144"
+}

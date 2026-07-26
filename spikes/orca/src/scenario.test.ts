@@ -127,4 +127,21 @@ describe("Orca Phase 0 preflight evidence", () => {
     expect(second.commands[0]?.outputSha256).toBe(first.commands[0]?.outputSha256);
     expect(second.contentFingerprint).toBe(first.contentFingerprint);
   });
+
+  it("rejects a preflight envelope changed without recomputing its fingerprint", async () => {
+    const evidence = await createOrcaPreflightEvidence({
+      runner: new FixtureRunner(),
+      executable: "orca",
+      cwd: "C:\\fixture",
+      now: () => new Date("2026-07-22T00:00:00.000Z"),
+      host: { platform: "win32", architecture: "x64", release: "10.0" },
+    });
+    const capabilities = evidence.capabilities.map((capability, index) =>
+      index === 0 ? { ...capability, reason: "changed" } : capability);
+
+    expect(() => OrcaPreflightEvidenceSchema.parse({
+      ...evidence,
+      capabilities,
+    })).toThrow();
+  });
 });

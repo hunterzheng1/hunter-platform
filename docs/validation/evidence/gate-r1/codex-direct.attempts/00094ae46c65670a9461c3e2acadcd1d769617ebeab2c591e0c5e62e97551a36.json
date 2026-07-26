@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "evidenceType": "phase0_direct_codex_runtime",
-  "generatedAt": "2026-07-26T14:57:43.507Z",
+  "generatedAt": "2026-07-22T17:03:47.221Z",
   "generator": {
     "name": "hunter-phase0-direct-codex",
     "version": "0.1.0"
@@ -117,13 +117,13 @@
         "<READ_ONLY_PROMPT>"
       ],
       "cwdScope": "temporary_git_fixture",
-      "exitCode": null,
-      "timedOut": true,
-      "timeoutCleanup": "not_proven",
+      "exitCode": 0,
+      "timedOut": false,
+      "timeoutCleanup": "not_applicable",
       "spawnError": null,
       "outputDiscarded": false,
-      "stdoutSha256": "103821457d6a4b738983a5585b2e01c835c6006e1be9539d9a4f20b064913873",
-      "stderrSha256": "8a3834ecf32e4e89004c746a0b65e0a4a5ec6e908610670532460e531344b1e6"
+      "stdoutSha256": "ce0df691be7f87eeb5540840460e07ab496054b164c3440ed3e5354116c2a6ac",
+      "stderrSha256": "40e48773110993ea3ef729b09902f92f68c50f23b719105ab309de9a351888c8"
     },
     {
       "operation": "resume",
@@ -142,8 +142,8 @@
       "timeoutCleanup": "not_applicable",
       "spawnError": null,
       "outputDiscarded": false,
-      "stdoutSha256": "672c0bbcc00fd3facd06ab6b01ae6cd72b1502de5af072b56c5989f2f2092ac9",
-      "stderrSha256": "0138e4bde82286a0dd429fe3cdcb70bb6b14f73f20580dd4fa4597dd1a974708"
+      "stdoutSha256": "23c3534b57fb66ce54a8b2f6aa1ee29dd8347801d826d1fe071d7acba1886ae3",
+      "stderrSha256": "78ed9f271f58015df6fdc506004e621d73598389ce458a36520d7abc1bbc948f"
     },
     {
       "operation": "interrupt",
@@ -161,7 +161,7 @@
       "spawnError": null,
       "outputDiscarded": false,
       "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "stderrSha256": "74d3d46568bbf32f90ae18db0d31d7718c4a524bb8cc60d3f6596cd84f287121"
+      "stderrSha256": "481697b162b1f64eda90a0f89d03f16066e0e914b99d69b0d015d6f08f5e8070"
     },
     {
       "operation": "fixture_status",
@@ -192,13 +192,13 @@
     },
     {
       "id": "launch",
-      "outcome": "NOT_PROVEN",
-      "reason": "structured_session_identity_missing"
+      "outcome": "PASS",
+      "reason": "structured_session_identity_created"
     },
     {
       "id": "send",
-      "outcome": "NOT_PROVEN",
-      "reason": "prompt_acceptance_not_proven"
+      "outcome": "PASS",
+      "reason": "fixed_prompt_accepted"
     },
     {
       "id": "observe",
@@ -227,13 +227,13 @@
     },
     {
       "id": "completion_receipt",
-      "outcome": "NOT_PROVEN",
-      "reason": "structured_terminal_event_missing"
+      "outcome": "PASS",
+      "reason": "structured_turn_terminal_event_observed_not_step_success"
     },
     {
       "id": "headless",
-      "outcome": "NOT_PROVEN",
-      "reason": "headless_execution_not_proven"
+      "outcome": "PASS",
+      "reason": "noninteractive_exec_json_completed"
     },
     {
       "id": "artifact_export",
@@ -245,5 +245,5 @@
     "applied": true,
     "schemaVersion": 1
   },
-  "contentFingerprint": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491"
+  "contentFingerprint": "00094ae46c65670a9461c3e2acadcd1d769617ebeab2c591e0c5e62e97551a36"
 }
