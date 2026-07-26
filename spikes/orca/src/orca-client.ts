@@ -12,13 +12,13 @@ const OrcaStatusEnvelopeSchema = z.object({
   result: z.object({
     app: z.object({
       running: z.boolean(),
-      pid: z.number().int().nonnegative(),
-      desktopWindowStatus: z.string().min(1),
+      pid: z.number().int().nonnegative().nullable(),
+      desktopWindowStatus: z.string().min(1).optional(),
     }),
     runtime: z.object({
       state: z.string().min(1),
       reachable: z.boolean(),
-      runtimeId: z.string().min(1),
+      runtimeId: z.string().min(1).nullable(),
     }),
     graph: z.object({
       state: z.string().min(1),

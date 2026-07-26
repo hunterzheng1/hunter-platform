@@ -1,5 +1,13 @@
 # Direct Codex Runtime 结构化链路验证
 
+> Gate R-1（2026-07-26）重新运行同一固定版本后，create 在 60 秒时间盒内超时，
+> launch/send/completion/headless 降级为 `NOT_PROVEN`，receipt-derived level 为
+> `NONE`。当前 canonical envelope 指纹为
+> `95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491`；下文是
+> 2026-07-23 原 attempt 的不可改写历史，原指纹已保存于
+> `evidence/gate-r1/codex-direct.attempts/`。详见
+> [`gate-r1-runtime-connectors.md`](gate-r1-runtime-connectors.md)。
+
 - 日期：2026-07-23（Asia/Shanghai）
 - 固定候选：Codex CLI `0.144.6`
 - 主机：Windows `10.0.26200` x64；Node.js `v24.14.0`

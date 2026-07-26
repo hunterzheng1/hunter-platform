@@ -73,6 +73,19 @@ export const OrcaPreflightEvidenceSchema = z.strictObject({
     schemaVersion: z.literal(1),
   }),
   contentFingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
+}).superRefine((value, context) => {
+  const { contentFingerprint, ...withoutFingerprint } = value;
+  const expected = sha256(JSON.stringify(canonicalize({
+    ...withoutFingerprint,
+    generatedAt: undefined,
+  })));
+  if (contentFingerprint !== expected) {
+    context.addIssue({
+      code: "custom",
+      path: ["contentFingerprint"],
+      message: "CONTENT_FINGERPRINT_MISMATCH",
+    });
+  }
 });
 export type OrcaPreflightEvidence = z.infer<typeof OrcaPreflightEvidenceSchema>;
 

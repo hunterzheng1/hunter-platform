@@ -1,0 +1,912 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "gate_r_runtime_connector_validation",
+  "generatedAt": "2026-07-26T15:28:46.446Z",
+  "generator": {
+    "name": "hunter-gate-r-runtime-validation",
+    "version": "0.1.0"
+  },
+  "overallVerdict": "NOT_PROVEN",
+  "proofScope": "local_runtime_and_connector_receipts",
+  "sourceEvidence": {
+    "inventory": "3859a82a543e03013e254cd614758e16031dd7620c224f74cf7f63b79138f47d",
+    "codex": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491",
+    "orca": "98c55e25e03250cc47e5911275ae4c16920ddbe63c658211029247892940100c",
+    "orcaLauncher": "b59bb1cfd1b5965e167c81109e4de3a05994b37a0570b8477f14df4e0291d144"
+  },
+  "provider": {
+    "provider": "orca",
+    "verdict": "NOT_PROVEN",
+    "mutationAttempted": false,
+    "launcherAttempt": {
+      "schemaVersion": 1,
+      "evidenceType": "gate_r_orca_open_launcher_attempt",
+      "recordedAt": "2026-07-26T15:28:00.518Z",
+      "attemptedAt": null,
+      "command": {
+        "executable": "[PRIVATE_PATH]",
+        "args": [
+          "open",
+          "--json"
+        ],
+        "cwdScope": "repository"
+      },
+      "durationLowerBoundMs": 90000,
+      "launcher": {
+        "outcome": "FAIL",
+        "timedOut": true,
+        "exitCode": null,
+        "outputCaptured": false,
+        "cleanup": "exact_launcher_terminated"
+      },
+      "runtimeAfterLauncher": {
+        "status": "ready",
+        "sourceEvidenceDigest": "98c55e25e03250cc47e5911275ae4c16920ddbe63c658211029247892940100c"
+      },
+      "mutationAttempted": false,
+      "stepSuccessInferred": false,
+      "redaction": {
+        "applied": true,
+        "schemaVersion": 1
+      },
+      "contentFingerprint": "b59bb1cfd1b5965e167c81109e4de3a05994b37a0570b8477f14df4e0291d144"
+    },
+    "capabilities": [
+      {
+        "id": "discover_runtime",
+        "outcome": "PASS",
+        "reason": "status_json_reports_running_reachable_runtime"
+      },
+      {
+        "id": "fixed_version",
+        "outcome": "NOT_PROVEN",
+        "reason": "public_cli_did_not_return_a_numeric_version"
+      },
+      {
+        "id": "workspace_create",
+        "outcome": "NOT_PROVEN",
+        "reason": "public_cli_has_no_fixture_destination_flag"
+      },
+      {
+        "id": "resource_cleanup",
+        "outcome": "NOT_PROVEN",
+        "reason": "public_cli_has_no_repo_remove_command"
+      },
+      {
+        "id": "terminal_launch",
+        "outcome": "NOT_PROVEN",
+        "reason": "workspace_fixture_confinement_not_proven"
+      },
+      {
+        "id": "terminal_observe",
+        "outcome": "NOT_PROVEN",
+        "reason": "terminal_not_launched"
+      },
+      {
+        "id": "terminal_interrupt",
+        "outcome": "NOT_PROVEN",
+        "reason": "terminal_not_launched"
+      },
+      {
+        "id": "restart_reconcile",
+        "outcome": "NOT_PROVEN",
+        "reason": "native_session_not_created"
+      },
+      {
+        "id": "workspace_session_identity",
+        "outcome": "NOT_PROVEN",
+        "reason": "native_session_not_created"
+      },
+      {
+        "id": "security_defaults",
+        "outcome": "NOT_PROVEN",
+        "reason": "settings_not_available_as_versioned_noninteractive_receipt"
+      },
+      {
+        "id": "mobile_pairing",
+        "outcome": "NOT_PROVEN",
+        "reason": "remote_pairing_not_enabled_or_tested"
+      }
+    ]
+  },
+  "connectors": [
+    {
+      "connector": "codex",
+      "receipt": {
+        "schemaVersion": 2,
+        "probeReceiptId": "cpr_3950390ea8ac1564c38c4ccb",
+        "subject": {
+          "kind": "connector",
+          "connectorId": "con_codex_direct",
+          "implementationVersion": "1.0.0"
+        },
+        "platform": "windows",
+        "executable": {
+          "status": "available"
+        },
+        "loginState": "authenticated",
+        "productVersion": {
+          "observed": "0.144.6",
+          "supported": [
+            "not_proven"
+          ]
+        },
+        "protocol": {
+          "kind": "codex_jsonl",
+          "observedVersion": null,
+          "supportedVersions": [
+            "not_proven"
+          ],
+          "schemaVersion": null,
+          "supportedSchemaVersions": [
+            0
+          ],
+          "schemaDigest": null
+        },
+        "probedAt": "2026-07-26T14:57:43.507Z",
+        "validUntil": "2026-07-27T14:57:43.507Z",
+        "results": [
+          {
+            "capability": "discover",
+            "status": "supported",
+            "evidenceId": "evd_0f0aef5f6862cb5fb9c3adef",
+            "evidence": {
+              "source": "phase0_evidence",
+              "digest": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491"
+            },
+            "probedAt": "2026-07-26T14:57:43.507Z"
+          },
+          {
+            "capability": "workspace_targeting",
+            "status": "supported",
+            "evidenceId": "evd_33584e559e7484be1b8f6ff5",
+            "evidence": {
+              "source": "phase0_evidence",
+              "digest": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491"
+            },
+            "probedAt": "2026-07-26T14:57:43.507Z"
+          },
+          {
+            "capability": "launch",
+            "status": "unknown",
+            "evidenceId": "evd_26b6ed459a33e3dec9dcda87",
+            "evidence": {
+              "source": "phase0_evidence",
+              "digest": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491"
+            },
+            "probedAt": "2026-07-26T14:57:43.507Z"
+          },
+          {
+            "capability": "send",
+            "status": "unknown",
+            "evidenceId": "evd_24dd025414ece846436ce374",
+            "evidence": {
+              "source": "phase0_evidence",
+              "digest": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491"
+            },
+            "probedAt": "2026-07-26T14:57:43.507Z"
+          },
+          {
+            "capability": "observe",
+            "status": "supported",
+            "evidenceId": "evd_41f70c0c6d3e469aafc4ab00",
+            "evidence": {
+              "source": "phase0_evidence",
+              "digest": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491"
+            },
+            "probedAt": "2026-07-26T14:57:43.507Z"
+          },
+          {
+            "capability": "structured_events",
+            "status": "supported",
+            "evidenceId": "evd_72660bedb9e06c652c1c6387",
+            "evidence": {
+              "source": "phase0_evidence",
+              "digest": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491"
+            },
+            "probedAt": "2026-07-26T14:57:43.507Z"
+          },
+          {
+            "capability": "permission_events",
+            "status": "unknown",
+            "evidenceId": "evd_862899d596a1e4a7e6440c33",
+            "evidence": {
+              "source": "phase0_evidence",
+              "digest": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491"
+            },
+            "probedAt": "2026-07-26T14:57:43.507Z"
+          },
+          {
+            "capability": "resume",
+            "status": "supported",
+            "evidenceId": "evd_6b3dbafa28dc91fa09ef3643",
+            "evidence": {
+              "source": "phase0_evidence",
+              "digest": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491"
+            },
+            "probedAt": "2026-07-26T14:57:43.507Z"
+          },
+          {
+            "capability": "interrupt",
+            "status": "unknown",
+            "evidenceId": "evd_453d5f3d7aad7e89dba8270d",
+            "evidence": {
+              "source": "phase0_evidence",
+              "digest": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491"
+            },
+            "probedAt": "2026-07-26T14:57:43.507Z"
+          },
+          {
+            "capability": "completion_receipt",
+            "status": "unknown",
+            "evidenceId": "evd_196b51444784b6f2352c0cd8",
+            "evidence": {
+              "source": "phase0_evidence",
+              "digest": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491"
+            },
+            "probedAt": "2026-07-26T14:57:43.507Z"
+          },
+          {
+            "capability": "headless",
+            "status": "unknown",
+            "evidenceId": "evd_9d4dde3f00385dc369959ad5",
+            "evidence": {
+              "source": "phase0_evidence",
+              "digest": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491"
+            },
+            "probedAt": "2026-07-26T14:57:43.507Z"
+          },
+          {
+            "capability": "artifact_export",
+            "status": "unknown",
+            "evidenceId": "evd_3217df019d546b7e103d7ec8",
+            "evidence": {
+              "source": "phase0_evidence",
+              "digest": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491"
+            },
+            "probedAt": "2026-07-26T14:57:43.507Z"
+          }
+        ]
+      },
+      "manifest": {
+        "schemaVersion": 1,
+        "probeReceiptId": "cpr_3950390ea8ac1564c38c4ccb",
+        "subject": {
+          "kind": "connector",
+          "connectorId": "con_codex_direct",
+          "implementationVersion": "1.0.0"
+        },
+        "level": "NONE",
+        "capabilities": [
+          {
+            "capability": "discover",
+            "status": "unknown",
+            "evidence": {
+              "source": "phase0_evidence",
+              "digest": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491"
+            },
+            "probedAt": "2026-07-26T14:57:43.507Z"
+          },
+          {
+            "capability": "workspace_prepare",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "workspace_isolation",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "workspace_targeting",
+            "status": "unknown",
+            "evidence": {
+              "source": "phase0_evidence",
+              "digest": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491"
+            },
+            "probedAt": "2026-07-26T14:57:43.507Z"
+          },
+          {
+            "capability": "launch",
+            "status": "unknown",
+            "evidence": {
+              "source": "phase0_evidence",
+              "digest": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491"
+            },
+            "probedAt": "2026-07-26T14:57:43.507Z"
+          },
+          {
+            "capability": "handoff",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "attach",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "observe",
+            "status": "unknown",
+            "evidence": {
+              "source": "phase0_evidence",
+              "digest": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491"
+            },
+            "probedAt": "2026-07-26T14:57:43.507Z"
+          },
+          {
+            "capability": "send",
+            "status": "unknown",
+            "evidence": {
+              "source": "phase0_evidence",
+              "digest": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491"
+            },
+            "probedAt": "2026-07-26T14:57:43.507Z"
+          },
+          {
+            "capability": "interrupt",
+            "status": "unknown",
+            "evidence": {
+              "source": "phase0_evidence",
+              "digest": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491"
+            },
+            "probedAt": "2026-07-26T14:57:43.507Z"
+          },
+          {
+            "capability": "resume",
+            "status": "unknown",
+            "evidence": {
+              "source": "phase0_evidence",
+              "digest": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491"
+            },
+            "probedAt": "2026-07-26T14:57:43.507Z"
+          },
+          {
+            "capability": "steer",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "structured_events",
+            "status": "unknown",
+            "evidence": {
+              "source": "phase0_evidence",
+              "digest": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491"
+            },
+            "probedAt": "2026-07-26T14:57:43.507Z"
+          },
+          {
+            "capability": "result_channel",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "permission_events",
+            "status": "unknown",
+            "evidence": {
+              "source": "phase0_evidence",
+              "digest": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491"
+            },
+            "probedAt": "2026-07-26T14:57:43.507Z"
+          },
+          {
+            "capability": "approve",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "structured_tool_events",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "policy_hook",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "reliable_attach_recovery",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "completion_receipt",
+            "status": "unknown",
+            "evidence": {
+              "source": "phase0_evidence",
+              "digest": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491"
+            },
+            "probedAt": "2026-07-26T14:57:43.507Z"
+          },
+          {
+            "capability": "durable_completion_receipt",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "artifact_export",
+            "status": "unknown",
+            "evidence": {
+              "source": "phase0_evidence",
+              "digest": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491"
+            },
+            "probedAt": "2026-07-26T14:57:43.507Z"
+          },
+          {
+            "capability": "native_surface",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "headless",
+            "status": "unknown",
+            "evidence": {
+              "source": "phase0_evidence",
+              "digest": "95f5144aff690b751ccc17619aca615f62856266bf6052e526ecfd1c934d5491"
+            },
+            "probedAt": "2026-07-26T14:57:43.507Z"
+          },
+          {
+            "capability": "mobile_control",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          }
+        ],
+        "computedAt": "2026-07-26T15:28:46.446Z"
+      }
+    },
+    {
+      "connector": "codebuddy",
+      "receipt": {
+        "schemaVersion": 2,
+        "probeReceiptId": "cpr_cfac1486aa46bcb5019856cc",
+        "subject": {
+          "kind": "connector",
+          "connectorId": "con_codebuddy_acp",
+          "implementationVersion": "1.0.0"
+        },
+        "platform": "windows",
+        "executable": {
+          "status": "unknown"
+        },
+        "loginState": "unknown",
+        "productVersion": {
+          "observed": null,
+          "supported": [
+            "not_proven"
+          ]
+        },
+        "protocol": {
+          "kind": "acp",
+          "observedVersion": null,
+          "supportedVersions": [
+            "not_proven"
+          ],
+          "schemaVersion": null,
+          "supportedSchemaVersions": [
+            0
+          ],
+          "schemaDigest": null
+        },
+        "probedAt": "2026-07-26T14:52:35.201Z",
+        "validUntil": "2026-07-27T14:52:35.201Z",
+        "results": [
+          {
+            "capability": "discover",
+            "status": "unknown",
+            "evidenceId": "evd_432c3f6f6144f9b18fd6233a",
+            "evidence": {
+              "source": "local_probe",
+              "digest": "3859a82a543e03013e254cd614758e16031dd7620c224f74cf7f63b79138f47d"
+            },
+            "probedAt": "2026-07-26T14:52:35.201Z"
+          }
+        ]
+      },
+      "manifest": {
+        "schemaVersion": 1,
+        "probeReceiptId": "cpr_cfac1486aa46bcb5019856cc",
+        "subject": {
+          "kind": "connector",
+          "connectorId": "con_codebuddy_acp",
+          "implementationVersion": "1.0.0"
+        },
+        "level": "NONE",
+        "capabilities": [
+          {
+            "capability": "discover",
+            "status": "unknown",
+            "evidence": {
+              "source": "local_probe",
+              "digest": "3859a82a543e03013e254cd614758e16031dd7620c224f74cf7f63b79138f47d"
+            },
+            "probedAt": "2026-07-26T14:52:35.201Z"
+          },
+          {
+            "capability": "workspace_prepare",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "workspace_isolation",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "workspace_targeting",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "launch",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "handoff",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "attach",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "observe",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "send",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "interrupt",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "resume",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "steer",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "structured_events",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "result_channel",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "permission_events",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "approve",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "structured_tool_events",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "policy_hook",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "reliable_attach_recovery",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "completion_receipt",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "durable_completion_receipt",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "artifact_export",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "native_surface",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "headless",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "mobile_control",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          }
+        ],
+        "computedAt": "2026-07-26T15:28:46.446Z"
+      }
+    },
+    {
+      "connector": "cursor",
+      "receipt": {
+        "schemaVersion": 2,
+        "probeReceiptId": "cpr_13e7a139846125dbe6f953fe",
+        "subject": {
+          "kind": "connector",
+          "connectorId": "con_cursor_handoff",
+          "implementationVersion": "1.0.0"
+        },
+        "platform": "windows",
+        "executable": {
+          "status": "unknown"
+        },
+        "loginState": "unknown",
+        "productVersion": {
+          "observed": null,
+          "supported": [
+            "not_proven"
+          ]
+        },
+        "protocol": {
+          "kind": "native_handoff",
+          "observedVersion": null,
+          "supportedVersions": [
+            "not_proven"
+          ],
+          "schemaVersion": null,
+          "supportedSchemaVersions": [
+            0
+          ],
+          "schemaDigest": null
+        },
+        "probedAt": "2026-07-26T14:52:35.201Z",
+        "validUntil": "2026-07-27T14:52:35.201Z",
+        "results": [
+          {
+            "capability": "discover",
+            "status": "unknown",
+            "evidenceId": "evd_0352d282cb4476512019faa6",
+            "evidence": {
+              "source": "local_probe",
+              "digest": "3859a82a543e03013e254cd614758e16031dd7620c224f74cf7f63b79138f47d"
+            },
+            "probedAt": "2026-07-26T14:52:35.201Z"
+          }
+        ]
+      },
+      "manifest": {
+        "schemaVersion": 1,
+        "probeReceiptId": "cpr_13e7a139846125dbe6f953fe",
+        "subject": {
+          "kind": "connector",
+          "connectorId": "con_cursor_handoff",
+          "implementationVersion": "1.0.0"
+        },
+        "level": "NONE",
+        "capabilities": [
+          {
+            "capability": "discover",
+            "status": "unknown",
+            "evidence": {
+              "source": "local_probe",
+              "digest": "3859a82a543e03013e254cd614758e16031dd7620c224f74cf7f63b79138f47d"
+            },
+            "probedAt": "2026-07-26T14:52:35.201Z"
+          },
+          {
+            "capability": "workspace_prepare",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "workspace_isolation",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "workspace_targeting",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "launch",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "handoff",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "attach",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "observe",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "send",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "interrupt",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "resume",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "steer",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "structured_events",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "result_channel",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "permission_events",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "approve",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "structured_tool_events",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "policy_hook",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "reliable_attach_recovery",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "completion_receipt",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "durable_completion_receipt",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "artifact_export",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "native_surface",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "headless",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          },
+          {
+            "capability": "mobile_control",
+            "status": "unknown",
+            "evidence": null,
+            "probedAt": null
+          }
+        ],
+        "computedAt": "2026-07-26T15:28:46.446Z"
+      }
+    }
+  ],
+  "safety": {
+    "remoteRepositoryWriteAttempted": false,
+    "providerMutationAttempted": false,
+    "stepSuccessInferredFromRuntimeObservation": false
+  },
+  "redaction": {
+    "applied": true,
+    "schemaVersion": 1
+  },
+  "contentFingerprint": "6bba225fb463c68f806b7e048127114c02aa5c3d79bcc217324d0d9df9c50b1b"
+}

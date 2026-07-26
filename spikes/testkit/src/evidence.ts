@@ -67,6 +67,18 @@ export const EvidenceEnvelopeSchema = z.strictObject({
     schemaVersion: z.literal(1),
   }),
   contentFingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
+}).superRefine((value, context) => {
+  const { contentFingerprint, ...withoutFingerprint } = value;
+  const expected = createHash("sha256")
+    .update(JSON.stringify(canonicalize(fingerprintProjection(withoutFingerprint))))
+    .digest("hex");
+  if (contentFingerprint !== expected) {
+    context.addIssue({
+      code: "custom",
+      path: ["contentFingerprint"],
+      message: "CONTENT_FINGERPRINT_MISMATCH",
+    });
+  }
 });
 export type EvidenceEnvelope = z.infer<typeof EvidenceEnvelopeSchema>;
 
@@ -177,7 +189,9 @@ export function assertSafeEvidence(serialized: string): void {
   ];
   const normalizedQuotes = serialized.replace(/\\"/gu, '"');
   const hasUnredactedRuntimeIdentifier =
-    /"(?:pid|runtimeId)"\s*:\s*(?:"(?!\[VOLATILE\]")|[^"\s])/iu.test(normalizedQuotes);
+    /"(?:pid|runtimeId)"\s*:\s*(?!null\b)(?:"(?!\[VOLATILE\]")|[^"\s])/iu.test(
+      normalizedQuotes,
+    );
   if (forbidden.some((pattern) => pattern.test(serialized)) || hasUnredactedRuntimeIdentifier) {
     throw new Error("EVIDENCE_CONTAINS_SENSITIVE_MATERIAL");
   }

@@ -94,6 +94,33 @@ describe("OrcaClient", () => {
     expect(receipt.raw).toEqual(upstream);
   });
 
+  it("retains nullable process and runtime identities when Orca is not attached", async () => {
+    const upstream = {
+      id: "request-detached",
+      ok: true,
+      result: {
+        app: { running: false, pid: null },
+        runtime: { state: "stopped", reachable: false, runtimeId: null },
+        graph: { state: "ready" },
+      },
+      _meta: { runtimeId: "runtime-transport" },
+    };
+    const runner = new RecordingRunner({ stdout: JSON.stringify(upstream) });
+    const client = new OrcaClient({
+      runner,
+      executable: "orca",
+      cwd: "C:\\fixture",
+      timeoutMs: 5_000,
+    });
+
+    const receipt = await client.status();
+
+    expect(receipt.known.app.pid).toBeNull();
+    expect(receipt.known.app.desktopWindowStatus).toBeUndefined();
+    expect(receipt.known.runtime.runtimeId).toBeNull();
+    expect(receipt.known.runtime.reachable).toBe(false);
+  });
+
   it("passes the repository path as a distinct argv value", async () => {
     const upstream = {
       id: "request-2",

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "evidenceType": "phase0_environment_inventory",
-  "generatedAt": "2026-07-26T14:52:35.201Z",
+  "generatedAt": "2026-07-26T14:32:34.927Z",
   "generator": {
     "name": "hunter-phase0-doctor",
     "version": "0.1.0"
@@ -62,8 +62,8 @@
           "stderr": "",
           "timedOut": false,
           "spawnError": null,
-          "startedAt": "2026-07-26T14:52:34.249Z",
-          "finishedAt": "2026-07-26T14:52:34.295Z"
+          "startedAt": "2026-07-26T14:32:34.018Z",
+          "finishedAt": "2026-07-26T14:32:34.056Z"
         }
       ]
     },
@@ -98,8 +98,8 @@
           "stderr": "",
           "timedOut": false,
           "spawnError": null,
-          "startedAt": "2026-07-26T14:52:34.257Z",
-          "finishedAt": "2026-07-26T14:52:34.305Z"
+          "startedAt": "2026-07-26T14:32:34.026Z",
+          "finishedAt": "2026-07-26T14:32:34.063Z"
         }
       ]
     },
@@ -134,8 +134,8 @@
           "stderr": "",
           "timedOut": false,
           "spawnError": "EPERM",
-          "startedAt": "2026-07-26T14:52:34.267Z",
-          "finishedAt": "2026-07-26T14:52:34.274Z"
+          "startedAt": "2026-07-26T14:32:34.030Z",
+          "finishedAt": "2026-07-26T14:32:34.037Z"
         }
       ]
     },
@@ -170,8 +170,8 @@
           "stderr": "",
           "timedOut": false,
           "spawnError": "ENOENT",
-          "startedAt": "2026-07-26T14:52:34.274Z",
-          "finishedAt": "2026-07-26T14:52:34.292Z"
+          "startedAt": "2026-07-26T14:32:34.037Z",
+          "finishedAt": "2026-07-26T14:32:34.050Z"
         }
       ]
     },
@@ -206,8 +206,8 @@
           "stderr": "",
           "timedOut": false,
           "spawnError": "ENOENT",
-          "startedAt": "2026-07-26T14:52:34.277Z",
-          "finishedAt": "2026-07-26T14:52:34.292Z"
+          "startedAt": "2026-07-26T14:32:34.039Z",
+          "finishedAt": "2026-07-26T14:32:34.050Z"
         }
       ]
     },
@@ -242,8 +242,8 @@
           "stderr": "",
           "timedOut": false,
           "spawnError": null,
-          "startedAt": "2026-07-26T14:52:34.279Z",
-          "finishedAt": "2026-07-26T14:52:34.583Z"
+          "startedAt": "2026-07-26T14:32:34.041Z",
+          "finishedAt": "2026-07-26T14:32:34.337Z"
         },
         {
           "command": {
@@ -255,12 +255,12 @@
           },
           "cwdScope": "repository",
           "exitCode": 0,
-          "stdout": "{\n  \"id\": \"local-status\",\n  \"ok\": true,\n  \"result\": {\n    \"app\": {\n      \"running\": true,\n      \"pid\": \"[VOLATILE]\",\n      \"desktopWindowStatus\": \"available\"\n    },\n    \"runtime\": {\n      \"state\": \"ready\",\n      \"reachable\": true,\n      \"runtimeId\": \"[VOLATILE]\"\n    },\n    \"graph\": {\n      \"state\": \"ready\"\n    }\n  },\n  \"_meta\": {\n    \"runtimeId\": \"[VOLATILE]\"\n  }\n}",
+          "stdout": "{\n  \"id\": \"local-status\",\n  \"ok\": true,\n  \"result\": {\n    \"app\": {\n      \"running\": false,\n      \"pid\": null\n    },\n    \"runtime\": {\n      \"state\": \"stale_bootstrap\",\n      \"reachable\": false,\n      \"runtimeId\": null\n    },\n    \"graph\": {\n      \"state\": \"not_running\"\n    }\n  },\n  \"_meta\": {\n    \"runtimeId\": \"[VOLATILE]\"\n  }\n}",
           "stderr": "",
           "timedOut": false,
           "spawnError": null,
-          "startedAt": "2026-07-26T14:52:34.584Z",
-          "finishedAt": "2026-07-26T14:52:34.920Z"
+          "startedAt": "2026-07-26T14:32:34.338Z",
+          "finishedAt": "2026-07-26T14:32:34.615Z"
         },
         {
           "command": {
@@ -275,8 +275,8 @@
           "stderr": "",
           "timedOut": false,
           "spawnError": null,
-          "startedAt": "2026-07-26T14:52:34.920Z",
-          "finishedAt": "2026-07-26T14:52:35.200Z"
+          "startedAt": "2026-07-26T14:32:34.615Z",
+          "finishedAt": "2026-07-26T14:32:34.926Z"
         }
       ]
     },
@@ -311,8 +311,8 @@
           "stderr": "",
           "timedOut": false,
           "spawnError": "ENOENT",
-          "startedAt": "2026-07-26T14:52:34.288Z",
-          "finishedAt": "2026-07-26T14:52:34.292Z"
+          "startedAt": "2026-07-26T14:32:34.046Z",
+          "finishedAt": "2026-07-26T14:32:34.050Z"
         }
       ]
     }
@@ -326,5 +326,5 @@
     "applied": true,
     "schemaVersion": 1
   },
-  "contentFingerprint": "3859a82a543e03013e254cd614758e16031dd7620c224f74cf7f63b79138f47d"
+  "contentFingerprint": "49eea71e931d6e0cbbe12faac5141afa83388bb7c3eae6754f37caac5b179395"
 }

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "evidenceType": "phase0_orca_windows_provider_preflight",
-  "generatedAt": "2026-07-26T14:47:48.107Z",
+  "generatedAt": "2026-07-26T14:41:37.642Z",
   "generator": {
     "name": "hunter-phase0-orca-preflight",
     "version": "0.1.0"
@@ -27,7 +27,7 @@
       "exitCode": 0,
       "timedOut": false,
       "spawnError": null,
-      "outputSha256": "5f7f4bf2424c3d9809884d19ca47687d3bcbc2e703aab46e91499fb4b0e7126f"
+      "outputSha256": "af46c34725d6934a7836c209334da7b9d59762bc0c0204107ac7c1f54e1452d1"
     },
     {
       "operation": "repo_help",
@@ -71,8 +71,8 @@
   "capabilities": [
     {
       "id": "discover_runtime",
-      "outcome": "PASS",
-      "reason": "status_json_reports_running_reachable_runtime"
+      "outcome": "FAIL",
+      "reason": "status_json_does_not_report_running_reachable_runtime"
     },
     {
       "id": "fixed_version",
@@ -129,5 +129,5 @@
     "applied": true,
     "schemaVersion": 1
   },
-  "contentFingerprint": "98c55e25e03250cc47e5911275ae4c16920ddbe63c658211029247892940100c"
+  "contentFingerprint": "e17839cad29443e0a93a1e511f8832af9770e548e60368baa5b18b021efc1e31"
 }

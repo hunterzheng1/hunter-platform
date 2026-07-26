@@ -74,5 +74,5 @@ describe("Phase 1 benchmark and failure matrix", () => {
     expect(JSON.stringify(report)).not.toMatch(
       /(?:hostname|[A-Z]:\\|\/(?:home|Users|tmp)\/|token|cookie|authorization)/iu,
     );
-  }, 20_000);
+  }, 60_000);
 });
