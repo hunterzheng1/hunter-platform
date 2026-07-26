@@ -90,9 +90,19 @@ describe("Workbench HTTP schemas", () => {
 
   it("strictly validates Workbench responses", () => {
     const revision = { projectId, requirementId, revisionId, aggregateVersion: 0, title: "移动审批", body: "正文", acceptanceCriteria: ["验收"], constraints: [], status: "draft" };
+    const project = {
+      projectId,
+      name: "Hunter",
+      requirements: [revision],
+      repositoryBindingVersion: 0,
+      repositoryBindings: [{
+        repositoryId: "rep_task2000001",
+        role: "primary",
+      }],
+    };
     expect(RequirementRevisionHttpResponseSchema.parse(revision)).toEqual(revision);
-    expect(ProjectDetailHttpResponseSchema.parse({ projectId, name: "Hunter", requirements: [revision] })).toMatchObject({ projectId, name: "Hunter" });
-    expect(() => ProjectDetailHttpResponseSchema.parse({ projectId, name: "Hunter", requirements: [], extra: true })).toThrow();
+    expect(ProjectDetailHttpResponseSchema.parse(project)).toMatchObject({ projectId, name: "Hunter" });
+    expect(() => ProjectDetailHttpResponseSchema.parse({ ...project, extra: true })).toThrow();
     expect(CreateProjectHttpResponseSchema.parse({ projectId, name: "Hunter", authorization: "host_session_reissue_required" })).toMatchObject({ projectId });
   });
 

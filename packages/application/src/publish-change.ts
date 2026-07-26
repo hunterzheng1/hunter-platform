@@ -4,6 +4,7 @@ import {
   ExecutionPlanSchema,
   TaskDefinitionSchema,
   ChangeRevisionIdSchema,
+  WorkflowRevisionIdSchema,
   canonicalSha256,
   createChangeRevision,
   createExecutionPlan,
@@ -20,6 +21,7 @@ export const PublishChangeCommandSchema = z
   .object({
     changeRevisionId: ChangeRevisionIdSchema,
     executionPlanId: ExecutionPlanIdSchema,
+    rootWorkflowRevisionId: WorkflowRevisionIdSchema,
     tasks: z.array(TaskDefinitionSchema).min(1),
     expectedVersion: z.number().int().nonnegative(),
     idempotencyKey: z.string().trim().min(8).max(128),
@@ -76,6 +78,12 @@ export class PublishChangeService {
     if (source === null) throw new Error("CHANGE_REVISION_NOT_FOUND");
     const project = this.repositories.getProject(source.projectId);
     if (project === null) throw new Error("CHANGE_PROJECT_NOT_FOUND");
+    const rootWorkflow = this.repositories.getWorkflowRevision(
+      command.rootWorkflowRevisionId,
+    );
+    if (rootWorkflow === null || rootWorkflow.status !== "published") {
+      throw new Error("ROOT_WORKFLOW_REVISION_NOT_PUBLISHED");
+    }
 
     const boundRepositories = new Set(project.repositoryBindings.map(({ repositoryId }) => repositoryId));
     for (const repositoryId of source.repositoryIds) {
@@ -131,10 +139,17 @@ export class PublishChangeService {
     });
 
     if (source.status === "published") {
+      const pinnedRootWorkflowRevisionId = existingPlan === null
+        ? null
+        : this.repositories.getExecutionPlanWorkflowRevisionId(
+            existingPlan.executionPlanId,
+          );
       if (
         existingPlan === null ||
         existingPlan.executionPlanId !== executionPlan.executionPlanId ||
         existingPlan.planFingerprint !== executionPlan.planFingerprint ||
+        pinnedRootWorkflowRevisionId
+          !== rootWorkflow.workflowRevisionId ||
         canonicalSha256(source) !== canonicalSha256(changeRevision)
       ) {
         throw new Error("PUBLISHED_CONTENT_MISMATCH");
@@ -144,7 +159,10 @@ export class PublishChangeService {
     if (existingPlan !== null) throw new Error("DRAFT_CHANGE_HAS_EXISTING_EXECUTION_PLAN");
 
     const response: PublishChangeResult = { changeRevision, executionPlan };
-    const requestFingerprint = canonicalSha256(response);
+    const requestFingerprint = canonicalSha256({
+      response,
+      rootWorkflowRevisionId: rootWorkflow.workflowRevisionId,
+    });
     const eventSuffix = canonicalSha256(command.idempotencyKey).slice(0, 24);
     const receipt = this.journal.commitCommand({
       commandId: `publish-change:${command.idempotencyKey}`,
@@ -172,8 +190,9 @@ export class PublishChangeService {
             executionPlanId: executionPlan.executionPlanId,
             executionPlan,
             planFingerprint: executionPlan.planFingerprint,
+            rootWorkflowRevisionId: rootWorkflow.workflowRevisionId,
           },
-          schemaVersion: 1,
+          schemaVersion: 2,
           occurredAt: publishedAt,
         },
       ],

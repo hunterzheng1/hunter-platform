@@ -10,6 +10,7 @@ import {
   RequirementIdSchema,
   RequirementRevisionIdSchema,
   RunIdSchema,
+  StepIdSchema,
   StepRunIdSchema,
   AttemptIdSchema,
   CapabilityProbeReceiptIdSchema,
@@ -572,6 +573,15 @@ export const CreateProjectHttpRequestSchema = z.strictObject({
 });
 export type CreateProjectHttpRequest = z.infer<typeof CreateProjectHttpRequestSchema>;
 
+export const AppendProjectRepositoryHttpRequestSchema = z.strictObject({
+  repositoryId: RepositoryIdSchema,
+  expectedVersion: CommandMetadataSchema.shape.expectedVersion,
+  idempotencyKey: CommandMetadataSchema.shape.idempotencyKey,
+});
+export type AppendProjectRepositoryHttpRequest = z.infer<
+  typeof AppendProjectRepositoryHttpRequestSchema
+>;
+
 export const CreateRequirementHttpRequestSchema = z.strictObject({
   requirementId: RequirementIdSchema,
   revisionId: RequirementRevisionIdSchema,
@@ -635,11 +645,148 @@ export const ProjectListHttpResponseSchema = z.strictObject({
 });
 export type ProjectListHttpResponse = z.infer<typeof ProjectListHttpResponseSchema>;
 
+export const RepositoryBindingHttpSchema = z.strictObject({
+  repositoryId: RepositoryIdSchema,
+  role: z.enum(["primary", "secondary"]),
+});
+export type RepositoryBindingHttp = z.infer<
+  typeof RepositoryBindingHttpSchema
+>;
+
+const ProjectRepositoryBindingsHttpSchema = z
+  .array(RepositoryBindingHttpSchema)
+  .min(1)
+  .max(50)
+  .superRefine((bindings, context) => {
+    if (
+      new Set(bindings.map(({ repositoryId }) => repositoryId)).size
+      !== bindings.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "repository bindings must be unique",
+      });
+    }
+    if (bindings.filter(({ role }) => role === "primary").length !== 1) {
+      context.addIssue({
+        code: "custom",
+        message: "exactly one primary repository is required",
+      });
+    }
+  });
+
 export const ProjectDetailHttpResponseSchema = ProjectSummaryHttpResponseSchema.extend({
   requirements: z.array(RequirementRevisionHttpResponseSchema),
+  repositoryBindingVersion: z.number().int().nonnegative(),
+  repositoryBindings: ProjectRepositoryBindingsHttpSchema,
   planningDefaults: ChangePlanningDefaultsHttpSchema.optional(),
 }).strict();
 export type ProjectDetailHttpResponse = z.infer<typeof ProjectDetailHttpResponseSchema>;
+
+export const AppendProjectRepositoryHttpResponseSchema = z.strictObject({
+  projectId: ProjectIdSchema,
+  repositoryBindingVersion: z.number().int().positive(),
+  repositoryBinding: z.strictObject({
+    repositoryId: RepositoryIdSchema,
+    role: z.literal("secondary"),
+  }),
+});
+export type AppendProjectRepositoryHttpResponse = z.infer<
+  typeof AppendProjectRepositoryHttpResponseSchema
+>;
+
+const WorkflowFingerprintHttpSchema = z
+  .string()
+  .regex(/^[a-f0-9]{64}$/u);
+const WorkflowMigrationCompatibilityReasonHttpSchema = z.enum([
+  "entry_step_changed",
+  "steps_added",
+  "steps_removed",
+  "steps_changed",
+  "routes_changed",
+  "loops_changed",
+]);
+const WorkflowMigrationCompatibilityHttpSchema =
+  z.discriminatedUnion("status", [
+    z.strictObject({
+      status: z.literal("no_structural_change"),
+      reasonCodes: z.tuple([]),
+    }),
+    z.strictObject({
+      status: z.literal("review_required"),
+      reasonCodes: z
+        .array(WorkflowMigrationCompatibilityReasonHttpSchema)
+        .min(1)
+        .max(6),
+    }),
+  ]);
+
+export const ProjectWorkflowBindingHttpResponseSchema = z.strictObject({
+  projectId: ProjectIdSchema,
+  currentWorkflowRevisionId: WorkflowRevisionIdSchema,
+  workflowBindingVersion: z.number().int().nonnegative(),
+});
+export type ProjectWorkflowBindingHttpResponse = z.infer<
+  typeof ProjectWorkflowBindingHttpResponseSchema
+>;
+
+export const ProjectWorkflowMigrationPreviewHttpRequestSchema =
+  z.strictObject({
+    toWorkflowRevisionId: WorkflowRevisionIdSchema,
+  });
+export type ProjectWorkflowMigrationPreviewHttpRequest = z.infer<
+  typeof ProjectWorkflowMigrationPreviewHttpRequestSchema
+>;
+
+export const ProjectWorkflowMigrationPreviewHttpResponseSchema =
+  z.strictObject({
+    projectId: ProjectIdSchema,
+    workflowBindingVersion: z.number().int().nonnegative(),
+    fromWorkflowRevisionId: WorkflowRevisionIdSchema,
+    toWorkflowRevisionId: WorkflowRevisionIdSchema,
+    fromWorkflowFingerprint: WorkflowFingerprintHttpSchema,
+    toWorkflowFingerprint: WorkflowFingerprintHttpSchema,
+    changes: z.strictObject({
+      titleChanged: z.boolean(),
+      entryStepChanged: z.boolean(),
+      addedStepIds: z.array(StepIdSchema),
+      removedStepIds: z.array(StepIdSchema),
+      changedStepIds: z.array(StepIdSchema),
+      routesChanged: z.boolean(),
+      loopsChanged: z.boolean(),
+      routeCountChanged: z.boolean(),
+      loopCountChanged: z.boolean(),
+    }),
+    compatibility: WorkflowMigrationCompatibilityHttpSchema,
+    previewFingerprint: WorkflowFingerprintHttpSchema,
+  });
+export type ProjectWorkflowMigrationPreviewHttpResponse = z.infer<
+  typeof ProjectWorkflowMigrationPreviewHttpResponseSchema
+>;
+
+export const ConfirmProjectWorkflowMigrationHttpRequestSchema =
+  z.strictObject({
+    fromWorkflowRevisionId: WorkflowRevisionIdSchema,
+    toWorkflowRevisionId: WorkflowRevisionIdSchema,
+    previewFingerprint: WorkflowFingerprintHttpSchema,
+    expectedVersion: CommandMetadataSchema.shape.expectedVersion,
+    idempotencyKey: CommandMetadataSchema.shape.idempotencyKey,
+  });
+export type ConfirmProjectWorkflowMigrationHttpRequest = z.infer<
+  typeof ConfirmProjectWorkflowMigrationHttpRequestSchema
+>;
+
+export const ConfirmProjectWorkflowMigrationHttpResponseSchema =
+  z.strictObject({
+    projectId: ProjectIdSchema,
+    previousWorkflowRevisionId: WorkflowRevisionIdSchema,
+    currentWorkflowRevisionId: WorkflowRevisionIdSchema,
+    workflowBindingVersion: z.number().int().positive(),
+    status: z.literal("migrated"),
+  });
+export type ConfirmProjectWorkflowMigrationHttpResponse = z.infer<
+  typeof ConfirmProjectWorkflowMigrationHttpResponseSchema
+>;
 
 const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
 const KnowledgeEntryBaseHttpSchema = z.strictObject({

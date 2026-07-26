@@ -38,6 +38,8 @@ const ids = {
   changeRevision: ChangeRevisionIdSchema.parse("crv_revision01"),
   executionPlan: ExecutionPlanIdSchema.parse("epl_plan0001"),
   workflowRevision: WorkflowRevisionIdSchema.parse("wfr_workflow01"),
+  otherRootWorkflowRevision:
+    WorkflowRevisionIdSchema.parse("wfr_workflow02"),
   agentProfile: AgentProfileIdSchema.parse("apr_profile01"),
   task: TaskIdSchema.parse("tsk_task0001"),
 };
@@ -115,8 +117,13 @@ function task(overrides: Partial<TaskDefinition> = {}): TaskDefinition {
   };
 }
 
-function workflow() {
-  return createWorkflowRevision({ ...validWorkflowInput(), workflowRevisionId: ids.workflowRevision });
+function workflow(
+  workflowRevisionId = ids.workflowRevision,
+) {
+  return createWorkflowRevision({
+    ...validWorkflowInput(),
+    workflowRevisionId,
+  });
 }
 
 describe("PublishChangeService", () => {
@@ -147,7 +154,15 @@ describe("PublishChangeService", () => {
       getExecutionPlanForChangeRevision: (revisionId: string) =>
         revisionId === target.revisionId ? (options.existingPlan ?? null) : null,
       getWorkflowRevision: (revisionId: string) =>
-        options.includeWorkflow === false || revisionId !== ids.workflowRevision ? null : workflow(),
+        options.includeWorkflow === false
+          || (
+            revisionId !== ids.workflowRevision
+            && revisionId !== ids.otherRootWorkflowRevision
+          )
+          ? null
+          : workflow(WorkflowRevisionIdSchema.parse(revisionId)),
+      getExecutionPlanWorkflowRevisionId: () =>
+        ids.workflowRevision,
       getAgentProfile: (profileId: string) =>
         options.includeProfile === false || profileId !== ids.agentProfile
           ? null
@@ -161,6 +176,7 @@ describe("PublishChangeService", () => {
     const command = {
       changeRevisionId: ids.changeRevision,
       executionPlanId: ids.executionPlan,
+      rootWorkflowRevisionId: ids.workflowRevision,
       tasks: [task()],
       expectedVersion: 0,
       idempotencyKey: "publish-change-0001",
@@ -183,6 +199,27 @@ describe("PublishChangeService", () => {
     expect(
       db.prepare("SELECT GROUP_CONCAT(event_type, ',') AS types FROM events ORDER BY position").get(),
     ).toEqual({ types: "ChangePublished,ExecutionPlanPublished" });
+  });
+
+  it("persists the server-selected root WorkflowRevision with the ExecutionPlan", () => {
+    const { database: db, service, command } = setup();
+
+    service.execute(
+      { ...command, rootWorkflowRevisionId: ids.workflowRevision },
+      { actorId: "local-user", correlationId: "publish-change-root-workflow" },
+    );
+
+    const row = db.prepare(
+      "SELECT schema_version, event_data FROM events WHERE event_type = 'ExecutionPlanPublished'",
+    ).get() as {
+      readonly schema_version: number;
+      readonly event_data: string;
+    };
+    expect(row.schema_version).toBe(2);
+    expect(JSON.parse(row.event_data)).toMatchObject({
+      executionPlanId: ids.executionPlan,
+      rootWorkflowRevisionId: ids.workflowRevision,
+    });
   });
 
   it.each([
@@ -311,5 +348,29 @@ describe("PublishChangeService", () => {
         { actorId: "user", correlationId: "changed" },
       ),
     ).toThrow(/PUBLISHED_CONTENT_MISMATCH/u);
+  });
+
+  it("rejects a different valid root WorkflowRevision when replaying a published Plan", () => {
+    const initial = setup();
+    const published = initial.service.execute(initial.command, {
+      actorId: "user",
+      correlationId: "initial",
+    });
+    database?.close();
+    database = undefined;
+    const existing = setup({
+      change: published.changeRevision,
+      existingPlan: published.executionPlan,
+    });
+
+    expect(() =>
+      existing.service.execute(
+        {
+          ...existing.command,
+          rootWorkflowRevisionId: ids.otherRootWorkflowRevision,
+        },
+        { actorId: "user", correlationId: "changed-root-workflow" },
+      ),
+    ).toThrow("PUBLISHED_CONTENT_MISMATCH");
   });
 });

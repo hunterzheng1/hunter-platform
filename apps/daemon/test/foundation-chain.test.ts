@@ -52,7 +52,7 @@ function persistCatalog(database: DatabaseSync, localPath: string) {
     commandId: "foundation-catalog:seed",
     requestFingerprint: canonicalSha256({ project, requirement, change, workflow, root }),
     projectId: ids.project,
-    aggregateId: `project:${ids.project}:foundation-catalog`,
+    aggregateId: `project:${ids.project}`,
     expectedVersion: 0,
     actor: { actorId: "foundation-fixture", correlationId: "foundation-chain" },
     events: [
@@ -152,9 +152,10 @@ describe("Foundation chain", () => {
     let clock = new Date("2026-07-22T12:00:00.000Z");
     const definitions = persistCatalog(database, workspacePath);
     let services = createSqliteApplicationServices({ database, externalHandler: fake, installSecret: "foundation-secret-tests", allowedHosts: ["hunter-test.localhost"], allowedOrigins: ["app://hunter"], capabilityReceiptFor: () => capability(), now: () => clock });
-    const published = services.publishChange.execute({ changeRevisionId: ids.changeRevision, executionPlanId: ids.plan, tasks: [{ taskId: ids.task, title: "Chain", objective: "verify", acceptanceCriteria: ["green"], repositoryIds: [ids.repository], moduleScopes: ["packages"], dependsOn: [], readSet: [], writeSet: ["packages"], access: "write", workflowRevisionId: ids.workflow, defaultAgentProfileId: ids.profile, sessionPolicy: "new", workspacePolicy: { mode: "write", isolation: "worktree", reuse: false } }], expectedVersion: 0, idempotencyKey: "publish-chain-1" }, { actorId: "chain", correlationId: "chain" });
+    const published = services.publishChange.execute({ changeRevisionId: ids.changeRevision, executionPlanId: ids.plan, rootWorkflowRevisionId: ids.rootWorkflow, tasks: [{ taskId: ids.task, title: "Chain", objective: "verify", acceptanceCriteria: ["green"], repositoryIds: [ids.repository], moduleScopes: ["packages"], dependsOn: [], readSet: [], writeSet: ["packages"], access: "write", workflowRevisionId: ids.workflow, defaultAgentProfileId: ids.profile, sessionPolicy: "new", workspacePolicy: { mode: "write", isolation: "worktree", reuse: false } }], expectedVersion: 0, idempotencyKey: "publish-chain-1" }, { actorId: "chain", correlationId: "chain" });
     const firstApp = chainApp(services);
-    expect((await firstApp.inject({ method: "POST", url: "/runs", headers: authenticatedHeaders(services), payload: { runId: ids.root, executionPlanId: ids.plan, workflowRevisionId: ids.rootWorkflow, expectedVersion: 0, idempotencyKey: "start-chain-root" } })).statusCode).toBe(200);
+    const startResponse = await firstApp.inject({ method: "POST", url: "/runs", headers: authenticatedHeaders(services), payload: { runId: ids.root, executionPlanId: ids.plan, workflowRevisionId: ids.rootWorkflow, expectedVersion: 0, idempotencyKey: "start-chain-root" } });
+    expect(startResponse.statusCode, startResponse.body).toBe(200);
     await firstApp.close();
     const dispatchCommand = { parentRunId: ids.root, expectedVersion: services.flowStore.loadRun(ids.root)!.version, idempotencyKey: "fanout-chain", actor: { actorId: "chain", correlationId: "chain" } };
     const fanout = services.runCoordinator.dispatch(dispatchCommand);

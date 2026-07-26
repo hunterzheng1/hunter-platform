@@ -240,6 +240,19 @@ export async function startDaemon(options: DaemonStartOptions) {
         },
         createProject: async (command, actor) =>
           definitions.createProject(command, actor),
+        appendProjectRepository: async (projectId, command, actor) =>
+          definitions.appendProjectRepository(projectId, command, actor),
+        getProjectWorkflowBinding: async (projectId) =>
+          definitions.getProjectWorkflowBinding(projectId),
+        previewProjectWorkflowMigration: async (projectId, request) =>
+          definitions.previewProjectWorkflowMigration(projectId, request),
+        confirmProjectWorkflowMigration:
+          async (projectId, command, actor) =>
+            definitions.confirmProjectWorkflowMigration(
+              projectId,
+              command,
+              actor,
+            ),
         getProject: async (projectId) => definitions.getProject(projectId),
         requirements: {
           createRequirement: async (projectId, command, actor) =>

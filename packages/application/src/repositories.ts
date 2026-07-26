@@ -3,6 +3,7 @@ import type {
   ChangeRevision,
   ChangeRevisionId,
   ExecutionPlan,
+  ExecutionPlanId,
   Project,
   ProjectId,
   RequirementRevision,
@@ -24,6 +25,9 @@ export interface PublishChangeRepositories {
     revisionId: RequirementRevisionId,
   ): Readonly<RequirementRevision> | null;
   getExecutionPlanForChangeRevision(revisionId: ChangeRevisionId): Readonly<ExecutionPlan> | null;
+  getExecutionPlanWorkflowRevisionId(
+    executionPlanId: ExecutionPlanId,
+  ): WorkflowRevisionId | null;
   getWorkflowRevision(revisionId: WorkflowRevisionId): Readonly<WorkflowRevision> | null;
   getAgentProfile(profileId: AgentProfileId): Readonly<AgentProfileRecord> | null;
 }

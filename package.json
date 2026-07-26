@@ -24,6 +24,7 @@
     "typecheck": "tsc -b --pretty false && tsc --noEmit --pretty false -p tsconfig.e2e.json",
     "verify:rebuild": "tsx scripts/verify-rebuild.ts",
     "verify:recovery": "tsx scripts/verify-recovery.ts",
+    "verify:backup": "npm run verify:backup-restore",
     "verify:backup-restore": "tsx scripts/verify-backup-restore.ts",
     "verify:diagnostics": "tsc -b packages/policy --pretty false && tsx scripts/verify-diagnostic-bundle.ts",
     "verify:resources": "tsc -b packages/domain packages/runtime-contracts packages/storage packages/api-contracts packages/testkit --pretty false && tsx scripts/verify-resource-bounds.ts",

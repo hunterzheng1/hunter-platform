@@ -9,6 +9,8 @@ import {
 import type { DeviceBindingId, DeviceId, ProjectId, RepositoryId } from "./ids.js";
 import { assertUnique, compareCanonicalText, deepFreeze } from "./immutable.js";
 
+const MAX_PROJECT_REPOSITORIES = 50;
+
 export interface RepositoryBinding {
   readonly repositoryId: RepositoryId;
   readonly role: "primary" | "secondary";
@@ -52,8 +54,18 @@ export const ProjectSchema = z
   .object({
     projectId: ProjectIdSchema,
     name: z.string().trim().min(1),
-    repositoryBindings: z.array(RepositoryBindingSchema).min(1),
+    repositoryBindings: z
+      .array(RepositoryBindingSchema)
+      .min(1)
+      .max(MAX_PROJECT_REPOSITORIES),
     deviceBindings: z.array(DeviceBindingSchema).min(1),
+  })
+  .strict();
+
+const AppendRepositoryBindingInputSchema = z
+  .object({
+    repositoryBinding: RepositoryBindingSchema,
+    deviceBinding: DeviceBindingSchema,
   })
   .strict();
 
@@ -80,5 +92,33 @@ export function createProject(input: unknown): Readonly<Project> {
     deviceBindings: [...parsed.deviceBindings].sort((left, right) =>
       compareCanonicalText(left.deviceBindingId, right.deviceBindingId),
     ),
+  });
+}
+
+export function appendRepositoryBinding(
+  projectInput: unknown,
+  input: unknown,
+): Readonly<Project> {
+  const project = ProjectSchema.parse(projectInput);
+  const parsed = AppendRepositoryBindingInputSchema.parse(input);
+  if (project.repositoryBindings.length >= MAX_PROJECT_REPOSITORIES) {
+    throw new Error("PROJECT_REPOSITORY_BINDING_LIMIT");
+  }
+  if (parsed.repositoryBinding.role !== "secondary") {
+    throw new Error("APPENDED_REPOSITORY_MUST_BE_SECONDARY");
+  }
+  if (
+    parsed.deviceBinding.repositoryId
+    !== parsed.repositoryBinding.repositoryId
+  ) {
+    throw new Error("APPENDED_DEVICE_BINDING_REPOSITORY_MISMATCH");
+  }
+  return createProject({
+    ...project,
+    repositoryBindings: [
+      ...project.repositoryBindings,
+      parsed.repositoryBinding,
+    ],
+    deviceBindings: [...project.deviceBindings, parsed.deviceBinding],
   });
 }

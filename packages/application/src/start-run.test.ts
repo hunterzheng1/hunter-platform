@@ -24,6 +24,7 @@ import { StartRunService } from "./start-run.js";
 const projectId = ProjectIdSchema.parse("prj_platform01");
 const executionPlanId = ExecutionPlanIdSchema.parse("epl_plan0001");
 const workflowRevisionId = WorkflowRevisionIdSchema.parse("wfr_workflow01");
+const unrelatedWorkflowRevisionId = WorkflowRevisionIdSchema.parse("wfr_workflow02");
 const requirementRevisionId = RequirementRevisionIdSchema.parse("rrv_revision01");
 const changeRevisionId = ChangeRevisionIdSchema.parse("crv_revision01");
 
@@ -117,6 +118,7 @@ describe("StartRunService", () => {
       {
         getProject: () => project,
         getExecutionPlan: () => plan,
+        getExecutionPlanWorkflowRevisionId: () => workflowRevisionId,
         getChangeRevision: () => change,
         getRequirementRevision: () => requirement,
         getWorkflowRevision: () => workflow,
@@ -163,6 +165,7 @@ describe("StartRunService", () => {
       {
         getProject: () => project,
         getExecutionPlan: () => plan,
+        getExecutionPlanWorkflowRevisionId: () => workflowRevisionId,
         getChangeRevision: () => change,
         getRequirementRevision: () => requirement,
         getWorkflowRevision: () => workflow,
@@ -204,6 +207,7 @@ describe("StartRunService", () => {
       {
         getProject: () => project,
         getExecutionPlan: () => plan,
+        getExecutionPlanWorkflowRevisionId: () => workflowRevisionId,
         getChangeRevision: () => change,
         getRequirementRevision: () => ({ ...requirement, status: "withdrawn" as const }),
         getWorkflowRevision: () => workflow,
@@ -230,6 +234,53 @@ describe("StartRunService", () => {
         { actorId: "user", correlationId: "start" },
       ),
     ).toThrow(/REQUIREMENT/u);
+    expect(handle).not.toHaveBeenCalled();
+  });
+
+  it("rejects a published root WorkflowRevision that is not pinned by the ExecutionPlan", () => {
+    const { project, requirement, change, workflow, plan } = fixtures();
+    const unrelatedWorkflow = createWorkflowRevision({
+      ...validWorkflowInput(),
+      workflowRevisionId: unrelatedWorkflowRevisionId,
+    });
+    const handle = vi.fn(() => ({
+      commandId: "start:unrelated-workflow",
+      response: { started: true },
+    }));
+    const repositories = {
+      getProject: () => project,
+      getExecutionPlan: () => plan,
+      getExecutionPlanWorkflowRevisionId: () => workflowRevisionId,
+      getChangeRevision: () => change,
+      getRequirementRevision: () => requirement,
+      getWorkflowRevision: (revisionId: typeof workflowRevisionId) =>
+        revisionId === workflowRevisionId ? workflow : unrelatedWorkflow,
+      getEffectivePolicySnapshot: () => ({
+        snapshotHash: "a".repeat(64),
+        policyVersion: 1,
+      }),
+      getRunBudgetLimit: () => ({
+        maxAttempts: 5,
+        maxElapsedMs: 60_000,
+        maxCost: 100,
+        maxTokens: 10_000,
+        maxLoopIterations: 3,
+      }),
+    };
+    const service = new StartRunService(repositories, { handle });
+
+    expect(() =>
+      service.execute(
+        {
+          runId: "run_root00001",
+          executionPlanId,
+          workflowRevisionId: unrelatedWorkflowRevisionId,
+          expectedVersion: 0,
+          idempotencyKey: "start-run-unrelated-workflow",
+        },
+        { actorId: "user", correlationId: "start" },
+      ),
+    ).toThrow("EXECUTION_PLAN_WORKFLOW_REVISION_MISMATCH");
     expect(handle).not.toHaveBeenCalled();
   });
 });

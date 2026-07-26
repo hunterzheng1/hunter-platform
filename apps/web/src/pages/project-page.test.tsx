@@ -19,6 +19,7 @@ const revisionId = RequirementRevisionIdSchema.parse("rrv_task2000001");
 const reviewRevisionId = RequirementRevisionIdSchema.parse("rrv_task2000002");
 const supersededRevisionId = RequirementRevisionIdSchema.parse("rrv_task2000003");
 const withdrawnRevisionId = RequirementRevisionIdSchema.parse("rrv_task2000004");
+const primaryRepositoryId = RepositoryIdSchema.parse("rep_task2primary");
 const draft = {
   projectId,
   requirementId,
@@ -30,6 +31,22 @@ const draft = {
   constraints: ["保持本地认证边界"],
   status: "draft" as const,
 };
+
+function projectResponse<
+  T extends {
+    readonly projectId: string;
+    readonly name: string;
+    readonly requirements: readonly unknown[];
+  },
+>(project: T) {
+  return {
+    ...project,
+    repositoryBindingVersion: 0,
+    repositoryBindings: [
+      { repositoryId: primaryRepositoryId, role: "primary" as const },
+    ],
+  };
+}
 
 afterEach(cleanup);
 
@@ -55,7 +72,8 @@ function deferred<T>() {
 describe("ProjectPage", () => {
   it("creates and approves the exact requirement revision without replacing it", async () => {
     const api = {
-      getProject: vi.fn(async () => ({ projectId, name: "Hunter", requirements: [] })),
+      getProject: vi.fn(async () =>
+        projectResponse({ projectId, name: "Hunter", requirements: [] })),
       createRequirement: vi.fn(async () => draft),
       approveRequirement: vi.fn(async () => ({
         ...draft,
@@ -98,7 +116,7 @@ describe("ProjectPage", () => {
 
   it("labels every non-approved state and only offers approval for reviewable revisions", async () => {
     const api = {
-      getProject: vi.fn(async () => ({
+      getProject: vi.fn(async () => projectResponse({
         projectId,
         name: "Hunter",
         requirements: [
@@ -132,10 +150,19 @@ describe("ProjectPage", () => {
 
   it("clears project A immediately and ignores its late load after switching to project B", async () => {
     const projectB = ProjectIdSchema.parse("prj_task2000002");
-    const loadB = deferred<{ projectId: typeof projectB; name: string; requirements: never[] }>();
+    const projectBResponse = projectResponse({
+      projectId: projectB,
+      name: "Project B",
+      requirements: [],
+    });
+    const loadB = deferred<typeof projectBResponse>();
     const api = {
       getProject: vi.fn(async (id: string) => id === projectId
-        ? { projectId, name: "Project A", requirements: [] }
+        ? projectResponse({
+            projectId,
+            name: "Project A",
+            requirements: [],
+          })
         : loadB.promise),
       createRequirement: vi.fn(),
       approveRequirement: vi.fn(),
@@ -146,7 +173,7 @@ describe("ProjectPage", () => {
     view.rerender(<ProjectPage projectId={projectB} api={api} onBack={vi.fn()} />);
     expect(screen.queryByRole("heading", { name: "Project A" })).toBeNull();
     expect(screen.getByRole("status").textContent).toContain("正在加载项目");
-    loadB.resolve({ projectId: projectB, name: "Project B", requirements: [] });
+    loadB.resolve(projectBResponse);
     expect(await screen.findByRole("heading", { name: "Project B" })).not.toBeNull();
   });
 
@@ -155,8 +182,16 @@ describe("ProjectPage", () => {
     const createdA = deferred<typeof draft>();
     const api = {
       getProject: vi.fn(async (id: string) => id === projectId
-        ? { projectId, name: "Project A", requirements: [] }
-        : { projectId: projectB, name: "Project B", requirements: [] }),
+        ? projectResponse({
+            projectId,
+            name: "Project A",
+            requirements: [],
+          })
+        : projectResponse({
+            projectId: projectB,
+            name: "Project B",
+            requirements: [],
+          })),
       createRequirement: vi.fn(async () => createdA.promise),
       approveRequirement: vi.fn(),
     };
@@ -180,8 +215,16 @@ describe("ProjectPage", () => {
     const approvalA = deferred<never>();
     const api = {
       getProject: vi.fn(async (id: string) => id === projectId
-        ? { projectId, name: "Project A", requirements: [draft] }
-        : { projectId: projectB, name: "Project B", requirements: [] }),
+        ? projectResponse({
+            projectId,
+            name: "Project A",
+            requirements: [draft],
+          })
+        : projectResponse({
+            projectId: projectB,
+            name: "Project B",
+            requirements: [],
+          })),
       createRequirement: vi.fn(),
       approveRequirement: vi.fn(async () => approvalA.promise),
     };
@@ -212,7 +255,7 @@ describe("ProjectPage", () => {
     });
     const api = {
       owner: "trusted-host",
-      getProject: vi.fn(async () => ({
+      getProject: vi.fn(async () => projectResponse({
         projectId,
         name: "Hunter",
         requirements: [
@@ -245,7 +288,7 @@ describe("ProjectPage", () => {
 
   it("fails closed with an explicit prompt when planning defaults are unavailable", async () => {
     const api = {
-      getProject: vi.fn(async () => ({
+      getProject: vi.fn(async () => projectResponse({
         projectId,
         name: "Hunter",
         requirements: [{ ...draft, status: "approved" as const, approvedAt: "2026-07-23T01:00:00.000Z" }],
@@ -263,7 +306,7 @@ describe("ProjectPage", () => {
   it("exposes an explicit project-scoped Knowledge navigation action", async () => {
     const onOpenKnowledge = vi.fn();
     const api = {
-      getProject: vi.fn(async () => ({
+      getProject: vi.fn(async () => projectResponse({
         projectId,
         name: "Hunter",
         requirements: [],

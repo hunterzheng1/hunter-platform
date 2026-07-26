@@ -81,6 +81,11 @@ describe("desktop narrow IPC", () => {
           projectId: "prj_ipcsecure01",
           name: "Hunter",
           requirements: [],
+          repositoryBindingVersion: 0,
+          repositoryBindings: [{
+            repositoryId: "rep_ipcsecure01",
+            role: "primary",
+          }],
         };
       }
       throw new Error(`unexpected ${channel}`);

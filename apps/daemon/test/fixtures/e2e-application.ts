@@ -584,6 +584,8 @@ export function createE2eDaemonComposition(input: {
           requirements: [...requirementViews.values()].filter(
             (revision) => revision.projectId === project.projectId,
           ),
+          repositoryBindingVersion: 0,
+          repositoryBindings: [...project.repositoryBindings],
           planningDefaults: {
             repositoryIds: [repositoryId],
             workflowRevisionId,
@@ -790,6 +792,7 @@ export function createE2eDaemonComposition(input: {
             {
               changeRevisionId: command.changeRevisionId,
               executionPlanId: command.executionPlanId,
+              rootWorkflowRevisionId,
               tasks: command.tasks,
               expectedVersion: command.expectedVersion,
               idempotencyKey: command.idempotencyKey,

@@ -1,19 +1,5 @@
 import { expect, test } from "./fixtures/readiness-test.js";
 
-test.afterEach(async ({ page }) => {
-  if (page.isClosed()) return;
-  await page
-    .evaluate(async () => {
-      const csrf = localStorage.getItem("hunter-e2e-csrf") ?? "";
-      await fetch("/__e2e_shutdown", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "x-hunter-e2e-csrf": csrf },
-      });
-    })
-    .catch(() => undefined);
-});
-
 test("remote mobile stays fail-closed without desktop pairing or explicit enablement", async ({
   page,
 }) => {

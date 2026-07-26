@@ -20,6 +20,7 @@ record should retain a hash and a safe summary.
 Current records:
 
 - [`phase-1-soak.md`](phase-1-soak.md) — Task 11 fixed-seed smoke/24-hour soak protocol, preserved cycle attempts, bounded resources, and honest NOT_RUN/NOT_PROVEN/PASS rules.
+- [`phase-1-contract-only-candidate.md`](phase-1-contract-only-candidate.md) — Task 12 H4 candidate ledger for Golden-1 through Golden-6, P-02/W-01 E2E, preserved RED/failure history, and remaining NOT_PROVEN/NOT_RUN gates.
 - [`phase-1-performance.md`](phase-1-performance.md) — Task 11 fixed dataset, JSDOM/Fake performance thresholds, complete failure matrix, and original failure history.
 - [`phase-1-windows-install-lifecycle.md`](phase-1-windows-install-lifecycle.md) — Task 10 unsigned NSIS artifact metadata, temporary packaged-app lifecycle, verified migration/backup gate, user-data-preserving uninstall policy, and owned sidecar cleanup evidence.
 - [`phase-1-mobile-offline-safety.md`](phase-1-mobile-offline-safety.md) — Task 9 device revocation/replay regression, timed offline outbox, atomic retention resync, mobile Gate allowlist, and provider-neutral remote surface.
