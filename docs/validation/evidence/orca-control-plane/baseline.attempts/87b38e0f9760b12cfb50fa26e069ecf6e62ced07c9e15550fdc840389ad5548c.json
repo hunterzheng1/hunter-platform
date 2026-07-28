@@ -1,0 +1,310 @@
+{
+  "schemaVersion": 2,
+  "evidenceType": "orca_control_plane_baseline",
+  "generatedAt": "2026-07-28T04:24:35.488Z",
+  "generator": {
+    "name": "hunter-orca-control-plane-baseline",
+    "version": "0.2.0"
+  },
+  "timebox": {
+    "timezone": "Asia/Shanghai",
+    "workingDays": 5,
+    "weekendDays": [
+      "saturday",
+      "sunday"
+    ],
+    "startedAt": "2026-07-28T04:24:35.488Z",
+    "deadlineAt": "2026-08-04T04:24:35.488Z"
+  },
+  "source": {
+    "commit": "1268ee942922112dd464de5180befb91e3f7c419",
+    "digest": "6372b9e9d4ea7705f658ef5ad6a1f6cc273252a14517f0a469b2de490ba5c04f",
+    "clean": true,
+    "digestAlgorithm": "sha256-path-content-v1",
+    "pathspec": [
+      ".github/workflows/ci.yml",
+      "package.json",
+      "package-lock.json",
+      "tsconfig.json",
+      "tsconfig.base.json",
+      "tsconfig.e2e.json",
+      "apps",
+      "contexts",
+      "packages",
+      "scripts",
+      "spikes",
+      "workflow-packs"
+    ]
+  },
+  "host": {
+    "platform": "win32",
+    "architecture": "x64",
+    "release": "10.0.26200"
+  },
+  "selectedAgent": "codex",
+  "tools": [
+    {
+      "id": "node",
+      "availability": "DETECTED",
+      "version": "24.14.0",
+      "authentication": "DETECTED",
+      "authenticationRequired": false
+    },
+    {
+      "id": "git",
+      "availability": "DETECTED",
+      "version": "2.50.1.windows.1",
+      "authentication": "DETECTED",
+      "authenticationRequired": false
+    },
+    {
+      "id": "orca",
+      "availability": "DETECTED",
+      "version": null,
+      "authentication": "NOT_PROVEN",
+      "authenticationRequired": true
+    },
+    {
+      "id": "codex",
+      "availability": "BLOCKED",
+      "version": null,
+      "authentication": "BLOCKED",
+      "authenticationRequired": true
+    }
+  ],
+  "publicInterfaces": [
+    {
+      "operation": "status",
+      "status": "DETECTED",
+      "receiptHash": "90b5362c4d922fef38b45a234aa8fe6ac4008ecd890d767557a24bbedc21caae"
+    },
+    {
+      "operation": "repo_add",
+      "status": "DETECTED",
+      "receiptHash": "58e8536a32df60026a4aec35a985633c9daf372e4b527f0cc5e4bce092b66bbe"
+    },
+    {
+      "operation": "repo_remove",
+      "status": "NOT_PROVEN",
+      "receiptHash": "58e8536a32df60026a4aec35a985633c9daf372e4b527f0cc5e4bce092b66bbe"
+    },
+    {
+      "operation": "worktree_create",
+      "status": "DETECTED",
+      "receiptHash": "ef931b65f20e9ddfe4a259e90512b87513c4378e71a22b400fbd6ecc6efdbf49"
+    },
+    {
+      "operation": "worktree_remove",
+      "status": "DETECTED",
+      "receiptHash": "ef931b65f20e9ddfe4a259e90512b87513c4378e71a22b400fbd6ecc6efdbf49"
+    },
+    {
+      "operation": "workspace_attach_existing",
+      "status": "NOT_PROVEN",
+      "receiptHash": "f464cff94743c8bdafcaa55abf07bf339f76ba534999e486344c408ce5e3780b"
+    },
+    {
+      "operation": "terminal_create",
+      "status": "DETECTED",
+      "receiptHash": "f918c2e67731619e3e8c771fdfbae8060ca70fab42e13158755069e0337f4de5"
+    },
+    {
+      "operation": "terminal_list",
+      "status": "DETECTED",
+      "receiptHash": "f918c2e67731619e3e8c771fdfbae8060ca70fab42e13158755069e0337f4de5"
+    },
+    {
+      "operation": "terminal_send",
+      "status": "DETECTED",
+      "receiptHash": "f918c2e67731619e3e8c771fdfbae8060ca70fab42e13158755069e0337f4de5"
+    },
+    {
+      "operation": "terminal_read",
+      "status": "DETECTED",
+      "receiptHash": "f918c2e67731619e3e8c771fdfbae8060ca70fab42e13158755069e0337f4de5"
+    },
+    {
+      "operation": "terminal_wait",
+      "status": "DETECTED",
+      "receiptHash": "f918c2e67731619e3e8c771fdfbae8060ca70fab42e13158755069e0337f4de5"
+    },
+    {
+      "operation": "terminal_close",
+      "status": "DETECTED",
+      "receiptHash": "f918c2e67731619e3e8c771fdfbae8060ca70fab42e13158755069e0337f4de5"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "discover_runtime",
+      "status": "PASS",
+      "reason": "status_json_reports_running_reachable_runtime",
+      "receiptHash": "28d6a1778cee9a7d1676657e3dea012172a277b8a57808eefa4b8d4b19e3e6dc"
+    },
+    {
+      "id": "fixed_version",
+      "status": "NOT_PROVEN",
+      "reason": "public_cli_did_not_return_a_numeric_version",
+      "receiptHash": null
+    },
+    {
+      "id": "workspace_attach_existing",
+      "status": "NOT_PROVEN",
+      "reason": "mutating_temporary_fixture_not_run",
+      "receiptHash": null
+    },
+    {
+      "id": "resource_cleanup",
+      "status": "NOT_PROVEN",
+      "reason": "cleanup_not_executed_in_task0_inventory",
+      "receiptHash": null
+    },
+    {
+      "id": "security_defaults",
+      "status": "NOT_PROVEN",
+      "reason": "manual_fail_closed_configuration_not_yet_receipted",
+      "receiptHash": null
+    }
+  ],
+  "commandReceipts": [
+    {
+      "operation": "node_version",
+      "executable": "node",
+      "args": [
+        "--version"
+      ],
+      "exitCode": 0,
+      "timedOut": false,
+      "outcome": "success",
+      "timeoutCleanup": "not_applicable",
+      "outputHash": "01c2dd56152b72beb51be79489a5359340feb10db62f0da3f984adbcd319849b"
+    },
+    {
+      "operation": "git_version",
+      "executable": "git",
+      "args": [
+        "--version"
+      ],
+      "exitCode": 0,
+      "timedOut": false,
+      "outcome": "success",
+      "timeoutCleanup": "not_applicable",
+      "outputHash": "44f5f80bde82a67553dcb69113ee3b2aa5c3862e1cfc34cafe4672c5fcf77954"
+    },
+    {
+      "operation": "orca_status",
+      "executable": "orca",
+      "args": [
+        "status",
+        "--json"
+      ],
+      "exitCode": 0,
+      "timedOut": false,
+      "outcome": "success",
+      "timeoutCleanup": "not_applicable",
+      "outputHash": "28d6a1778cee9a7d1676657e3dea012172a277b8a57808eefa4b8d4b19e3e6dc"
+    },
+    {
+      "operation": "orca_repo_help",
+      "executable": "orca",
+      "args": [
+        "repo",
+        "--help"
+      ],
+      "exitCode": 0,
+      "timedOut": false,
+      "outcome": "success",
+      "timeoutCleanup": "not_applicable",
+      "outputHash": "58e8536a32df60026a4aec35a985633c9daf372e4b527f0cc5e4bce092b66bbe"
+    },
+    {
+      "operation": "orca_worktree_help",
+      "executable": "orca",
+      "args": [
+        "worktree",
+        "--help"
+      ],
+      "exitCode": 0,
+      "timedOut": false,
+      "outcome": "success",
+      "timeoutCleanup": "not_applicable",
+      "outputHash": "ef931b65f20e9ddfe4a259e90512b87513c4378e71a22b400fbd6ecc6efdbf49"
+    },
+    {
+      "operation": "orca_worktree_create_help",
+      "executable": "orca",
+      "args": [
+        "worktree",
+        "create",
+        "--help"
+      ],
+      "exitCode": 0,
+      "timedOut": false,
+      "outcome": "success",
+      "timeoutCleanup": "not_applicable",
+      "outputHash": "f464cff94743c8bdafcaa55abf07bf339f76ba534999e486344c408ce5e3780b"
+    },
+    {
+      "operation": "orca_terminal_help",
+      "executable": "orca",
+      "args": [
+        "terminal",
+        "--help"
+      ],
+      "exitCode": 0,
+      "timedOut": false,
+      "outcome": "success",
+      "timeoutCleanup": "not_applicable",
+      "outputHash": "f918c2e67731619e3e8c771fdfbae8060ca70fab42e13158755069e0337f4de5"
+    },
+    {
+      "operation": "codex_version",
+      "executable": "codex",
+      "args": [
+        "--version"
+      ],
+      "exitCode": null,
+      "timedOut": false,
+      "outcome": "spawn_error",
+      "timeoutCleanup": "not_applicable",
+      "outputHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "operation": "codex_login_status",
+      "executable": "codex",
+      "args": [
+        "login",
+        "status"
+      ],
+      "exitCode": null,
+      "timedOut": false,
+      "outcome": "spawn_error",
+      "timeoutCleanup": "not_applicable",
+      "outputHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "runBudget": {
+    "maxAttempts": 2,
+    "maxSessionsPerAttempt": 1,
+    "maxSendsPerAttempt": 4,
+    "maxAttemptDurationMs": 1200000,
+    "maxTotalExecutionMs": 2700000,
+    "additionalPaidBudgetUsd": 0
+  },
+  "historicalEvidence": {
+    "readOnly": true,
+    "references": [
+      "docs/validation/phase-0-decision.md",
+      "docs/validation/gate-r1-runtime-connectors.md",
+      "docs/validation/evidence/gate-r1/runtime-connectors.json"
+    ]
+  },
+  "providerVerdict": "NOT_PROVEN",
+  "proofScope": "local_inventory_only",
+  "mutationAttempted": false,
+  "redaction": {
+    "applied": true,
+    "schemaVersion": 1
+  },
+  "contentFingerprint": "677e3b3af24b4f5e52d273eb1e1e7f0c94344eb5454659391b293371c6310b99"
+}
