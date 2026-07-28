@@ -3,8 +3,8 @@
 ## Canonical terms
 
 `Mobile*` terms below remain compatibility vocabulary for already implemented
-contracts. New mobile/PWA delivery is frozen by ADR-0006 and is not part of the
-active Orca-first gate.
+contracts. New mobile/PWA delivery is frozen by ADR-0007 and is not part of the
+active Herdr replacement gate.
 
 | Term | Canonical meaning |
 |---|---|

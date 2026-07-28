@@ -3,9 +3,11 @@
 ## 架构结论
 
 Hunter Platform 当前采用**本地优先的模块化控制面 + 可替换外部工作台**：
-一个本地服务 `hunterd`、一个窄 Web 控制面，以及一个 Orca Adapter。
-Orca 是首选外部 Workbench/Runtime Host；它和 Hunter Web/CLI 都只能通过
-受认证应用接口访问 Hunter 能力，不能绕过模块直接修改数据库。
+一个本地服务 `hunterd`、一个窄 Web 控制面，以及一个 Herdr Adapter。
+Herdr 0.7.5 是当前唯一 replacement gate 候选；它和 Hunter Web/CLI 都
+只能通过受认证应用接口访问 Hunter 能力，不能绕过模块直接修改数据库。
+standalone Orca 可继续独立使用，但已停止的 Orca Adapter 不在当前架构
+实施范围。
 
 逻辑上分为 Workbench、Flow 和 Runtime 三层，物理上先在一个 Monorepo 和一个本地服务中演进。只有出现明确的独立伸缩、隔离或团队部署需求时才拆服务。
 
@@ -13,13 +15,13 @@ Orca 是首选外部 Workbench/Runtime Host；它和 Hunter Web/CLI 都只能通
 
 ```mermaid
 flowchart TB
-    OrcaUI["Orca<br/>worktree / terminal / diff / browser / agent"]
+    HerdrUI["Herdr<br/>workspace / pane / terminal / agent"]
     Web["Hunter Web control surface<br/>Requirement / Run / Verify / Evidence"]
     CLI["Narrow Hunter CLI / Agent tools"]
     API["Authenticated Application API"]
 
-    OrcaUI -->|"public CLI / Skills / MCP"| Adapter["Orca Adapter"]
-    OrcaUI -->|"opens loopback page"| Web
+    HerdrUI -->|"public CLI / named-pipe API"| Adapter["Herdr Adapter"]
+    Browser["Normal loopback browser"] --> Web
     Web --> API
     CLI --> API
 
@@ -42,9 +44,9 @@ flowchart TB
 
     Runtime --> Port["Runtime capability ports"]
     Port --> Adapter
-    Adapter --> OrcaUI
-    OrcaUI --> Agent["One real native coding Agent"]
-    Port -.-> Future["Future Pi / Herdr / other Adapter"]
+    Adapter --> HerdrUI
+    HerdrUI --> Agent["One real native coding Agent"]
+    Port -.-> Future["Future Pi / Orca / other Adapter"]
 
     Core --> SQLite["SQLite WAL<br/>events, state, indexes"]
     Core --> Files["Versioned files<br/>requirements, workflows, knowledge"]
@@ -77,12 +79,12 @@ flowchart TB
 - `AgentDiscovery`：发现安装、登录和版本状态。
 - `WorkspaceProvider`：准备 Repository、branch、worktree 或只读快照。
 - `ProcessHost`：抽象进程、PTY、输出和生命周期；当前 gate 的目标设计是
-  通过已证明的 Orca 公共接口委托，尚未形成 production implementation。
+  通过已证明的 Herdr 公共接口委托，尚未形成 production implementation。
 - `AgentConnector`：launch、send、resume、interrupt、approve 等结构化动作。
 - `SessionObserver`：接收协议或可证明的会话状态。
 - `NativeSurfaceOpener`：打开终端、Cursor 或其他原生界面。
 - `ArtifactCollector`：收集文件、Diff、测试报告和日志。
-- `CompletionVerifier`：由 Hunter 在 Agent 会话外运行，为 Flow 提供机器验证结果；它不属于 Orca Adapter。
+- `CompletionVerifier`：由 Hunter 在 Agent 会话外运行，为 Flow 提供机器验证结果；它不属于 Herdr Adapter。
 
 每个实现发布 Capability Manifest。Flow 根据步骤要求选择实现，不按产品名猜能力。
 
@@ -104,25 +106,29 @@ flowchart TB
 | L2 Controllable | 官方 CLI、ACP、app-server 或 RPC 的启动、发送、中断、结果 | 可自动执行并接收结构化返回 |
 | L3 Governed | L2 + 权限事件、工具事件、可靠恢复、完成回执 | 可受 Policy/Gate 治理并高可信恢复 |
 
-当前不按 Codex、CodeBuddy 或 Cursor 名称设定目标等级。第一条 Orca-hosted
+当前不按 Codex、CodeBuddy 或 Cursor 名称设定目标等级。第一条 Herdr-hosted
 路径只启用本机原子 probe receipt 已证明的能力；任何能力缺失都显式降级
 或阻断，不得通过解析模糊终端文本伪造 L2/L3。
 
-## Orca 集成策略
+## Herdr replacement 集成策略
 
-Orca 是首选但可替换的外部 Workbench/Runtime Host。当前只实施旁路
-Adapter：
+Herdr 0.7.5 是 Orca Stop 后唯一正在验证的外部 Runtime/terminal Host。
+当前只实施旁路 Adapter：
 
-1. 仅使用公开 CLI、Skills、MCP 或其他明确公开契约，不修改 Orca。
-2. Hunter 先用 Git 创建、校验并租赁精确 worktree；Orca 只能附加该路径。
-3. Hunter Core、数据库、Workflow、Verifier 与知识规则永不存入 Orca
-   私有模型，Adapter 不读写 Orca 私有数据库。
-4. Orca 的 idle、exit、window、terminal、session 状态只生成
+1. 仅使用固定 Herdr binary 的公开 CLI、JSON Schema 和 named-pipe API。
+2. Hunter 先用 Git 创建、校验并租赁精确 worktree；Herdr 只能通过
+   `worktree open --path` 附加该路径。
+3. 正常 cleanup 只能 state-only `workspace close`；禁止让 Herdr
+   `worktree create/remove` Hunter-owned checkout。
+4. Hunter Core、数据库、Workflow、Verifier 与知识规则永不存入 Herdr
+   私有模型，Adapter 不读写 Herdr private session/config。
+5. Herdr 的 idle、done、exit、pane、terminal、session 状态只生成
    `RuntimeObservation`，不能完成 Step。
-5. Hunter-owned run 必须使用 Manual/fail-closed 配置；发现 bypass、yolo、
+6. Hunter-owned run 必须使用 Manual/fail-closed 配置；发现 bypass、yolo、
    auto-approve 等危险参数立即拒绝启动。
-6. 只有 sidecar 通过且公共扩展点无法解决实质 UX 阻断时，才以新 ADR
-   评估薄 Fork；当前未授权任何 Fork。
+7. Windows beta、named-pipe ACL、Agent control、restart/reconcile 和
+   cleanup 均须本机 receipt；文档或 `ping` 不构成 PASS。
+8. 当前未授权 Herdr/Pi/Orca Fork、Pi Adapter 或第二并行 Provider。
 
 ## 数据架构
 
@@ -181,8 +187,8 @@ Token 和密钥存入 Windows Credential Manager 或 Linux Secret Service。数�
 ## 本地与远程访问
 
 - `hunterd` 默认只监听本机。
-- Orca Browser tab、本机浏览器和窄 CLI 使用同一受认证应用 API。
-- `hunterd` 继续默认仅监听 loopback；Orca 不能获得安装级长期 Secret。
+- 普通本机浏览器和窄 CLI 使用同一受认证应用 API。
+- `hunterd` 继续默认仅监听 loopback；Herdr/Agent 不能获得安装级长期 Secret。
 - 自定义移动/PWA、设备配对、中继和远程控制在当前 gate 冻结。
 
 ## 平台策略

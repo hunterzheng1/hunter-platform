@@ -47,9 +47,10 @@ Owner 表示负责关闭证据的人，不意味着单人承担全部实施。
 | R-27 | 上游 Agent 条款或账号授权限制自动化使用 | 3 | 5 | 15 | 自动化违反服务条款、登录无法非交互恢复 | 仅用官方接口；法律/条款核验；用户授权 Gate；提供替代 Connector | Product+Legal / P0 |
 | R-28 | Artifact/Knowledge 中含第三方或敏感源码，远程预览越权 | 3 | 5 | 15 | 手机看到未授权文件、通知泄露内容 | 内容分级、设备 Scope、服务端授权、通知最小化、导出审计 | Security / P1 |
 | R-29 | 在真实用户价值前继续扩大 Foundation/UI，投入无法转化为日常使用 | 5 | 5 | 25 | 测试与模块增加但真实 Agent slice 仍未贯通 | 五工作日唯一真实 value gate；冻结重复 UI/Runtime；失败即 Stop | Product / current |
-| R-30 | Orca/Agent 默认危险权限被误当成 Hunter 授权 | 4 | 5 | 20 | argv/profile 出现 bypass、yolo、auto-approve；把 worktree 当 sandbox | Manual/fail-closed；启动前结构化拒绝；worktree 与 OS sandbox 明确分离 | Security / current |
-| R-31 | Orca 与 Hunter 双重 UI/状态让用户误解谁有成功权威 | 4 | 4 | 16 | Orca idle 显示 done、Hunter 未验证；两边可改 canonical state | Hunter-only VerificationReceipt/HumanReceipt；外部状态只作 observation；窄控制页 | Product+Flow / current |
-| R-32 | Orca 快速上游变化或 Fork 同步成本吞噬 Hunter | 4 | 4 | 16 | 私有 DB 依赖、GUI 自动化、频繁破坏性变化 | public sidecar only；固定版本 receipts；当前禁止 Fork；Stop/Pi-Herdr 决策门 | Architecture / current |
+| R-30 | Host/Agent 默认危险权限被误当成 Hunter 授权 | 4 | 5 | 20 | argv/profile 出现 bypass、yolo、auto-approve；把 worktree 当 sandbox | Manual/fail-closed；启动前结构化拒绝；worktree 与 OS sandbox 明确分离 | Security / current |
+| R-31 | External Host 与 Hunter 双重状态让用户误解谁有成功权威 | 4 | 4 | 16 | Host idle/done、Hunter 未验证；两边似乎都能完成 Step | Hunter-only VerificationReceipt/HumanReceipt；外部状态只作 observation；窄控制页 | Product+Flow / current |
+| R-32 | 快速上游变化或 Fork 同步成本吞噬 Hunter | 4 | 4 | 16 | private state 依赖、terminal/GUI scraping、频繁破坏性变化 | public Adapter only；固定版本 receipts；当前禁止 Fork；单候选 Stop 门 | Architecture / current |
+| R-33 | Herdr Windows beta 或 named-pipe/session 隔离不足 | 4 | 5 | 20 | ConPTY 不稳定、unrelated session 可见/受影响、state-only close 不完整 | 固定 0.7.5；isolated named session；exact ID receipts；本机 Task 0/1 硬门 | Runtime+Security / current |
 
 ## 3. Phase 0 红色风险关闭标准
 
@@ -81,6 +82,15 @@ ADR-0006 将 Orca 选为下一条首选、有界 sidecar/Adapter 路线，并不
 风险是 R-29–R-32；只有五日真实 slice 的固定版本、脱敏原子收据可以改变
 它们的状态。发现 private DB、GUI automation、危险权限或无法精确
 attach/cleanup 时立即 Stop。
+
+#### 2026-07-28 post-Orca-Stop disposition
+
+Orca Task 1 已因 exact existing-worktree attach 与 non-destructive
+deregister 缺失而 `BLOCKED`，R-29–R-32 没有关闭。ADR-0007 保留该失败，
+选择 Herdr 0.7.5 进行剩余时间盒 replacement gate。新增重点风险是 Windows
+preview 稳定性、named-pipe same-user 边界、state-only workspace cleanup、
+Agent argv 权限和 isolated named-session recovery，并登记为 R-33；官方文档、安装或
+`ping` 均不能降低风险。
 
 ### R-03：完成语义不统一
 
@@ -169,10 +179,11 @@ Rollback Trigger:
 
 - 所有红色风险已降级、关闭或通过 ADR 明确接受。
 - 没有“完成状态不可信”“重复外部副作用”“Secret 泄露”类未关闭问题。
-- Orca-hosted 单链路有固定版本实机收据且保留替换路径；仅安装/status
+- Herdr-hosted 单链路有固定版本实机收据且保留替换路径；仅安装/ping
   或上游文档不算通过。
 - 产品文案只声明 receipt 实际证明的 Agent/Adapter 能力。
-- Windows 五日黄金路径、故意失败/恢复、Hunter+Orca 重启与完整 cleanup
+- Windows 剩余时间盒黄金路径、故意失败/恢复、Hunter+isolated Herdr
+  重启与完整 cleanup
   通过。
 - Linux CI 未被平台代码破坏。
 - Archive/Knowledge 的来源、有效性与冲突策略通过测试。

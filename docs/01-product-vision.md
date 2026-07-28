@@ -22,7 +22,10 @@ Hunter 的目标不是抹平各工具差异，而是让差异显式、让流程�
 
 ## 最终产品形态
 
-用户以 Orca 作为日常工作台，在 Orca Browser tab 或普通本机浏览器中打开一个窄而深的 Hunter 控制页。`hunterd` 在本机持有 canonical state；Orca 承载 worktree、终端、Diff、Browser 和原生 Agent 会话。Hunter 不复制 Orca 已有的开发界面。
+用户可以继续把 standalone Orca 作为成熟的日常桌面工作台；Hunter 当前
+真实价值门则在普通本机浏览器打开一个窄而深的控制页，并以 Herdr 作为
+可替换的候选 Runtime/terminal Host。`hunterd` 持有 canonical state；
+Hunter 不复制 Orca 或 Herdr 已有的开发界面。
 
 用户在 Hunter 中创建多个逻辑 Project。每个 Project 可以绑定一个或多个 Git Repository，并同时维护多个 Requirement。
 
@@ -32,12 +35,12 @@ Hunter 的目标不是抹平各工具差异，而是让差异显式、让流程�
 2. 将一个或多个 RequirementRevision 切成可交付的 ChangeRevision。
 3. 规划阶段生成带依赖的 TaskGraph；可串行，也可有限并行。
 4. 为 Change 选择已发布的 WorkflowRevision，并设置每一步的 AgentProfile、SessionPolicy、WorkspacePolicy、Verifier 和预算。
-5. Hunter 启动 WorkflowRun，通过 Orca Adapter 把冻结 Handoff 交给一个 Orca 承载的真实 Agent。
+5. Hunter 启动 WorkflowRun，通过 Herdr Adapter 把冻结 Handoff 交给一个 Herdr 承载的真实 Agent。
 6. Run 页面以线路图展示当前 Task、Step、Attempt、会话、工作区、日志、产物和验证结果。
 7. 测试或评审失败时，在显式 LoopPolicy 内创建新的 Attempt；不覆盖历史。
-8. 需要深度操作时，回到 Orca 中已定位的终端、Diff、Browser 或 Agent 会话。
+8. 需要深度操作时，打开已定位的 Herdr terminal/Agent 会话，或使用 standalone Orca/Codex 等原生界面检查 Git 与 Diff。
 9. Run 完成、失败或取消后均可归档；归档自动进入分级知识体系。
-10. 自定义 Hunter 移动端在当前阶段冻结；若使用 Orca Companion，它只承载外部工作面，不能绕过 Hunter 的验证与策略。
+10. 自定义 Hunter 移动端在当前阶段冻结；任何 Orca/Herdr 外部入口都不能绕过 Hunter 的验证与策略。
 
 ## 四层业务语义
 
@@ -63,8 +66,8 @@ Requirement -> Change -> Task -> Workflow Step
 - Workflow Template、项目覆盖与版本升级
 - Run/Task/Step 执行线路
 - Artifact、Evidence、Archive 和 Knowledge
-- 从 Run/Attempt 精确定位 Orca 工作区、终端与 Agent 会话
-- 在 Orca Browser tab 或本机浏览器运行的最小 Web 控制面
+- 从 Run/Attempt 精确定位 Herdr workspace、terminal 与 Agent 会话
+- 在普通本机浏览器运行的最小 Web 控制面
 
 当前控制面只优先实现 Requirement、Change、Attention、Run/Attempt、
 Verification、Evidence 和 Policy。完整 Hunter Desktop、移动 PWA、
@@ -85,21 +88,22 @@ Verification、Evidence 和 Policy。完整 Hunter Desktop、移动 PWA、
 
 本机 canonical state 与适配层，包括：
 
-- Agent/Orca 原子能力探测、ExternalOperation、Receipt 与对账
+- Agent/External Host 原子能力探测、ExternalOperation、Receipt 与对账
 - Workspace、Writer 与 Controller Lease
 - 独立 Verifier、Artifact、日志和协议事件采集
-- Orca 公共接口 Adapter
+- Herdr 公共 CLI/socket Adapter
 - Windows 与 Linux 平台边界
 
-Orca 是首选但可替换的外部 Workbench/Runtime Host。PTY、进程树、原生
-窗口、Diff、Browser 和 Agent 会话由 Orca 负责；Hunter 不读取 Orca
-私有数据库，也不把 Orca 事件当作业务成功。Pi、Herdr 或其他 Runtime
-以后只能在相同公共契约下以新证据接入。
+Herdr 0.7.5 是 Orca Stop 后唯一正在验证的候选 Runtime/terminal Host。
+PTY、pane、进程树和 Agent 会话由 Herdr 负责；Hunter 不读取 Herdr 私有
+状态，也不把 Host 事件当作业务成功。standalone Orca 可继续承担成熟
+桌面体验，但已停止的 Orca Adapter 不在本 gate 扩展。Pi 或其他 Runtime
+只能在新决策和相同公共契约下以新证据接入。
 
 ## 核心原则
 
 1. **本地执行为事实源**：仓库、凭据、工作区和完整产物默认留在开发机。
-2. **Hunter 持有产品状态**：外部 Agent、Orca 或终端消失时，需求、工作流和历史仍可恢复。
+2. **Hunter 持有产品状态**：外部 Agent、Host 或终端消失时，需求、工作流和历史仍可恢复。
 3. **原生优先**：保留各家工具的界面和独特能力；Hunter 提供统一驾驶舱，而非复制所有体验。
 4. **分级兼容**：协议完整的 Agent 自动执行；GUI 工具可以先采用打开、观察和人工确认。
 5. **验证优先于自述**：Agent 返回不等于 Step 成功，必须通过 Verifier 或人工确认。
@@ -111,11 +115,11 @@ Orca 是首选但可替换的外部 Workbench/Runtime Host。PTY、进程树、�
 
 ## 第一条真实执行路径
 
-当前只验证一个 Orca 承载的真实 Agent，不同时建设 Codex、CodeBuddy 和
+当前只验证一个 Herdr 承载的真实 Agent，不同时建设 Codex、CodeBuddy 和
 Cursor 的深度 Direct Connector。具体 Agent 产品由本机可用性和用户选择
 决定，其 Capability 等级只能由原子 probe receipt 计算，不能因产品名称
-推定。第二个 Agent、Pi/Herdr Adapter 与其他 Provider 必须在第一条路径
-证明价值后另行立项。
+推定。Pi、恢复 Orca Adapter 或其他 Provider 必须在本 gate 结束后另行
+决策，不能并行铺开。
 
 ## 知识愿景
 
@@ -133,7 +137,8 @@ RequirementRevision 自身就是正式知识来源，而不是复制进一个失
 
 - Windows 为首发和硬验收平台。
 - Linux 从接口、路径、进程与打包设计第一天支持，并在后续阶段正式验收。
-- Orca 承担桌面、Diff、终端、Browser 和深度操作。
+- 当前 gate 由 Herdr 承担 workspace、terminal 与 Agent Host；standalone
+  Orca、编辑器和 Diff 工具仍可独立日用，但不拥有 Hunter canonical state。
 - Hunter 的窄 Web 控制页承担治理、验证和证据；自定义移动/PWA 后置。
 - 团队组织、成员权限、计费和多人同时编辑不属于首版。
 
@@ -156,13 +161,13 @@ RequirementRevision 自身就是正式知识来源，而不是复制进一个失
 五个工作日的首个真实纵向版本至少应证明：
 
 - 一个已批准 Requirement/Change 能启动真实非玩具 Run。
-- Hunter 创建并校验精确的隔离 worktree；Orca 只附加该路径。
-- 一个 Orca 承载的 Agent 能在无 bypass/yolo/auto-approve 参数下修改代码。
+- Hunter 创建并校验精确的隔离 worktree；Herdr 只附加该路径。
+- 一个 Herdr 承载的 Agent 能在无 bypass/yolo/auto-approve 参数下修改代码。
 - Agent return、terminal idle 和 process exit 不会绕过独立 Verifier。
 - 故意失败的 Attempt 1 被保留，恢复后的 Attempt 2 才能通过。
-- Hunter 与 Orca 各重启一次后不重复发送或产生重复副作用。
+- Hunter 与本次隔离 Herdr session 各重启一次后不重复发送或产生重复副作用。
 - 全部 Receipt/Evidence 脱敏、可复现，并能在十分钟内被普通用户理解。
-- Orca 私有状态消失或替换 Provider 时，Hunter canonical history 仍成立。
+- Herdr 私有状态消失或替换 Provider 时，Hunter canonical history 仍成立。
 
 未在时间盒内全部证明，或用户认为相对直接使用 Orca 没有明显价值，
 即停止扩建 Hunter，而不是继续增加 UI、Provider 或抽象。

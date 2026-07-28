@@ -8,6 +8,8 @@ Phase 0 local verification reports.
 
 - `2026-07-28-hunter-build-vs-pi-orca-herdr.md` — current Build/Buy/Base-on
   assessment and the evidence behind the Orca-first control-plane pivot.
+- `2026-07-28-pi-herdr-public-adapter-gate.md` — post-Orca-Stop primary-source
+  comparison and the bounded Herdr Task 0/1 recommendation.
 
 ## Supporting investigations
 
