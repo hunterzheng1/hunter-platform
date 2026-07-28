@@ -2,6 +2,10 @@ import { existsSync } from "node:fs";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import {
+  NodeCommandRunner,
+  withTemporaryGitFixture,
+} from "@hunter/spike-testkit";
 import { describe, expect, it } from "vitest";
 import {
   HerdrPublicAdapterGateSchema,
@@ -241,5 +245,56 @@ describe("Herdr public Adapter real gate evidence", () => {
     } finally {
       await rm(temporaryRoot, { recursive: true, force: true });
     }
+  });
+
+  it("can create and clean the exact nested Hunter worktree shape used by the gate", async () => {
+    await withTemporaryGitFixture(async (fixture) => {
+      const worktreePath = join(
+        fixture.path,
+        ".hunter-task1-worktrees",
+        "attach",
+      );
+      const runner = new NodeCommandRunner();
+      const created = await runner.run({
+        executable: "git",
+        args: [
+          "worktree",
+          "add",
+          "-b",
+          "codex/herdr-task1-fixture",
+          worktreePath,
+          fixture.baselineCommit,
+        ],
+        cwd: fixture.path,
+        timeoutMs: 15_000,
+      });
+      if (created.exitCode !== 0) {
+        throw new Error(
+          `TASK1_FIXTURE_WORKTREE_CREATE_FAILED:${created.stderr.trim()}`,
+        );
+      }
+      const removed = await runner.run({
+        executable: "git",
+        args: ["worktree", "remove", worktreePath],
+        cwd: fixture.path,
+        timeoutMs: 15_000,
+      });
+      if (removed.exitCode !== 0) {
+        throw new Error(
+          `TASK1_FIXTURE_WORKTREE_REMOVE_FAILED:${removed.stderr.trim()}`,
+        );
+      }
+      const branchRemoved = await runner.run({
+        executable: "git",
+        args: ["branch", "--delete", "codex/herdr-task1-fixture"],
+        cwd: fixture.path,
+        timeoutMs: 15_000,
+      });
+      if (branchRemoved.exitCode !== 0) {
+        throw new Error(
+          `TASK1_FIXTURE_BRANCH_REMOVE_FAILED:${branchRemoved.stderr.trim()}`,
+        );
+      }
+    });
   });
 });

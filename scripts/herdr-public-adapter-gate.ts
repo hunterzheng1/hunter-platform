@@ -691,7 +691,7 @@ async function exerciseGate(options: {
         await runGit(fixture, fixture.path, [
           "worktree",
           "add",
-          "--branch",
+          "-b",
           branchName,
           requestedWorktreePath,
           fixture.baselineCommit,
