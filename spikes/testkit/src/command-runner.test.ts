@@ -77,6 +77,22 @@ describe("node command runner", () => {
     });
   });
 
+  it("allows an explicitly bounded larger capture for public schema inventory", async () => {
+    const runner = new NodeCommandRunner();
+    const expectedBytes = 96 * 1024;
+
+    const result = await runner.run({
+      executable: process.execPath,
+      args: ["-e", `process.stdout.write("x".repeat(${expectedBytes}))`],
+      cwd: process.cwd(),
+      timeoutMs: 1_000,
+      maxCaptureBytes: 128 * 1024,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(Buffer.byteLength(result.stdout)).toBe(expectedBytes);
+  });
+
   it("bounds timeout cleanup and terminates the spawned process tree", async () => {
     const runner = new NodeCommandRunner();
     let rootPid: number | undefined;

@@ -939,6 +939,7 @@ export async function collectHerdrControlPlaneBaseline(
     args: readonly string[],
     timeoutMs = 10_000,
     environment?: Readonly<Record<string, string>>,
+    maxCaptureBytes?: number,
   ): Promise<CommandResult> =>
     await options.runner.run({
       executable,
@@ -946,6 +947,7 @@ export async function collectHerdrControlPlaneBaseline(
       cwd: options.cwd,
       timeoutMs,
       ...(environment === undefined ? {} : { environment }),
+      ...(maxCaptureBytes === undefined ? {} : { maxCaptureBytes }),
     });
 
   const nodeVersion = await run("node", ["--version"]);
@@ -953,18 +955,21 @@ export async function collectHerdrControlPlaneBaseline(
   const runHerdr = async (
     args: readonly string[],
     timeoutMs = 10_000,
+    maxCaptureBytes?: number,
   ): Promise<CommandResult> =>
     await run(
       options.herdrExecutable,
       args,
       timeoutMs,
       options.herdrEnvironment,
+      maxCaptureBytes,
     );
   const herdrVersion = await runHerdr(["--version"]);
   const herdrHelp = await runHerdr(["--help"]);
   const herdrApiSchema = await runHerdr(
     ["api", "schema", "--json"],
     20_000,
+    512 * 1024,
   );
   const herdrWorktreeHelp = await runHerdr(["worktree", "--help"]);
   const herdrWorkspaceHelp = await runHerdr(["workspace", "--help"]);

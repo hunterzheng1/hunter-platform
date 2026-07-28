@@ -5,6 +5,7 @@ import {
 } from "node:child_process";
 
 const MAX_CAPTURE_BYTES = 64 * 1024;
+const MAX_EXPLICIT_CAPTURE_BYTES = 1024 * 1024;
 const TERMINATION_DEADLINE_MS = 2_500;
 
 export type TimeoutCleanup =
@@ -17,6 +18,7 @@ export interface CommandRequest {
   readonly args: readonly string[];
   readonly cwd: string;
   readonly timeoutMs: number;
+  readonly maxCaptureBytes?: number;
   readonly environment?: Readonly<Record<string, string>>;
   readonly stdin?: string;
 }
@@ -48,11 +50,15 @@ export type SpawnCommand = (
 const spawnCommand: SpawnCommand = (executable, args, options) =>
   spawn(executable, [...args], options);
 
-function appendBounded(current: string, chunk: Buffer): string {
-  if (Buffer.byteLength(current) >= MAX_CAPTURE_BYTES) {
+function appendBounded(
+  current: string,
+  chunk: Buffer,
+  maxCaptureBytes: number,
+): string {
+  if (Buffer.byteLength(current) >= maxCaptureBytes) {
     return current;
   }
-  const remaining = MAX_CAPTURE_BYTES - Buffer.byteLength(current);
+  const remaining = maxCaptureBytes - Buffer.byteLength(current);
   return current + chunk.subarray(0, remaining).toString("utf8");
 }
 
@@ -144,6 +150,14 @@ export class NodeCommandRunner implements CommandRunner {
   }
 
   async run(request: CommandRequest): Promise<CommandResult> {
+    const maxCaptureBytes = request.maxCaptureBytes ?? MAX_CAPTURE_BYTES;
+    if (
+      !Number.isSafeInteger(maxCaptureBytes)
+      || maxCaptureBytes < 1
+      || maxCaptureBytes > MAX_EXPLICIT_CAPTURE_BYTES
+    ) {
+      throw new Error("COMMAND_CAPTURE_LIMIT_INVALID");
+    }
     const startedAt = new Date().toISOString();
 
     return await new Promise((resolve) => {
@@ -208,10 +222,10 @@ export class NodeCommandRunner implements CommandRunner {
       }, request.timeoutMs);
 
       child.stdout.on("data", (chunk: Buffer) => {
-        stdout = appendBounded(stdout, chunk);
+        stdout = appendBounded(stdout, chunk, maxCaptureBytes);
       });
       child.stderr.on("data", (chunk: Buffer) => {
-        stderr = appendBounded(stderr, chunk);
+        stderr = appendBounded(stderr, chunk, maxCaptureBytes);
       });
       child.once("error", (error: NodeJS.ErrnoException) => {
         spawnError = error.code ?? error.name;
