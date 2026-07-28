@@ -6,7 +6,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import type {
   CommandRequest,
@@ -431,7 +431,7 @@ describe("Orca control-plane baseline evidence", () => {
       });
 
       await writeFile(
-        `${fixture.path}\\README.md`,
+        join(fixture.path, "README.md"),
         "# Hunter changed fixture\n",
         "utf8",
       );
@@ -445,22 +445,33 @@ describe("Orca control-plane baseline evidence", () => {
   });
 
   it("confines evidence output to the versioned Orca control-plane directory", () => {
+    const repositoryRoot = join(tmpdir(), "hunter-orca-output-root");
     expect(
       resolveBaselineOutputPath(
-        "C:\\repo",
+        repositoryRoot,
         "docs/validation/evidence/orca-control-plane/baseline.json",
       ),
     ).toBe(
-      "C:\\repo\\docs\\validation\\evidence\\orca-control-plane\\baseline.json",
+      join(
+        repositoryRoot,
+        "docs",
+        "validation",
+        "evidence",
+        "orca-control-plane",
+        "baseline.json",
+      ),
     );
     expect(() =>
       resolveBaselineOutputPath(
-        "C:\\repo",
+        repositoryRoot,
         "docs/validation/evidence/orca/baseline.json",
       ),
     ).toThrow("BASELINE_EVIDENCE_OUTPUT_OUTSIDE_ALLOWED_ROOT");
     expect(() =>
-      resolveBaselineOutputPath("C:\\repo", "C:\\tmp\\baseline.json"),
+      resolveBaselineOutputPath(
+        repositoryRoot,
+        resolve(tmpdir(), "baseline-outside.json"),
+      ),
     ).toThrow("BASELINE_EVIDENCE_OUTPUT_OUTSIDE_ALLOWED_ROOT");
   });
 
