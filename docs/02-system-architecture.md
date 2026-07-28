@@ -2,7 +2,10 @@
 
 ## 架构结论
 
-Hunter Platform 首版采用**本地优先的模块化单体**：一个产品安装包、一个本地服务 `hunterd`、一个共享 Web UI。桌面端、移动 Web/PWA 和 CLI 只能通过应用模块接口访问业务能力，不能绕过模块直接修改数据库。
+Hunter Platform 当前采用**本地优先的模块化控制面 + 可替换外部工作台**：
+一个本地服务 `hunterd`、一个窄 Web 控制面，以及一个 Orca Adapter。
+Orca 是首选外部 Workbench/Runtime Host；它和 Hunter Web/CLI 都只能通过
+受认证应用接口访问 Hunter 能力，不能绕过模块直接修改数据库。
 
 逻辑上分为 Workbench、Flow 和 Runtime 三层，物理上先在一个 Monorepo 和一个本地服务中演进。只有出现明确的独立伸缩、隔离或团队部署需求时才拆服务。
 
@@ -10,47 +13,43 @@ Hunter Platform 首版采用**本地优先的模块化单体**：一个产品安
 
 ```mermaid
 flowchart TB
-    Desktop["Hunter Desktop<br/>Windows first / Linux compatible"]
-    Mobile["Mobile or another computer<br/>Responsive Web/PWA"]
-    CLI["Hunter CLI"]
+    OrcaUI["Orca<br/>worktree / terminal / diff / browser / agent"]
+    Web["Hunter Web control surface<br/>Requirement / Run / Verify / Evidence"]
+    CLI["Narrow Hunter CLI / Agent tools"]
     API["Authenticated Application API"]
 
-    Desktop --> API
-    Mobile -->|"LAN, VPN, or optional relay"| API
+    OrcaUI -->|"public CLI / Skills / MCP"| Adapter["Orca Adapter"]
+    OrcaUI -->|"opens loopback page"| Web
+    Web --> API
     CLI --> API
 
     subgraph Core["hunterd - Hunter canonical state"]
         WB["Workbench<br/>Projects and Requirements"]
         Flow["Flow Engine<br/>Tasks, Runs, Steps, Loops"]
-        Runtime["Runtime Manager<br/>Providers and Connectors"]
+        Runtime["Runtime Manager<br/>operations, leases, observations"]
         Knowledge["Knowledge Catalog<br/>Archive and Resolution"]
         Policy["Policy Engine<br/>Permissions, Gates, Budgets"]
-        Gateway["Device Gateway<br/>Pairing and remote control"]
+        Verifier["Independent Verifier<br/>receipts and output contracts"]
     end
 
     API --> WB
     API --> Flow
     API --> Knowledge
-    API --> Gateway
     Flow --> Policy
     Flow --> Runtime
     Flow --> Knowledge
+    Flow --> Verifier
 
     Runtime --> Port["Runtime capability ports"]
-    Port --> Orca["Orca Provider<br/>replaceable"]
-    Port -.-> AO["Agent Orchestrator Provider"]
-    Port -.-> Direct["Direct Connectors"]
-
-    Orca --> Codex["Codex"]
-    Orca --> CodeBuddy["CodeBuddy Code"]
-    Orca --> Cursor["Cursor"]
-    Direct --> Codex
-    Direct --> CodeBuddy
+    Port --> Adapter
+    Adapter --> OrcaUI
+    OrcaUI --> Agent["One real native coding Agent"]
+    Port -.-> Future["Future Pi / Herdr / other Adapter"]
 
     Core --> SQLite["SQLite WAL<br/>events, state, indexes"]
     Core --> Files["Versioned files<br/>requirements, workflows, knowledge"]
     Core --> CAS["Content-addressed store<br/>logs and large artifacts"]
-    Runtime --> Git["Git repositories and worktrees"]
+    Runtime --> Git["Git repositories<br/>Hunter-created worktrees and leases"]
     Policy --> Secrets["OS credential store"]
 ```
 
@@ -61,11 +60,13 @@ flowchart TB
 | `ProjectCatalog` | 创建 Project、绑定 Repository/Device、查询项目投影 | 多仓库身份、设备路径映射 |
 | `Requirements` | 起草、审核、批准、修订 Requirement 与 Change | 不可变 Revision、覆盖关系、状态转换 |
 | `FlowEngine` | 发布 Workflow、规划 Task、启动/控制/查询 Run | DAG 调度、Loop、幂等、重试、恢复 |
-| `RuntimeManager` | 选择能力、分配 Workspace/Session、发出控制命令 | Orca、PTY、原生进程、能力降级 |
+| `RuntimeManager` | 选择已证明能力、分配 Lease、记录操作/观察并对账 | 外部 Provider 引用、幂等、能力降级 |
 | `ArtifactRepository` | 注册、寻址和读取 Artifact/Evidence | 文件哈希、去重、来源与生命周期 |
 | `KnowledgeCatalog` | 归档入库、知识提升、冲突与上下文解析 | 等级、替代关系、范围、置信度 |
 | `PolicyEngine` | 返回 allow、deny 或 require-approval | 项目规则、工具权限、风险、预算 |
-| `DeviceGateway` | 配对、认证、授权、撤销和远程命令 | 密钥、令牌、连接与离线状态 |
+| `Verifier` | 在 Agent 会话外运行冻结验证定义并签发收据 | 输出契约、哈希绑定、重跑与人工 Gate |
+
+`DeviceGateway`、Hunter Desktop 与自定义移动端保留为冻结兼容模块，不是当前价值门的交付依赖。
 
 模块之间使用命令、查询、稳定 ID 和领域事件。数据库事务可以在单体内部保证一致性，但调用方不能依赖另一个模块的表结构。
 
@@ -75,12 +76,13 @@ flowchart TB
 
 - `AgentDiscovery`：发现安装、登录和版本状态。
 - `WorkspaceProvider`：准备 Repository、branch、worktree 或只读快照。
-- `ProcessHost`：管理进程、PTY、输出和生命周期。
+- `ProcessHost`：抽象进程、PTY、输出和生命周期；当前 gate 的目标设计是
+  通过已证明的 Orca 公共接口委托，尚未形成 production implementation。
 - `AgentConnector`：launch、send、resume、interrupt、approve 等结构化动作。
 - `SessionObserver`：接收协议或可证明的会话状态。
 - `NativeSurfaceOpener`：打开终端、Cursor 或其他原生界面。
 - `ArtifactCollector`：收集文件、Diff、测试报告和日志。
-- `CompletionVerifier`：为 Flow 提供机器验证结果，但不直接推进状态机。
+- `CompletionVerifier`：由 Hunter 在 Agent 会话外运行，为 Flow 提供机器验证结果；它不属于 Orca Adapter。
 
 每个实现发布 Capability Manifest。Flow 根据步骤要求选择实现，不按产品名猜能力。
 
@@ -102,19 +104,25 @@ flowchart TB
 | L2 Controllable | 官方 CLI、ACP、app-server 或 RPC 的启动、发送、中断、结果 | 可自动执行并接收结构化返回 |
 | L3 Governed | L2 + 权限事件、工具事件、可靠恢复、完成回执 | 可受 Policy/Gate 治理并高可信恢复 |
 
-首批目标：Codex L2/L3，CodeBuddy Code L2/L3，Cursor L0/L1。任何能力缺失都必须显式降级；不得通过解析模糊终端文本伪造 L2/L3。
+当前不按 Codex、CodeBuddy 或 Cursor 名称设定目标等级。第一条 Orca-hosted
+路径只启用本机原子 probe receipt 已证明的能力；任何能力缺失都显式降级
+或阻断，不得通过解析模糊终端文本伪造 L2/L3。
 
 ## Orca 集成策略
 
-Orca 只作为 Phase 0 首个有时限、可逆的候选，用来验证终端、worktree、Git、Agent 进程与移动控制基础；Phase 0 通过前不把它视为已采用产品依赖：
+Orca 是首选但可替换的外部 Workbench/Runtime Host。当前只实施旁路
+Adapter：
 
-1. 先通过公开 JSON CLI/API 实现独立 Provider，不修改 Orca。
-2. 在 Windows 实测 ConPTY、会话、worktree、重启、权限和移动端边界。
-3. 只有统一客户端体验确有必要时，才评估增加 Hunter 页面和启动逻辑的薄 Fork。
-4. Hunter Core、数据库、Workflow 与知识规则永不存入 Orca 私有模型。
-5. Orca 不满足契约时，可替换为 Agent Orchestrator、Direct Connector 或 Hunter 实现。
-
-Orca 或任何 Agent 的跳过权限参数不得成为 Hunter 默认值。
+1. 仅使用公开 CLI、Skills、MCP 或其他明确公开契约，不修改 Orca。
+2. Hunter 先用 Git 创建、校验并租赁精确 worktree；Orca 只能附加该路径。
+3. Hunter Core、数据库、Workflow、Verifier 与知识规则永不存入 Orca
+   私有模型，Adapter 不读写 Orca 私有数据库。
+4. Orca 的 idle、exit、window、terminal、session 状态只生成
+   `RuntimeObservation`，不能完成 Step。
+5. Hunter-owned run 必须使用 Manual/fail-closed 配置；发现 bypass、yolo、
+   auto-approve 等危险参数立即拒绝启动。
+6. 只有 sidecar 通过且公共扩展点无法解决实质 UX 阻断时，才以新 ADR
+   评估薄 Fork；当前未授权任何 Fork。
 
 ## 数据架构
 
@@ -173,12 +181,9 @@ Token 和密钥存入 Windows Credential Manager 或 Linux Secret Service。数�
 ## 本地与远程访问
 
 - `hunterd` 默认只监听本机。
-- Desktop 使用本地认证通道访问；CLI 使用同一应用 API。
-- 移动设备通过一次性配对建立独立设备密钥。
-- 局域网或 Tailscale/WireGuard 可直连；加密中继是后续可选组件。
-- 远程设备按能力授权，可单独撤销。
-- 主机离线时只展示已同步摘要，不伪装实时控制。
-- 手机默认不能执行高危命令、修改安全策略或读取未授权源码。
+- Orca Browser tab、本机浏览器和窄 CLI 使用同一受认证应用 API。
+- `hunterd` 继续默认仅监听 loopback；Orca 不能获得安装级长期 Secret。
+- 自定义移动/PWA、设备配对、中继和远程控制在当前 gate 冻结。
 
 ## 平台策略
 
@@ -191,19 +196,19 @@ Token 和密钥存入 Windows Credential Manager 或 Linux Secret Service。数�
 ```text
 hunter-platform/
 ├─ apps/
-│  ├─ desktop/
-│  ├─ web/
-│  └─ daemon/
+│  ├─ web/                     # narrow control surface
+│  ├─ daemon/                  # canonical local control plane
+│  └─ desktop/                 # frozen compatibility/recovery asset
 ├─ packages/
 │  ├─ domain/
 │  ├─ flow-engine/
 │  ├─ knowledge/
 │  ├─ storage/
 │  ├─ runtime-contracts/
-│  ├─ provider-orca/
-│  ├─ connector-codex/
-│  ├─ connector-codebuddy/
-│  ├─ connector-cursor/
+│  ├─ provider-orca/           # active bounded Adapter
+│  ├─ connector-codex/         # frozen direct path
+│  ├─ connector-codebuddy/     # frozen
+│  ├─ connector-cursor/        # frozen
 │  ├─ policy/
 │  └─ testkit/
 ├─ workflow-packs/

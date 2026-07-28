@@ -2,6 +2,8 @@
 
 - Status: Accepted
 - Date: 2026-07-21
+- Delivery note: ADR-0006 keeps capability-derived connector levels but freezes
+  multiple deep direct Connectors during the Orca-first value gate.
 
 ## Context
 

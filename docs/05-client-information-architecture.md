@@ -1,8 +1,8 @@
 # 05. 客户端信息架构与交互体验
 
-> 状态：Approved Design Draft
-> 适用范围：Hunter Platform Desktop、共享 Web UI、移动 PWA
-> 核心判断：Hunter 是项目与工作流驾驶舱，不是另一个聊天窗口，也不替代原生 Agent 的专业界面。
+> 状态：Approved Design，2026-07-28 delivery scope revised
+> 当前范围：Orca 中打开的 Hunter 窄 Web 控制面；Desktop、移动 PWA 与重复原生界面冻结
+> 核心判断：Orca 是日常工作台；Hunter 只提供项目治理、验证和证据控制面。
 
 ## 1. 体验目标
 
@@ -14,7 +14,14 @@ Hunter 的客户端必须让用户在不理解 Runtime、Connector、Session 等
 4. 哪个 Agent、哪个会话、哪个工作区产生了什么结果？
 5. 我现在需要批准、补充信息、接管，还是无需操作？
 
-首版采用“一个安装包、一个主要客户端”的产品体验。桌面端在后台启动本机 `hunterd`，用户不需要分别管理 Workbench、Flow、Runtime。手机或其他电脑通过响应式 Web/PWA 访问同一个 Hunter Core，只提供远程驾驶所需能力。
+当前体验采用“一个日常工作台、一个窄控制面”：用户在 Orca 中管理
+worktree、终端、Diff、Browser 与 Agent，同时从 Orca Browser tab 打开
+本机 Hunter Web。`hunterd` 独立持有 canonical state。普通本机浏览器是
+回退入口；自定义 Hunter Desktop 和移动/PWA 不属于当前 gate。
+
+本文件后续完整页面描述保留为长期产品设计库存。当前只交付
+`Requirement/Change`、`需要我处理`、`Run/Attempt`、
+`Verification/Evidence`、`Policy/Recovery` 的最小切片。
 
 ## 2. 体验原则
 
@@ -62,31 +69,25 @@ Hunter 提供统一状态、上下文、产物和控制，但不复制 Cursor、
 ## 4. 全局信息架构
 
 ```text
-Hunter
-├─ 需要我处理
-│  ├─ 等待输入
-│  ├─ 等待审批
-│  ├─ 验证失败
-│  └─ Runtime/Agent 异常
-├─ 项目
-│  └─ Project
-│     ├─ 概览
-│     ├─ 需求
-│     ├─ 变更与任务
-│     ├─ 执行
-│     ├─ 工作流
-│     ├─ 产物与归档
-│     ├─ 知识
-│     └─ 设置
-├─ 全局运行中心
-├─ 工作流模板
-├─ 知识检索
-└─ 设置
-   ├─ Agent 与 Profile
-   ├─ Runtime Provider
-   ├─ 设备与远程访问
-   ├─ 权限与预算
-   └─ 数据与备份
+Orca
+├─ Worktrees / Terminals / Diff / Browser / Agents
+└─ Hunter control tab
+   └─ Hunter
+      ├─ 需要我处理
+      │  ├─ 等待输入
+      │  ├─ 等待审批
+      │  ├─ 验证失败
+      │  └─ Runtime/Agent 异常
+      ├─ 项目
+      │  └─ Project
+      │     ├─ 需求与变更
+      │     ├─ Run / Attempt
+      │     ├─ Verification / Evidence
+      │     └─ Policy / Recovery
+      └─ 设置
+         ├─ Orca Adapter 状态
+         ├─ 权限与预算
+         └─ 数据与恢复
 ```
 
 默认首页是“需要我处理”，而不是统计大屏。没有待处理事项时，再展示活跃项目、最近完成和快速创建入口。
@@ -255,9 +256,13 @@ Artifact 必须显示来源对象、生成时间、内容哈希、关联 Attempt
 
 界面绝不把第 2 步标记为“Agent 已完成”。
 
-## 7. 移动 PWA：远程驾驶舱
+## 7. 移动 PWA：冻结的后续设计
 
-移动端首版只支持：
+本节不是当前交付承诺。用户可以使用 Orca 自身移动能力观察其外部
+工作面，但 Orca 移动状态不能签发 Hunter Verifier/Human Receipt。只有
+未来独立用户证据和安全评审通过后，Hunter 才重启自定义移动工作。
+
+若未来重新立项，原设计只支持：
 
 - 项目、Requirement、Change 与 Run 列表。
 - 执行线路和当前 Step 摘要。
@@ -266,7 +271,7 @@ Artifact 必须显示来源对象、生成时间、内容哈希、关联 Attempt
 - 暂停、继续和终止 Run。
 - 通知与“一键回桌面处理”。
 
-移动端首版不支持：
+即使未来重新立项，也不支持：
 
 - 完整终端或 IDE。
 - 大型 Diff Review。
@@ -287,17 +292,18 @@ Artifact 必须显示来源对象、生成时间、内容哈希、关联 Attempt
 
 ## 9. 首版体验验收
 
-客户端达到首版可用的最低标准：
+当前 Orca-first gate 的最低标准：
 
-1. 用户可在 5 分钟内创建两个 Project 并绑定不同仓库。
-2. 同一 Project 可同时看到至少两个 Requirement 和两个活跃 Change。
-3. Task DAG 能正确表达串行、并行与等待依赖。
-4. 任一运行节点都能在两次点击内定位到 Agent、Session、Workspace、Artifact 和 Evidence。
-5. Agent 返回但测试失败时，线路明确显示“执行返回、验证失败、未完成”。
-6. Cursor 降级流程不会出现虚假的自动控制按钮。
-7. 应用重启后能回到相同 Run 线路，并将失联执行标成待处理。
-8. 手机可以安全完成审批、补充输入、暂停和继续。
-9. 归档后可以从 Requirement 或 Change 反向找到全部产物与知识。
+1. 用户从 Orca 在一次操作内打开已认证的 Hunter 本机控制页。
+2. 不懂 Runtime 内部术语的用户可在十分钟内完成一个真实 Requirement
+   到验证结果的路径。
+3. 任一 Attempt 可在两次点击内定位到精确 worktree、Agent observation、
+   Artifact、VerificationReceipt 和 Evidence。
+4. Agent 返回但测试失败时，页面明确显示“执行返回、验证失败、未完成”。
+5. Attempt 1 失败与 Attempt 2 恢复同时可见，历史不可覆盖。
+6. Hunter/Orca 重启后能回到同一 Run，并把无法证明的执行标为待处理。
+7. UI 不提供或暗示 bypass/yolo/auto-approve、虚假 Resume 或虚假成功。
+8. 无未认证写入口，bootstrap Secret 不出现在 URL query、日志、评论或证据。
 
 ## 10. 明确非目标
 

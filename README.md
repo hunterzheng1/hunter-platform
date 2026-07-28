@@ -1,7 +1,9 @@
 # Hunter Platform
 
-Hunter is a local-first, Windows-first development control plane for running
-versioned Harness workflows across interchangeable native coding agents.
+Hunter is a local-first, Windows-first governance control plane around native
+coding agents. Orca is the preferred first external workbench/runtime host;
+Hunter owns versioned requirements, runs, verification, evidence, policy, and
+recovery state.
 
 The product does not replace Codex, CodeBuddy, Cursor, Claude Code, OpenCode,
 Pi, Goose, or future tools. It owns the continuity around them: projects,
@@ -10,10 +12,15 @@ long-term knowledge.
 
 ## Current status
 
-- Product direction: approved by the owner on 2026-07-21.
-- Repository state: documentation-first platform reset.
-- Review state: independent internal findings and their dispositions are recorded; the corrected baseline is ready for Fable5 review.
-- Implementation: not started; provider-dependent delivery waits for Phase 0 evidence, while provider-neutral Foundation work may proceed against Fake contracts.
+- Product direction: narrowed by the owner on 2026-07-28 to an Orca-first,
+  sidecar/Adapter delivery path.
+- Repository state: provider-neutral control-plane foundations and deterministic
+  Fake contracts exist; historical validation remains evidence-scoped.
+- Runtime status: Orca is the preferred bounded integration route, not a proven
+  production Provider. Existing Phase 0 and Gate R `NOT_PROVEN` results remain
+  authoritative until replaced by new local receipts.
+- Active work: a five-working-day real vertical slice. If it cannot add
+  measurable value over direct Orca use, Hunter expansion stops.
 
 The former Goose-centered Hunter Runtime design is intentionally superseded.
 The owner requested a clean remote history, so this repository starts from a
@@ -29,21 +36,25 @@ part of the new product baseline.
 4. [Domain model](docs/03-domain-model-and-state-machines.md)
 5. [Workflow semantics](docs/04-workflow-and-loop-semantics.md)
 6. [Migration and roadmap](docs/09-migration-and-roadmap.md)
-7. [Implementation plan](docs/plans/2026-07-21-hunter-platform-phase-0-and-vertical-slice.md)
-8. [Fable5 review guide](docs/reviews/fable5-review-guide.md)
+7. [Current implementation plan](docs/plans/2026-07-28-orca-control-plane-pivot.md)
+8. [Orca-first architecture decision](docs/adr/0006-orca-first-control-plane-delivery.md)
 
 ## Product modules
 
-- **Hunter Workbench** — desktop and responsive web control surface.
+- **Hunter Workbench** — a narrow local Web control surface, opened from Orca
+  or a browser, for requirements, attention, runs, verification, and evidence.
 - **Hunter Flow** — deterministic workflow, loop, gate, and recovery engine.
-- **Hunter Runtime (`hunterd`)** — local process, workspace, and connector host.
+- **Hunter Runtime (`hunterd`)** — local canonical state, policy, receipts, and
+  provider-neutral orchestration behind a thin Orca Adapter.
 - **Hunter Harness** — versioned workflow and Skill packs, maintained separately.
 
-The user receives one Hunter product even though these names describe distinct
-internal modules.
+Orca supplies the daily desktop/worktree/terminal/browser experience. Hunter
+does not duplicate those surfaces and never treats Orca idle/exit as success.
 
 ## Repository intent
 
-This repository is the main Hunter product monorepo. The first implementation
-will add desktop, web, daemon, domain, flow, knowledge, storage, provider, and
-connector packages only after the Phase 0 technical decisions are evidenced.
+This repository is the main Hunter control-plane monorepo. Existing desktop,
+mobile, direct-Connector, terminal, browser, and second-Provider expansion is
+frozen while the Orca sidecar vertical slice is evaluated. No production
+Provider, product release, or mobile product is claimed by this repository
+state.

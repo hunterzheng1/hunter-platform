@@ -6,11 +6,12 @@ Phase 0 local verification reports.
 
 ## Current synthesis
 
-- `2026-07-21-hunter-platform-landscape-and-reuse.md` — current product landscape,
-  reuse recommendation, and unanswered Phase 0 questions.
+- `2026-07-28-hunter-build-vs-pi-orca-herdr.md` — current Build/Buy/Base-on
+  assessment and the evidence behind the Orca-first control-plane pivot.
 
 ## Supporting investigations
 
+- `2026-07-21-hunter-platform-landscape-and-reuse.md`
 - `2026-07-21-agent-workflow-workbench-landscape.md`
 - `2026-07-21-agent-control-protocols.md`
 - `2026-07-20-mobile-coding-agent-control-surfaces.md`

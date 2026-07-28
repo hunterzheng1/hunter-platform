@@ -2,6 +2,10 @@
 
 ## Canonical terms
 
+`Mobile*` terms below remain compatibility vocabulary for already implemented
+contracts. New mobile/PWA delivery is frozen by ADR-0006 and is not part of the
+active Orca-first gate.
+
 | Term | Canonical meaning |
 |---|---|
 | `Project` | 用户管理的一个完整产品、目标或长期工作空间；可包含多个 Requirement，并绑定一个或多个 Repository。 |

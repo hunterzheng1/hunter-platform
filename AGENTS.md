@@ -1,7 +1,8 @@
 # Hunter Platform contributor instructions
 
-Hunter Platform is currently a documentation-first reset. Before changing the
-product model or adding implementation code, read:
+Hunter Platform is a documentation-led control-plane project. The active
+delivery direction is the 2026-07-28 Orca-first pivot recorded in ADR-0006.
+Before changing the product model or adding implementation code, read:
 
 1. `docs/README.md`
 2. `docs/11-decision-summary.md`
@@ -27,8 +28,11 @@ product model or adding implementation code, read:
   local unless an explicit policy says otherwise.
 - Windows is the first hard acceptance platform. Keep platform behavior behind
   interfaces that can be implemented and tested on Linux.
-- Orca is a replaceable Runtime Provider candidate. Do not make Hunter domain
-  types, persistence, or workflow semantics depend on Orca internals.
+- Orca is the preferred first external workbench/runtime host, but remains
+  replaceable. Do not make Hunter domain types, persistence, workflow semantics,
+  or success criteria depend on Orca internals.
+- Orca and Agent permission presets must be Manual/fail-closed for Hunter-owned
+  runs. Reject bypass, yolo, auto-approve, or equivalent unsafe defaults.
 - Do not reintroduce Goose Gate, Goose version pinning, the former three-arm
   pilot, or a 30-day vendor gate as product prerequisites.
 
@@ -44,3 +48,10 @@ product model or adding implementation code, read:
   context vocabulary in the matching `contexts/*/CONTEXT.md`.
 - Update documentation and tests in the same change when a public contract or
   domain invariant changes.
+- Clean up topic branches and linked worktrees after their PR is merged or the
+  work is explicitly abandoned/superseded. Before deletion, verify the worktree
+  is clean, the branch is not current/protected/shared, no open PR depends on it,
+  and it has no unique unpushed or unmerged commits. Remove the linked worktree
+  first, then the local branch, and only then a no-longer-needed remote branch.
+  Never delete `main`, active work, or unique history without a recoverable
+  reference and explicit owner confirmation.

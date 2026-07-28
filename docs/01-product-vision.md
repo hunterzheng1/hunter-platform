@@ -2,7 +2,7 @@
 
 ## 一句话定义
 
-Hunter 是一个本地优先、面向多项目的 AI 开发控制台：它把已经确认的需求转化为可追踪、可验证、可恢复的工作流，并按能力等级调度 Codex、CodeBuddy、Cursor 等原生 Agent，同时统一管理产物、证据、归档和长期知识。
+Hunter 是一个本地优先、面向多项目的 AI 开发治理控制面：它把已经确认的需求转化为可追踪、可验证、可恢复的工作流，并通过可替换的外部 Runtime/Workbench Host 使用原生 Agent，同时统一管理尝试、验证、证据、归档和长期知识。
 
 Hunter 不是新的“超级编程 Agent”，也不替代 Cursor、Codex 等工具自己的编辑器、终端、模型或 Agent Loop。它是这些工具之上的控制面。
 
@@ -22,7 +22,9 @@ Hunter 的目标不是抹平各工具差异，而是让差异显式、让流程�
 
 ## 最终产品形态
 
-用户安装一个 Hunter 客户端，创建多个逻辑 Project。每个 Project 可以绑定一个或多个 Git Repository，并同时维护多个 Requirement。
+用户以 Orca 作为日常工作台，在 Orca Browser tab 或普通本机浏览器中打开一个窄而深的 Hunter 控制页。`hunterd` 在本机持有 canonical state；Orca 承载 worktree、终端、Diff、Browser 和原生 Agent 会话。Hunter 不复制 Orca 已有的开发界面。
+
+用户在 Hunter 中创建多个逻辑 Project。每个 Project 可以绑定一个或多个 Git Repository，并同时维护多个 Requirement。
 
 一次典型使用路径是：
 
@@ -30,12 +32,12 @@ Hunter 的目标不是抹平各工具差异，而是让差异显式、让流程�
 2. 将一个或多个 RequirementRevision 切成可交付的 ChangeRevision。
 3. 规划阶段生成带依赖的 TaskGraph；可串行，也可有限并行。
 4. 为 Change 选择已发布的 WorkflowRevision，并设置每一步的 AgentProfile、SessionPolicy、WorkspacePolicy、Verifier 和预算。
-5. Hunter 启动 WorkflowRun，按条件调度 Codex、CodeBuddy Code、Cursor 或其他 Agent。
+5. Hunter 启动 WorkflowRun，通过 Orca Adapter 把冻结 Handoff 交给一个 Orca 承载的真实 Agent。
 6. Run 页面以线路图展示当前 Task、Step、Attempt、会话、工作区、日志、产物和验证结果。
 7. 测试或评审失败时，在显式 LoopPolicy 内创建新的 Attempt；不覆盖历史。
-8. 需要深度操作时，一键打开正确的终端、Cursor 或其他原生工作界面。
+8. 需要深度操作时，回到 Orca 中已定位的终端、Diff、Browser 或 Agent 会话。
 9. Run 完成、失败或取消后均可归档；归档自动进入分级知识体系。
-10. 手机或另一台设备可以查看、审批、补充输入、暂停和继续，但不能绕过项目安全策略。
+10. 自定义 Hunter 移动端在当前阶段冻结；若使用 Orca Companion，它只承载外部工作面，不能绕过 Hunter 的验证与策略。
 
 ## 四层业务语义
 
@@ -61,8 +63,12 @@ Requirement -> Change -> Task -> Workflow Step
 - Workflow Template、项目覆盖与版本升级
 - Run/Task/Step 执行线路
 - Artifact、Evidence、Archive 和 Knowledge
-- 原生 Agent 窗口快捷打开
-- Windows 首发桌面端与移动 Web/PWA
+- 从 Run/Attempt 精确定位 Orca 工作区、终端与 Agent 会话
+- 在 Orca Browser tab 或本机浏览器运行的最小 Web 控制面
+
+当前控制面只优先实现 Requirement、Change、Attention、Run/Attempt、
+Verification、Evidence 和 Policy。完整 Hunter Desktop、移动 PWA、
+终端、编辑器、Diff 和 Browser 均不在当前交付范围。
 
 ### Hunter Flow
 
@@ -77,16 +83,18 @@ Requirement -> Change -> Task -> Workflow Step
 
 ### Hunter Runtime (`hunterd`)
 
-本机执行与适配层，包括：
+本机 canonical state 与适配层，包括：
 
-- Agent 探测、启动、连接、观察和中断
-- PTY、进程树和原生窗口管理
-- Workspace/worktree 与控制权 Lease
-- Orca Provider 和 Direct Connector
-- Artifact、日志和协议事件采集
-- Windows 与 Linux 平台适配
+- Agent/Orca 原子能力探测、ExternalOperation、Receipt 与对账
+- Workspace、Writer 与 Controller Lease
+- 独立 Verifier、Artifact、日志和协议事件采集
+- Orca 公共接口 Adapter
+- Windows 与 Linux 平台边界
 
-Orca 是 Phase 0 首个有时限、可逆的 Runtime Provider 可行性候选，不是已采用底座，也不是 Hunter 的数据事实源。Agent Orchestrator 或 Hunter 自研能力可在相同契约下替换或补充它。
+Orca 是首选但可替换的外部 Workbench/Runtime Host。PTY、进程树、原生
+窗口、Diff、Browser 和 Agent 会话由 Orca 负责；Hunter 不读取 Orca
+私有数据库，也不把 Orca 事件当作业务成功。Pi、Herdr 或其他 Runtime
+以后只能在相同公共契约下以新证据接入。
 
 ## 核心原则
 
@@ -101,15 +109,13 @@ Orca 是 Phase 0 首个有时限、可逆的 Runtime Provider 可行性候选，
 9. **开放且可替换**：Connector 与 Provider 通过能力契约接入，不绑定今天领先的单一工具。
 10. **知识可追溯**：全部归档自动入库，但只有有效权威知识和已验证经验自动注入。
 
-## 首批 Agent
+## 第一条真实执行路径
 
-首个纵向版本冻结三种代表性接入：
-
-- **Codex**：目标 L2/L3，验证结构化执行、恢复、Steer 与审批事件。
-- **CodeBuddy Code**：目标 L2/L3，验证 ACP、Headless 或 HTTP 接入以及非 OpenAI 深度 Connector。
-- **Cursor**：目标 L0/L1，验证打开正确工作区、传递任务、观察 Git/产物和人工完成确认。
-
-OpenCode、Claude Code、Pi、Goose、Grok Build 等以后按相同 Connector 契约接入。Goose 不再享有专用 Gate、版本 Pin 或产品架构地位。
+当前只验证一个 Orca 承载的真实 Agent，不同时建设 Codex、CodeBuddy 和
+Cursor 的深度 Direct Connector。具体 Agent 产品由本机可用性和用户选择
+决定，其 Capability 等级只能由原子 probe receipt 计算，不能因产品名称
+推定。第二个 Agent、Pi/Herdr Adapter 与其他 Provider 必须在第一条路径
+证明价值后另行立项。
 
 ## 知识愿景
 
@@ -123,12 +129,12 @@ RequirementRevision 自身就是正式知识来源，而不是复制进一个失
 
 ## 首版目标用户与平台
 
-首版面向**单用户、多项目、多设备**：
+当前价值门面向**单用户、多项目、单台 Windows 开发机**：
 
 - Windows 为首发和硬验收平台。
 - Linux 从接口、路径、进程与打包设计第一天支持，并在后续阶段正式验收。
-- 桌面端承担配置、Diff、日志和深度操作。
-- 响应式 Web/PWA 是移动端远程驾驶舱；原生 App 与聊天机器人后置。
+- Orca 承担桌面、Diff、终端、Browser 和深度操作。
+- Hunter 的窄 Web 控制页承担治理、验证和证据；自定义移动/PWA 后置。
 - 团队组织、成员权限、计费和多人同时编辑不属于首版。
 
 ## 非目标
@@ -147,15 +153,16 @@ RequirementRevision 自身就是正式知识来源，而不是复制进一个失
 
 ## 成功标准
 
-首个纵向版本至少应证明：
+五个工作日的首个真实纵向版本至少应证明：
 
-- 两个以上 Project 可独立运行，且一个 Project 可维护多个 Requirement。
-- Requirement 可拆成 Change 和串并行 TaskGraph。
-- Codex、CodeBuddy、Cursor 可在同一个 Change 的不同步骤中按能力等级协作。
-- 执行状态和验证状态不会混淆。
-- 测试或评审失败能够创建新 Attempt，并在预算内返回实现。
-- 并行写 Task 具有独立 worktree，集成是显式步骤。
-- Hunter 或 Provider 重启后能够恢复或诚实标记 `needs_attention`。
-- 成功、失败、取消的 Run 都可归档，且知识来源、状态和适用范围可追溯。
-- 手机可安全查看、审批、补充、暂停和继续。
-- Orca 被替换为 Fake 或备选 Provider 时，Hunter 的核心业务状态和测试仍然成立。
+- 一个已批准 Requirement/Change 能启动真实非玩具 Run。
+- Hunter 创建并校验精确的隔离 worktree；Orca 只附加该路径。
+- 一个 Orca 承载的 Agent 能在无 bypass/yolo/auto-approve 参数下修改代码。
+- Agent return、terminal idle 和 process exit 不会绕过独立 Verifier。
+- 故意失败的 Attempt 1 被保留，恢复后的 Attempt 2 才能通过。
+- Hunter 与 Orca 各重启一次后不重复发送或产生重复副作用。
+- 全部 Receipt/Evidence 脱敏、可复现，并能在十分钟内被普通用户理解。
+- Orca 私有状态消失或替换 Provider 时，Hunter canonical history 仍成立。
+
+未在时间盒内全部证明，或用户认为相对直接使用 Orca 没有明显价值，
+即停止扩建 Hunter，而不是继续增加 UI、Provider 或抽象。

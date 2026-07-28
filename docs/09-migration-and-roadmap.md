@@ -4,6 +4,45 @@
 > 目标仓库：`hunterzheng1/hunter-platform`
 > 产品结构：一个主产品 Monorepo + 一个独立的 Hunter Harness 内容/分发仓库
 
+## 0. 2026-07-28 active roadmap override
+
+当前路线由 ADR-0006 和
+[`2026-07-28-orca-control-plane-pivot.md`](plans/2026-07-28-orca-control-plane-pivot.md)
+控制。以下 Phase 0–3 内容保留为历史设计和长期能力库存，不再按原顺序
+自动推进。
+
+### 0.1 保留并激活
+
+- Domain/Requirements、Application API、Flow/Verifier、Runtime contracts/
+  manager、Storage/Event/Outbox/Receipt、Policy、最小 Archive/Knowledge。
+- `hunterd` 与窄 Web control surface。
+- 一个只使用公开接口的 Orca Adapter。
+
+### 0.2 冻结
+
+- Hunter Desktop 新功能、移动/PWA、Device Gateway。
+- Hunter-owned terminal、PTY、worktree IDE、Diff 和 Browser。
+- Codex/CodeBuddy/Cursor 深 direct Connector、第二 Provider 和额外
+  capability 抽象。
+- 生产签名、分发、发布与 Fork。
+
+### 0.3 当前实施顺序
+
+```text
+docs/contract freeze
+  → public Orca atomic receipts + Manual permission proof
+  → authenticated Hunter page opened from Orca
+  → Hunter-created exact worktree + Orca attach
+  → one real Agent + non-authoritative observations
+  → independent fail/recovery/pass verification
+  → Hunter/Orca restart, evidence, cleanup
+  → ten-minute user value Go/Stop
+```
+
+时间盒为五个工作日。PASS 前不得以 Fake、测试数、安装包或上游宣传代替
+真实路径。Stop 后默认继续 standalone Orca；是否尝试 Pi/Herdr Adapter 或
+归档 Hunter，需要新的 owner 决定。
+
 ## 1. 迁移目标
 
 现有 Hunter-Runtime 的早期实现验证了本机 Kernel、进程、安全实验与 Goose 接入，但首要产品问题已经改变：Hunter 不再以 Goose 或任何单一 Agent 为中心，而是构建“多项目 AI 开发控制台 + 确定性工作流编排 + 可替换原生执行层”。
@@ -140,7 +179,7 @@ Flow、Runtime Contracts 与本地治理是主产品内的深模块，不另建�
 
 Hunter-Harness 仍可独立发布 Pack/Skill；Platform 通过显式版本和内容哈希导入。运行中的 WorkflowRevision 不随源仓库更新而变化。
 
-## 5. Phase 0：技术去风险与架构决策
+## 5. Historical Phase 0：技术去风险与架构决策
 
 ### 5.1 目标
 
@@ -175,13 +214,17 @@ Phase 0 结束必须形成书面决定：
 - 如果 Orca 不通过，替代路径已在同一 Contract 下跑通最小 Spike。
 - Fable5 评审的 Blocker 已关闭或由明确 ADR 接受。
 
-### 5.5 当前决策状态（2026-07-22）
+### 5.5 历史决策状态（2026-07-22）
 
-ADR-0005 采用 Outcome 5：尚无生产 Runtime Provider 得到证明。Orca、Agent Orchestrator、Codex、CodeBuddy 和 Cursor 的 executable/login 本机探针均为 BLOCKED，时间盒结束后的采用判定为 NOT_PROVEN；不指定 primary/fallback，不选择 Sidecar 或 Fork。
+ADR-0005 当时采用 Outcome 5：尚无生产 Runtime Provider 得到证明。Orca、Agent Orchestrator、Codex、CodeBuddy 和 Cursor 的 executable/login 本机探针均为 BLOCKED，时间盒结束后的采用判定为 NOT_PROVEN；当时不指定 primary/fallback，不选择 Sidecar 或 Fork。
 
-Foundation、Fake contract suite 和 Windows/Ubuntu CI 已通过；Outcome 5 只允许继续 Foundation 维护和 Fake contract 验证。Agent Orchestrator fallback typed scenario 与上面的真实 Provider 退出标准仍未满足，因此 Phase 0 Gate A 和 Phase 1/First Vertical Slice 保持阻断。任何后续阶段、真实 Provider 演示、集成承诺或发布都必须等待 `P0-RUNTIME-01` 产生固定版本、脱敏的原子能力收据并重新评审 Gate A。
+Foundation、Fake contract suite 和 Windows/Ubuntu CI 当时已通过；Outcome 5
+只允许继续 Foundation 维护和 Fake contract 验证。该证据边界继续有效，
+但交付顺序已由 ADR-0006 的五日 Orca-first gate 取代。真实 Provider
+能力与发布仍必须等待固定版本、脱敏原子收据；旧 `P0-RUNTIME-01` 不再是
+自动推进的当前计划。
 
-## 6. Phase 1：首个完整纵向版本
+## 6. Historical Phase 1 target：首个完整纵向版本
 
 ### 6.1 用户能力
 
@@ -230,9 +273,10 @@ Foundation、Fake contract suite 和 Windows/Ubuntu CI 已通过；Outcome 5 只
 
 团队协作、云端执行和原生手机 App 不因进入 Phase 3 就自动立项，仍需独立用户证据和安全评审。
 
-## 9. Orca 决策门槛矩阵
+## 9. Historical Orca 决策门槛矩阵
 
-下表是未来有本机证据后选择集成形态的门槛，不是当前测量结果。Outcome 5 下所有 Orca 能力仍为 NOT_PROVEN。
+下表是 2026-07-22 形成的历史门槛，不是当前测量结果。Outcome 5 下所有
+Orca 能力仍为 NOT_PROVEN；ADR-0006 只把 Sidecar 选为新的有界实验路线。
 
 | 维度 | Sidecar 采用门槛 | 薄 Fork 采用门槛 | 放弃/替换触发条件 |
 |---|---|---|---|
@@ -244,9 +288,12 @@ Foundation、Fake contract suite 和 Windows/Ubuntu CI 已通过；Outcome 5 只
 | 上游同步成本 | 低 | 可预算 | 高且持续 |
 | Hunter 数据独立 | 是 | 是 | 若否则禁止采用 |
 
-Sidecar 是 Orca 获得本机证据后的首个评估形态，不是默认采用结果。当前 Outcome 5 不选择任何生产 Provider。薄 Fork 必须有 sidecar 通过证据、独立 ADR、维护责任人、上游同步策略和退出计划；“想统一品牌”不是 Fork 理由。
+Sidecar 原本是 Orca 获得本机证据后的首个评估形态；ADR-0006 现在明确
+选择它作为五日实验，但仍未选择任何 production Provider。薄 Fork 必须有
+sidecar 通过证据、独立 owner-approved ADR、维护责任人、上游同步策略和
+退出计划；“想统一品牌”不是 Fork 理由。
 
-## 10. 实施顺序与依赖
+## 10. Historical implementation order
 
 ```text
 领域词汇/契约
@@ -285,3 +332,14 @@ UI 不等待所有 Connector 完成才开始，但 UI 使用 Fake Provider 和�
 - 下一 Phase 的范围和明确非目标。
 
 不能以“某上游产品功能很多”替代 Hunter 自己的验收，也不能因上游迭代而把尚未验证的能力写成已支持。
+
+### 分支与 worktree 生命周期
+
+- PR 合并或工作被明确 abandoned/superseded 后才进入清理候选。
+- 清理前 fetch/prune 并确认：worktree clean、没有开放 PR、分支不是
+  current/main/protected/shared，目标分支已包含其提交，或独有历史已有
+  owner-approved 可恢复引用。
+- 先移除关联 worktree，再删除 local branch；只有仓库自有且不再使用的
+  topic branch 才删除 remote branch。
+- 含未提交修改、未推送/未合并独有提交或活跃 worktree 的分支必须保留并
+  在交付报告中说明。

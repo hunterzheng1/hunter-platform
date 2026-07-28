@@ -1,8 +1,10 @@
 # ADR-0005: 尚无生产 Runtime Provider 得到证明
 
-- Status: Accepted
+- Status: Superseded for post-Phase-0 delivery direction by ADR-0006; the Phase
+  0 Outcome 5 evidence and every historical status remain accepted and final.
 - Date: 2026-07-22
 - Revised: 2026-07-23
+- Superseded: 2026-07-28
 - Decision outcome: Phase 0 Outcome 5
 
 ## 2026-07-23 gate scope clarification

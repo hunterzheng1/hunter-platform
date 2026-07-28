@@ -105,32 +105,32 @@ Review 默认使用新的 NativeSession，避免实现会话自我确认。项�
 
 ## 完成证据优先级
 
-当不同 Connector 控制深度不同，Hunter 使用以下由强到弱的完成来源：
+当不同 Connector 控制深度不同，Hunter 把执行观察与完成权威严格分开：
 
-1. 正式协议的结构化 completion/error/permission 事件。
-2. Hunter Step Receipt，包含固定输入/输出 hash 和执行者确认。
-3. 可重复 Verifier，例如测试、Git Diff、文件 schema 或 Artifact 检查。
-4. 用户人工确认。
+1. 可重复的独立 Verifier 产生 `VerificationReceipt`，绑定 Attempt、输入、
+   输出和配置 hash。
+2. 指定 Actor 对精确内容 hash 产生 `HumanReceipt`。
+3. 正式协议的 completion/error/permission 事件、Agent return、process
+   exit、terminal idle 和 window 状态只属于 `RuntimeObservation`。
 
-弱来源不能伪装成强来源。UI 应显示“执行已返回、验证失败”或“窗口已打开、等待人工确认”，而不是统一显示“完成”。
+第 3 类信号最多让执行进入 `returned` 或 `needs_attention`，不能单独完成
+Step。UI 应显示“执行已返回、验证失败”或“窗口已打开、等待人工确认”，
+而不是统一显示“完成”。
 
-## 分级 Connector 行为
+## 当前 Orca-hosted Connector 行为
 
-### L2/L3：Codex 与 CodeBuddy Code 目标路径
+- Hunter 创建、校验并租赁精确 Repository/worktree。
+- Orca Adapter 只通过公开接口附加该路径，发送 HandoffPack 引用和 Step
+  指令，并记录已证明的观察/控制 receipt。
+- Agent/Orca 的 completion、idle、exit 与 window 信号只结束执行观察，
+  不结束验证。
+- Verifier 在 Agent session 外运行；失败创建新的 StepAttempt 并保留旧
+  Attempt。
+- 若 attach、reconcile、cleanup 或 Manual/fail-closed 权限无法证明，
+  当前路径进入 `BLOCKED`，不回退到私有数据库、GUI 自动化或危险参数。
 
-- 通过官方结构化接口启动或恢复会话。
-- 发送 HandoffPack 引用和 Step 指令。
-- 接收输出、工具/权限事件、中断与 completion。
-- 能力存在时由 PolicyEngine 处理审批。
-- 会话恢复失败时按 SessionPolicy 选择暂停或新会话降级。
-
-### L0/L1：Cursor 首版路径
-
-- 打开正确 Repository/worktree 和任务摘要。
-- 将 HandoffPack 放入可复制或可导入位置。
-- 观察进程、Git Diff、指定 Artifact 和测试结果。
-- 用户在 Cursor 内工作，完成后提交 Step Receipt 或在 Hunter 中确认。
-- Hunter 绝不声称能可靠发送消息、恢复聊天或知道 Cursor 是否“思考完成”，除非未来出现并验证正式接口。
+多 Agent direct Connector 的 L0–L3 语义仍保留在公共契约中，但当前
+delivery gate 不并行建设 Codex、CodeBuddy 或 Cursor 的深接入。
 
 ## SessionPolicy
 
@@ -202,14 +202,17 @@ Loop 是显式回边，不是无限 `while true`。LoopPolicy 至少包含：
 
 Hunter 首版不默认自动 push、merge 到主分支或部署。这些动作需要项目策略和 Human Gate。
 
-## 审批与远程控制
+## 审批与控制权
 
 HumanGateStep 绑定固定 Revision/Artifact/Action hash。审批命令必须包含幂等键、Actor、Device 和期望状态版本。
 
-- 手机重复提交同一审批只生效一次。
+- 任一客户端重复提交同一审批只生效一次。
 - 已过期或状态已经变化的审批返回冲突，不重新执行动作。
 - 高危文件操作、凭据访问、发布、合并和部署可被 Policy 强制 Gate。
-- 同一 Session 同时只有一个 ControllerLease；移动端 Steer 前必须取得或转移控制权。
+- 同一 Session 同时只有一个 Hunter `ControllerLease`，所有
+  Hunter-mediated 输入必须先取得或转移控制权。Orca UI/原生终端的人工
+  输入不受 Hunter 强制锁控制；观察到这类外部输入时自动控制暂停并进入
+  `needs_attention`。
 
 ## 重启与对账
 
@@ -225,7 +228,9 @@ HumanGateStep 绑定固定 Revision/Artifact/Action hash。审批命令必须包
 
 状态未知是正常且必须可见的状态，不得为了线路“亮绿灯”而猜测。
 
-## 示例：移动端需求的并行 Change
+## 冻结示例：移动端需求的并行 Change
+
+以下示例只说明领域模型仍支持并行 Change，不代表当前移动/PWA 交付范围。
 
 ```text
 Requirement: 支持手机远程操作
@@ -238,7 +243,7 @@ Requirement: 支持手机远程操作
 └─ Change C: 端到端集成 (depends on Change A + Change B)
 ```
 
-Change A 与 B 可以并行；其中写入任务使用独立 worktree。Change C 显式汇合分支并执行集成测试。每个 Task 可以使用相同默认 Workflow，也可绑定专用子流程。Codex 可规划、CodeBuddy 可实现、Cursor 可供人工接管，但完成结论始终由 Hunter Flow 和 Verifier 持有。
+Change A 与 B 可以并行；其中写入任务使用独立 worktree。Change C 显式汇合分支并执行集成测试。每个 Task 可以使用相同默认 Workflow，也可绑定专用子流程。无论由哪个外部 Host/Agent 执行，完成结论始终由 Hunter Flow 和 Verifier/HumanReceipt 持有。
 
 ## 不支持的语义
 

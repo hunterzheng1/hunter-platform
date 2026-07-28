@@ -43,3 +43,44 @@ interview.
     a separate workflow/Skill pack and distribution concern.
 23. Goose Gate, Goose pinning, the three-arm pilot, and the 30-day Goose gate are
     removed from the active product baseline.
+
+## 2026-07-28 delivery pivot
+
+The owner approved the following decisions after evaluating Hunter against
+current Pi, Orca, and Herdr capabilities. These decisions supersede conflicting
+delivery assumptions in items 13, 14, 19, and 20 without changing the domain
+invariants in items 1–12 or rewriting historical validation.
+
+24. Hunter remains a product-level governance control plane; it does not become
+    another IDE, terminal multiplexer, worktree manager, browser, or Agent loop.
+25. Orca is the preferred first, replaceable external workbench/runtime host.
+    Hunter uses only public CLI, Skills, MCP, or other documented integration
+    surfaces and never reads or writes Orca private storage.
+26. Hunter keeps canonical Requirement, Change, Workflow, Run, Attempt,
+    Verification, Evidence, Policy, Lease, Archive, and Knowledge state. Orca
+    keeps its own window, terminal, worktree-registration, and native-session
+    state; Hunter stores only provider-neutral external references and
+    observations.
+27. The first user surface is a narrow authenticated Hunter Web control page
+    opened in an Orca browser tab or a normal browser. New Hunter desktop,
+    terminal, editor, browser, mobile/PWA, and device-gateway work is frozen.
+28. Deep direct Codex, CodeBuddy, and Cursor Connectors, a second production
+    Provider, and additional speculative capability abstractions are deferred.
+    The first real path uses one Orca-hosted Agent behind Hunter contracts.
+29. Agent return, terminal idle, process exit, window state, and Orca status are
+    observations only. Only a Hunter-run independent Verifier or an exact,
+    auditable Human Receipt may complete a Step.
+30. Hunter-owned runs use Manual/fail-closed permission settings. Any
+    dangerously-bypass, yolo, auto-approve, or equivalent preset blocks the
+    operation instead of being silently inherited.
+31. Delivery starts with one five-working-day, non-toy vertical slice:
+    approved Requirement → Hunter-isolated worktree → Orca-hosted Agent →
+    deliberate failed Attempt → recovery Attempt → independent verification →
+    redacted Evidence. If this cannot be completed safely or adds no practical
+    value over direct Orca use, Hunter expansion stops.
+32. No Orca fork is authorized. A thin fork requires a separately approved ADR
+    after the sidecar path passes and a material user-experience gap cannot be
+    solved through public integration surfaces.
+33. Topic branches and linked worktrees are cleaned after merge or explicit
+    abandonment only when they are clean, have no unique work, have no open PR,
+    and are not current, protected, or shared branches.

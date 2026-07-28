@@ -2,6 +2,8 @@
 
 - Status: Accepted
 - Date: 2026-07-21
+- Delivery note: ADR-0006 retains the local modular core but supersedes the
+  requirement to build Hunter-owned desktop/mobile shells for the current gate.
 
 ## Context
 
