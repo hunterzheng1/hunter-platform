@@ -13,6 +13,7 @@ import {
   HERDR_STABLE_RELEASE,
   HERDR_REPLACEMENT_TIMEBOX_STARTED_AT,
   HERDR_WINDOWS_PREVIEW_RELEASE,
+  HerdrControlPlaneBaselineSchema,
   collectHerdrControlPlaneBaseline,
   createHerdrControlPlaneBaseline,
   findHerdrBaselineTimeboxStart,
@@ -244,6 +245,11 @@ describe("Herdr control-plane baseline evidence", () => {
     );
     expect(evidence.task0Verdict).toBe("PASS");
     expect(evidence.providerVerdict).toBe("NOT_PROVEN");
+    expect(() =>
+      HerdrControlPlaneBaselineSchema.parse(
+        JSON.parse(JSON.stringify(evidence)) as unknown,
+      ),
+    ).not.toThrow();
     expect(evidence.proofScope).toBe("local_inventory_only");
     expect(evidence.mutationAttempted).toBe(false);
     expect(evidence.runBudget.additionalPaidBudgetUsd).toBe(0);

@@ -173,6 +173,28 @@ const CommandReceiptSchema = z.strictObject({
   outputHash: SHA256Schema,
 });
 
+const HerdrStableReleaseSchema = z.strictObject({
+  tag: z.literal(HERDR_STABLE_RELEASE.tag),
+  commit: z.literal(HERDR_STABLE_RELEASE.commit),
+  publishedAt: z.literal(HERDR_STABLE_RELEASE.publishedAt),
+  windowsAssetPublished: z.literal(
+    HERDR_STABLE_RELEASE.windowsAssetPublished,
+  ),
+});
+
+const HerdrWindowsPreviewReleaseSchema = z.strictObject({
+  tag: z.literal(HERDR_WINDOWS_PREVIEW_RELEASE.tag),
+  commit: z.literal(HERDR_WINDOWS_PREVIEW_RELEASE.commit),
+  relationToStable: z.literal(
+    HERDR_WINDOWS_PREVIEW_RELEASE.relationToStable,
+  ),
+  publishedAt: z.literal(HERDR_WINDOWS_PREVIEW_RELEASE.publishedAt),
+  assetName: z.literal(HERDR_WINDOWS_PREVIEW_RELEASE.assetName),
+  size: z.literal(HERDR_WINDOWS_PREVIEW_RELEASE.size),
+  sha256: z.literal(HERDR_WINDOWS_PREVIEW_RELEASE.sha256),
+  downloadUrl: z.literal(HERDR_WINDOWS_PREVIEW_RELEASE.downloadUrl),
+});
+
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map((item) => canonicalize(item));
   if (value !== null && typeof value === "object") {
@@ -257,8 +279,8 @@ export const HerdrControlPlaneBaselineSchema = z
     }),
     selectedAgent: z.literal("codex"),
     release: z.strictObject({
-      stable: z.literal(HERDR_STABLE_RELEASE),
-      windowsPreview: z.literal(HERDR_WINDOWS_PREVIEW_RELEASE),
+      stable: HerdrStableReleaseSchema,
+      windowsPreview: HerdrWindowsPreviewReleaseSchema,
     }),
     assetIntegrity: z.strictObject({
       algorithm: z.literal("sha256"),
