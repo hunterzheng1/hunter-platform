@@ -1,4 +1,11 @@
-import { writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type {
   CommandRequest,
@@ -11,6 +18,7 @@ import {
   collectOrcaControlPlaneBaseline,
   createOrcaControlPlaneBaseline,
   inspectControlPlaneSource,
+  prepareBaselineEvidenceOutput,
   resolveBaselineOutputPath,
 } from "./orca-control-plane-baseline.js";
 import { withTemporaryGitFixture } from "../spikes/testkit/src/index.js";
@@ -20,9 +28,13 @@ const SHA256_B = "b".repeat(64);
 
 class FixtureRunner implements CommandRunner {
   readonly requests: CommandRequest[] = [];
+  #active = false;
 
   async run(request: CommandRequest): Promise<CommandResult> {
+    if (this.#active) throw new Error("CONCURRENT_PROBE_COMMAND");
+    this.#active = true;
     this.requests.push(request);
+    await Promise.resolve();
     const key = `${request.executable}\u0000${request.args.join("\u0000")}`;
     const outputs = new Map<string, string>([
       ["node\u0000--version", "v24.4.1"],
@@ -64,18 +76,22 @@ class FixtureRunner implements CommandRunner {
       ["codex\u0000login\u0000status", "Logged in using secret@example.invalid"],
     ]);
     const stdout = outputs.get(key);
-    return {
-      executable: request.executable,
-      args: request.args,
-      cwd: request.cwd,
-      exitCode: stdout === undefined ? 1 : 0,
-      stdout: stdout ?? "",
-      stderr: stdout === undefined ? "unsupported" : "",
-      timedOut: false,
-      spawnError: null,
-      startedAt: "2026-07-28T04:15:00.000Z",
-      finishedAt: "2026-07-28T04:15:01.000Z",
-    };
+    try {
+      return {
+        executable: request.executable,
+        args: request.args,
+        cwd: request.cwd,
+        exitCode: stdout === undefined ? 1 : 0,
+        stdout: stdout ?? "",
+        stderr: stdout === undefined ? "unsupported" : "",
+        timedOut: false,
+        spawnError: null,
+        startedAt: "2026-07-28T04:15:00.000Z",
+        finishedAt: "2026-07-28T04:15:01.000Z",
+      };
+    } finally {
+      this.#active = false;
+    }
   }
 }
 
@@ -157,6 +173,8 @@ describe("Orca control-plane baseline evidence", () => {
           args: ["status", "--json"],
           exitCode: 0,
           timedOut: false,
+          outcome: "success",
+          timeoutCleanup: "not_applicable",
           outputHash: SHA256_B,
         },
       ],
@@ -220,7 +238,6 @@ describe("Orca control-plane baseline evidence", () => {
     expect(runner.requests.map((request) => request.args)).toEqual([
       ["--version"],
       ["--version"],
-      ["--version"],
       ["status", "--json"],
       ["repo", "--help"],
       ["worktree", "--help"],
@@ -232,7 +249,7 @@ describe("Orca control-plane baseline evidence", () => {
     expect(evidence.tools).toContainEqual({
       id: "orca",
       availability: "DETECTED",
-      version: "0.8.0",
+      version: null,
       authentication: "NOT_PROVEN",
       authenticationRequired: true,
     });
@@ -255,6 +272,10 @@ describe("Orca control-plane baseline evidence", () => {
       reason: "mutating_temporary_fixture_not_run",
       receiptHash: null,
     });
+    expect(evidence.commandReceipts.every((receipt) =>
+      receipt.outcome === "success"
+      && receipt.timeoutCleanup === "not_applicable"
+    )).toBe(true);
     expect(JSON.stringify(evidence)).not.toMatch(
       /C:\\Users\\private|secret@example|runtime-private|request-private/iu,
     );
@@ -307,5 +328,24 @@ describe("Orca control-plane baseline evidence", () => {
     expect(() =>
       resolveBaselineOutputPath("C:\\repo", "C:\\tmp\\baseline.json"),
     ).toThrow("BASELINE_EVIDENCE_OUTPUT_OUTSIDE_ALLOWED_ROOT");
+  });
+
+  it("archives an earlier failed baseline by content hash before a retry", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "hunter-orca-baseline-test-"));
+    const target = join(directory, "baseline.json");
+    const failedEvidence = "{\"providerVerdict\":\"NOT_PROVEN\"}\n";
+    try {
+      await writeFile(target, failedEvidence, "utf8");
+
+      const archived = prepareBaselineEvidenceOutput(target);
+
+      expect(archived).toMatch(
+        /baseline\.attempts[\\/][a-f0-9]{64}\.json$/u,
+      );
+      await expect(readFile(archived, "utf8")).resolves.toBe(failedEvidence);
+      await expect(readFile(target, "utf8")).rejects.toThrow();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

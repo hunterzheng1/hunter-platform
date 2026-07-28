@@ -11,7 +11,15 @@ import {
   writeFileSync,
 } from "node:fs";
 import { arch, release } from "node:os";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import {
+  basename,
+  dirname,
+  extname,
+  isAbsolute,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   NodeCommandRunner,
@@ -94,17 +102,23 @@ const CommandReceiptSchema = z.strictObject({
   args: z.array(z.string().max(512)).max(32),
   exitCode: z.number().int().nullable(),
   timedOut: z.boolean(),
+  outcome: z.enum(["success", "exit_nonzero", "timed_out", "spawn_error"]),
+  timeoutCleanup: z.enum([
+    "not_applicable",
+    "process_tree_terminated",
+    "not_proven",
+  ]),
   outputHash: SHA256Schema,
 });
 
 export const OrcaControlPlaneBaselineSchema = z
   .strictObject({
-    schemaVersion: z.literal(1),
+    schemaVersion: z.literal(2),
     evidenceType: z.literal("orca_control_plane_baseline"),
     generatedAt: z.iso.datetime(),
     generator: z.strictObject({
       name: z.literal("hunter-orca-control-plane-baseline"),
-      version: z.literal("0.1.0"),
+      version: z.literal("0.2.0"),
     }),
     timebox: z.strictObject({
       timezone: z.literal("Asia/Shanghai"),
@@ -274,12 +288,12 @@ export function createOrcaControlPlaneBaseline(
 ): OrcaControlPlaneBaseline {
   const safeInput = redactValue(input) as OrcaControlPlaneBaselineInput;
   const withoutFingerprint = {
-    schemaVersion: 1 as const,
+    schemaVersion: 2 as const,
     evidenceType: "orca_control_plane_baseline" as const,
     generatedAt: safeInput.generatedAt,
     generator: {
       name: "hunter-orca-control-plane-baseline" as const,
-      version: "0.1.0" as const,
+      version: "0.2.0" as const,
     },
     timebox: {
       timezone: "Asia/Shanghai" as const,
@@ -497,36 +511,45 @@ export async function collectOrcaControlPlaneBaseline(
   const run = async (
     executable: string,
     args: readonly string[],
+    timeoutMs = 5_000,
   ): Promise<CommandResult> => await options.runner.run({
     executable,
     args,
     cwd: options.cwd,
-    timeoutMs: 5_000,
+    timeoutMs,
   });
 
-  const [
-    nodeVersion,
-    gitVersion,
-    orcaVersion,
-    orcaStatus,
-    orcaRepoHelp,
-    orcaWorktreeHelp,
-    orcaWorktreeCreateHelp,
-    orcaTerminalHelp,
-    codexVersion,
-    codexLogin,
-  ] = await Promise.all([
-    run("node", ["--version"]),
-    run("git", ["--version"]),
-    run(options.orcaExecutable, ["--version"]),
-    run(options.orcaExecutable, ["status", "--json"]),
-    run(options.orcaExecutable, ["repo", "--help"]),
-    run(options.orcaExecutable, ["worktree", "--help"]),
-    run(options.orcaExecutable, ["worktree", "create", "--help"]),
-    run(options.orcaExecutable, ["terminal", "--help"]),
-    run(options.codexExecutable, ["--version"]),
-    run(options.codexExecutable, ["login", "status"]),
-  ]);
+  // Some public CLIs serialize access to their runtime. Keep probes strictly
+  // sequential so inventory cannot create self-inflicted timeouts.
+  const nodeVersion = await run("node", ["--version"]);
+  const gitVersion = await run("git", ["--version"]);
+  const orcaStatus = await run(options.orcaExecutable, ["status", "--json"], 15_000);
+  const orcaRepoHelp = await run(
+    options.orcaExecutable,
+    ["repo", "--help"],
+    10_000,
+  );
+  const orcaWorktreeHelp = await run(
+    options.orcaExecutable,
+    ["worktree", "--help"],
+    10_000,
+  );
+  const orcaWorktreeCreateHelp = await run(
+    options.orcaExecutable,
+    ["worktree", "create", "--help"],
+    10_000,
+  );
+  const orcaTerminalHelp = await run(
+    options.orcaExecutable,
+    ["terminal", "--help"],
+    10_000,
+  );
+  const codexVersion = await run(options.codexExecutable, ["--version"], 10_000);
+  const codexLogin = await run(
+    options.codexExecutable,
+    ["login", "status"],
+    10_000,
+  );
 
   let statusJson: unknown;
   if (commandSucceeded(orcaStatus)) {
@@ -558,7 +581,6 @@ export async function collectOrcaControlPlaneBaseline(
   const commandInputs = [
     ["node_version", "node", ["--version"], nodeVersion],
     ["git_version", "git", ["--version"], gitVersion],
-    ["orca_version", "orca", ["--version"], orcaVersion],
     ["orca_status", "orca", ["status", "--json"], orcaStatus],
     ["orca_repo_help", "orca", ["repo", "--help"], orcaRepoHelp],
     ["orca_worktree_help", "orca", ["worktree", "--help"], orcaWorktreeHelp],
@@ -579,6 +601,16 @@ export async function collectOrcaControlPlaneBaseline(
       args: [...args],
       exitCode: result.exitCode,
       timedOut: result.timedOut,
+      outcome: result.timedOut
+        ? ("timed_out" as const)
+        : result.spawnError != null
+          ? ("spawn_error" as const)
+          : result.exitCode === 0
+            ? ("success" as const)
+            : ("exit_nonzero" as const),
+      timeoutCleanup:
+        result.timeoutCleanup
+        ?? (result.timedOut ? "not_proven" : "not_applicable"),
       outputHash: operation === "orca_status"
         ? statusReceiptHash
         : commandHash(result),
@@ -621,7 +653,7 @@ export async function collectOrcaControlPlaneBaseline(
       {
         id: "orca",
         availability: orcaDetected ? "DETECTED" : "BLOCKED",
-        version: parseVersion(orcaVersion, "orca"),
+        version: null,
         authentication: "NOT_PROVEN",
         authenticationRequired: true,
       },
@@ -679,15 +711,9 @@ export async function collectOrcaControlPlaneBaseline(
       },
       {
         id: "fixed_version",
-        status: parseVersion(orcaVersion, "orca") === null
-          ? "NOT_PROVEN"
-          : "PASS",
-        reason: parseVersion(orcaVersion, "orca") === null
-          ? "orca_version_not_observed"
-          : "orca_version_observed_from_public_cli",
-        receiptHash: parseVersion(orcaVersion, "orca") === null
-          ? null
-          : commandHash(orcaVersion),
+        status: "NOT_PROVEN",
+        reason: "public_cli_did_not_return_a_numeric_version",
+        receiptHash: null,
       },
       {
         id: "workspace_attach_existing",
@@ -723,6 +749,29 @@ function parseOutputArgument(argv: readonly string[]): string {
   return value;
 }
 
+export function prepareBaselineEvidenceOutput(outputPathInput: string): string | null {
+  const outputPath = resolve(outputPathInput);
+  if (!existsSync(outputPath)) return null;
+  const contents = readFileSync(outputPath);
+  const extension = extname(outputPath) || ".json";
+  const stem = basename(outputPath, extname(outputPath));
+  const archiveRoot = resolve(dirname(outputPath), `${stem}.attempts`);
+  const archivePath = resolve(
+    archiveRoot,
+    `${createHash("sha256").update(contents).digest("hex")}${extension}`,
+  );
+  mkdirSync(archiveRoot, { recursive: true });
+  if (existsSync(archivePath)) {
+    if (!readFileSync(archivePath).equals(contents)) {
+      throw new Error("BASELINE_EVIDENCE_HASH_COLLISION");
+    }
+    unlinkSync(outputPath);
+    return archivePath;
+  }
+  renameSync(outputPath, archivePath);
+  return archivePath;
+}
+
 function writeBaselineEvidenceAtomic(outputPath: string, serialized: string): void {
   if (existsSync(outputPath)) {
     throw new Error("BASELINE_EVIDENCE_ALREADY_EXISTS");
@@ -748,6 +797,7 @@ async function main(): Promise<void> {
     repositoryRoot,
     parseOutputArgument(process.argv.slice(2)),
   );
+  prepareBaselineEvidenceOutput(outputPath);
   const source = inspectControlPlaneSource({
     cwd: repositoryRoot,
     pathspec: CONTROL_PLANE_SOURCE_PATHSPEC,
@@ -758,7 +808,9 @@ async function main(): Promise<void> {
     runner: new NodeCommandRunner(),
     cwd: repositoryRoot,
     orcaExecutable: process.env.ORCA_CLI_COMMAND?.trim() || "orca",
-    codexExecutable: process.env.CODEX_CLI_COMMAND?.trim() || "codex",
+    codexExecutable:
+      process.env.CODEX_CLI_COMMAND?.trim()
+      || (process.platform === "win32" ? "codex.exe" : "codex"),
     now: () => new Date(),
     source,
     host: {
