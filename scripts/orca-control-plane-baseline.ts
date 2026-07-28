@@ -43,6 +43,39 @@ const MeasuredStateSchema = z.enum([
   "NOT_RUN",
   "CONTRACT_ONLY",
 ]);
+const EXPECTED_TOOL_IDS = ["codex", "git", "node", "orca"] as const;
+const EXPECTED_PUBLIC_INTERFACE_OPERATIONS = [
+  "repo_add",
+  "repo_remove",
+  "status",
+  "terminal_close",
+  "terminal_create",
+  "terminal_list",
+  "terminal_read",
+  "terminal_send",
+  "terminal_wait",
+  "workspace_attach_existing",
+  "worktree_create",
+  "worktree_remove",
+] as const;
+const EXPECTED_CAPABILITY_IDS = [
+  "discover_runtime",
+  "fixed_version",
+  "resource_cleanup",
+  "security_defaults",
+  "workspace_attach_existing",
+] as const;
+const EXPECTED_COMMAND_OPERATIONS = [
+  "codex_login_status",
+  "codex_version",
+  "git_version",
+  "node_version",
+  "orca_repo_help",
+  "orca_status",
+  "orca_terminal_help",
+  "orca_worktree_create_help",
+  "orca_worktree_help",
+] as const;
 
 export const CONTROL_PLANE_SOURCE_PATHSPEC = [
   ".github/workflows/ci.yml",
@@ -182,9 +215,14 @@ export const OrcaControlPlaneBaselineSchema = z
     contentFingerprint: SHA256Schema,
   })
   .superRefine((evidence, context) => {
-    const expectedToolIds = ["codex", "git", "node", "orca"];
-    const observedToolIds = evidence.tools.map(({ id }) => id).sort();
-    if (JSON.stringify(observedToolIds) !== JSON.stringify(expectedToolIds)) {
+    const inventoryMatches = (
+      observed: readonly string[],
+      expected: readonly string[],
+    ): boolean =>
+      JSON.stringify([...observed].sort())
+        === JSON.stringify([...expected].sort());
+
+    if (!inventoryMatches(evidence.tools.map(({ id }) => id), EXPECTED_TOOL_IDS)) {
       context.addIssue({
         code: "custom",
         path: ["tools"],
@@ -192,6 +230,18 @@ export const OrcaControlPlaneBaselineSchema = z
       });
     }
 
+    if (
+      !inventoryMatches(
+        evidence.publicInterfaces.map(({ operation }) => operation),
+        EXPECTED_PUBLIC_INTERFACE_OPERATIONS,
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["publicInterfaces"],
+        message: "PUBLIC_INTERFACE_INVENTORY_MISMATCH",
+      });
+    }
     const duplicatePublicInterface = evidence.publicInterfaces.find(
       (receipt, index, receipts) =>
         receipts.findIndex(({ operation }) => operation === receipt.operation)
@@ -205,6 +255,18 @@ export const OrcaControlPlaneBaselineSchema = z
       });
     }
 
+    if (
+      !inventoryMatches(
+        evidence.capabilities.map(({ id }) => id),
+        EXPECTED_CAPABILITY_IDS,
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["capabilities"],
+        message: "CAPABILITY_INVENTORY_MISMATCH",
+      });
+    }
     const duplicateCapability = evidence.capabilities.find(
       (receipt, index, receipts) =>
         receipts.findIndex(({ id }) => id === receipt.id) !== index,
@@ -214,6 +276,31 @@ export const OrcaControlPlaneBaselineSchema = z
         code: "custom",
         path: ["capabilities"],
         message: "CAPABILITY_RECEIPT_DUPLICATE",
+      });
+    }
+
+    if (
+      !inventoryMatches(
+        evidence.commandReceipts.map(({ operation }) => operation),
+        EXPECTED_COMMAND_OPERATIONS,
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["commandReceipts"],
+        message: "COMMAND_RECEIPT_INVENTORY_MISMATCH",
+      });
+    }
+    const duplicateCommandReceipt = evidence.commandReceipts.find(
+      (receipt, index, receipts) =>
+        receipts.findIndex(({ operation }) => operation === receipt.operation)
+          !== index,
+    );
+    if (duplicateCommandReceipt !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["commandReceipts"],
+        message: "COMMAND_RECEIPT_DUPLICATE",
       });
     }
 

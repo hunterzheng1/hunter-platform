@@ -164,6 +164,22 @@ describe("Orca control-plane baseline evidence", () => {
           status: "NOT_PROVEN",
           receiptHash: SHA256_B,
         },
+        ...([
+          "repo_add",
+          "repo_remove",
+          "worktree_create",
+          "worktree_remove",
+          "terminal_create",
+          "terminal_list",
+          "terminal_send",
+          "terminal_read",
+          "terminal_wait",
+          "terminal_close",
+        ] as const).map((operation) => ({
+          operation,
+          status: "NOT_PROVEN" as const,
+          receiptHash: null,
+        })),
       ],
       capabilities: [
         {
@@ -178,6 +194,16 @@ describe("Orca control-plane baseline evidence", () => {
           reason: "mutating_fixture_not_run",
           receiptHash: null,
         },
+        ...([
+          "fixed_version",
+          "resource_cleanup",
+          "security_defaults",
+        ] as const).map((id) => ({
+          id,
+          status: "NOT_PROVEN" as const,
+          reason: "not_measured",
+          receiptHash: null,
+        })),
       ],
       commandReceipts: [
         {
@@ -190,6 +216,25 @@ describe("Orca control-plane baseline evidence", () => {
           timeoutCleanup: "not_applicable",
           outputHash: SHA256_B,
         },
+        ...([
+          "node_version",
+          "git_version",
+          "orca_repo_help",
+          "orca_worktree_help",
+          "orca_worktree_create_help",
+          "orca_terminal_help",
+          "codex_version",
+          "codex_login_status",
+        ] as const).map((operation) => ({
+          operation,
+          executable: "orca" as const,
+          args: [],
+          exitCode: 0,
+          timedOut: false,
+          outcome: "success" as const,
+          timeoutCleanup: "not_applicable" as const,
+          outputHash: SHA256_B,
+        })),
       ],
     });
 
@@ -342,6 +387,33 @@ describe("Orca control-plane baseline evidence", () => {
     });
     expect(duplicateCapabilityResult.error?.issues.map((issue) => issue.message))
       .toContain("CAPABILITY_RECEIPT_DUPLICATE");
+
+    const incompletePublicInterfaceResult =
+      OrcaControlPlaneBaselineSchema.safeParse({
+        ...evidence,
+        publicInterfaces: evidence.publicInterfaces.slice(1),
+      });
+    expect(
+      incompletePublicInterfaceResult.error?.issues.map((issue) => issue.message),
+    ).toContain("PUBLIC_INTERFACE_INVENTORY_MISMATCH");
+
+    const incompleteCapabilityResult = OrcaControlPlaneBaselineSchema.safeParse({
+      ...evidence,
+      capabilities: evidence.capabilities.slice(1),
+    });
+    expect(incompleteCapabilityResult.error?.issues.map((issue) => issue.message))
+      .toContain("CAPABILITY_INVENTORY_MISMATCH");
+
+    const duplicateCommandResult = OrcaControlPlaneBaselineSchema.safeParse({
+      ...evidence,
+      commandReceipts: [
+        evidence.commandReceipts[0],
+        evidence.commandReceipts[0],
+        ...evidence.commandReceipts.slice(2),
+      ],
+    });
+    expect(duplicateCommandResult.error?.issues.map((issue) => issue.message))
+      .toContain("COMMAND_RECEIPT_DUPLICATE");
   });
 
   it("binds a clean source digest and detects later source drift in a temporary Git fixture", async () => {
