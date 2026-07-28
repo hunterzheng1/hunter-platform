@@ -1,0 +1,1098 @@
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { arch, release } from "node:os";
+import {
+  basename,
+  delimiter,
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  NodeCommandRunner,
+  assertSafeEvidence,
+  redact,
+  type CommandResult,
+  type CommandRunner,
+} from "@hunter/spike-testkit";
+import { z } from "zod";
+
+const SHA256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
+const ToolStateSchema = z.enum(["DETECTED", "BLOCKED", "NOT_PROVEN"]);
+const MeasuredStateSchema = z.enum([
+  "PASS",
+  "FAIL",
+  "BLOCKED",
+  "NOT_PROVEN",
+  "NOT_RUN",
+  "CONTRACT_ONLY",
+]);
+const EXPECTED_TOOL_IDS = ["codex", "git", "node", "orca"] as const;
+const EXPECTED_PUBLIC_INTERFACE_OPERATIONS = [
+  "repo_add",
+  "repo_remove",
+  "status",
+  "terminal_close",
+  "terminal_create",
+  "terminal_list",
+  "terminal_read",
+  "terminal_send",
+  "terminal_wait",
+  "workspace_attach_existing",
+  "worktree_create",
+  "worktree_remove",
+] as const;
+const EXPECTED_CAPABILITY_IDS = [
+  "discover_runtime",
+  "fixed_version",
+  "resource_cleanup",
+  "security_defaults",
+  "workspace_attach_existing",
+] as const;
+const EXPECTED_COMMAND_OPERATIONS = [
+  "codex_login_status",
+  "codex_version",
+  "git_version",
+  "node_version",
+  "orca_repo_help",
+  "orca_status",
+  "orca_terminal_help",
+  "orca_worktree_create_help",
+  "orca_worktree_help",
+] as const;
+
+export const CONTROL_PLANE_SOURCE_PATHSPEC = [
+  ".github/workflows/ci.yml",
+  "package.json",
+  "package-lock.json",
+  "tsconfig.json",
+  "tsconfig.base.json",
+  "tsconfig.e2e.json",
+  "apps",
+  "contexts",
+  "packages",
+  "scripts",
+  "spikes",
+  "workflow-packs",
+] as const;
+
+const ControlPlaneSourceIdentitySchema = z.strictObject({
+  commit: z.string().regex(/^[a-f0-9]{40}$/u),
+  digest: SHA256Schema,
+  clean: z.literal(true),
+});
+export type ControlPlaneSourceIdentity = z.infer<
+  typeof ControlPlaneSourceIdentitySchema
+>;
+
+export interface ControlPlaneSourceInspection {
+  readonly commit: string;
+  readonly digest: string;
+  readonly clean: boolean;
+}
+
+const ToolReceiptSchema = z.strictObject({
+  id: z.enum(["node", "git", "orca", "codex"]),
+  launcherKind: z.enum(["native", "powershell_script"]),
+  availability: ToolStateSchema,
+  version: z.string().min(1).max(256).nullable(),
+  authentication: ToolStateSchema,
+  authenticationRequired: z.boolean(),
+});
+
+const PublicInterfaceReceiptSchema = z.strictObject({
+  operation: z.string().min(1).max(128),
+  status: ToolStateSchema,
+  receiptHash: SHA256Schema.nullable(),
+});
+
+const CapabilityReceiptSchema = z
+  .strictObject({
+    id: z.string().min(1).max(128),
+    status: MeasuredStateSchema,
+    reason: z.string().min(1).max(256),
+    receiptHash: SHA256Schema.nullable(),
+  })
+  .superRefine((receipt, context) => {
+    if (receipt.status === "PASS" && receipt.receiptHash === null) {
+      context.addIssue({
+        code: "custom",
+        path: ["receiptHash"],
+        message: "PASS_REQUIRES_RECEIPT_HASH",
+      });
+    }
+  });
+
+const CommandReceiptSchema = z.strictObject({
+  operation: z.string().min(1).max(128),
+  executable: z.enum(["node", "git", "orca", "codex"]),
+  args: z.array(z.string().max(512)).max(32),
+  exitCode: z.number().int().nullable(),
+  timedOut: z.boolean(),
+  outcome: z.enum(["success", "exit_nonzero", "timed_out", "spawn_error"]),
+  timeoutCleanup: z.enum([
+    "not_applicable",
+    "process_tree_terminated",
+    "not_proven",
+  ]),
+  outputHash: SHA256Schema,
+});
+
+export const OrcaControlPlaneBaselineSchema = z
+  .strictObject({
+    schemaVersion: z.literal(2),
+    evidenceType: z.literal("orca_control_plane_baseline"),
+    generatedAt: z.iso.datetime(),
+    generator: z.strictObject({
+      name: z.literal("hunter-orca-control-plane-baseline"),
+      version: z.literal("0.2.0"),
+    }),
+    timebox: z.strictObject({
+      timezone: z.literal("Asia/Shanghai"),
+      workingDays: z.literal(5),
+      weekendDays: z.tuple([z.literal("saturday"), z.literal("sunday")]),
+      startedAt: z.iso.datetime(),
+      deadlineAt: z.iso.datetime(),
+    }),
+    source: ControlPlaneSourceIdentitySchema.extend({
+      digestAlgorithm: z.literal("sha256-path-content-v1"),
+      pathspec: z.tuple(
+        CONTROL_PLANE_SOURCE_PATHSPEC.map((entry) => z.literal(entry)) as [
+          z.ZodLiteral<(typeof CONTROL_PLANE_SOURCE_PATHSPEC)[number]>,
+          ...z.ZodLiteral<(typeof CONTROL_PLANE_SOURCE_PATHSPEC)[number]>[],
+        ],
+      ),
+    }),
+    host: z.strictObject({
+      platform: z.string().min(1).max(64),
+      architecture: z.string().min(1).max(64),
+      release: z.string().min(1).max(128),
+    }),
+    selectedAgent: z.literal("codex"),
+    tools: z.array(ToolReceiptSchema).length(4),
+    publicInterfaces: z.array(PublicInterfaceReceiptSchema),
+    capabilities: z.array(CapabilityReceiptSchema),
+    commandReceipts: z.array(CommandReceiptSchema),
+    runBudget: z.strictObject({
+      maxAttempts: z.literal(2),
+      maxSessionsPerAttempt: z.literal(1),
+      maxSendsPerAttempt: z.literal(4),
+      maxAttemptDurationMs: z.literal(1_200_000),
+      maxTotalExecutionMs: z.literal(2_700_000),
+      additionalPaidBudgetUsd: z.literal(0),
+    }),
+    historicalEvidence: z.strictObject({
+      readOnly: z.literal(true),
+      references: z.tuple([
+        z.literal("docs/validation/phase-0-decision.md"),
+        z.literal("docs/validation/gate-r1-runtime-connectors.md"),
+        z.literal("docs/validation/evidence/gate-r1/runtime-connectors.json"),
+      ]),
+    }),
+    providerVerdict: z.literal("NOT_PROVEN"),
+    proofScope: z.literal("local_inventory_only"),
+    mutationAttempted: z.literal(false),
+    redaction: z.strictObject({
+      applied: z.literal(true),
+      schemaVersion: z.literal(1),
+    }),
+    contentFingerprint: SHA256Schema,
+  })
+  .superRefine((evidence, context) => {
+    const inventoryMatches = (
+      observed: readonly string[],
+      expected: readonly string[],
+    ): boolean =>
+      JSON.stringify([...observed].sort())
+        === JSON.stringify([...expected].sort());
+
+    if (!inventoryMatches(evidence.tools.map(({ id }) => id), EXPECTED_TOOL_IDS)) {
+      context.addIssue({
+        code: "custom",
+        path: ["tools"],
+        message: "TOOL_INVENTORY_MISMATCH",
+      });
+    }
+
+    if (
+      !inventoryMatches(
+        evidence.publicInterfaces.map(({ operation }) => operation),
+        EXPECTED_PUBLIC_INTERFACE_OPERATIONS,
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["publicInterfaces"],
+        message: "PUBLIC_INTERFACE_INVENTORY_MISMATCH",
+      });
+    }
+    const duplicatePublicInterface = evidence.publicInterfaces.find(
+      (receipt, index, receipts) =>
+        receipts.findIndex(({ operation }) => operation === receipt.operation)
+          !== index,
+    );
+    if (duplicatePublicInterface !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["publicInterfaces"],
+        message: "PUBLIC_INTERFACE_RECEIPT_DUPLICATE",
+      });
+    }
+
+    if (
+      !inventoryMatches(
+        evidence.capabilities.map(({ id }) => id),
+        EXPECTED_CAPABILITY_IDS,
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["capabilities"],
+        message: "CAPABILITY_INVENTORY_MISMATCH",
+      });
+    }
+    const duplicateCapability = evidence.capabilities.find(
+      (receipt, index, receipts) =>
+        receipts.findIndex(({ id }) => id === receipt.id) !== index,
+    );
+    if (duplicateCapability !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["capabilities"],
+        message: "CAPABILITY_RECEIPT_DUPLICATE",
+      });
+    }
+
+    if (
+      !inventoryMatches(
+        evidence.commandReceipts.map(({ operation }) => operation),
+        EXPECTED_COMMAND_OPERATIONS,
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["commandReceipts"],
+        message: "COMMAND_RECEIPT_INVENTORY_MISMATCH",
+      });
+    }
+    const duplicateCommandReceipt = evidence.commandReceipts.find(
+      (receipt, index, receipts) =>
+        receipts.findIndex(({ operation }) => operation === receipt.operation)
+          !== index,
+    );
+    if (duplicateCommandReceipt !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["commandReceipts"],
+        message: "COMMAND_RECEIPT_DUPLICATE",
+      });
+    }
+
+    const expectedDeadline = computeShanghaiBusinessDeadline(
+      evidence.timebox.startedAt,
+      evidence.timebox.workingDays,
+    );
+    if (evidence.timebox.deadlineAt !== expectedDeadline) {
+      context.addIssue({
+        code: "custom",
+        path: ["timebox", "deadlineAt"],
+        message: "TIMEBOX_DEADLINE_MISMATCH",
+      });
+    }
+
+    const { contentFingerprint, ...withoutFingerprint } = evidence;
+    const expectedFingerprint = sha256(
+      JSON.stringify(canonicalize({
+        ...withoutFingerprint,
+        generatedAt: undefined,
+      })),
+    );
+    if (contentFingerprint !== expectedFingerprint) {
+      context.addIssue({
+        code: "custom",
+        path: ["contentFingerprint"],
+        message: "CONTENT_FINGERPRINT_MISMATCH",
+      });
+    }
+  });
+
+export type OrcaControlPlaneBaseline = z.infer<
+  typeof OrcaControlPlaneBaselineSchema
+>;
+
+export interface OrcaControlPlaneBaselineInput {
+  readonly generatedAt: string;
+  readonly timeboxStartedAt: string;
+  readonly source: ControlPlaneSourceIdentity;
+  readonly host: OrcaControlPlaneBaseline["host"];
+  readonly tools: OrcaControlPlaneBaseline["tools"];
+  readonly publicInterfaces: OrcaControlPlaneBaseline["publicInterfaces"];
+  readonly capabilities: OrcaControlPlaneBaseline["capabilities"];
+  readonly commandReceipts: OrcaControlPlaneBaseline["commandReceipts"];
+}
+
+export interface OrcaControlPlaneBaselineCollectionOptions {
+  readonly runner: CommandRunner;
+  readonly cwd: string;
+  readonly orcaExecutable: string;
+  readonly codexExecutable: string;
+  readonly codexPrefixArguments?: readonly string[];
+  readonly now: () => Date;
+  readonly timeboxStartedAt?: string;
+  readonly source: ControlPlaneSourceIdentity;
+  readonly host: OrcaControlPlaneBaseline["host"];
+}
+
+export interface ControlPlaneSourceInspectionOptions {
+  readonly cwd: string;
+  readonly pathspec: readonly string[];
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((item) => canonicalize(item));
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, item]) => item !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, canonicalize(item)]),
+    );
+  }
+  return value;
+}
+
+function redactValue(value: unknown): unknown {
+  if (typeof value === "string") return redact(value);
+  if (Array.isArray(value)) return value.map((item) => redactValue(item));
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, redactValue(item)]),
+    );
+  }
+  return value;
+}
+
+export function computeShanghaiBusinessDeadline(
+  startedAt: string,
+  workingDays: number,
+): string {
+  const started = new Date(startedAt);
+  if (
+    Number.isNaN(started.valueOf()) ||
+    !Number.isSafeInteger(workingDays) ||
+    workingDays < 1 ||
+    workingDays > 31
+  ) {
+    throw new Error("TIMEBOX_INPUT_INVALID");
+  }
+
+  const shanghaiOffsetMs = 8 * 60 * 60 * 1_000;
+  const localCursor = new Date(started.valueOf() + shanghaiOffsetMs);
+  let remaining = workingDays;
+  while (remaining > 0) {
+    localCursor.setUTCDate(localCursor.getUTCDate() + 1);
+    const day = localCursor.getUTCDay();
+    if (day !== 0 && day !== 6) remaining -= 1;
+  }
+  return new Date(localCursor.valueOf() - shanghaiOffsetMs).toISOString();
+}
+
+export function createOrcaControlPlaneBaseline(
+  input: OrcaControlPlaneBaselineInput,
+): OrcaControlPlaneBaseline {
+  const safeInput = redactValue(input) as OrcaControlPlaneBaselineInput;
+  const withoutFingerprint = {
+    schemaVersion: 2 as const,
+    evidenceType: "orca_control_plane_baseline" as const,
+    generatedAt: safeInput.generatedAt,
+    generator: {
+      name: "hunter-orca-control-plane-baseline" as const,
+      version: "0.2.0" as const,
+    },
+    timebox: {
+      timezone: "Asia/Shanghai" as const,
+      workingDays: 5 as const,
+      weekendDays: ["saturday", "sunday"] as const,
+      startedAt: safeInput.timeboxStartedAt,
+      deadlineAt: computeShanghaiBusinessDeadline(
+        safeInput.timeboxStartedAt,
+        5,
+      ),
+    },
+    source: {
+      ...safeInput.source,
+      digestAlgorithm: "sha256-path-content-v1" as const,
+      pathspec: CONTROL_PLANE_SOURCE_PATHSPEC,
+    },
+    host: safeInput.host,
+    selectedAgent: "codex" as const,
+    tools: safeInput.tools,
+    publicInterfaces: safeInput.publicInterfaces,
+    capabilities: safeInput.capabilities,
+    commandReceipts: safeInput.commandReceipts,
+    runBudget: {
+      maxAttempts: 2 as const,
+      maxSessionsPerAttempt: 1 as const,
+      maxSendsPerAttempt: 4 as const,
+      maxAttemptDurationMs: 1_200_000 as const,
+      maxTotalExecutionMs: 2_700_000 as const,
+      additionalPaidBudgetUsd: 0 as const,
+    },
+    historicalEvidence: {
+      readOnly: true as const,
+      references: [
+        "docs/validation/phase-0-decision.md",
+        "docs/validation/gate-r1-runtime-connectors.md",
+        "docs/validation/evidence/gate-r1/runtime-connectors.json",
+      ] as const,
+    },
+    providerVerdict: "NOT_PROVEN" as const,
+    proofScope: "local_inventory_only" as const,
+    mutationAttempted: false as const,
+    redaction: { applied: true as const, schemaVersion: 1 as const },
+  };
+  const contentFingerprint = sha256(
+    JSON.stringify(canonicalize({
+      ...withoutFingerprint,
+      generatedAt: undefined,
+    })),
+  );
+  return OrcaControlPlaneBaselineSchema.parse({
+    ...withoutFingerprint,
+    contentFingerprint,
+  });
+}
+
+function gitOutput(
+  cwd: string,
+  args: readonly string[],
+  encoding: "utf8" | "buffer",
+): string | Buffer {
+  return execFileSync("git", [...args], {
+    cwd,
+    encoding,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+}
+
+function validateSourcePathspec(pathspec: readonly string[]): string[] {
+  if (pathspec.length === 0 || pathspec.length > 64) {
+    throw new Error("SOURCE_PATHSPEC_INVALID");
+  }
+  return pathspec.map((entry) => {
+    if (
+      entry.length === 0 ||
+      entry.length > 512 ||
+      isAbsolute(entry) ||
+      entry === ".." ||
+      entry.startsWith(`..${sep}`) ||
+      entry.includes("\u0000")
+    ) {
+      throw new Error("SOURCE_PATHSPEC_INVALID");
+    }
+    return entry;
+  });
+}
+
+export function inspectControlPlaneSource(
+  options: ControlPlaneSourceInspectionOptions,
+): ControlPlaneSourceInspection {
+  const repositoryRoot = resolve(options.cwd);
+  const pathspec = validateSourcePathspec(options.pathspec);
+  const commit = String(
+    gitOutput(repositoryRoot, ["rev-parse", "HEAD"], "utf8"),
+  ).trim();
+  const status = String(
+    gitOutput(
+      repositoryRoot,
+      ["status", "--porcelain=v1", "--untracked-files=all", "--", ...pathspec],
+      "utf8",
+    ),
+  ).trim();
+  const listed = String(
+    gitOutput(
+      repositoryRoot,
+      [
+        "ls-files",
+        "-z",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "--",
+        ...pathspec,
+      ],
+      "utf8",
+    ),
+  ).split("\u0000").filter(Boolean).sort();
+  const digest = createHash("sha256");
+  for (const repositoryPath of listed) {
+    const absolutePath = resolve(repositoryRoot, repositoryPath);
+    const segment = relative(repositoryRoot, absolutePath);
+    if (
+      segment === "" ||
+      segment === ".." ||
+      segment.startsWith(`..${sep}`) ||
+      isAbsolute(segment)
+    ) {
+      throw new Error("SOURCE_PATH_OUTSIDE_REPOSITORY");
+    }
+    const stat = lstatSync(absolutePath);
+    const contents = stat.isSymbolicLink()
+      ? Buffer.from(readlinkSync(absolutePath), "utf8")
+      : readFileSync(absolutePath);
+    digest.update(repositoryPath.replaceAll("\\", "/"));
+    digest.update("\u0000");
+    digest.update(contents);
+    digest.update("\u0000");
+  }
+  return {
+    commit,
+    digest: digest.digest("hex"),
+    clean: status.length === 0,
+  };
+}
+
+export function resolveBaselineOutputPath(
+  repositoryRootInput: string,
+  outputInput: string,
+): string {
+  const repositoryRoot = resolve(repositoryRootInput);
+  const evidenceRoot = resolve(
+    repositoryRoot,
+    "docs",
+    "validation",
+    "evidence",
+    "orca-control-plane",
+  );
+  const outputPath = resolve(repositoryRoot, outputInput);
+  const segment = relative(evidenceRoot, outputPath);
+  if (
+    segment === "" ||
+    segment === ".." ||
+    segment.startsWith(`..${sep}`) ||
+    isAbsolute(segment) ||
+    !outputPath.endsWith(".json")
+  ) {
+    throw new Error("BASELINE_EVIDENCE_OUTPUT_OUTSIDE_ALLOWED_ROOT");
+  }
+  return outputPath;
+}
+
+const OrcaStatusSchema = z.object({
+  ok: z.literal(true),
+  result: z.object({
+    app: z.object({ running: z.boolean() }),
+    runtime: z.object({
+      state: z.string().min(1),
+      reachable: z.boolean(),
+      appVersion: z.string().min(1).max(128).optional(),
+    }),
+    graph: z.object({ state: z.string().min(1) }),
+  }),
+});
+
+function commandSucceeded(result: CommandResult): boolean {
+  return result.exitCode === 0 && !result.timedOut && result.spawnError == null;
+}
+
+function commandHash(result: CommandResult, projection?: unknown): string {
+  const output = projection === undefined
+    ? `${result.stdout}\n${result.stderr}`.replace(/\r\n/gu, "\n").trim()
+    : JSON.stringify(canonicalize(projection));
+  return sha256(redact(output));
+}
+
+function parseVersion(result: CommandResult, product: "node" | "git" | "orca" | "codex"):
+  string | null {
+  if (!commandSucceeded(result)) return null;
+  const normalized = redact(result.stdout).trim().split(/\r?\n/u, 1)[0] ?? "";
+  const pattern = product === "node"
+    ? /^v?([0-9]+(?:\.[0-9]+){1,3}(?:[-+][A-Za-z0-9.-]+)?)$/u
+    : product === "git"
+      ? /^git version ([0-9]+(?:\.[0-9]+){1,3}(?:\.[A-Za-z0-9.-]+)?)$/iu
+      : /\b([0-9]+(?:\.[0-9]+){1,3}(?:[-+][A-Za-z0-9.-]+)?)\b/u;
+  return pattern.exec(normalized)?.[1] ?? null;
+}
+
+function parseVersionText(value: string | undefined): string | null {
+  if (value === undefined) return null;
+  return /^v?([0-9]+(?:\.[0-9]+){1,3}(?:[-+][A-Za-z0-9.-]+)?)$/u
+    .exec(value.trim())?.[1] ?? null;
+}
+
+function helpHas(result: CommandResult, word: string): boolean {
+  return commandSucceeded(result)
+    && new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\b`, "iu")
+      .test(result.stdout);
+}
+
+export async function collectOrcaControlPlaneBaseline(
+  options: OrcaControlPlaneBaselineCollectionOptions,
+): Promise<OrcaControlPlaneBaseline> {
+  const run = async (
+    executable: string,
+    args: readonly string[],
+    timeoutMs = 5_000,
+  ): Promise<CommandResult> => await options.runner.run({
+    executable,
+    args,
+    cwd: options.cwd,
+    timeoutMs,
+  });
+
+  // Some public CLIs serialize access to their runtime. Keep probes strictly
+  // sequential so inventory cannot create self-inflicted timeouts.
+  const nodeVersion = await run("node", ["--version"]);
+  const gitVersion = await run("git", ["--version"]);
+  const orcaStatus = await run(options.orcaExecutable, ["status", "--json"], 15_000);
+  const orcaRepoHelp = await run(
+    options.orcaExecutable,
+    ["repo", "--help"],
+    10_000,
+  );
+  const orcaWorktreeHelp = await run(
+    options.orcaExecutable,
+    ["worktree", "--help"],
+    10_000,
+  );
+  const orcaWorktreeCreateHelp = await run(
+    options.orcaExecutable,
+    ["worktree", "create", "--help"],
+    10_000,
+  );
+  const orcaTerminalHelp = await run(
+    options.orcaExecutable,
+    ["terminal", "--help"],
+    10_000,
+  );
+  const codexPrefixArguments = options.codexPrefixArguments ?? [];
+  const runCodex = async (
+    args: readonly string[],
+  ): Promise<CommandResult> => await run(
+    options.codexExecutable,
+    [...codexPrefixArguments, ...args],
+    10_000,
+  );
+  const codexVersionWithPrefix = await runCodex(["--version"]);
+  const codexLogin = await runCodex(["login", "status"]);
+
+  let statusJson: unknown;
+  if (commandSucceeded(orcaStatus)) {
+    try {
+      statusJson = JSON.parse(orcaStatus.stdout) as unknown;
+    } catch {
+      statusJson = undefined;
+    }
+  }
+  const parsedStatus = statusJson === undefined
+    ? null
+    : OrcaStatusSchema.safeParse(statusJson);
+  const statusProjection = parsedStatus?.success === true
+    ? {
+        app: { running: parsedStatus.data.result.app.running },
+        runtime: {
+          ...(parsedStatus.data.result.runtime.appVersion === undefined
+            ? {}
+            : { appVersion: parsedStatus.data.result.runtime.appVersion }),
+          reachable: parsedStatus.data.result.runtime.reachable,
+          state: parsedStatus.data.result.runtime.state,
+        },
+        graph: { state: parsedStatus.data.result.graph.state },
+      }
+    : { parseStatus: "invalid" };
+  const statusReceiptHash = commandHash(orcaStatus, statusProjection);
+  const runtimeReady = parsedStatus?.success === true
+    && parsedStatus.data.result.app.running
+    && parsedStatus.data.result.runtime.reachable
+    && parsedStatus.data.result.runtime.state.toLowerCase() === "ready";
+
+  const commandInputs = [
+    ["node_version", "node", ["--version"], nodeVersion],
+    ["git_version", "git", ["--version"], gitVersion],
+    ["orca_status", "orca", ["status", "--json"], orcaStatus],
+    ["orca_repo_help", "orca", ["repo", "--help"], orcaRepoHelp],
+    ["orca_worktree_help", "orca", ["worktree", "--help"], orcaWorktreeHelp],
+    [
+      "orca_worktree_create_help",
+      "orca",
+      ["worktree", "create", "--help"],
+      orcaWorktreeCreateHelp,
+    ],
+    ["orca_terminal_help", "orca", ["terminal", "--help"], orcaTerminalHelp],
+    ["codex_version", "codex", ["--version"], codexVersionWithPrefix],
+    ["codex_login_status", "codex", ["login", "status"], codexLogin],
+  ] as const;
+  const commandReceipts = commandInputs.map(
+    ([operation, executable, args, result]) => ({
+      operation,
+      executable,
+      args: [...args],
+      exitCode: result.exitCode,
+      timedOut: result.timedOut,
+      outcome: result.timedOut
+        ? ("timed_out" as const)
+        : result.spawnError != null
+          ? ("spawn_error" as const)
+          : result.exitCode === 0
+            ? ("success" as const)
+            : ("exit_nonzero" as const),
+      timeoutCleanup:
+        result.timeoutCleanup
+        ?? (result.timedOut ? "not_proven" : "not_applicable"),
+      outputHash: operation === "orca_status"
+        ? statusReceiptHash
+        : commandHash(result),
+    }),
+  );
+
+  const orcaDetected = commandSucceeded(orcaStatus);
+  const codexDetected = commandSucceeded(codexVersionWithPrefix);
+  const observedOrcaVersion =
+    parsedStatus?.success === true
+      ? parseVersionText(parsedStatus.data.result.runtime.appVersion)
+      : null;
+  const detectedInterface = (
+    operation: string,
+    detected: boolean,
+    result: CommandResult,
+  ) => ({
+    operation,
+    status: detected ? ("DETECTED" as const) : ("NOT_PROVEN" as const),
+    receiptHash: commandHash(result),
+  });
+
+  const generatedAt = options.now().toISOString();
+  return createOrcaControlPlaneBaseline({
+    generatedAt,
+    timeboxStartedAt: options.timeboxStartedAt ?? generatedAt,
+    source: options.source,
+    host: options.host,
+    tools: [
+      {
+        id: "node",
+        launcherKind: "native",
+        availability: commandSucceeded(nodeVersion) ? "DETECTED" : "BLOCKED",
+        version: parseVersion(nodeVersion, "node"),
+        authentication: "DETECTED",
+        authenticationRequired: false,
+      },
+      {
+        id: "git",
+        launcherKind: "native",
+        availability: commandSucceeded(gitVersion) ? "DETECTED" : "BLOCKED",
+        version: parseVersion(gitVersion, "git"),
+        authentication: "DETECTED",
+        authenticationRequired: false,
+      },
+      {
+        id: "orca",
+        launcherKind: "native",
+        availability: orcaDetected ? "DETECTED" : "BLOCKED",
+        version: observedOrcaVersion,
+        authentication: "NOT_PROVEN",
+        authenticationRequired: true,
+      },
+      {
+        id: "codex",
+        launcherKind:
+          codexPrefixArguments.length === 0 ? "native" : "powershell_script",
+        availability: codexDetected ? "DETECTED" : "BLOCKED",
+        version: parseVersion(codexVersionWithPrefix, "codex"),
+        authentication: commandSucceeded(codexLogin)
+          ? "DETECTED"
+          : codexDetected ? "NOT_PROVEN" : "BLOCKED",
+        authenticationRequired: true,
+      },
+    ],
+    publicInterfaces: [
+      detectedInterface("status", orcaDetected, orcaStatus),
+      detectedInterface("repo_add", helpHas(orcaRepoHelp, "add"), orcaRepoHelp),
+      detectedInterface(
+        "repo_remove",
+        helpHas(orcaRepoHelp, "remove") || helpHas(orcaRepoHelp, "rm"),
+        orcaRepoHelp,
+      ),
+      detectedInterface(
+        "worktree_create",
+        helpHas(orcaWorktreeHelp, "create"),
+        orcaWorktreeHelp,
+      ),
+      detectedInterface(
+        "worktree_remove",
+        helpHas(orcaWorktreeHelp, "remove") || helpHas(orcaWorktreeHelp, "rm"),
+        orcaWorktreeHelp,
+      ),
+      {
+        operation: "workspace_attach_existing",
+        status: "NOT_PROVEN",
+        receiptHash: commandHash(orcaWorktreeCreateHelp),
+      },
+      ...(["create", "list", "send", "read", "wait", "close"] as const).map(
+        (operation) => detectedInterface(
+          `terminal_${operation}`,
+          helpHas(orcaTerminalHelp, operation),
+          orcaTerminalHelp,
+        ),
+      ),
+    ],
+    capabilities: [
+      {
+        id: "discover_runtime",
+        status: runtimeReady ? "PASS" : orcaDetected ? "NOT_PROVEN" : "BLOCKED",
+        reason: runtimeReady
+          ? "status_json_reports_running_reachable_runtime"
+          : orcaDetected
+            ? "status_json_does_not_prove_running_reachable_runtime"
+            : "orca_status_unavailable",
+        receiptHash: runtimeReady ? statusReceiptHash : null,
+      },
+      {
+        id: "fixed_version",
+        status: observedOrcaVersion === null ? "NOT_PROVEN" : "PASS",
+        reason: observedOrcaVersion === null
+          ? "public_cli_did_not_return_a_numeric_version"
+          : "status_json_returned_numeric_app_version",
+        receiptHash: observedOrcaVersion === null ? null : statusReceiptHash,
+      },
+      {
+        id: "workspace_attach_existing",
+        status: "NOT_PROVEN",
+        reason: "mutating_temporary_fixture_not_run",
+        receiptHash: null,
+      },
+      {
+        id: "resource_cleanup",
+        status: "NOT_PROVEN",
+        reason: "cleanup_not_executed_in_task0_inventory",
+        receiptHash: null,
+      },
+      {
+        id: "security_defaults",
+        status: "NOT_PROVEN",
+        reason: "manual_fail_closed_configuration_not_yet_receipted",
+        receiptHash: null,
+      },
+    ],
+    commandReceipts,
+  });
+}
+
+function parseOutputArgument(argv: readonly string[]): string {
+  const index = argv.indexOf("--output");
+  const value = index >= 0 ? argv[index + 1] : undefined;
+  if (value === undefined || value.trim().length === 0) {
+    throw new Error(
+      "USAGE: --output docs/validation/evidence/orca-control-plane/<file>.json",
+    );
+  }
+  return value;
+}
+
+export function prepareBaselineEvidenceOutput(outputPathInput: string): string | null {
+  const outputPath = resolve(outputPathInput);
+  if (!existsSync(outputPath)) return null;
+  const contents = readFileSync(outputPath);
+  const extension = extname(outputPath) || ".json";
+  const stem = basename(outputPath, extname(outputPath));
+  const archiveRoot = resolve(dirname(outputPath), `${stem}.attempts`);
+  const archivePath = resolve(
+    archiveRoot,
+    `${createHash("sha256").update(contents).digest("hex")}${extension}`,
+  );
+  mkdirSync(archiveRoot, { recursive: true });
+  if (existsSync(archivePath)) {
+    if (!readFileSync(archivePath).equals(contents)) {
+      throw new Error("BASELINE_EVIDENCE_HASH_COLLISION");
+    }
+    unlinkSync(outputPath);
+    return archivePath;
+  }
+  renameSync(outputPath, archivePath);
+  return archivePath;
+}
+
+const BaselineTimeboxFragmentSchema = z.object({
+  timebox: z.object({ startedAt: z.iso.datetime() }),
+});
+
+export function findBaselineTimeboxStart(
+  outputPathInput: string,
+  fallbackInput: string,
+): string {
+  const fallback = z.iso.datetime().parse(fallbackInput);
+  const outputPath = resolve(outputPathInput);
+  const extension = extname(outputPath) || ".json";
+  const stem = basename(outputPath, extname(outputPath));
+  const archiveRoot = resolve(dirname(outputPath), `${stem}.attempts`);
+  const candidates = existsSync(outputPath) ? [outputPath] : [];
+  if (existsSync(archiveRoot)) {
+    for (const entry of readdirSync(archiveRoot, { withFileTypes: true })) {
+      if (
+        entry.isFile()
+        && new RegExp(`^[a-f0-9]{64}\\${extension}$`, "u").test(entry.name)
+      ) {
+        candidates.push(resolve(archiveRoot, entry.name));
+      }
+    }
+  }
+
+  let earliest = fallback;
+  let invalidHistory = false;
+  for (const candidate of candidates) {
+    try {
+      const contents = readFileSync(candidate, "utf8");
+      if (Buffer.byteLength(contents) > 1024 * 1024) {
+        invalidHistory = true;
+        continue;
+      }
+      const parsed = BaselineTimeboxFragmentSchema.safeParse(
+        JSON.parse(contents) as unknown,
+      );
+      if (!parsed.success) {
+        invalidHistory = true;
+        continue;
+      }
+      if (
+        new Date(parsed.data.timebox.startedAt).valueOf()
+          < new Date(earliest).valueOf()
+      ) {
+        earliest = parsed.data.timebox.startedAt;
+      }
+    } catch {
+      invalidHistory = true;
+    }
+  }
+  if (invalidHistory) throw new Error("BASELINE_TIMEBOX_HISTORY_INVALID");
+  return earliest;
+}
+
+function writeBaselineEvidenceAtomic(outputPath: string, serialized: string): void {
+  if (existsSync(outputPath)) {
+    throw new Error("BASELINE_EVIDENCE_ALREADY_EXISTS");
+  }
+  mkdirSync(dirname(outputPath), { recursive: true });
+  const temporaryPath = `${outputPath}.${process.pid}.tmp`;
+  writeFileSync(temporaryPath, serialized, {
+    encoding: "utf8",
+    flag: "wx",
+    mode: 0o600,
+  });
+  try {
+    renameSync(temporaryPath, outputPath);
+  } catch (error) {
+    if (existsSync(temporaryPath)) unlinkSync(temporaryPath);
+    throw new Error("BASELINE_EVIDENCE_WRITE_FAILED", { cause: error });
+  }
+}
+
+function findFileOnPath(fileName: string): string | null {
+  const pathValue = process.env.PATH;
+  if (pathValue === undefined) return null;
+  for (const rawDirectory of pathValue.split(delimiter)) {
+    const directory = rawDirectory.trim().replace(/^"|"$/gu, "");
+    if (directory.length === 0) continue;
+    const candidate = join(directory, fileName);
+    try {
+      if (existsSync(candidate) && lstatSync(candidate).isFile()) return candidate;
+    } catch {
+      // An unreadable PATH entry is not an executable candidate.
+    }
+  }
+  return null;
+}
+
+async function main(): Promise<void> {
+  const repositoryRoot = process.cwd();
+  const outputPath = resolveBaselineOutputPath(
+    repositoryRoot,
+    parseOutputArgument(process.argv.slice(2)),
+  );
+  const generatedAt = new Date();
+  const timeboxStartedAt = findBaselineTimeboxStart(
+    outputPath,
+    generatedAt.toISOString(),
+  );
+  const sourceInspection = inspectControlPlaneSource({
+    cwd: repositoryRoot,
+    pathspec: CONTROL_PLANE_SOURCE_PATHSPEC,
+  });
+  if (!sourceInspection.clean) {
+    throw new Error("CONTROL_PLANE_SOURCE_NOT_CLEAN");
+  }
+  const source = ControlPlaneSourceIdentitySchema.parse(sourceInspection);
+
+  const configuredCodexCommand = process.env.CODEX_CLI_COMMAND?.trim();
+  const codexScript =
+    configuredCodexCommand === undefined && process.platform === "win32"
+      ? findFileOnPath("codex.ps1")
+      : null;
+  const evidence = await collectOrcaControlPlaneBaseline({
+    runner: new NodeCommandRunner(),
+    cwd: repositoryRoot,
+    orcaExecutable: process.env.ORCA_CLI_COMMAND?.trim() || "orca",
+    codexExecutable:
+      configuredCodexCommand
+      ?? (codexScript === null ? "codex" : "powershell.exe"),
+    ...(codexScript === null
+      ? {}
+      : {
+          codexPrefixArguments: [
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-File",
+            codexScript,
+          ],
+        }),
+    now: () => generatedAt,
+    timeboxStartedAt,
+    source,
+    host: {
+      platform: process.platform,
+      architecture: arch(),
+      release: release(),
+    },
+  });
+  const serialized = `${JSON.stringify(evidence, null, 2)}\n`;
+  assertSafeEvidence(serialized);
+  prepareBaselineEvidenceOutput(outputPath);
+  writeBaselineEvidenceAtomic(outputPath, serialized);
+  const states = evidence.tools
+    .map((tool) => `${tool.id}=${tool.availability}/${tool.authentication}`)
+    .join(",");
+  process.stdout.write(
+    `Orca control-plane baseline: verdict=${evidence.providerVerdict} tools=${states}\n`,
+  );
+}
+
+const entryPoint = process.argv[1];
+if (
+  entryPoint !== undefined &&
+  resolve(entryPoint) === resolve(fileURLToPath(import.meta.url))
+) {
+  main().catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`Orca control-plane baseline failed: ${redact(message)}\n`);
+    process.exitCode = 1;
+  });
+}
