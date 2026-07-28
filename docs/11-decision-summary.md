@@ -115,3 +115,18 @@ separate review checkpoint.
 41. The original deadline remains `2026-08-04T04:19:30.589Z`. A candidate
     replacement does not reset the clock. A Herdr Stop does not automatically
     start Pi; the next decision is whether to archive Hunter.
+
+## 2026-07-28 Herdr Task 1 Stop
+
+42. Herdr Task 1 reached its hard `BLOCKED` gate after three formal attempts
+    with new evidence. Fixed binary identity, operation idempotency, and the
+    dangerous-permission argument gate passed within the local temporary-fixture
+    scope; exact existing-worktree attach did not complete.
+43. State-only close, complete session isolation, and complete resource cleanup
+    therefore remain `BLOCKED`. Tasks 2–8 are `NOT_RUN`; no fourth probe may
+    rewrite the preserved failure history.
+44. No Agent was started, no prompt was sent, no additional paid budget was
+    used, and the Hunter-owned temporary Git worktree and branch were removed.
+45. The replacement plan is stopped pending a product decision. Hunter does not
+    automatically start Pi, weaken its exact-worktree/Lease/verifier invariants,
+    or claim Herdr as a production Provider.

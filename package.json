@@ -22,6 +22,7 @@
     "spike:orca-control-plane-baseline": "tsx scripts/orca-control-plane-baseline.ts --output docs/validation/evidence/orca-control-plane/baseline.json",
     "spike:orca-public-adapter-gate": "tsx scripts/orca-public-adapter-gate.ts --output docs/validation/evidence/orca-control-plane/public-adapter-gate.json",
     "spike:herdr-control-plane-baseline": "tsx scripts/herdr-control-plane-baseline.ts --output docs/validation/evidence/herdr-control-plane/baseline.json",
+    "spike:herdr-public-adapter-gate": "tsx scripts/herdr-public-adapter-gate.ts --output docs/validation/evidence/herdr-control-plane/public-adapter-gate.json",
     "verify:gate-r-runtime": "tsx scripts/gate-r-runtime-evidence.ts --output docs/validation/evidence/gate-r1/runtime-connectors.json",
     "start:e2e": "node scripts/start-e2e.mjs",
     "test": "vitest run",
