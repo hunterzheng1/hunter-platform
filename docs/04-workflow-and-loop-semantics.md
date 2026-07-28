@@ -117,16 +117,17 @@ Review 默认使用新的 NativeSession，避免实现会话自我确认。项�
 Step。UI 应显示“执行已返回、验证失败”或“窗口已打开、等待人工确认”，
 而不是统一显示“完成”。
 
-## 当前 Orca-hosted Connector 行为
+## 当前 Herdr-hosted Connector 行为
 
 - Hunter 创建、校验并租赁精确 Repository/worktree。
-- Orca Adapter 只通过公开接口附加该路径，发送 HandoffPack 引用和 Step
-  指令，并记录已证明的观察/控制 receipt。
-- Agent/Orca 的 completion、idle、exit 与 window 信号只结束执行观察，
+- Herdr Adapter 只通过固定 public CLI/socket `worktree open --path` 附加
+  该路径，发送 HandoffPack 引用和 Step 指令，并记录已证明的观察/控制
+  receipt。
+- Agent/Herdr 的 return、idle、done、exit 与 pane 信号只结束执行观察，
   不结束验证。
 - Verifier 在 Agent session 外运行；失败创建新的 StepAttempt 并保留旧
   Attempt。
-- 若 attach、reconcile、cleanup 或 Manual/fail-closed 权限无法证明，
+- 若 exact attach、state-only close、reconcile 或 Manual/fail-closed 权限无法证明，
   当前路径进入 `BLOCKED`，不回退到私有数据库、GUI 自动化或危险参数。
 
 多 Agent direct Connector 的 L0–L3 语义仍保留在公共契约中，但当前
@@ -210,7 +211,7 @@ HumanGateStep 绑定固定 Revision/Artifact/Action hash。审批命令必须包
 - 已过期或状态已经变化的审批返回冲突，不重新执行动作。
 - 高危文件操作、凭据访问、发布、合并和部署可被 Policy 强制 Gate。
 - 同一 Session 同时只有一个 Hunter `ControllerLease`，所有
-  Hunter-mediated 输入必须先取得或转移控制权。Orca UI/原生终端的人工
+  Hunter-mediated 输入必须先取得或转移控制权。Herdr/原生终端的人工
   输入不受 Hunter 强制锁控制；观察到这类外部输入时自动控制暂停并进入
   `needs_attention`。
 

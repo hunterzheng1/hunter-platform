@@ -4,7 +4,7 @@
 > 核心判断：开发机是执行与完整数据事实源；云端或中继只是可选连接层。
 
 > 2026-07-28 当前交付范围：只开放 loopback Hunter Web 与窄 Agent tools；
-> 自定义移动/PWA、设备配对和中继冻结。Orca 只通过受认证应用接口或
+> 自定义移动/PWA、设备配对和中继冻结。Herdr 只通过受认证应用接口或
 > Runtime Adapter 访问，不获得数据库、安装级 Secret 或 Verifier 权限。
 
 ## 1. 数据所有权原则
@@ -119,7 +119,7 @@ Event 至少包含全局顺序或流内版本、发生时间、记录时间、Ac
 2. 完成或回滚中断的 Storage Migration。
 3. 重放未处理 Outbox，使用原幂等键。
 4. 枚举 `running / assigned / waiting_* / verifying` Attempt。
-5. 向 ProcessHost、Orca 和 Agent Connector 重新探测会话。
+5. 向 ProcessHost、当前 Runtime Host 和 Agent Connector 重新探测会话。
 6. 校验 Workspace 路径、Lease、Git HEAD 和外部修改。
 7. 重建查询投影或校验投影版本。
 8. 将无法证明仍存活的会话标记 `stale / needs_attention`。
@@ -154,7 +154,7 @@ Event 至少包含全局顺序或流内版本、发生时间、记录时间、Ac
         ▼
 Hunter Core ── PolicyEngine ── Runtime Manager
         │                         │
-        │                         ├─ Orca / ProcessHost
+        │                         ├─ Herdr / ProcessHost
         │                         ├─ Agent Connector
         │                         └─ Native App
         ├─ SQLite / Content
@@ -169,7 +169,7 @@ Hunter Core ── PolicyEngine ── Runtime Manager
 - 上游 Connector 返回路径。
 - 浏览器与移动端参数。
 - 导入的 Workflow Pack、Archive 和 Knowledge。
-- Orca 或其他 Provider 的版本与配置。
+- Herdr 或其他 Provider 的版本与配置。
 
 跨边界时必须执行 Schema、大小、路径范围、权限、内容类型和版本验证。
 
@@ -202,7 +202,7 @@ require_approval
 - 绕过 Agent 自身权限机制。
 - 从移动端发起高危命令。
 
-Hunter-owned run 不继承 Orca 或任何 Agent 预填的“跳过全部权限”默认参数。
+Hunter-owned run 不继承 Herdr、Orca 或任何 Agent 预填的“跳过全部权限”默认参数。
 Adapter 必须使用 Manual/fail-closed 配置，并在结构化 argv、profile 或
 preset 中发现 bypass、yolo、auto-approve 或等价语义时，在进程启动前
 拒绝并记录 `BLOCKED` receipt。项目可以配置更严格策略；当前 gate 不允许
@@ -213,19 +213,19 @@ preset 中发现 bypass、yolo、auto-approve 或等价语义时，在进程启�
 ### 12.1 默认模式
 
 - `hunterd` 默认仅监听 loopback。
-- Orca Browser tab、普通本机浏览器和窄 CLI 使用本机受认证通道。
+- 普通本机浏览器和窄 CLI 使用本机受认证通道。
 - 用户显式启用远程访问后才开放配对。
 
-Orca 只能打开不含 credential 的 loopback URL；URL 可携带不具授权能力
-的 launch identifier。写会话必须通过另一个经验证、不会进入 argv/URL/
-Browser history/Orca log 的 same-user rendezvous 建立，并交换为
-`HttpOnly`、`SameSite=Strict` session。若 Orca 公共接口不存在安全的
-非 argv handoff，则回退为页面内一次性短码/明确用户确认；仍无法证明时
-该项为 `BLOCKED`，不得把 token 放入 query 或 fragment 迁就一键打开。
+本 gate 由用户在普通本机浏览器打开不含 credential 的 loopback URL；URL
+可携带不具授权能力的 launch identifier。写会话必须通过另一个经验证、
+不会进入 argv/URL/Browser history/Herdr log 的 same-user rendezvous
+建立，并交换为 `HttpOnly`、`SameSite=Strict` session。无法证明安全
+handoff 时回退为页面内一次性短码/明确用户确认；仍无法证明则
+`BLOCKED`，不得把 token 放入 query 或 fragment 迁就一键打开。
 服务同时校验 Host/Origin、CSRF 与随机 loopback port。
 
 launch identifier、bootstrap、session 和长期 Secret 都不得进入命令日志、
-Orca comment、Evidence 或诊断包；测试必须同时扫描 process command line
+Herdr metadata、Evidence 或诊断包；测试必须同时扫描 process command line
 和 Browser history。
 
 上述安全形态是实施约束，不是当前已验证事实；必须在五日 gate 中用真实
@@ -233,7 +233,7 @@ Orca comment、Evidence 或诊断包；测试必须同时扫描 process command 
 
 ### 12.2 设备配对
 
-本节及 12.3 是冻结的未来设计，不属于当前 Orca-first gate。
+本节及 12.3 是冻结的未来设计，不属于当前 Herdr replacement gate。
 
 1. 桌面端生成短时、一次性配对挑战。
 2. 手机在本地扫描二维码或输入短码。
@@ -305,7 +305,7 @@ Orca comment、Evidence 或诊断包；测试必须同时扫描 process command 
 3. 重复审批不会重复推进 Step。
 4. Connector 无法从 Project 外路径采集 Artifact。
 5. 日志和导出中不出现注册过的 Secret。
-6. Core 或 Orca 崩溃后不产生重复 Agent Session。
+6. Core 或当前 Runtime Host 崩溃后不产生重复 Agent Session。
 7. 数据库损坏或 Artifact 丢失时 fail closed，不把 Step 标为通过。
 8. 不支持权限事件的 Connector 自动降级，不能获得 L3 标识。
 9. 活动 SQLite 从不通过文件同步机制跨设备复制。

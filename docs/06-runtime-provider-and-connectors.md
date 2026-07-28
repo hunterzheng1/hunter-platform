@@ -1,16 +1,16 @@
 # 06. Runtime Provider 与 Agent Connector 设计
 
 > 状态：Approved Design，2026-07-28 delivery scope revised
-> 当前范围：一个 Orca Adapter + 一个 Orca-hosted real Agent
-> 核心判断：Orca 是首选但可替换的外部 Host；能力仍由原子 receipt 计算，Hunter 必须诚实降级。
+> 当前范围：一个 Herdr Adapter + 一个 Herdr-hosted real Agent
+> 核心判断：Herdr 是 Orca Stop 后的有界替换候选；能力仍由原子 receipt 计算，Hunter 必须诚实降级。
 
 ## 1. 设计目标
 
 Runtime 层负责把 Hunter Flow 的逻辑执行请求映射为 provider-neutral
-ExternalOperation，并通过 Orca 公共接口附加 Hunter 已验证的 worktree、
+ExternalOperation，并通过 Herdr 公共接口附加 Hunter 已验证的 worktree、
 启动/观察真实 Agent，同时向 Flow 返回原子 receipt、observation 与产物。
-Orca 负责 PTY、终端、窗口、Diff、Browser 和 native session；Hunter 不
-重复实现这些基础设施。
+Herdr 负责 workspace、pane、PTY、终端和 Agent runtime；Hunter 不重复
+实现这些基础设施。standalone Orca 的桌面能力不属于当前 Adapter。
 
 它不负责：
 
@@ -28,18 +28,18 @@ Hunter Core 持有工作流事实；Runtime Provider 和 Connector 是可替换�
 
 | 端口 | 职责 | 当前所有权 |
 |---|---|---|
-| `AgentDiscovery` | 发现安装、登录、版本、可执行入口和动态能力 | Orca Adapter 可实现，receipt 必须 fail closed |
-| `WorkspaceProvider` | 由 Git 创建/校验 branch、worktree、隔离空间和 Lease | Hunter-owned；Orca 不可实现创建 |
-| `ProcessHost` | 启动进程、PTY、日志流、信号与进程树生命周期 | 当前 gate 目标为委托 Orca 公共接口 |
-| `AgentConnector` | 启动或连接 Agent、发送 Prompt、恢复、Steer、中断 | Orca Adapter 只实现实测通过的原子能力 |
-| `SessionObserver` | 观察 Session、原始事件、心跳与等待原因 | Orca Adapter 可实现；只产生 observation |
-| `NativeSurfaceOpener` | 打开终端、Browser 或其他原生操作界面 | Orca Adapter 可实现 |
-| `ArtifactCollector` | 采集 Diff、文件、日志、测试报告与协议输出 | Hunter 校验；可消费 Orca observation |
-| `CompletionVerifier` | 根据冻结输出契约产生 VerificationReceipt | Hunter-only；Orca/Agent 永不可实现 |
+| `AgentDiscovery` | 发现安装、登录、版本、可执行入口和动态能力 | Herdr Adapter 可实现，receipt 必须 fail closed |
+| `WorkspaceProvider` | 由 Git 创建/校验 branch、worktree、隔离空间和 Lease | Hunter-owned；Herdr 只能 open exact existing path |
+| `ProcessHost` | 启动进程、PTY、日志流、信号与进程树生命周期 | 当前 gate 目标为委托 Herdr public CLI/socket |
+| `AgentConnector` | 启动或连接 Agent、发送 Prompt、恢复、Steer、中断 | Herdr Adapter 只实现实测通过的原子能力 |
+| `SessionObserver` | 观察 Session、原始事件、心跳与等待原因 | Herdr Adapter 可实现；只产生 observation |
+| `NativeSurfaceOpener` | 打开终端或其他原生操作界面 | Herdr Adapter 可实现；Browser 使用普通本机入口 |
+| `ArtifactCollector` | 采集 Diff、文件、日志、测试报告与协议输出 | Hunter 校验；可消费 Herdr observation |
+| `CompletionVerifier` | 根据冻结输出契约产生 VerificationReceipt | Hunter-only；Herdr/Agent 永不可实现 |
 
-Orca Adapter 只能实现表中明确允许的外部端口，且端口契约归 Hunter
-所有。Workspace 的 identity、Git HEAD 与 Lease 由 Hunter 验证；Orca
-只附加公开接口能够精确定位和完整清理的既存路径。Orca/Agent 在任何
+Herdr Adapter 只能实现表中明确允许的外部端口，且端口契约归 Hunter
+所有。Workspace 的 identity、Git HEAD 与 Lease 由 Hunter 验证；Herdr
+只通过公开接口附加能够精确定位和 state-only 清理的既存路径。Herdr/Agent 在任何
 情况下都不能实现或签发 `CompletionVerifier`。
 
 ## 3. Connector 能力等级
@@ -83,16 +83,18 @@ mobile_control
 
 | 接入对象 | 当前用途 | 当前等级 | 五日 gate 必须测量 |
 |---|---|---:|---|
-| Orca | 首选外部 Workbench/Runtime Host | 未推定 | 固定版本、status、精确 attach/open existing worktree、无 bypass 的 Agent 生命周期、重启对账、结构化 cleanup |
-| 一个 Orca-hosted Agent | 第一条真实执行链 | 由 receipts 计算 | launch/send/observe/interrupt/reconcile 中实际需要的原子能力、Verifier 权威隔离 |
+| Herdr 0.7.5 | Orca Stop 后的 replacement Runtime/terminal Host | 未推定 | Windows binary/protocol、exact `worktree open --path`、state-only `workspace close`、isolated named session、重启对账 |
+| 一个 Herdr-hosted Agent | 第一条真实执行链 | 由 receipts 计算 | launch/prompt/observe/wait/interrupt/reconcile 中实际需要的原子能力、Manual 配置、Verifier 权威隔离 |
+| Orca Adapter | Task 1 已停止 | `BLOCKED` | 保留 exact attach/non-destructive deregister 失败证据，不继续扩展 |
 | Codex/CodeBuddy/Cursor direct | 冻结 | NOT_PROVEN 或历史证据状态 | 当前 gate 不建设；不得因产品名称推定能力 |
-| Pi/Herdr/第二 Provider | 后续候选 | NOT_PROVEN | 仅在 Orca slice 后由用户价值和新计划触发 |
+| Pi/第三 Provider | 后续候选 | NOT_PROVEN | 本 gate 不实现、不安装、不并行验证 |
 
 表中等级不是目标营销标签。只有当前固定版本的实机原子 receipt 能生成
 兼容矩阵；未证明的能力必须降级或阻断。
 
-这里的“首选”是 owner-approved 实验顺序，不是 Provider PASS。Fake contract
-也不能升级真实能力。Goose 不再具有特殊 Gate、版本 Pin 或产品地位。
+这里的“replacement candidate”是 owner-approved 实验顺序，不是 Provider
+PASS。Fake contract 也不能升级真实能力。Goose 不再具有特殊 Gate、版本
+Pin 或产品地位。
 
 ## 5. 接入优先级
 
@@ -205,49 +207,46 @@ fallback_policy
 
 `WorkspaceLease` 至少包含 Project、Repository、Device、绝对路径、Git HEAD、分支、读写模式、持有者和过期/回收状态。
 
-## 10. Orca 集成策略
+## 10. Herdr replacement 集成策略
 
-Orca 是首选但可替换的外部执行底盘和用户工作台，不是 Hunter 的事实源、
-不可替换内核或已证明的生产 Provider。ADR-0005 的历史 `NOT_PROVEN`
-结果保持有效；ADR-0006 只选择下一条有界路线。
+Herdr 0.7.5 是 Orca Task 1 Stop 后的有界 replacement candidate，不是
+Hunter 的事实源、不可替换内核或已证明的 production Provider。ADR-0005
+的 `NOT_PROVEN` 与 ADR-0006/Orca `BLOCKED` 均保持有效；ADR-0007 只选择
+下一项 gate。
 
 ### 10.1 阶段 A：旁路 Sidecar
 
-只通过公开 CLI、Skills、MCP 或其他明确公开接口接入，Hunter Core 独立保存全部业务状态。需要验证：
+只通过固定 public CLI、exported JSON Schema 或 named-pipe API 接入，
+Hunter Core 独立保存全部业务状态。需要验证：
 
-- Windows 上真实安装、升级和卸载。
-- Hunter 创建 exact worktree、Orca attach/open 既存路径与完整 deregistration cleanup。
+- Windows v0.7.5 官方资产、hash、binary 与 preview lifecycle。
+- Hunter 创建 exact worktree、Herdr `worktree open --path` 与 state-only
+  `workspace close` cleanup；禁止 `worktree create/remove`。
 - JSON 输出的 Schema、错误语义和向后兼容。
-- Hunter 重启、Orca 重启、会话失联后的重新关联。
+- Hunter 重启、isolated Herdr named session 重启、会话失联后的重新关联。
 - ConPTY、路径空格、非 ASCII 路径、长路径和进程树。
 - Hunter local Web bootstrap 的认证与 Secret 零泄漏。
-- 遥测、凭据、默认危险参数和许可证。
+- named-pipe same-user 边界、凭据、Agent 默认危险参数和许可证。
 
-### 10.2 阶段 B：是否需要薄 Fork
+### 10.2 Fork 保持禁止
 
-只有同时满足以下条件才进入薄 Fork：
-
-1. Sidecar 已证明核心运行能力可靠。
-2. 单客户端体验存在无法通过公开扩展点解决的明确缺口。
-3. 缺口对首版核心用户故事构成阻塞，而不是视觉偏好。
-4. Fork 能保持 Hunter Core、数据库和领域模型独立。
-5. 已评估上游同步成本、许可证和安全维护责任。
-6. 新的 owner-approved ADR 明确批准 Fork 范围、预算、同步与退出计划。
-
-薄 Fork 只允许增加 Hunter 页面入口、启动/认证桥或稳定扩展点；不把 Flow、Requirement、Knowledge 逻辑塞进 Orca 内部。
+本 gate 未授权任何 Herdr、Orca 或 Pi Fork。历史 Orca 薄 Fork 评估没有
+得到执行证据，且 Orca Adapter 已停止，不能自动恢复。任何 Fork 都需要
+本 replacement gate 先通过、出现公共接口无法解决的关键价值缺口，并由
+新的 owner-approved ADR 单独定义范围、同步预算与退出计划。
 
 ### 10.3 回退条件
 
-出现任一情况，应停止深度依赖 Orca：
+出现任一情况，应停止 Herdr replacement gate：
 
-- Windows 基础能力或恢复稳定性不达标。
-- 公开接口不足且 Fork 维护成本不可接受。
+- Windows beta 基础能力或恢复稳定性不达标。
+- exact open/state-only close、isolated session 或 structured schema 不足。
 - 安全默认值无法可靠覆盖。
 - 许可证、遥测或供应链风险不能接受。
 - 上游不兼容变化频繁，契约测试无法隔离。
 
-当前回退不是自动扩建 Direct Runtime。五日 gate 失败后继续独立使用 Orca，
-再由 owner 单独决定是否做 Pi/Herdr 的有界 Adapter，或归档 Hunter。
+当前回退不是自动扩建 Direct Runtime。Herdr gate 失败后继续独立使用
+成熟工具；Pi 不自动启动，下一决定是是否归档 Hunter。
 
 ## 11. Windows 首发与 Linux 兼容
 
@@ -271,7 +270,7 @@ Orca 是首选但可替换的外部执行底盘和用户工作台，不是 Hunte
 ## 12. 权限与安全
 
 - 不默认使用任何 Agent 的跳过全部权限参数。
-- Orca/Agent 必须选择 Manual/fail-closed；命令、profile 或 preset 中发现
+- Herdr/Agent 必须选择 Manual/fail-closed；命令、profile 或 preset 中发现
   bypass、yolo、auto-approve 及等价语义时，Adapter 在启动前拒绝并记录
   `BLOCKED` receipt。
 - AgentProfile 声明工具权限与资源边界；PolicyEngine 返回 allow、deny 或 require_approval。
@@ -299,17 +298,26 @@ Orca 是首选但可替换的外部执行底盘和用户工作台，不是 Hunte
 12. 上游版本未知或 Schema 漂移时 fail closed。
 
 Fake Provider 是 CI 的确定性基线；当前真实集成测试只覆盖被批准的
-Orca-hosted 单链路。通过 Fake、官方文档、安装检测或 `orca status` 均不
+Herdr-hosted 单链路。通过 Fake、官方文档、安装检测或 `herdr ping` 均不
 代表真实 Connector 可发布。
 
 ## 14. 参考与验证入口
 
-以下上游仅作为 Phase 0 验证入口，具体能力以实机与固定版本契约测试为准：
+当前 replacement gate 的上游入口如下，具体能力仍以实机与固定版本契约
+测试为准：
+
+- [Herdr official repository](https://github.com/ogulcancelik/herdr)
+- [Herdr CLI reference](https://herdr.dev/docs/cli-reference/)
+- [Herdr Socket API](https://herdr.dev/docs/socket-api/)
+- [Herdr Windows beta](https://herdr.dev/docs/windows-beta/)
+
+以下为历史证据或未来候选入口，不是当前实现承诺：
 
 - [Orca 官方仓库](https://github.com/stablyai/orca)
 - [Orca CLI Reference](https://www.onorca.dev/docs/cli/reference)
 - [Orca Mobile](https://www.onorca.dev/docs/mobile)
 - [Orca Supported Agents](https://www.onorca.dev/docs/agents/supported)
+- [Pi official repository](https://github.com/earendil-works/pi)
 - [CodeBuddy CLI Reference](https://www.codebuddy.ai/docs/cli/cli-reference)
 - [CodeBuddy ACP](https://www.codebuddy.cn/docs/cli/acp)
 - [Agent Orchestrator](https://github.com/AgentWrapper/agent-orchestrator)

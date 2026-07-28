@@ -1,8 +1,8 @@
 # 05. 客户端信息架构与交互体验
 
 > 状态：Approved Design，2026-07-28 delivery scope revised
-> 当前范围：Orca 中打开的 Hunter 窄 Web 控制面；Desktop、移动 PWA 与重复原生界面冻结
-> 核心判断：Orca 是日常工作台；Hunter 只提供项目治理、验证和证据控制面。
+> 当前范围：普通本机浏览器中的 Hunter 窄 Web 控制面 + Herdr terminal/Agent Host；Desktop、移动 PWA 与重复原生界面冻结
+> 核心判断：Herdr 是当前有界 Runtime 候选；Hunter 只提供项目治理、验证和证据控制面，standalone Orca 可独立日用。
 
 ## 1. 体验目标
 
@@ -14,10 +14,10 @@ Hunter 的客户端必须让用户在不理解 Runtime、Connector、Session 等
 4. 哪个 Agent、哪个会话、哪个工作区产生了什么结果？
 5. 我现在需要批准、补充信息、接管，还是无需操作？
 
-当前体验采用“一个日常工作台、一个窄控制面”：用户在 Orca 中管理
-worktree、终端、Diff、Browser 与 Agent，同时从 Orca Browser tab 打开
-本机 Hunter Web。`hunterd` 独立持有 canonical state。普通本机浏览器是
-回退入口；自定义 Hunter Desktop 和移动/PWA 不属于当前 gate。
+当前体验采用“成熟原生工具 + 一个窄控制面”：Herdr 承载本次 gate 的
+workspace、terminal、pane 与 Agent，用户在普通本机浏览器打开 Hunter
+Web。`hunterd` 独立持有 canonical state。用户仍可独立使用 Orca、编辑器
+和 Diff 工具；自定义 Hunter Desktop 和移动/PWA 不属于当前 gate。
 
 本文件后续完整页面描述保留为长期产品设计库存。当前只交付
 `Requirement/Change`、`需要我处理`、`Run/Attempt`、
@@ -69,9 +69,9 @@ Hunter 提供统一状态、上下文、产物和控制，但不复制 Cursor、
 ## 4. 全局信息架构
 
 ```text
-Orca
-├─ Worktrees / Terminals / Diff / Browser / Agents
-└─ Hunter control tab
+Herdr + normal browser
+├─ Herdr Workspaces / Panes / Terminals / Agents
+└─ Hunter control page
    └─ Hunter
       ├─ 需要我处理
       │  ├─ 等待输入
@@ -85,7 +85,7 @@ Orca
       │     ├─ Verification / Evidence
       │     └─ Policy / Recovery
       └─ 设置
-         ├─ Orca Adapter 状态
+         ├─ Herdr Adapter 状态
          ├─ 权限与预算
          └─ 数据与恢复
 ```
@@ -292,16 +292,18 @@ Artifact 必须显示来源对象、生成时间、内容哈希、关联 Attempt
 
 ## 9. 首版体验验收
 
-当前 Orca-first gate 的最低标准：
+当前 Herdr replacement gate 的最低标准：
 
-1. 用户从 Orca 在一次操作内打开已认证的 Hunter 本机控制页。
+1. 用户在普通本机浏览器打开已认证的 Hunter 本机控制页，并能定位对应
+   Herdr workspace/pane。
 2. 不懂 Runtime 内部术语的用户可在十分钟内完成一个真实 Requirement
    到验证结果的路径。
 3. 任一 Attempt 可在两次点击内定位到精确 worktree、Agent observation、
    Artifact、VerificationReceipt 和 Evidence。
 4. Agent 返回但测试失败时，页面明确显示“执行返回、验证失败、未完成”。
 5. Attempt 1 失败与 Attempt 2 恢复同时可见，历史不可覆盖。
-6. Hunter/Orca 重启后能回到同一 Run，并把无法证明的执行标为待处理。
+6. Hunter/隔离 Herdr named session 重启后能回到同一 Run，并把无法证明
+   的执行标为待处理。
 7. UI 不提供或暗示 bypass/yolo/auto-approve、虚假 Resume 或虚假成功。
 8. 无未认证写入口，bootstrap Secret 不出现在 URL query、日志、评论或证据。
 

@@ -84,3 +84,34 @@ invariants in items 1–12 or rewriting historical validation.
 33. Topic branches and linked worktrees are cleaned after merge or explicit
     abandonment only when they are clean, have no unique work, have no open PR,
     and are not current, protected, or shared branches.
+
+## 2026-07-28 post-Orca Stop replacement
+
+The Orca experiment reached the Stop condition that its own plan defined. The
+owner then authorized the recommended bounded second-host evaluation without a
+separate review checkpoint.
+
+34. Orca 1.4.159 remains `BLOCKED` for the active slice because its public
+    interface cannot both attach the exact existing Hunter worktree and
+    deregister without deleting that Git checkout. Tasks 2–8 remain historical
+    `NOT_RUN`; this evidence is never rewritten.
+35. Hunter keeps the exact-worktree and Lease invariants. It does not weaken
+    workspace ownership merely to fit Orca.
+36. Herdr 0.7.5 is the single replacement candidate for the remainder of the
+    original timebox. Pi is a documented fallback and is not implemented or
+    installed in parallel.
+37. The Herdr Adapter may use only the fixed public CLI, exported JSON Schema,
+    or documented local socket/named-pipe protocol. It may not read private
+    session/config files or automate terminal/GUI pixels.
+38. Herdr may open the Hunter-owned checkout by exact path. Normal cleanup uses
+    state-only `workspace close`; `worktree create`, `worktree remove`, and
+    force removal are forbidden for Hunter-owned runs.
+39. Herdr's Windows beta, public operations, Agent lifecycle, permission
+    defaults, recovery, and cleanup remain `NOT_PROVEN` until fixed-version
+    local receipts pass. Choosing it is not a production Provider declaration.
+40. The first control surface is the authenticated Hunter page in a normal
+    loopback browser. Herdr owns terminal/pane/Agent runtime state; standalone
+    Orca may continue independently as a daily desktop tool.
+41. The original deadline remains `2026-08-04T04:19:30.589Z`. A candidate
+    replacement does not reset the clock. A Herdr Stop does not automatically
+    start Pi; the next decision is whether to archive Hunter.

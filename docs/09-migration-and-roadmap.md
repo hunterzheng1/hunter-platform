@@ -6,8 +6,8 @@
 
 ## 0. 2026-07-28 active roadmap override
 
-当前路线由 ADR-0006 和
-[`2026-07-28-orca-control-plane-pivot.md`](plans/2026-07-28-orca-control-plane-pivot.md)
+当前路线由 ADR-0007 和
+[`2026-07-28-herdr-control-plane-replacement.md`](plans/2026-07-28-herdr-control-plane-replacement.md)
 控制。以下 Phase 0–3 内容保留为历史设计和长期能力库存，不再按原顺序
 自动推进。
 
@@ -16,13 +16,13 @@
 - Domain/Requirements、Application API、Flow/Verifier、Runtime contracts/
   manager、Storage/Event/Outbox/Receipt、Policy、最小 Archive/Knowledge。
 - `hunterd` 与窄 Web control surface。
-- 一个只使用公开接口的 Orca Adapter。
+- 一个只使用固定 public CLI/schema/named-pipe API 的 Herdr Adapter。
 
 ### 0.2 冻结
 
 - Hunter Desktop 新功能、移动/PWA、Device Gateway。
 - Hunter-owned terminal、PTY、worktree IDE、Diff 和 Browser。
-- Codex/CodeBuddy/Cursor 深 direct Connector、第二 Provider 和额外
+- Codex/CodeBuddy/Cursor 深 direct Connector、Pi/恢复 Orca Adapter 和额外
   capability 抽象。
 - 生产签名、分发、发布与 Fork。
 
@@ -30,18 +30,19 @@
 
 ```text
 docs/contract freeze
-  → public Orca atomic receipts + Manual permission proof
-  → authenticated Hunter page opened from Orca
-  → Hunter-created exact worktree + Orca attach
+  → official Herdr v0.7.5 asset/hash + public schema
+  → exact worktree open + state-only workspace close receipts
+  → authenticated Hunter page in normal loopback browser
+  → Hunter-created exact worktree + Herdr attach
   → one real Agent + non-authoritative observations
   → independent fail/recovery/pass verification
-  → Hunter/Orca restart, evidence, cleanup
+  → Hunter/isolated Herdr restart, evidence, cleanup
   → ten-minute user value Go/Stop
 ```
 
-时间盒为五个工作日。PASS 前不得以 Fake、测试数、安装包或上游宣传代替
-真实路径。Stop 后默认继续 standalone Orca；是否尝试 Pi/Herdr Adapter 或
-归档 Hunter，需要新的 owner 决定。
+时间盒继承原截止 `2026-08-04T04:19:30.589Z`，不因替换候选而重置。
+PASS 前不得以 Fake、测试数、安装包或上游宣传代替真实路径。Herdr Stop
+后不自动启动 Pi；下一决定是继续使用 standalone 成熟工具或归档 Hunter。
 
 ## 1. 迁移目标
 
@@ -220,9 +221,10 @@ ADR-0005 当时采用 Outcome 5：尚无生产 Runtime Provider 得到证明。O
 
 Foundation、Fake contract suite 和 Windows/Ubuntu CI 当时已通过；Outcome 5
 只允许继续 Foundation 维护和 Fake contract 验证。该证据边界继续有效，
-但交付顺序已由 ADR-0006 的五日 Orca-first gate 取代。真实 Provider
-能力与发布仍必须等待固定版本、脱敏原子收据；旧 `P0-RUNTIME-01` 不再是
-自动推进的当前计划。
+ADR-0006 的 Orca-first gate 后续在 Task 1 按计划 Stop；当前交付顺序由
+ADR-0007 的 Herdr replacement gate 取代。真实 Provider 能力与发布仍
+必须等待固定版本、脱敏原子收据；旧 `P0-RUNTIME-01` 不再是自动推进的
+当前计划。
 
 ## 6. Historical Phase 1 target：首个完整纵向版本
 
@@ -276,7 +278,8 @@ Foundation、Fake contract suite 和 Windows/Ubuntu CI 当时已通过；Outcome
 ## 9. Historical Orca 决策门槛矩阵
 
 下表是 2026-07-22 形成的历史门槛，不是当前测量结果。Outcome 5 下所有
-Orca 能力仍为 NOT_PROVEN；ADR-0006 只把 Sidecar 选为新的有界实验路线。
+Orca 能力当时为 NOT_PROVEN；ADR-0006 后续留下 Task 1 `BLOCKED` 的真实
+证据，ADR-0007 不改写它。
 
 | 维度 | Sidecar 采用门槛 | 薄 Fork 采用门槛 | 放弃/替换触发条件 |
 |---|---|---|---|
@@ -288,10 +291,10 @@ Orca 能力仍为 NOT_PROVEN；ADR-0006 只把 Sidecar 选为新的有界实验�
 | 上游同步成本 | 低 | 可预算 | 高且持续 |
 | Hunter 数据独立 | 是 | 是 | 若否则禁止采用 |
 
-Sidecar 原本是 Orca 获得本机证据后的首个评估形态；ADR-0006 现在明确
-选择它作为五日实验，但仍未选择任何 production Provider。薄 Fork 必须有
-sidecar 通过证据、独立 owner-approved ADR、维护责任人、上游同步策略和
-退出计划；“想统一品牌”不是 Fork 理由。
+Sidecar 原本是 Orca 获得本机证据后的首个评估形态；该实验已按硬门 Stop。
+ADR-0007 只选择 Herdr public Adapter 作为剩余时间盒实验，仍未选择任何
+production Provider。任何薄 Fork 都需要单独 owner-approved ADR、维护
+责任人、上游同步策略和退出计划；“想统一品牌”不是 Fork 理由。
 
 ## 10. Historical implementation order
 
