@@ -137,6 +137,26 @@ export const OrcaPublicAdapterGateSchema = z
     contentFingerprint: SHA256Schema,
   })
   .superRefine((evidence, context) => {
+    const expectedCommandOperations = [
+      "status",
+      "repo_help",
+      "repo_add_help",
+      "worktree_help",
+      "worktree_create_help",
+      "worktree_set_help",
+      "worktree_rm_help",
+    ];
+    if (
+      evidence.commandReceipts.map(({ operation }) => operation).join(",")
+      !== expectedCommandOperations.join(",")
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["commandReceipts"],
+        message: "COMMAND_RECEIPT_INVENTORY_MISMATCH",
+      });
+    }
+
     const ids = evidence.capabilities.map(({ id }) => id);
     if (
       new Set(ids).size !== ids.length ||
@@ -157,11 +177,33 @@ export const OrcaPublicAdapterGateSchema = z
 
     const attach = evidence.capabilities[1];
     const cleanup = evidence.capabilities[2];
+    const permissionArgumentGate = evidence.capabilities[3];
+    const securityDefaults = evidence.capabilities[4];
+    const receiptSucceeded = (
+      operation: (typeof expectedCommandOperations)[number],
+    ): boolean =>
+      evidence.commandReceipts.find(
+        (receipt) => receipt.operation === operation,
+      )?.outcome === "success";
+    const attachInventoryConclusive =
+      receiptSucceeded("worktree_help")
+      && receiptSucceeded("worktree_create_help")
+      && receiptSucceeded("worktree_set_help");
+    const cleanupInventoryConclusive =
+      receiptSucceeded("repo_help")
+      && receiptSucceeded("worktree_help")
+      && receiptSucceeded("worktree_rm_help");
+    const expectedAttachStatus =
+      evidence.publicSurface.exactExistingWorktreeAttachDetected
+        ? "NOT_PROVEN"
+        : attachInventoryConclusive ? "BLOCKED" : "NOT_PROVEN";
+    const expectedCleanupStatus =
+      evidence.publicSurface.nonDestructiveDeregisterDetected
+        ? "NOT_PROVEN"
+        : cleanupInventoryConclusive ? "BLOCKED" : "NOT_PROVEN";
     if (
-      (!evidence.publicSurface.exactExistingWorktreeAttachDetected
-        && attach.status !== "BLOCKED") ||
-      (!evidence.publicSurface.nonDestructiveDeregisterDetected
-        && cleanup.status !== "BLOCKED")
+      attach.status !== expectedAttachStatus
+      || cleanup.status !== expectedCleanupStatus
     ) {
       context.addIssue({
         code: "custom",
@@ -170,8 +212,24 @@ export const OrcaPublicAdapterGateSchema = z
       });
     }
     if (
-      (attach.status === "BLOCKED" || cleanup.status === "BLOCKED")
-      && evidence.providerVerdict !== "BLOCKED"
+      permissionArgumentGate.status !== "CONTRACT_ONLY"
+      || securityDefaults.status !== "NOT_PROVEN"
+      || (evidence.runtime.version === null
+        ? evidence.capabilities[0].status !== "NOT_PROVEN"
+        : evidence.capabilities[0].status !== "PASS")
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["capabilities"],
+        message: "CAPABILITY_STATUS_MISMATCH",
+      });
+    }
+    const expectedVerdict =
+      expectedAttachStatus === "BLOCKED" || expectedCleanupStatus === "BLOCKED"
+        ? "BLOCKED"
+        : "NOT_PROVEN";
+    if (
+      evidence.providerVerdict !== expectedVerdict
     ) {
       context.addIssue({
         code: "custom",

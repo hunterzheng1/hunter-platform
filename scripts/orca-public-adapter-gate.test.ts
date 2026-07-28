@@ -94,6 +94,20 @@ class PublicHelpRunner implements CommandRunner {
   }
 }
 
+class InconclusiveHelpRunner extends PublicHelpRunner {
+  override async run(request: CommandRequest): Promise<CommandResult> {
+    const result = await super.run(request);
+    return request.args.join("\u0000") === "worktree\u0000--help"
+      ? {
+          ...result,
+          exitCode: 1,
+          stdout: "",
+          stderr: "help unavailable",
+        }
+      : result;
+  }
+}
+
 describe("Orca public adapter gate", () => {
   it("fails closed without mutating when public CLI cannot attach and detach an exact existing worktree", async () => {
     const runner = new PublicHelpRunner();
@@ -196,5 +210,55 @@ describe("Orca public adapter gate", () => {
         providerVerdict: "PASS",
       }),
     ).toThrow();
+
+    expect(() =>
+      OrcaPublicAdapterGateSchema.parse({
+        ...evidence,
+        commandReceipts: [
+          evidence.commandReceipts[0],
+          evidence.commandReceipts[0],
+          ...evidence.commandReceipts.slice(2),
+        ],
+      }),
+    ).toThrow();
+  });
+
+  it("records NOT_PROVEN instead of losing evidence when help inventory is incomplete", async () => {
+    const evidence = await collectOrcaPublicAdapterGate({
+      runner: new InconclusiveHelpRunner(),
+      cwd: "C:\\fixture",
+      orcaExecutable: "orca",
+      generatedAt: "2026-07-28T05:30:00.000Z",
+      source: SOURCE,
+      baseline: {
+        path: "docs/validation/evidence/orca-control-plane/baseline.json",
+        sha256: "b".repeat(64),
+        sourceCommit: "2".repeat(40),
+        sourceDigest: "c".repeat(64),
+        timeboxStartedAt: "2026-07-28T04:19:30.589Z",
+        timeboxDeadlineAt: "2026-08-04T04:19:30.589Z",
+      },
+    });
+
+    expect(evidence.providerVerdict).toBe("NOT_PROVEN");
+    expect(evidence.capabilities).toEqual([
+      expect.objectContaining({ id: "fixed_version", status: "PASS" }),
+      expect.objectContaining({
+        id: "workspace_attach_existing",
+        status: "NOT_PROVEN",
+      }),
+      expect.objectContaining({
+        id: "resource_cleanup",
+        status: "NOT_PROVEN",
+      }),
+      expect.objectContaining({
+        id: "permission_argument_gate",
+        status: "CONTRACT_ONLY",
+      }),
+      expect.objectContaining({
+        id: "security_defaults",
+        status: "NOT_PROVEN",
+      }),
+    ]);
   });
 });
