@@ -19,6 +19,7 @@ record should retain a hash and a safe summary.
 
 Current records:
 
+- [`orca-public-adapter-gate.md`](orca-public-adapter-gate.md) — Orca-first Task 1 public CLI attach/cleanup hard gate, version-matched local help receipts, zero-mutation `BLOCKED` closeout, and Task 2–8 `NOT_RUN`.
 - [`orca-control-plane-baseline.md`](orca-control-plane-baseline.md) — Orca-first Task 0 frozen source/timebox/budget, read-only public-interface inventory, redacted local tool receipts, and preserved failed probe attempts.
 - [`gate-r1-runtime-connectors.md`](gate-r1-runtime-connectors.md) — Gate R-1 real local Orca/Codex/CodeBuddy/Cursor receipts, receipt-derived `NONE` levels, preserved launcher/timeout failure history, and explicit Provider Gate A boundary.
 - [`phase-1-soak.md`](phase-1-soak.md) — Task 11 fixed-seed smoke/24-hour soak protocol, preserved cycle attempts, bounded resources, and honest NOT_RUN/NOT_PROVEN/PASS rules.

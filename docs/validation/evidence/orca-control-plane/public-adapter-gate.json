@@ -1,0 +1,197 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "orca_public_adapter_gate",
+  "generatedAt": "2026-07-28T05:36:42.095Z",
+  "generator": {
+    "name": "hunter-orca-public-adapter-gate",
+    "version": "0.1.0"
+  },
+  "source": {
+    "commit": "71a4e72b3c0fe27155cef146e4893180b084e5f5",
+    "digest": "0fa37e6c8f8ed28f427cb3106c2c042d176705f205bc3721904204f88a0771bf",
+    "clean": true
+  },
+  "baseline": {
+    "path": "docs/validation/evidence/orca-control-plane/baseline.json",
+    "sha256": "3f6be678a66c8348583935f664fcfa04bfe752d6ad903a32b1e6023fcf83777d",
+    "sourceCommit": "5ce1ccfa1f851bdcb8d1b7aa2623f98bee8bbec6",
+    "sourceDigest": "7d88427e93827647bb17673be58c9ad5378bd9e64b6664f05f6f80a86588a904",
+    "timeboxStartedAt": "2026-07-28T04:19:30.589Z",
+    "timeboxDeadlineAt": "2026-08-04T04:19:30.589Z"
+  },
+  "runtime": {
+    "availability": "DETECTED",
+    "version": "1.4.159"
+  },
+  "publicSurface": {
+    "exactExistingWorktreeAttachDetected": false,
+    "nonDestructiveDeregisterDetected": false,
+    "repoRemoveCommandDetected": false,
+    "worktreeCreateCreatesNewCheckout": true,
+    "worktreeRemoveDeletesGitWorktree": true,
+    "worktreeSetOnlyUpdatesMetadata": true
+  },
+  "commandReceipts": [
+    {
+      "operation": "status",
+      "args": [
+        "status",
+        "--json"
+      ],
+      "exitCode": 0,
+      "timedOut": false,
+      "outcome": "success",
+      "outputHash": "829d6477ac694c2d5ea3b8b681f7123ab46a70e803005196f222abce98f04ec7"
+    },
+    {
+      "operation": "repo_help",
+      "args": [
+        "repo",
+        "--help"
+      ],
+      "exitCode": 0,
+      "timedOut": false,
+      "outcome": "success",
+      "outputHash": "58e8536a32df60026a4aec35a985633c9daf372e4b527f0cc5e4bce092b66bbe"
+    },
+    {
+      "operation": "repo_add_help",
+      "args": [
+        "repo",
+        "add",
+        "--help"
+      ],
+      "exitCode": 0,
+      "timedOut": false,
+      "outcome": "success",
+      "outputHash": "a6f402fd54d8b0717002cff701f31b3d7ddaf49d693727a384c37853b13c2afb"
+    },
+    {
+      "operation": "worktree_help",
+      "args": [
+        "worktree",
+        "--help"
+      ],
+      "exitCode": 0,
+      "timedOut": false,
+      "outcome": "success",
+      "outputHash": "ef931b65f20e9ddfe4a259e90512b87513c4378e71a22b400fbd6ecc6efdbf49"
+    },
+    {
+      "operation": "worktree_create_help",
+      "args": [
+        "worktree",
+        "create",
+        "--help"
+      ],
+      "exitCode": 0,
+      "timedOut": false,
+      "outcome": "success",
+      "outputHash": "f464cff94743c8bdafcaa55abf07bf339f76ba534999e486344c408ce5e3780b"
+    },
+    {
+      "operation": "worktree_set_help",
+      "args": [
+        "worktree",
+        "set",
+        "--help"
+      ],
+      "exitCode": 0,
+      "timedOut": false,
+      "outcome": "success",
+      "outputHash": "e10913de8a1ce23c073950be3c27d8f9d4bc9e7f011e29f8a5ab9a1933c7e534"
+    },
+    {
+      "operation": "worktree_rm_help",
+      "args": [
+        "worktree",
+        "rm",
+        "--help"
+      ],
+      "exitCode": 0,
+      "timedOut": false,
+      "outcome": "success",
+      "outputHash": "2b80353f973ddb16d9ad843f4d155042d40667fcde7cd82d4c963a19d22b9c2b"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "fixed_version",
+      "status": "PASS",
+      "reason": "status_json_returned_numeric_app_version",
+      "receiptHash": "829d6477ac694c2d5ea3b8b681f7123ab46a70e803005196f222abce98f04ec7"
+    },
+    {
+      "id": "workspace_attach_existing",
+      "status": "BLOCKED",
+      "reason": "public_cli_only_creates_new_checkout_or_updates_managed_metadata",
+      "receiptHash": null
+    },
+    {
+      "id": "resource_cleanup",
+      "status": "BLOCKED",
+      "reason": "public_cli_has_no_nondestructive_deregister_and_rm_deletes_git_worktree",
+      "receiptHash": null
+    },
+    {
+      "id": "permission_argument_gate",
+      "status": "CONTRACT_ONLY",
+      "reason": "adapter_rejects_forbidden_permission_flags_in_local_tests",
+      "receiptHash": null
+    },
+    {
+      "id": "security_defaults",
+      "status": "NOT_PROVEN",
+      "reason": "real_manual_fail_closed_configuration_not_executed",
+      "receiptHash": null
+    }
+  ],
+  "budgetUsage": {
+    "realAttempts": 0,
+    "realSessions": 0,
+    "sends": 0,
+    "additionalPaidBudgetUsd": 0
+  },
+  "cleanup": {
+    "status": "NOT_REQUIRED",
+    "reason": "no_provider_resource_created"
+  },
+  "subsequentTasks": [
+    {
+      "task": 2,
+      "status": "NOT_RUN"
+    },
+    {
+      "task": 3,
+      "status": "NOT_RUN"
+    },
+    {
+      "task": 4,
+      "status": "NOT_RUN"
+    },
+    {
+      "task": 5,
+      "status": "NOT_RUN"
+    },
+    {
+      "task": 6,
+      "status": "NOT_RUN"
+    },
+    {
+      "task": 7,
+      "status": "NOT_RUN"
+    },
+    {
+      "task": 8,
+      "status": "NOT_RUN"
+    }
+  ],
+  "providerVerdict": "BLOCKED",
+  "proofScope": "local_public_cli_help_inventory",
+  "mutationAttempted": false,
+  "redaction": {
+    "applied": true,
+    "schemaVersion": 1
+  },
+  "contentFingerprint": "16246f4817f7d27b0ab13671b255bd8765f4d53749b5ba7262da08e9cebf1b70"
+}
