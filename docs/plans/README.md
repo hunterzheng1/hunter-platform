@@ -1,11 +1,12 @@
 # Implementation plans
 
-## Active plan
+## Stopped plan — product decision pending
 
 [Herdr replacement control-plane gate](2026-07-28-herdr-control-plane-replacement.md)
-is the only active implementation plan. It inherits the original deadline and
-tests one real Herdr-hosted vertical slice without resetting the Orca failure
-history. No older plan may be resumed automatically.
+stopped at Task 1 after three evidence-bearing attempts reached the exact
+existing-worktree hard gate. Tasks 2–8 are `NOT_RUN`; the closeout is recorded
+in [Herdr public Adapter Task 1 closeout](../validation/herdr-public-adapter-gate.md).
+No older plan, Pi fallback, or later Herdr task may be resumed automatically.
 
 ## Historical plans
 

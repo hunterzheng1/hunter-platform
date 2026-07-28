@@ -1,0 +1,146 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "herdr_public_adapter_gate",
+  "generatedAt": "2026-07-28T09:12:24.250Z",
+  "generator": {
+    "name": "hunter-herdr-public-adapter-gate",
+    "version": "0.1.0"
+  },
+  "source": {
+    "commit": "e80121236280070f650bda16f9e01e2dfb80b813",
+    "digest": "baa677901a96333c34d652d837a7a2fcb2d77e9ec21596b40bb00cac2b65a81d",
+    "clean": true
+  },
+  "baseline": {
+    "path": "docs/validation/evidence/herdr-control-plane/baseline.json",
+    "sha256": "642732601620776bfb9c1b6f62a87144464b418cc0f8697b0b4751a413510921",
+    "task0Verdict": "PASS",
+    "providerVerdict": "NOT_PROVEN"
+  },
+  "runtime": {
+    "providerId": "rtp_herdr_public_cli",
+    "version": "0.7.5-preview.2026-07-21-0f10e1453a7f",
+    "identityFingerprint": "528129fcabb9432b5ffa3197e63a25b28df7ba23c65edcb2478c9b3638265a7d",
+    "identityVerified": false
+  },
+  "fixture": {
+    "noRemote": false,
+    "exactPathAttached": false,
+    "headPreservedAfterClose": false,
+    "branchPreservedAfterClose": false,
+    "contentPreservedAfterClose": false,
+    "gitPathPreservedAfterClose": false
+  },
+  "operations": {
+    "prepareStatus": "not_run",
+    "prepareReceiptHash": null,
+    "duplicateReturnedSameReceipt": false,
+    "releaseStatus": "not_run",
+    "releaseReceiptHash": null
+  },
+  "sessionIsolation": {
+    "targetBefore": "unknown",
+    "targetAfterClose": "unknown",
+    "targetAfterCleanup": "unknown",
+    "unrelatedDigestBefore": null,
+    "unrelatedDigestAfterClose": null,
+    "unrelatedDigestAfterCleanup": null,
+    "unrelatedResourcesUntouched": false
+  },
+  "permissionGate": {
+    "dangerousArgumentRejectedBeforeIo": false,
+    "forceRemovalRejectedBeforeIo": false,
+    "shellExecutionUsed": false,
+    "privateStateRead": false,
+    "guiOrTerminalScrapingUsed": false
+  },
+  "cleanup": {
+    "workspaceStateClosed": false,
+    "ownedSessionStopped": false,
+    "ownedSessionDeleted": false,
+    "hunterGitWorktreeRemoved": false,
+    "hunterGitBranchRemoved": false
+  },
+  "checks": [
+    {
+      "id": "fixed_version",
+      "status": "BLOCKED",
+      "receiptHash": null
+    },
+    {
+      "id": "workspace_attach_existing",
+      "status": "BLOCKED",
+      "receiptHash": null
+    },
+    {
+      "id": "operation_idempotency",
+      "status": "BLOCKED",
+      "receiptHash": null
+    },
+    {
+      "id": "state_only_cleanup",
+      "status": "BLOCKED",
+      "receiptHash": null
+    },
+    {
+      "id": "isolated_session",
+      "status": "BLOCKED",
+      "receiptHash": null
+    },
+    {
+      "id": "permission_argument_gate",
+      "status": "BLOCKED",
+      "receiptHash": null
+    },
+    {
+      "id": "resource_cleanup",
+      "status": "BLOCKED",
+      "receiptHash": null
+    }
+  ],
+  "budgetUsage": {
+    "realAttempts": 1,
+    "realSessions": 1,
+    "agentStarts": 0,
+    "sends": 0,
+    "additionalPaidBudgetUsd": 0
+  },
+  "providerVerdict": "BLOCKED",
+  "failureCode": "TEMP_GIT_COMMAND_FAILED",
+  "subsequentTasks": [
+    {
+      "task": 2,
+      "status": "NOT_RUN"
+    },
+    {
+      "task": 3,
+      "status": "NOT_RUN"
+    },
+    {
+      "task": 4,
+      "status": "NOT_RUN"
+    },
+    {
+      "task": 5,
+      "status": "NOT_RUN"
+    },
+    {
+      "task": 6,
+      "status": "NOT_RUN"
+    },
+    {
+      "task": 7,
+      "status": "NOT_RUN"
+    },
+    {
+      "task": 8,
+      "status": "NOT_RUN"
+    }
+  ],
+  "proofScope": "local_public_cli_temporary_git_fixture",
+  "redaction": {
+    "applied": true,
+    "schemaVersion": 1
+  },
+  "contentFingerprint": "571eef999931b02666d8c323f70bc76fbd38c9d8d4f6a06b146289231579bc8a"
+}
