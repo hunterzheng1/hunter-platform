@@ -1,8 +1,44 @@
 # 08. 用户故事与验收标准
 
-> 状态：Approved Design Draft
-> 首版目标用户：单用户、多项目、多设备的个人开发者
+> 状态：Approved Design，2026-07-28 active gate revised
+> 当前目标用户：单用户、单台 Windows 开发机、Orca 日常工作台
 > 首发验收平台：Windows；核心契约从第一天在 Linux CI 运行。
+
+## 0. 当前五工作日 Go/Stop Gate
+
+本节优先于后续旧 Phase 1 广度验收。后续多 Agent、Desktop、移动/PWA、
+第二 Provider 与完整页面矩阵保留为长期设计库存，不是当前通过条件。
+
+唯一真实黄金路径：
+
+```text
+approved Requirement/Change
+  → Hunter creates and leases exact Git worktree
+  → Orca attaches exact path
+  → one real Agent changes a non-toy target without bypass flags
+  → runtime returns/idle but Step remains unverified
+  → independent Verifier deliberately fails Attempt 1
+  → recovery creates Attempt 2 and passes
+  → Hunter + Orca restart/reconcile without duplicate effect
+  → redacted Evidence and complete cleanup
+```
+
+Go 必须同时满足：
+
+- 全链路在真实 Windows/Orca/Agent 上重现，Fake 结果只作 contract baseline。
+- 每个外部副作用有 operation id、fingerprint 和 receipt；重放返回同一结果。
+- Attempt 1 失败历史完整，Attempt 2 不覆盖它。
+- Orca/Agent 无法签发 Verifier 或 HumanReceipt。
+- workspace path/HEAD、restart、terminal/session registration、receipt/outbox
+  和 Provider effect 全部对账。
+- Manual/fail-closed 生效；没有 bypass/yolo/auto-approve 等参数。
+- Evidence 不含凭据、完整 Prompt、绝对用户隐私路径或未脱敏环境。
+- 普通用户能在十分钟内理解并完成路径，且认为它比直接用 Orca 多出实际
+  治理价值。
+
+任一核心能力需要私有 Orca DB、GUI 自动化、危险权限，或五个工作日仍
+未贯通，结果是 `BLOCKED`/`NOT_PROVEN` 并停止扩建，不用更多 Fake、
+Connector、UI 或抽象替代真实结果。
 
 ## 1. 验收原则
 
@@ -50,7 +86,7 @@ And 对 DAG 环依赖的保存被拒绝并说明环路径
 And 已发布 ChangeRevision 不可覆盖；范围变化会创建新的 draft Revision
 ```
 
-### Journey C：混合 Agent 执行并可接管
+### Journey C：混合 Agent 执行并可接管（当前冻结）
 
 作为开发者，我希望计划交给 Codex、实现交给 CodeBuddy、某个局部修改在 Cursor 中人工接管，同时仍在一个 Run 里看到统一状态与产物。
 
@@ -288,16 +324,19 @@ Hunter 打开正确 Cursor workspace，用户完成修改并提交 Step Receipt�
 
 ## 8. 发布阻断条件
 
-存在任一情况时，Phase 1 不可声明完成：
+存在任一情况时，当前 gate 不可 PASS，Hunter 不可声明 production-ready：
 
 - Agent 返回后未经验证直接亮绿灯。
 - RequirementRevision 或 WorkflowRevision 被运行时覆盖。
 - 并发 Agent 写同一工作区。
 - Core 重启可能重复启动 Agent。
 - Orca 成为唯一不可替换的数据或领域事实源。
+- Adapter 需要读取 Orca 私有数据库、解析 GUI/模糊终端文本或继承
+  bypass/yolo/auto-approve。
+- Orca 不能精确附加 Hunter 创建的 worktree 或不能完整清理注册/分支。
 - Cursor 被宣传为可控会话，但实际上只完成了窗口打开。
 - Secret 出现在数据库、日志、导出或诊断包。
-- 移动端能绕过桌面策略执行高风险操作。
+- 任一外部 Host/客户端能绕过 Hunter 策略执行高风险操作。
 - Archive 已创建但无法追溯到输入版本、Attempt 和 Evidence。
 - 所有知识自动进入 Prompt，未处理 superseded/withdrawn 状态。
 
@@ -307,7 +346,7 @@ Agent 可以完成：
 
 - 单元、状态机、存储、迁移和契约测试。
 - Fake Provider 与本地端到端测试。
-- Orca/Codex/CodeBuddy/Cursor 的安装探测和技术效果检查。
+- Orca 与本次所选 Orca-hosted Agent 的安装探测和技术效果检查。
 - 故障注入、日志检查、Artifact/Evidence 对账。
 
 需要用户参与：

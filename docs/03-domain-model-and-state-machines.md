@@ -245,7 +245,10 @@ SessionPolicy 的含义：
 ### Lease
 
 - WorkspaceLease 防止多个写入 Attempt 同时修改同一工作区。
-- ControllerLease 防止 Hunter Desktop、手机和原生终端同时向一个会话输入。
+- ControllerLease 只串行化经过 Hunter Adapter 的 controller 输入。Orca
+  UI、原生 Agent/终端等绕过 Adapter 的人工输入无法被 Lease 强制阻止；
+  一旦观察到外部输入或状态漂移，Attempt 进入 `needs_attention` 并停止
+  自动控制。
 - Lease 有 owner、scope、generation、expiry 和续租策略。
 - 失去 Lease 时进入 `stale/needs_attention`，不能自动夺取仍可能活跃的控制权。
 

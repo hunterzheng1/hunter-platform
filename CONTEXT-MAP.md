@@ -31,7 +31,7 @@ Project
 | Workbench | `Project`、`Repository`、`DeviceBinding` | 需求版本、执行状态、原生 Agent 会话 |
 | Requirements | `Requirement`、`RequirementRevision`、`RequirementAmendment`、`Change`、`ChangeRevision` | Task 调度、工作流状态机 |
 | Flow | `ExecutionPlan`、`TaskGraph`、`Task`、`WorkflowRevision`、`WorkflowRun`、`StepRun`、`StepAttempt` | 操作 PTY、解释 Agent 私有状态 |
-| Runtime | `AgentProduct`、`AgentProfile`、`Connector`、`NativeSessionRef`、`WorkspaceLease` | 判定业务步骤成功、保存需求正文 |
+| Runtime | `AgentProduct`、`AgentProfile`、`Connector`、`ExternalWorkbenchHost`、`RuntimeObservation`、`NativeSessionRef`、`WorkspaceLease` | 判定业务步骤成功、保存需求正文 |
 | Knowledge | `Artifact`、`Evidence`、`Archive`、`KnowledgeSource`、`KnowledgeEntry` | 调度 Agent、修改冻结需求 |
 | Harness Distribution | `HarnessPack`、`WorkflowPack`、`SkillPackage`、`DistributionRelease`、`HarnessInstallation` | 定义 Workbench Project、成为本地执行前置依赖 |
 
@@ -40,6 +40,9 @@ Project
 - 跨域引用使用稳定 ID 和不可变 Revision ID，不复制对方的可变内部状态。
 - `WorkflowRun` 必须固定引用一个 `ChangeRevision`、一组 `RequirementRevision` 和一个 `WorkflowRevision`。
 - `StepAttempt` 可引用 Runtime 返回的 `NativeSessionRef`，但会话状态不能直接决定步骤是否成功。
+- ExternalWorkbenchHost 通过受认证应用接口和 Runtime 端口与 Hunter
+  协作；它的私有状态只能作为外部引用或 `RuntimeObservation`，不能成为
+  Hunter 的跨域接口。
 - Knowledge 通过 `KnowledgeSource` 引用需求、Change、Run、Attempt、Artifact 与 Evidence；来源对象仍由原上下文持有。
 - Harness Distribution 可以发布 Flow 可导入的工作流包和 Runtime 可安装的适配资产，但不能修改正在运行的 Revision。
 - `DeviceBinding` 保存某个 Repository 在某台设备上的路径；本地路径不是跨设备身份。
@@ -47,7 +50,9 @@ Project
 ## 产品边界
 
 - Hunter 是项目、需求、工作流、执行证据和知识的控制面，不是新的超级编程 Agent。
-- Codex、CodeBuddy、Cursor、Orca 及未来工具都是可替换执行能力，不持有 Hunter 的权威业务状态。
+- Codex、CodeBuddy、Cursor 及未来 Agent 是可替换的 `AgentProduct`；Orca、
+  Pi、Herdr 等可以承担可替换的 Runtime 或 Workbench Host 角色。两类角色
+  均不持有 Hunter 的权威业务状态，也不能直接判定 Step 成功。
 - 一个 `Project` 可以绑定一个或多个 Repository；首版优先做好单仓库体验，但领域模型不得收窄为“一仓库一项目”。
 - 已批准的 RequirementRevision、已发布的 ChangeRevision 和 WorkflowRevision 不可覆盖修改。
 - Loop、重试、并行和自动推进必须受显式策略、预算与验证器约束。

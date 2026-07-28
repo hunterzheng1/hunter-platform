@@ -3,6 +3,10 @@
 > 状态：Approved Design Draft
 > 核心判断：开发机是执行与完整数据事实源；云端或中继只是可选连接层。
 
+> 2026-07-28 当前交付范围：只开放 loopback Hunter Web 与窄 Agent tools；
+> 自定义移动/PWA、设备配对和中继冻结。Orca 只通过受认证应用接口或
+> Runtime Adapter 访问，不获得数据库、安装级 Secret 或 Verifier 权限。
+
 ## 1. 数据所有权原则
 
 Hunter 默认将以下内容留在本机：
@@ -198,17 +202,38 @@ require_approval
 - 绕过 Agent 自身权限机制。
 - 从移动端发起高危命令。
 
-首版不继承 Orca 或任何 Agent 预填的“跳过全部权限”默认参数。项目可以配置更严格策略；放宽策略必须记录审批人、范围和有效期。
+Hunter-owned run 不继承 Orca 或任何 Agent 预填的“跳过全部权限”默认参数。
+Adapter 必须使用 Manual/fail-closed 配置，并在结构化 argv、profile 或
+preset 中发现 bypass、yolo、auto-approve 或等价语义时，在进程启动前
+拒绝并记录 `BLOCKED` receipt。项目可以配置更严格策略；当前 gate 不允许
+把此项放宽为全局绕过。
 
 ## 12. 远程访问模型
 
 ### 12.1 默认模式
 
 - `hunterd` 默认仅监听 loopback。
-- 桌面 UI 使用本机受认证通道。
+- Orca Browser tab、普通本机浏览器和窄 CLI 使用本机受认证通道。
 - 用户显式启用远程访问后才开放配对。
 
+Orca 只能打开不含 credential 的 loopback URL；URL 可携带不具授权能力
+的 launch identifier。写会话必须通过另一个经验证、不会进入 argv/URL/
+Browser history/Orca log 的 same-user rendezvous 建立，并交换为
+`HttpOnly`、`SameSite=Strict` session。若 Orca 公共接口不存在安全的
+非 argv handoff，则回退为页面内一次性短码/明确用户确认；仍无法证明时
+该项为 `BLOCKED`，不得把 token 放入 query 或 fragment 迁就一键打开。
+服务同时校验 Host/Origin、CSRF 与随机 loopback port。
+
+launch identifier、bootstrap、session 和长期 Secret 都不得进入命令日志、
+Orca comment、Evidence 或诊断包；测试必须同时扫描 process command line
+和 Browser history。
+
+上述安全形态是实施约束，不是当前已验证事实；必须在五日 gate 中用真实
+浏览器证据证明。
+
 ### 12.2 设备配对
+
+本节及 12.3 是冻结的未来设计，不属于当前 Orca-first gate。
 
 1. 桌面端生成短时、一次性配对挑战。
 2. 手机在本地扫描二维码或输入短码。

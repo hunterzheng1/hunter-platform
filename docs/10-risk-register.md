@@ -46,6 +46,10 @@ Owner 表示负责关闭证据的人，不意味着单人承担全部实施。
 | R-26 | 团队/云端/插件生态提前进入范围导致 Phase 1 失焦 | 4 | 4 | 16 | 账号 RBAC、计费、Marketplace 先于纵向流程 | 首版单用户多设备；非目标清单；新范围需用户证据与设计评审 | Product / P1 |
 | R-27 | 上游 Agent 条款或账号授权限制自动化使用 | 3 | 5 | 15 | 自动化违反服务条款、登录无法非交互恢复 | 仅用官方接口；法律/条款核验；用户授权 Gate；提供替代 Connector | Product+Legal / P0 |
 | R-28 | Artifact/Knowledge 中含第三方或敏感源码，远程预览越权 | 3 | 5 | 15 | 手机看到未授权文件、通知泄露内容 | 内容分级、设备 Scope、服务端授权、通知最小化、导出审计 | Security / P1 |
+| R-29 | 在真实用户价值前继续扩大 Foundation/UI，投入无法转化为日常使用 | 5 | 5 | 25 | 测试与模块增加但真实 Agent slice 仍未贯通 | 五工作日唯一真实 value gate；冻结重复 UI/Runtime；失败即 Stop | Product / current |
+| R-30 | Orca/Agent 默认危险权限被误当成 Hunter 授权 | 4 | 5 | 20 | argv/profile 出现 bypass、yolo、auto-approve；把 worktree 当 sandbox | Manual/fail-closed；启动前结构化拒绝；worktree 与 OS sandbox 明确分离 | Security / current |
+| R-31 | Orca 与 Hunter 双重 UI/状态让用户误解谁有成功权威 | 4 | 4 | 16 | Orca idle 显示 done、Hunter 未验证；两边可改 canonical state | Hunter-only VerificationReceipt/HumanReceipt；外部状态只作 observation；窄控制页 | Product+Flow / current |
+| R-32 | Orca 快速上游变化或 Fork 同步成本吞噬 Hunter | 4 | 4 | 16 | 私有 DB 依赖、GUI 自动化、频繁破坏性变化 | public sidecar only；固定版本 receipts；当前禁止 Fork；Stop/Pi-Herdr 决策门 | Architecture / current |
 
 ## 3. Phase 0 红色风险关闭标准
 
@@ -69,6 +73,14 @@ ADR-0005 冻结“尚无生产 Runtime Provider 得到证明”。R-01、R-02、
 R-16 通过“本轮不 Fork、sidecar 未证明前禁止评估 Fork”获得补偿控制，但风险分暂不降低。R-17 已由 provider-neutral contracts、Fake contract suite 和双平台 CI 证明 Hunter 架构边界，真实 Provider swap 仍为 NOT_PROVEN，风险分同样保持不变。
 
 下一关闭动作是 `P0-RUNTIME-01 Windows candidate enablement and atomic receipt`，最多 1 个工作日、单候选最多 4 小时；只有用户明确授权并自行完成安装/login 后才能启动。任何未在时间盒内获得原子能力收据的候选继续为 NOT_PROVEN。
+
+#### 2026-07-28 owner-directed disposition
+
+ADR-0006 将 Orca 选为下一条首选、有界 sidecar/Adapter 路线，并不关闭或
+降低 R-01/R-02/R-04/R-05/R-27，也不把 Outcome 5 改写为 PASS。新的首要
+风险是 R-29–R-32；只有五日真实 slice 的固定版本、脱敏原子收据可以改变
+它们的状态。发现 private DB、GUI automation、危险权限或无法精确
+attach/cleanup 时立即 Stop。
 
 ### R-03：完成语义不统一
 
@@ -157,9 +169,12 @@ Rollback Trigger:
 
 - 所有红色风险已降级、关闭或通过 ADR 明确接受。
 - 没有“完成状态不可信”“重复外部副作用”“Secret 泄露”类未关闭问题。
-- Orca 决策有实机证据且保留替换路径。
-- Codex、CodeBuddy、Cursor 的支持等级与产品文案一致。
-- Windows 黄金场景和恢复演练通过。
+- Orca-hosted 单链路有固定版本实机收据且保留替换路径；仅安装/status
+  或上游文档不算通过。
+- 产品文案只声明 receipt 实际证明的 Agent/Adapter 能力。
+- Windows 五日黄金路径、故意失败/恢复、Hunter+Orca 重启与完整 cleanup
+  通过。
 - Linux CI 未被平台代码破坏。
 - Archive/Knowledge 的来源、有效性与冲突策略通过测试。
-- 远程访问默认关闭，设备撤销与命令幂等通过安全测试。
+- 远程访问默认关闭；loopback browser bootstrap、命令幂等与 Secret
+  零泄漏通过安全测试。移动/设备撤销不是当前 gate 条件。

@@ -1,12 +1,16 @@
 # 06. Runtime Provider 与 Agent Connector 设计
 
-> 状态：Approved Design Draft
-> 首批范围：Orca Provider、Codex、CodeBuddy Code、Cursor
-> 核心判断：不同 Agent 可以具有不同控制深度；Hunter 必须能力协商并诚实降级。
+> 状态：Approved Design，2026-07-28 delivery scope revised
+> 当前范围：一个 Orca Adapter + 一个 Orca-hosted real Agent
+> 核心判断：Orca 是首选但可替换的外部 Host；能力仍由原子 receipt 计算，Hunter 必须诚实降级。
 
 ## 1. 设计目标
 
-Runtime 层负责把 Hunter Flow 的逻辑执行请求映射到本机的仓库、worktree、进程、PTY、Agent 会话和原生窗口，同时向 Flow 返回可验证的事件与产物。
+Runtime 层负责把 Hunter Flow 的逻辑执行请求映射为 provider-neutral
+ExternalOperation，并通过 Orca 公共接口附加 Hunter 已验证的 worktree、
+启动/观察真实 Agent，同时向 Flow 返回原子 receipt、observation 与产物。
+Orca 负责 PTY、终端、窗口、Diff、Browser 和 native session；Hunter 不
+重复实现这些基础设施。
 
 它不负责：
 
@@ -20,20 +24,23 @@ Hunter Core 持有工作流事实；Runtime Provider 和 Connector 是可替换�
 
 ## 2. 能力拆分
 
-不定义一个包办所有职责的万能 `RuntimeProvider`。首版使用八个可组合端口：
+不定义一个包办所有职责的万能 `RuntimeProvider`。能力按所有权拆分：
 
-| 端口 | 职责 |
-|---|---|
-| `AgentDiscovery` | 发现安装、登录、版本、可执行入口和动态能力 |
-| `WorkspaceProvider` | 创建/绑定仓库、branch、worktree、隔离空间和 Lease |
-| `ProcessHost` | 启动进程、PTY、日志流、信号与进程树生命周期 |
-| `AgentConnector` | 启动或连接 Agent、发送 Prompt、恢复、Steer、中断、审批 |
-| `SessionObserver` | 观察 Session、原始事件、心跳与等待原因 |
-| `NativeSurfaceOpener` | 打开 Cursor、终端或其他原生操作界面 |
-| `ArtifactCollector` | 采集 Diff、文件、日志、测试报告与协议输出 |
-| `CompletionVerifier` | 根据输出契约产生验证结果与 Evidence |
+| 端口 | 职责 | 当前所有权 |
+|---|---|---|
+| `AgentDiscovery` | 发现安装、登录、版本、可执行入口和动态能力 | Orca Adapter 可实现，receipt 必须 fail closed |
+| `WorkspaceProvider` | 由 Git 创建/校验 branch、worktree、隔离空间和 Lease | Hunter-owned；Orca 不可实现创建 |
+| `ProcessHost` | 启动进程、PTY、日志流、信号与进程树生命周期 | 当前 gate 目标为委托 Orca 公共接口 |
+| `AgentConnector` | 启动或连接 Agent、发送 Prompt、恢复、Steer、中断 | Orca Adapter 只实现实测通过的原子能力 |
+| `SessionObserver` | 观察 Session、原始事件、心跳与等待原因 | Orca Adapter 可实现；只产生 observation |
+| `NativeSurfaceOpener` | 打开终端、Browser 或其他原生操作界面 | Orca Adapter 可实现 |
+| `ArtifactCollector` | 采集 Diff、文件、日志、测试报告与协议输出 | Hunter 校验；可消费 Orca observation |
+| `CompletionVerifier` | 根据冻结输出契约产生 VerificationReceipt | Hunter-only；Orca/Agent 永不可实现 |
 
-Orca 可以同时实现多个端口，但端口契约归 Hunter 所有。这样可以单独替换 WorkspaceProvider、直接使用某个 Agent 的结构化协议，或在 Orca 不可用时回退到其他 ProcessHost。
+Orca Adapter 只能实现表中明确允许的外部端口，且端口契约归 Hunter
+所有。Workspace 的 identity、Git HEAD 与 Lease 由 Hunter 验证；Orca
+只附加公开接口能够精确定位和完整清理的既存路径。Orca/Agent 在任何
+情况下都不能实现或签发 `CompletionVerifier`。
 
 ## 3. Connector 能力等级
 
@@ -72,18 +79,20 @@ mobile_control
 
 每项同时记录：支持状态、来源、版本约束和最近一次探测时间。UI 与 Flow 根据 Manifest 选择合法操作，不能依赖硬编码的 Agent 名称。
 
-## 4. 首批接入组合
+## 4. 当前接入组合
 
-| 接入对象 | 首版用途 | 目标等级 | Phase 0 必须验证 |
+| 接入对象 | 当前用途 | 当前等级 | 五日 gate 必须测量 |
 |---|---|---:|---|
-| Orca | Workspace、Git、终端、PTY、Agent 进程与移动终端基础 | L1/L2 基础设施 | Windows 安装、JSON CLI/API、worktree、恢复、移动配对、安全默认值 |
-| Codex | 第一条深度自动执行链 | L2/L3 | 启动/恢复/Steer/中断、事件、审批、完成回执、版本兼容 |
-| CodeBuddy Code | 第二条供应商独立的深度执行链 | L2/L3 | ACP、Headless 或 HTTP 的实际稳定接口、Session 恢复、取消、权限与流式事件 |
-| Cursor | GUI 原生操作与分级降级范例；SDK/CLI 作为升级候选 | L0/L1 | 打开指定 workspace、任务包交接、进程/Git/Artifact 观察、人工完成回执；并行比较 `@cursor/sdk` public beta 与 CLI 的事件、权限、条款和 Windows 稳定性 |
+| Orca | 首选外部 Workbench/Runtime Host | 未推定 | 固定版本、status、精确 attach/open existing worktree、无 bypass 的 Agent 生命周期、重启对账、结构化 cleanup |
+| 一个 Orca-hosted Agent | 第一条真实执行链 | 由 receipts 计算 | launch/send/observe/interrupt/reconcile 中实际需要的原子能力、Verifier 权威隔离 |
+| Codex/CodeBuddy/Cursor direct | 冻结 | NOT_PROVEN 或历史证据状态 | 当前 gate 不建设；不得因产品名称推定能力 |
+| Pi/Herdr/第二 Provider | 后续候选 | NOT_PROVEN | 仅在 Orca slice 后由用户价值和新计划触发 |
 
-这里的等级是目标，不是未经验证的事实。Phase 0 通过实机契约测试后，为具体版本生成兼容矩阵；未通过的能力必须降级。
+表中等级不是目标营销标签。只有当前固定版本的实机原子 receipt 能生成
+兼容矩阵；未证明的能力必须降级或阻断。
 
-OpenCode、Claude Code、Pi、Goose、Grok Build 等进入后续 Connector 队列。Goose 不再具有特殊 Gate、版本 Pin 或产品决策地位，只能按普通 Agent 契约接入。
+这里的“首选”是 owner-approved 实验顺序，不是 Provider PASS。Fake contract
+也不能升级真实能力。Goose 不再具有特殊 Gate、版本 Pin 或产品地位。
 
 ## 5. 接入优先级
 
@@ -147,19 +156,20 @@ Flow 调度 StepAttempt
   → 准备 Handoff Pack 与权限策略
   → 幂等启动或连接 Native Session
   → 采集 RuntimeEvent、日志、Git 与 Artifact
-  → Agent 返回或人工提交完成回执
-  → CompletionVerifier 验证输出契约
+  → Agent 返回并记录 RuntimeObservation
+  → Hunter 独立 CompletionVerifier，或精确 HumanReceipt
   → Flow 决定成功、失败、Retry、Loop 或 Gate
 ```
 
-可靠完成信号按可信度排序：
+执行返回观察按可信度可以不同，但都不具有完成权威：
 
-1. 官方协议的结构化完成事件。
-2. Hunter 签发并关联 Attempt 的 Step Receipt。
-3. 自动验证器：测试、构建、文件、Diff、内容哈希或输出 Schema。
-4. 用户明确人工确认。
+1. 官方协议的结构化 completion/error/permission 事件；
+2. 受管进程退出、terminal idle、window/session 状态；
+3. Agent 文本自述。
 
-PTY 空闲、窗口关闭、进程退出码为 0 或 Agent 文本中出现“完成”都不能单独使 Step 变为成功。
+三者最多使执行进入 `returned`/`needs_attention`。Step 只有两种完成
+权威：Hunter 独立 Verifier 的 `VerificationReceipt`，或绑定精确
+Attempt/content hash 的 `HumanReceipt`。
 
 ## 8. Agent、Profile 与 Session 语义
 
@@ -197,18 +207,20 @@ fallback_policy
 
 ## 10. Orca 集成策略
 
-Orca 是 Phase 0 首个有时限、可逆的执行底盘候选，不是已采用依赖、Hunter 的事实源或不可替换内核。
+Orca 是首选但可替换的外部执行底盘和用户工作台，不是 Hunter 的事实源、
+不可替换内核或已证明的生产 Provider。ADR-0005 的历史 `NOT_PROVEN`
+结果保持有效；ADR-0006 只选择下一条有界路线。
 
 ### 10.1 阶段 A：旁路 Sidecar
 
-优先通过公开 JSON CLI/API 接入，Hunter Core 独立保存全部业务状态。需要验证：
+只通过公开 CLI、Skills、MCP 或其他明确公开接口接入，Hunter Core 独立保存全部业务状态。需要验证：
 
 - Windows 上真实安装、升级和卸载。
-- 仓库、worktree、终端与 Agent 生命周期。
+- Hunter 创建 exact worktree、Orca attach/open 既存路径与完整 deregistration cleanup。
 - JSON 输出的 Schema、错误语义和向后兼容。
 - Hunter 重启、Orca 重启、会话失联后的重新关联。
 - ConPTY、路径空格、非 ASCII 路径、长路径和进程树。
-- 移动配对与权限边界。
+- Hunter local Web bootstrap 的认证与 Secret 零泄漏。
 - 遥测、凭据、默认危险参数和许可证。
 
 ### 10.2 阶段 B：是否需要薄 Fork
@@ -220,6 +232,7 @@ Orca 是 Phase 0 首个有时限、可逆的执行底盘候选，不是已采用
 3. 缺口对首版核心用户故事构成阻塞，而不是视觉偏好。
 4. Fork 能保持 Hunter Core、数据库和领域模型独立。
 5. 已评估上游同步成本、许可证和安全维护责任。
+6. 新的 owner-approved ADR 明确批准 Fork 范围、预算、同步与退出计划。
 
 薄 Fork 只允许增加 Hunter 页面入口、启动/认证桥或稳定扩展点；不把 Flow、Requirement、Knowledge 逻辑塞进 Orca 内部。
 
@@ -233,7 +246,8 @@ Orca 是 Phase 0 首个有时限、可逆的执行底盘候选，不是已采用
 - 许可证、遥测或供应链风险不能接受。
 - 上游不兼容变化频繁，契约测试无法隔离。
 
-回退顺序是：替换单个端口 → Direct Connector → 按 Agent Orchestrator 当前桌面/Go-daemon 架构做条件 Spike → Hunter 自研最小 Runtime。AO 不是已证明的无缝 Provider；禁止因为已投入研究成本而继续锁定。
+当前回退不是自动扩建 Direct Runtime。五日 gate 失败后继续独立使用 Orca，
+再由 owner 单独决定是否做 Pi/Herdr 的有界 Adapter，或归档 Hunter。
 
 ## 11. Windows 首发与 Linux 兼容
 
@@ -257,6 +271,9 @@ Orca 是 Phase 0 首个有时限、可逆的执行底盘候选，不是已采用
 ## 12. 权限与安全
 
 - 不默认使用任何 Agent 的跳过全部权限参数。
+- Orca/Agent 必须选择 Manual/fail-closed；命令、profile 或 preset 中发现
+  bypass、yolo、auto-approve 及等价语义时，Adapter 在启动前拒绝并记录
+  `BLOCKED` receipt。
 - AgentProfile 声明工具权限与资源边界；PolicyEngine 返回 allow、deny 或 require_approval。
 - 凭据只由 Connector 在需要时解析，不能写入 Prompt、日志、Artifact 或 Event Payload。
 - 进程命令以参数数组传递，避免 Shell 注入。
@@ -281,7 +298,9 @@ Orca 是 Phase 0 首个有时限、可逆的执行底盘候选，不是已采用
 11. Core/Provider 重启后的重连。
 12. 上游版本未知或 Schema 漂移时 fail closed。
 
-Fake Provider 是 CI 的确定性基线；真实 Orca、Codex、CodeBuddy、Cursor 在受控机器执行集成测试。通过 Fake 不代表真实 Connector 可发布。
+Fake Provider 是 CI 的确定性基线；当前真实集成测试只覆盖被批准的
+Orca-hosted 单链路。通过 Fake、官方文档、安装检测或 `orca status` 均不
+代表真实 Connector 可发布。
 
 ## 14. 参考与验证入口
 

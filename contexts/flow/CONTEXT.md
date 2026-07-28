@@ -19,6 +19,8 @@
 | `InputContract` | Step 开始前必须具备的结构化输入与前置条件。 |
 | `OutputContract` | Step 被判定成功前必须产生并验证的结构化输出。 |
 | `Verifier` | 根据 OutputContract、Evidence、Artifact 或人工确认作出验证结论的组件。 |
+| `VerificationReceipt` | 由 Agent 会话之外的 Verifier 产生、绑定 StepAttempt、输入/输出/配置哈希与结论的不可变收据。 |
+| `HumanReceipt` | 指定 Actor 对精确内容哈希、StepAttempt 和决策作出的显式、可审计收据；不是模糊的“完成”按钮。 |
 | `HumanGateStep` | 需要指定 Actor 明确批准、拒绝或补充输入的步骤。 |
 | `LoopPolicy` | 定义回边、最大轮数、停止条件、重复失败策略和预算的有界循环策略。 |
 | `RunBudget` | 对轮数、时间、成本或其他资源的上限。 |
@@ -32,6 +34,7 @@
 |---|---|
 | 把 Task 和 WorkflowStep 当作同一对象 | Task 是做什么；WorkflowStep 是如何处理它 |
 | Agent 返回即把步骤标为成功 | 先进入验证，再由 `Verifier` 或人工确认 |
+| 允许 Agent/Provider 自行签发成功结论 | 由独立 `VerificationReceipt` 或精确 `HumanReceipt` 决定 |
 | 重试时覆盖旧日志和状态 | 创建新的 `StepAttempt` |
 | 无限 Loop 或隐式自循环 | 显式 `LoopPolicy` 与 `RunBudget` |
 | 执行中修改 Workflow 结构 | 创建并使用新的 `WorkflowRevision` |
