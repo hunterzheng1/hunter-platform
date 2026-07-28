@@ -68,8 +68,15 @@ export type ControlPlaneSourceIdentity = z.infer<
   typeof ControlPlaneSourceIdentitySchema
 >;
 
+export interface ControlPlaneSourceInspection {
+  readonly commit: string;
+  readonly digest: string;
+  readonly clean: boolean;
+}
+
 const ToolReceiptSchema = z.strictObject({
   id: z.enum(["node", "git", "orca", "codex"]),
+  launcherKind: z.enum(["native", "powershell_script"]),
   availability: ToolStateSchema,
   version: z.string().min(1).max(256).nullable(),
   authentication: ToolStateSchema,
@@ -175,6 +182,41 @@ export const OrcaControlPlaneBaselineSchema = z
     contentFingerprint: SHA256Schema,
   })
   .superRefine((evidence, context) => {
+    const expectedToolIds = ["codex", "git", "node", "orca"];
+    const observedToolIds = evidence.tools.map(({ id }) => id).sort();
+    if (JSON.stringify(observedToolIds) !== JSON.stringify(expectedToolIds)) {
+      context.addIssue({
+        code: "custom",
+        path: ["tools"],
+        message: "TOOL_INVENTORY_MISMATCH",
+      });
+    }
+
+    const duplicatePublicInterface = evidence.publicInterfaces.find(
+      (receipt, index, receipts) =>
+        receipts.findIndex(({ operation }) => operation === receipt.operation)
+          !== index,
+    );
+    if (duplicatePublicInterface !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["publicInterfaces"],
+        message: "PUBLIC_INTERFACE_RECEIPT_DUPLICATE",
+      });
+    }
+
+    const duplicateCapability = evidence.capabilities.find(
+      (receipt, index, receipts) =>
+        receipts.findIndex(({ id }) => id === receipt.id) !== index,
+    );
+    if (duplicateCapability !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["capabilities"],
+        message: "CAPABILITY_RECEIPT_DUPLICATE",
+      });
+    }
+
     const expectedDeadline = computeShanghaiBusinessDeadline(
       evidence.timebox.startedAt,
       evidence.timebox.workingDays,
@@ -387,7 +429,7 @@ function validateSourcePathspec(pathspec: readonly string[]): string[] {
 
 export function inspectControlPlaneSource(
   options: ControlPlaneSourceInspectionOptions,
-): ControlPlaneSourceIdentity {
+): ControlPlaneSourceInspection {
   const repositoryRoot = resolve(options.cwd);
   const pathspec = validateSourcePathspec(options.pathspec);
   const commit = String(
@@ -440,7 +482,7 @@ export function inspectControlPlaneSource(
     commit,
     digest: digest.digest("hex"),
     clean: status.length === 0,
-  } as ControlPlaneSourceIdentity;
+  };
 }
 
 export function resolveBaselineOutputPath(
@@ -661,6 +703,7 @@ export async function collectOrcaControlPlaneBaseline(
     tools: [
       {
         id: "node",
+        launcherKind: "native",
         availability: commandSucceeded(nodeVersion) ? "DETECTED" : "BLOCKED",
         version: parseVersion(nodeVersion, "node"),
         authentication: "DETECTED",
@@ -668,6 +711,7 @@ export async function collectOrcaControlPlaneBaseline(
       },
       {
         id: "git",
+        launcherKind: "native",
         availability: commandSucceeded(gitVersion) ? "DETECTED" : "BLOCKED",
         version: parseVersion(gitVersion, "git"),
         authentication: "DETECTED",
@@ -675,6 +719,7 @@ export async function collectOrcaControlPlaneBaseline(
       },
       {
         id: "orca",
+        launcherKind: "native",
         availability: orcaDetected ? "DETECTED" : "BLOCKED",
         version: observedOrcaVersion,
         authentication: "NOT_PROVEN",
@@ -682,6 +727,8 @@ export async function collectOrcaControlPlaneBaseline(
       },
       {
         id: "codex",
+        launcherKind:
+          codexPrefixArguments.length === 0 ? "native" : "powershell_script",
         availability: codexDetected ? "DETECTED" : "BLOCKED",
         version: parseVersion(codexVersionWithPrefix, "codex"),
         authentication: commandSucceeded(codexLogin)
@@ -823,25 +870,32 @@ export function findBaselineTimeboxStart(
   }
 
   let earliest = fallback;
+  let invalidHistory = false;
   for (const candidate of candidates) {
     try {
       const contents = readFileSync(candidate, "utf8");
-      if (Buffer.byteLength(contents) > 1024 * 1024) continue;
+      if (Buffer.byteLength(contents) > 1024 * 1024) {
+        invalidHistory = true;
+        continue;
+      }
       const parsed = BaselineTimeboxFragmentSchema.safeParse(
         JSON.parse(contents) as unknown,
       );
+      if (!parsed.success) {
+        invalidHistory = true;
+        continue;
+      }
       if (
-        parsed.success
-        && new Date(parsed.data.timebox.startedAt).valueOf()
+        new Date(parsed.data.timebox.startedAt).valueOf()
           < new Date(earliest).valueOf()
       ) {
         earliest = parsed.data.timebox.startedAt;
       }
     } catch {
-      // Invalid historical material remains preserved but cannot extend the
-      // timebox or become current evidence.
+      invalidHistory = true;
     }
   }
+  if (invalidHistory) throw new Error("BASELINE_TIMEBOX_HISTORY_INVALID");
   return earliest;
 }
 
@@ -891,12 +945,14 @@ async function main(): Promise<void> {
     outputPath,
     generatedAt.toISOString(),
   );
-  prepareBaselineEvidenceOutput(outputPath);
-  const source = inspectControlPlaneSource({
+  const sourceInspection = inspectControlPlaneSource({
     cwd: repositoryRoot,
     pathspec: CONTROL_PLANE_SOURCE_PATHSPEC,
   });
-  if (!source.clean) throw new Error("CONTROL_PLANE_SOURCE_NOT_CLEAN");
+  if (!sourceInspection.clean) {
+    throw new Error("CONTROL_PLANE_SOURCE_NOT_CLEAN");
+  }
+  const source = ControlPlaneSourceIdentitySchema.parse(sourceInspection);
 
   const configuredCodexCommand = process.env.CODEX_CLI_COMMAND?.trim();
   const codexScript =
@@ -932,6 +988,7 @@ async function main(): Promise<void> {
   });
   const serialized = `${JSON.stringify(evidence, null, 2)}\n`;
   assertSafeEvidence(serialized);
+  prepareBaselineEvidenceOutput(outputPath);
   writeBaselineEvidenceAtomic(outputPath, serialized);
   const states = evidence.tools
     .map((tool) => `${tool.id}=${tool.availability}/${tool.authentication}`)

@@ -122,6 +122,7 @@ describe("Orca control-plane baseline evidence", () => {
       tools: [
         {
           id: "node",
+          launcherKind: "native",
           availability: "DETECTED",
           version: "v24.4.1",
           authentication: "DETECTED",
@@ -129,6 +130,7 @@ describe("Orca control-plane baseline evidence", () => {
         },
         {
           id: "git",
+          launcherKind: "native",
           availability: "DETECTED",
           version: "2.50.1.windows.1",
           authentication: "DETECTED",
@@ -136,6 +138,7 @@ describe("Orca control-plane baseline evidence", () => {
         },
         {
           id: "orca",
+          launcherKind: "native",
           availability: "DETECTED",
           version: null,
           authentication: "NOT_PROVEN",
@@ -143,6 +146,7 @@ describe("Orca control-plane baseline evidence", () => {
         },
         {
           id: "codex",
+          launcherKind: "native",
           availability: "DETECTED",
           version: "codex-cli 0.1.0",
           authentication: "NOT_PROVEN",
@@ -279,6 +283,7 @@ describe("Orca control-plane baseline evidence", () => {
     ]);
     expect(evidence.tools).toContainEqual({
       id: "orca",
+      launcherKind: "native",
       availability: "DETECTED",
       version: "0.8.0",
       authentication: "NOT_PROVEN",
@@ -286,6 +291,7 @@ describe("Orca control-plane baseline evidence", () => {
     });
     expect(evidence.tools).toContainEqual({
       id: "codex",
+      launcherKind: "powershell_script",
       availability: "DETECTED",
       version: "0.1.0",
       authentication: "DETECTED",
@@ -311,6 +317,31 @@ describe("Orca control-plane baseline evidence", () => {
       /C:\\Users\\private|secret@example|runtime-private|request-private/iu,
     );
     expect(evidence.mutationAttempted).toBe(false);
+
+    const duplicateTools = [
+      evidence.tools[0],
+      evidence.tools[0],
+      evidence.tools[2],
+      evidence.tools[3],
+    ];
+    const duplicateToolResult = OrcaControlPlaneBaselineSchema.safeParse({
+      ...evidence,
+      tools: duplicateTools,
+    });
+    expect(duplicateToolResult.error?.issues.map((issue) => issue.message))
+      .toContain("TOOL_INVENTORY_MISMATCH");
+
+    const duplicateCapabilities = [
+      evidence.capabilities[0],
+      evidence.capabilities[0],
+      ...evidence.capabilities.slice(2),
+    ];
+    const duplicateCapabilityResult = OrcaControlPlaneBaselineSchema.safeParse({
+      ...evidence,
+      capabilities: duplicateCapabilities,
+    });
+    expect(duplicateCapabilityResult.error?.issues.map((issue) => issue.message))
+      .toContain("CAPABILITY_RECEIPT_DUPLICATE");
   });
 
   it("binds a clean source digest and detects later source drift in a temporary Git fixture", async () => {
@@ -407,6 +438,22 @@ describe("Orca control-plane baseline evidence", () => {
           "2026-07-28T04:30:00.000Z",
         ),
       ).toBe("2026-07-28T04:19:30.589Z");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed instead of resetting a timebox when history is invalid", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "hunter-orca-timebox-invalid-"));
+    const target = join(directory, "baseline.json");
+    try {
+      await writeFile(target, "{\"timebox\":{\"startedAt\":\"not-a-date\"}}", "utf8");
+      expect(() =>
+        findBaselineTimeboxStart(
+          target,
+          "2026-07-28T04:30:00.000Z",
+        ),
+      ).toThrow("BASELINE_TIMEBOX_HISTORY_INVALID");
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
