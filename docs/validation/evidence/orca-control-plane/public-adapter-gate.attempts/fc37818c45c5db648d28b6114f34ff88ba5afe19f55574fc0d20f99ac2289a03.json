@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
   "evidenceType": "orca_public_adapter_gate",
-  "generatedAt": "2026-07-28T05:36:42.095Z",
+  "generatedAt": "2026-07-28T05:30:54.658Z",
   "generator": {
     "name": "hunter-orca-public-adapter-gate",
     "version": "0.1.0"
   },
   "source": {
-    "commit": "71a4e72b3c0fe27155cef146e4893180b084e5f5",
-    "digest": "0fa37e6c8f8ed28f427cb3106c2c042d176705f205bc3721904204f88a0771bf",
+    "commit": "104e3257d5cced42b9dbbf733b6b13ff2df25214",
+    "digest": "538ae0226e46f32e07954e34376e713a4cbf88be1a5b074fab1c1afdd48f88c0",
     "clean": true
   },
   "baseline": {
@@ -193,5 +193,5 @@
     "applied": true,
     "schemaVersion": 1
   },
-  "contentFingerprint": "16246f4817f7d27b0ab13671b255bd8765f4d53749b5ba7262da08e9cebf1b70"
+  "contentFingerprint": "0343716dcbf152c2d72b135c3ab86f8871bee90de9b23f7ca71e1611070f6aa7"
 }

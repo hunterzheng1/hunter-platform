@@ -1,7 +1,7 @@
 # Orca-first control-plane Task 1 public Adapter gate
 
 - 状态：`BLOCKED`
-- 测量时间：`2026-07-28T05:30:54.658Z`
+- 测量时间：`2026-07-28T05:36:42.095Z`
 - Orca：`1.4.159`，`DETECTED`
 - 证据：
   [`evidence/orca-control-plane/public-adapter-gate.json`](evidence/orca-control-plane/public-adapter-gate.json)
@@ -13,8 +13,8 @@
 ## Frozen source and baseline
 
 当前证据绑定源码提交
-`104e3257d5cced42b9dbbf733b6b13ff2df25214`，源码摘要为
-`538ae0226e46f32e07954e34376e713a4cbf88be1a5b074fab1c1afdd48f88c0`。
+`71a4e72b3c0fe27155cef146e4893180b084e5f5`，源码摘要为
+`0fa37e6c8f8ed28f427cb3106c2c042d176705f205bc3721904204f88a0771bf`。
 它引用的 Task 0 baseline SHA-256 为
 `3f6be678a66c8348583935f664fcfa04bfe752d6ad903a32b1e6023fcf83777d`。
 五工作日时间盒没有重置，仍为
@@ -70,8 +70,15 @@ CLI 无法证明可完整清理的注册，因此没有为了“试一下”而�
    help 成功。
 3. 按 `orca-cli` 技能要求，从 Orca 二进制读取版本匹配 guide，并再次确认
    `status --json`；没有使用缓存命令表推断能力。
-4. 正式 gate generator 的 7 个只读命令全部成功，schema/hash/privacy/source
-   校验仍需在提交前完成；结论保持 `BLOCKED`。
+4. 首次正式 gate generator 的 7 个只读命令全部成功，结论为
+   `BLOCKED`；自审前证据已按内容哈希归档。
+5. 自审补充了 command receipt 完整清单，并保证 help 缺失时保留
+   `NOT_PROVEN` 而不是丢失证据；当前 7 个只读命令再次全部成功，结论仍为
+   `BLOCKED`。
+
+上一份成功证据位于
+`evidence/orca-control-plane/public-adapter-gate.attempts/`，文件名等于内容
+SHA-256。它和当前证据都不含原始 stdout/stderr、凭据或私有路径。
 
 ## Budget, cleanup, and stop
 
