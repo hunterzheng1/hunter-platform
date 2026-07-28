@@ -1,0 +1,353 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "herdr_control_plane_baseline",
+  "generatedAt": "2026-07-28T07:45:41.900Z",
+  "generator": {
+    "name": "hunter-herdr-control-plane-baseline",
+    "version": "0.1.0"
+  },
+  "timebox": {
+    "timezone": "Asia/Shanghai",
+    "workingDays": 5,
+    "startedAt": "2026-07-28T04:19:30.589Z",
+    "deadlineAt": "2026-08-04T04:19:30.589Z"
+  },
+  "source": {
+    "commit": "dedaae65cfa7ce4df677f7cd9e814c0a8b77e7d2",
+    "digest": "8d1796462159f7723c02ee89d06ab2370184ce505cc0fc33f51b423645d24341",
+    "clean": true,
+    "digestAlgorithm": "sha256-path-content-v1",
+    "pathspec": [
+      ".github/workflows/ci.yml",
+      "package.json",
+      "package-lock.json",
+      "tsconfig.json",
+      "tsconfig.base.json",
+      "tsconfig.e2e.json",
+      "apps",
+      "contexts",
+      "packages",
+      "scripts",
+      "spikes",
+      "workflow-packs"
+    ]
+  },
+  "host": {
+    "platform": "win32",
+    "architecture": "x64",
+    "release": "10.0.26200"
+  },
+  "selectedAgent": "codex",
+  "release": {
+    "stable": {
+      "tag": "v0.7.5",
+      "commit": "ef4c23f5775bb8cfec05f05d0844226ff959a07a",
+      "publishedAt": "2026-07-21T18:11:20Z",
+      "windowsAssetPublished": false
+    },
+    "windowsPreview": {
+      "tag": "preview-2026-07-21-0f10e1453a7f",
+      "commit": "0f10e1453a7f9fda357352bb65ce17fa26fda447",
+      "relationToStable": "ahead_by_2_docs_only",
+      "publishedAt": "2026-07-21T19:02:36Z",
+      "assetName": "herdr-windows-x86_64.exe",
+      "size": 19981312,
+      "sha256": "75c85763db0ca5fd13b485d0728cc3e9ea1152964a4e976e1d49f2e86b01a92b",
+      "downloadUrl": "https://github.com/ogulcancelik/herdr/releases/download/preview-2026-07-21-0f10e1453a7f/herdr-windows-x86_64.exe"
+    }
+  },
+  "assetIntegrity": {
+    "algorithm": "sha256",
+    "expected": "75c85763db0ca5fd13b485d0728cc3e9ea1152964a4e976e1d49f2e86b01a92b",
+    "actual": "75c85763db0ca5fd13b485d0728cc3e9ea1152964a4e976e1d49f2e86b01a92b",
+    "expectedSize": 19981312,
+    "actualSize": 19981312,
+    "temporaryDirectoryVerified": true,
+    "status": "PASS"
+  },
+  "downloadPolicy": {
+    "sourceUrl": "https://github.com/ogulcancelik/herdr/releases/download/preview-2026-07-21-0f10e1453a7f/herdr-windows-x86_64.exe",
+    "temporaryDirectoryOnly": true,
+    "globalInstall": false,
+    "pipeToShell": false,
+    "executionPolicyBypass": false
+  },
+  "tools": [
+    {
+      "id": "node",
+      "availability": "DETECTED",
+      "version": "24.14.0",
+      "authentication": "DETECTED",
+      "authenticationRequired": false
+    },
+    {
+      "id": "git",
+      "availability": "DETECTED",
+      "version": "2.50.1.windows.1",
+      "authentication": "DETECTED",
+      "authenticationRequired": false
+    },
+    {
+      "id": "herdr",
+      "availability": "DETECTED",
+      "version": "0.7.5-preview.2026-07-21-0f10e1453a7f",
+      "authentication": "DETECTED",
+      "authenticationRequired": false
+    },
+    {
+      "id": "codex",
+      "availability": "DETECTED",
+      "version": "0.144.6",
+      "authentication": "DETECTED",
+      "authenticationRequired": true
+    }
+  ],
+  "publicInterfaces": [
+    {
+      "operation": "root_help",
+      "status": "DETECTED",
+      "receiptHash": "4312cc7d213c43c3984d2ced2090260e8f570fac918bb256426490cc318b786e"
+    },
+    {
+      "operation": "api_schema",
+      "status": "NOT_PROVEN",
+      "receiptHash": null
+    },
+    {
+      "operation": "worktree_inventory",
+      "status": "DETECTED",
+      "receiptHash": "78535d5f9b92cd4b836766e265f902addfdbe764eefb6f391d139ed3ed453ace"
+    },
+    {
+      "operation": "workspace_inventory",
+      "status": "DETECTED",
+      "receiptHash": "8799760018e441e80b9369b6e28ef5b83ae11b2b94c1bb3a73c5178e7c0e0d3e"
+    },
+    {
+      "operation": "session_inventory",
+      "status": "DETECTED",
+      "receiptHash": "cc716ab685cc4a8a844629e742d5c136c6fdd95d91ced56003e03ccc956d98d5"
+    },
+    {
+      "operation": "agent_inventory",
+      "status": "DETECTED",
+      "receiptHash": "5f3c33a9729d05200ecdb0c149d9004a51ede882520ca7246e8dae1ecf81d499"
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "asset_integrity",
+      "status": "PASS",
+      "reason": "official_preview_asset_sha256_and_size_match",
+      "receiptHash": "3b068d3f8f6f3647e2ad62bd80196116747d834d2edc438f84c3970f05c2024b"
+    },
+    {
+      "id": "windows_binary_launch",
+      "status": "PASS",
+      "reason": "windows_binary_returned_version",
+      "receiptHash": "6115921c81ff0b32e4974ff4829456380bc1d5034c28aff1aa27562c4ba25bee"
+    },
+    {
+      "id": "fixed_version",
+      "status": "PASS",
+      "reason": "exact_preview_version_matches_pinned_release",
+      "receiptHash": "6115921c81ff0b32e4974ff4829456380bc1d5034c28aff1aa27562c4ba25bee"
+    },
+    {
+      "id": "public_schema",
+      "status": "BLOCKED",
+      "reason": "public_schema_invalid_or_unavailable",
+      "receiptHash": null
+    },
+    {
+      "id": "public_inventory",
+      "status": "PASS",
+      "reason": "all_read_only_help_inventory_commands_succeeded",
+      "receiptHash": "9f10d2a6698d7344756f3920daa5bbe3e76a491eca195f485af5efecaf217650"
+    },
+    {
+      "id": "workspace_attach_existing",
+      "status": "NOT_PROVEN",
+      "reason": "mutating_temporary_fixture_not_run",
+      "receiptHash": null
+    },
+    {
+      "id": "resource_cleanup",
+      "status": "NOT_PROVEN",
+      "reason": "cleanup_not_executed_in_task0_inventory",
+      "receiptHash": null
+    },
+    {
+      "id": "security_defaults",
+      "status": "NOT_PROVEN",
+      "reason": "manual_fail_closed_agent_launch_not_run",
+      "receiptHash": null
+    }
+  ],
+  "commandReceipts": [
+    {
+      "operation": "node_version",
+      "executable": "node",
+      "args": [
+        "--version"
+      ],
+      "exitCode": 0,
+      "timedOut": false,
+      "outcome": "success",
+      "timeoutCleanup": "not_applicable",
+      "outputHash": "01c2dd56152b72beb51be79489a5359340feb10db62f0da3f984adbcd319849b"
+    },
+    {
+      "operation": "git_version",
+      "executable": "git",
+      "args": [
+        "--version"
+      ],
+      "exitCode": 0,
+      "timedOut": false,
+      "outcome": "success",
+      "timeoutCleanup": "not_applicable",
+      "outputHash": "44f5f80bde82a67553dcb69113ee3b2aa5c3862e1cfc34cafe4672c5fcf77954"
+    },
+    {
+      "operation": "herdr_version",
+      "executable": "herdr",
+      "args": [
+        "--version"
+      ],
+      "exitCode": 0,
+      "timedOut": false,
+      "outcome": "success",
+      "timeoutCleanup": "not_applicable",
+      "outputHash": "6115921c81ff0b32e4974ff4829456380bc1d5034c28aff1aa27562c4ba25bee"
+    },
+    {
+      "operation": "herdr_help",
+      "executable": "herdr",
+      "args": [
+        "--help"
+      ],
+      "exitCode": 0,
+      "timedOut": false,
+      "outcome": "success",
+      "timeoutCleanup": "not_applicable",
+      "outputHash": "4312cc7d213c43c3984d2ced2090260e8f570fac918bb256426490cc318b786e"
+    },
+    {
+      "operation": "herdr_api_schema",
+      "executable": "herdr",
+      "args": [
+        "api",
+        "schema",
+        "--json"
+      ],
+      "exitCode": 0,
+      "timedOut": false,
+      "outcome": "success",
+      "timeoutCleanup": "not_applicable",
+      "outputHash": "3018c02db441b5cafef5cbf3c3fbad79c59d02e7500534204a9f56b7bbd8cce1"
+    },
+    {
+      "operation": "herdr_worktree_help",
+      "executable": "herdr",
+      "args": [
+        "worktree",
+        "--help"
+      ],
+      "exitCode": 0,
+      "timedOut": false,
+      "outcome": "success",
+      "timeoutCleanup": "not_applicable",
+      "outputHash": "78535d5f9b92cd4b836766e265f902addfdbe764eefb6f391d139ed3ed453ace"
+    },
+    {
+      "operation": "herdr_workspace_help",
+      "executable": "herdr",
+      "args": [
+        "workspace",
+        "--help"
+      ],
+      "exitCode": 0,
+      "timedOut": false,
+      "outcome": "success",
+      "timeoutCleanup": "not_applicable",
+      "outputHash": "8799760018e441e80b9369b6e28ef5b83ae11b2b94c1bb3a73c5178e7c0e0d3e"
+    },
+    {
+      "operation": "herdr_session_help",
+      "executable": "herdr",
+      "args": [
+        "session",
+        "--help"
+      ],
+      "exitCode": 0,
+      "timedOut": false,
+      "outcome": "success",
+      "timeoutCleanup": "not_applicable",
+      "outputHash": "cc716ab685cc4a8a844629e742d5c136c6fdd95d91ced56003e03ccc956d98d5"
+    },
+    {
+      "operation": "herdr_agent_help",
+      "executable": "herdr",
+      "args": [
+        "agent",
+        "--help"
+      ],
+      "exitCode": 0,
+      "timedOut": false,
+      "outcome": "success",
+      "timeoutCleanup": "not_applicable",
+      "outputHash": "5f3c33a9729d05200ecdb0c149d9004a51ede882520ca7246e8dae1ecf81d499"
+    },
+    {
+      "operation": "codex_version",
+      "executable": "codex",
+      "args": [
+        "--version"
+      ],
+      "exitCode": 0,
+      "timedOut": false,
+      "outcome": "success",
+      "timeoutCleanup": "not_applicable",
+      "outputHash": "a560ff1e62b63d4f161d1705f0b0ed337f602f084c3b45e15ef213478d24f2b3"
+    },
+    {
+      "operation": "codex_login_status",
+      "executable": "codex",
+      "args": [
+        "login",
+        "status"
+      ],
+      "exitCode": 0,
+      "timedOut": false,
+      "outcome": "success",
+      "timeoutCleanup": "not_applicable",
+      "outputHash": "345b7b618c1de4ab8cd0c42a100874c69fb3007f835502622ab4e2245a3456f0"
+    }
+  ],
+  "runBudget": {
+    "maxAttempts": 2,
+    "maxSessionsPerAttempt": 1,
+    "maxSendsPerAttempt": 4,
+    "maxAttemptDurationMs": 1200000,
+    "maxTotalExecutionMs": 2700000,
+    "additionalPaidBudgetUsd": 0
+  },
+  "historicalEvidence": {
+    "readOnly": true,
+    "references": [
+      "docs/validation/phase-0-decision.md",
+      "docs/validation/gate-r1-runtime-connectors.md",
+      "docs/validation/orca-public-adapter-gate.md"
+    ]
+  },
+  "task0Verdict": "BLOCKED",
+  "providerVerdict": "NOT_PROVEN",
+  "proofScope": "local_inventory_only",
+  "mutationAttempted": false,
+  "redaction": {
+    "applied": true,
+    "schemaVersion": 1
+  },
+  "contentFingerprint": "cf51c54a14228baece4522e6811efc5aad165177290182713686b5d49e300a29"
+}
