@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "evidenceType": "orca_control_plane_baseline",
-  "generatedAt": "2026-07-28T04:58:12.137Z",
+  "generatedAt": "2026-07-28T04:50:19.697Z",
   "generator": {
     "name": "hunter-orca-control-plane-baseline",
     "version": "0.2.0"
@@ -17,8 +17,8 @@
     "deadlineAt": "2026-08-04T04:19:30.589Z"
   },
   "source": {
-    "commit": "a1709a87adab0a010f8ef2885b967771d822d669",
-    "digest": "7311d7baacbc3e48f78c3cfbf458dd3df4cf5f68c09a1657e667c777d44b54f8",
+    "commit": "561178e16a64c2adb2086d7a6a5fcab2256a4ccc",
+    "digest": "0978f426074805890a4a29792c3a042a215401b457a3d9d375c89ced2c6eb454",
     "clean": true,
     "digestAlgorithm": "sha256-path-content-v1",
     "pathspec": [
@@ -310,5 +310,5 @@
     "applied": true,
     "schemaVersion": 1
   },
-  "contentFingerprint": "d08ba5700609a1efc204e2974dca4c928f505111fd2491f732855fea828da57b"
+  "contentFingerprint": "56989f62ebf7eecb8155db0bfb30804753af2bbda6786b590dd21c165441760d"
 }
