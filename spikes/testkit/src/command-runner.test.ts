@@ -10,7 +10,55 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+type ProcessKiller = (pid: number, signal: NodeJS.Signals) => void;
+
+function killProcessIfAlive(
+  pid: number,
+  isAlive: (candidatePid: number) => boolean = isProcessAlive,
+  kill: ProcessKiller = process.kill,
+): void {
+  if (isAlive(pid)) {
+    try {
+      kill(pid, "SIGKILL");
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+        throw error;
+      }
+    }
+  }
+}
+
 describe("node command runner", () => {
+  it("accepts ESRCH when a process exits between the liveness check and cleanup", () => {
+    const exited = new Error("kill ESRCH") as NodeJS.ErrnoException;
+    exited.code = "ESRCH";
+
+    expect(() =>
+      killProcessIfAlive(
+        42,
+        () => true,
+        () => {
+          throw exited;
+        },
+      ),
+    ).not.toThrow();
+  });
+
+  it("does not hide non-ESRCH cleanup failures", () => {
+    const denied = new Error("kill EPERM") as NodeJS.ErrnoException;
+    denied.code = "EPERM";
+
+    expect(() =>
+      killProcessIfAlive(
+        42,
+        () => true,
+        () => {
+          throw denied;
+        },
+      ),
+    ).toThrow(denied);
+  });
+
   it("records a synchronous spawn denial instead of aborting the inventory", async () => {
     const runner = new NodeCommandRunner(() => {
       const error = new Error("spawn EPERM") as NodeJS.ErrnoException;
@@ -123,11 +171,11 @@ describe("node command runner", () => {
         expect(isProcessAlive(descendantPid)).toBe(false);
       }
     } finally {
-      if (rootPid !== undefined && isProcessAlive(rootPid)) {
-        process.kill(rootPid, "SIGKILL");
+      if (rootPid !== undefined) {
+        killProcessIfAlive(rootPid);
       }
-      if (descendantPid !== undefined && isProcessAlive(descendantPid)) {
-        process.kill(descendantPid, "SIGKILL");
+      if (descendantPid !== undefined) {
+        killProcessIfAlive(descendantPid);
       }
     }
   }, 5_000);
