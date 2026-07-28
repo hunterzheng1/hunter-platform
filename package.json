@@ -20,6 +20,7 @@
     "spike:codex-app-server": "npm run build --workspace @hunter/spike-codex && node --enable-source-maps spikes/codex/dist/app-server-scenario.js --output docs/validation/evidence/codex/app-server-runtime.json",
     "spike:orca": "npm run build --workspace @hunter/spike-orca && node --enable-source-maps spikes/orca/dist/scenario.js --output docs/validation/evidence/orca/preflight.json",
     "spike:orca-control-plane-baseline": "tsx scripts/orca-control-plane-baseline.ts --output docs/validation/evidence/orca-control-plane/baseline.json",
+    "spike:orca-public-adapter-gate": "tsx scripts/orca-public-adapter-gate.ts --output docs/validation/evidence/orca-control-plane/public-adapter-gate.json",
     "verify:gate-r-runtime": "tsx scripts/gate-r-runtime-evidence.ts --output docs/validation/evidence/gate-r1/runtime-connectors.json",
     "start:e2e": "node scripts/start-e2e.mjs",
     "test": "vitest run",
