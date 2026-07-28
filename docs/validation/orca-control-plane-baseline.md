@@ -13,8 +13,8 @@
 ## Frozen source and budget
 
 当前 Evidence 绑定生成器源码提交
-`a1709a87adab0a010f8ef2885b967771d822d669`，源码摘要为
-`7311d7baacbc3e48f78c3cfbf458dd3df4cf5f68c09a1657e667c777d44b54f8`。
+`5ce1ccfa1f851bdcb8d1b7aa2623f98bee8bbec6`，源码摘要为
+`7d88427e93827647bb17673be58c9ad5378bd9e64b6664f05f6f80a86588a904`。
 摘要使用 `sha256-path-content-v1`，Evidence 文件自身不属于 source
 pathspec，因此提交 Evidence 不会改变被冻结源码。
 
@@ -25,7 +25,7 @@ pathspec，因此提交 Evidence 不会改变被冻结源码。
 - 真实执行累计最多 45 分钟；
 - 新增付费额度为 0。
 
-重试不会重置五工作日时间盒。Task 0 的六次真实 probe execution 均沿用首次
+重试不会重置五工作日时间盒。Task 0 的七次真实 probe execution 均沿用首次
 `startedAt`；损坏或不可解析的历史会让生成器失败关闭，不能隐式重置时间盒。
 
 ## Tool inventory
@@ -77,11 +77,13 @@ deregister/cleanup、幂等性和 Manual/fail-closed permission receipt。
 5. schema v2 execution 在普通用户权限下成功归档旧 Evidence 并原子写入
    新文件；Orca 与 Codex 只读命令全部成功；严格清单审查前文件已按内容
    哈希归档。
-6. 当前 schema v2 execution 绑定新增的完整清单校验：工具、public
+6. schema v2 execution 绑定新增的完整清单校验：工具、public
    interface、capability 和 command receipt 缺失或重复时均失败关闭；Orca
-   与 Codex 只读命令全部成功。
+   与 Codex 只读命令全部成功；CI 路径修复前文件已按内容哈希归档。
+7. 当前 schema v2 execution 绑定 Ubuntu CI 暴露的跨平台路径测试修复；
+   Orca 与 Codex 只读命令全部成功。
 
-四个历史 Evidence 文件位于
+五个历史 Evidence 文件位于
 `evidence/orca-control-plane/baseline.attempts/`。它们只保存脱敏状态、
 退出结果和输出 hash，不保存 token、cookie、原始登录内容、完整环境或用户
 私有路径。
