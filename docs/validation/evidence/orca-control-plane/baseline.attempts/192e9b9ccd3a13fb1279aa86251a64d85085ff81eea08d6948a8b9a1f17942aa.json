@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "evidenceType": "orca_control_plane_baseline",
-  "generatedAt": "2026-07-28T04:50:19.697Z",
+  "generatedAt": "2026-07-28T04:30:22.607Z",
   "generator": {
     "name": "hunter-orca-control-plane-baseline",
     "version": "0.2.0"
@@ -17,8 +17,8 @@
     "deadlineAt": "2026-08-04T04:19:30.589Z"
   },
   "source": {
-    "commit": "561178e16a64c2adb2086d7a6a5fcab2256a4ccc",
-    "digest": "0978f426074805890a4a29792c3a042a215401b457a3d9d375c89ced2c6eb454",
+    "commit": "7773c38e27d1f318f41d450bb439bf2ba4086b2d",
+    "digest": "06af5f0d2fc2a306a337bd457ae9499eb24c2f858682113367746592f34ed49b",
     "clean": true,
     "digestAlgorithm": "sha256-path-content-v1",
     "pathspec": [
@@ -45,7 +45,6 @@
   "tools": [
     {
       "id": "node",
-      "launcherKind": "native",
       "availability": "DETECTED",
       "version": "24.14.0",
       "authentication": "DETECTED",
@@ -53,7 +52,6 @@
     },
     {
       "id": "git",
-      "launcherKind": "native",
       "availability": "DETECTED",
       "version": "2.50.1.windows.1",
       "authentication": "DETECTED",
@@ -61,7 +59,6 @@
     },
     {
       "id": "orca",
-      "launcherKind": "native",
       "availability": "DETECTED",
       "version": "1.4.159",
       "authentication": "NOT_PROVEN",
@@ -69,7 +66,6 @@
     },
     {
       "id": "codex",
-      "launcherKind": "powershell_script",
       "availability": "DETECTED",
       "version": "0.144.6",
       "authentication": "DETECTED",
@@ -310,5 +306,5 @@
     "applied": true,
     "schemaVersion": 1
   },
-  "contentFingerprint": "56989f62ebf7eecb8155db0bfb30804753af2bbda6786b590dd21c165441760d"
+  "contentFingerprint": "dcf1a35612b4b5adbbeb27f5c10f01e685e201e6c0d3ef1dfc61930c0206efe5"
 }

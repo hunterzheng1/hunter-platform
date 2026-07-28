@@ -13,8 +13,8 @@
 ## Frozen source and budget
 
 当前 Evidence 绑定生成器源码提交
-`7773c38e27d1f318f41d450bb439bf2ba4086b2d`，源码摘要为
-`06af5f0d2fc2a306a337bd457ae9499eb24c2f858682113367746592f34ed49b`。
+`561178e16a64c2adb2086d7a6a5fcab2256a4ccc`，源码摘要为
+`0978f426074805890a4a29792c3a042a215401b457a3d9d375c89ced2c6eb454`。
 摘要使用 `sha256-path-content-v1`，Evidence 文件自身不属于 source
 pathspec，因此提交 Evidence 不会改变被冻结源码。
 
@@ -25,17 +25,17 @@ pathspec，因此提交 Evidence 不会改变被冻结源码。
 - 真实执行累计最多 45 分钟；
 - 新增付费额度为 0。
 
-重试不会重置五工作日时间盒。Task 0 的三个真实 probe attempt 均沿用首次
-`startedAt`。
+重试不会重置五工作日时间盒。Task 0 的五次真实 probe execution 均沿用首次
+`startedAt`；损坏或不可解析的历史会让生成器失败关闭，不能隐式重置时间盒。
 
 ## Tool inventory
 
-| Tool | 安装/可执行 | 版本 | 登录 |
-|---|---|---:|---|
-| Node.js | `DETECTED` | `24.14.0` | 不需要，`DETECTED` |
-| Git | `DETECTED` | `2.50.1.windows.1` | 不需要，`DETECTED` |
-| Orca | `DETECTED` | `1.4.159` | `NOT_PROVEN` |
-| Codex | `DETECTED` | `0.144.6` | `DETECTED` |
+| Tool | 启动方式 | 安装/可执行 | 版本 | 登录 |
+|---|---|---|---:|---|
+| Node.js | `native` | `DETECTED` | `24.14.0` | 不需要，`DETECTED` |
+| Git | `native` | `DETECTED` | `2.50.1.windows.1` | 不需要，`DETECTED` |
+| Orca | `native` | `DETECTED` | `1.4.159` | `NOT_PROVEN` |
+| Codex | `powershell_script` | `DETECTED` | `0.144.6` | `DETECTED` |
 
 Orca 版本来自公开 `status --json` 的数值 `runtime.appVersion`。Codex 通过
 系统发现的 PowerShell CLI script，以固定 `-NoLogo -NoProfile
@@ -69,10 +69,15 @@ deregister/cleanup、幂等性和 Manual/fail-closed permission receipt。
 2. schema v2 attempt 改为严格串行后，Orca 恢复 `DETECTED`，Codex 原生
    WindowsApps executable 仍因当前自动化身份无法启动而 `BLOCKED`；原文件
    已按内容哈希归档。
-3. 当前 schema v2 attempt 使用已验证的 PowerShell script fallback；
-   Orca 与 Codex 只读命令全部成功。
+3. schema v2 attempt 使用已验证的 PowerShell script fallback；Orca 与
+   Codex 只读命令全部成功；审查前文件已按内容哈希归档。
+4. 审查后的首次 execution 已完成只读采集与内存校验，但沙箱拒绝将旧
+   Evidence 重命名到归档目录，命令以 `EPERM` 失败退出；核验确认旧文件
+   blob 与提交版本一致、没有临时文件，因此没有把该次执行写成成功。
+5. 当前 schema v2 execution 在普通用户权限下成功归档旧 Evidence 并原子
+   写入新文件；Orca 与 Codex 只读命令全部成功。
 
-两个历史文件位于
+三个历史 Evidence 文件位于
 `evidence/orca-control-plane/baseline.attempts/`。它们只保存脱敏状态、
 退出结果和输出 hash，不保存 token、cookie、原始登录内容、完整环境或用户
 私有路径。
