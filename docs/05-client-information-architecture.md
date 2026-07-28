@@ -1,5 +1,9 @@
 # 05. 客户端信息架构与交互体验
 
+> 归档状态（2026-07-28）：[ADR-0008](adr/0008-archive-hunter-platform.md)
+> 已停止主动产品开发。本文的 Approved Design 与“当前范围”是已停止
+> ADR-0007 gate 的历史目标，不是受支持产品承诺。
+
 > 状态：Approved Design，2026-07-28 delivery scope revised
 > 当前范围：普通本机浏览器中的 Hunter 窄 Web 控制面 + Herdr terminal/Agent Host；Desktop、移动 PWA 与重复原生界面冻结
 > 核心判断：Herdr 是当前有界 Runtime 候选；Hunter 只提供项目治理、验证和证据控制面，standalone Orca 可独立日用。

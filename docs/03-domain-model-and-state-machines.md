@@ -1,5 +1,9 @@
 # Hunter Platform 领域模型与状态机
 
+> 归档状态（2026-07-28）：[ADR-0008](adr/0008-archive-hunter-platform.md)
+> 已停止主动产品开发。本文作为 provider-neutral 领域契约历史保留，不表示
+> 存在活跃实施计划或生产 Provider。
+
 ## 领域主链
 
 ```mermaid

@@ -130,3 +130,23 @@ separate review checkpoint.
 45. The replacement plan is stopped pending a product decision. Hunter does not
     automatically start Pi, weaken its exact-worktree/Lease/verifier invariants,
     or claim Herdr as a production Provider.
+
+## 2026-07-28 Hunter Platform archive
+
+46. The owner accepted the recommendation to archive Hunter after the bounded
+    Orca and Herdr public-interface experiments both reached their planned Task
+    1 Stop.
+47. Hunter has no active implementation plan. Tasks 2–8 remain `NOT_RUN` for
+    both stopped Provider routes; Pi is not started automatically and no older
+    plan resumes implicitly.
+48. The final archival change must pass local verification and actual
+    Windows/Ubuntu CI, merge to `main`, and clean its topic resources before the
+    GitHub repository becomes read-only.
+49. Archiving preserves source, contracts, Evidence, and every historical
+    status. It is not a production release, Provider PASS, security remediation,
+    or authorization to delete unique work.
+50. The `codex/windows-pc-daily-preview` branch is preserved because it has
+    unique commits and uncommitted work. Reactivation requires an explicit owner
+    decision, a new ADR, a bounded value hypothesis, fresh security/baseline
+    checks, and new public atomic capability evidence or an explicit ownership
+    model change.

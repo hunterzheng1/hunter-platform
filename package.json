@@ -33,6 +33,7 @@
     "verify:backup-restore": "tsx scripts/verify-backup-restore.ts",
     "verify:diagnostics": "tsc -b packages/policy --pretty false && tsx scripts/verify-diagnostic-bundle.ts",
     "verify:resources": "tsc -b packages/domain packages/runtime-contracts packages/storage packages/api-contracts packages/testkit --pretty false && tsx scripts/verify-resource-bounds.ts",
+    "verify:archive": "vitest run scripts/archive-status.test.ts --configLoader native --no-file-parallelism",
     "verify:phase1-performance": "tsc -b packages/domain packages/runtime-contracts packages/storage packages/api-contracts packages/device-gateway packages/knowledge packages/testkit apps/web --pretty false && tsx scripts/benchmark-phase1.ts --output docs/validation/evidence/phase1/performance.json",
     "verify:phase1-soak-smoke": "tsc -b packages/domain packages/runtime-contracts packages/storage packages/api-contracts packages/device-gateway packages/knowledge packages/testkit apps/web --pretty false && tsx scripts/soak-phase1.ts --smoke --output docs/validation/evidence/phase1/soak-smoke.json",
     "soak:phase1": "tsc -b packages/domain packages/runtime-contracts packages/storage packages/api-contracts packages/device-gateway packages/knowledge packages/testkit apps/web --pretty false && tsx scripts/soak-phase1.ts --output docs/validation/evidence/phase1/soak-24h.json",

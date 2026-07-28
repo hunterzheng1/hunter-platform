@@ -1,13 +1,28 @@
 # Hunter Platform contributor instructions
 
-Hunter Platform is a documentation-led control-plane project. The active
-delivery direction is the 2026-07-28 Orca-first pivot recorded in ADR-0006.
-Before changing the product model or adding implementation code, read:
+Hunter Platform is an archived documentation-led control-plane project.
+ADR-0008 supersedes ADR-0007 as the current repository-state decision.
+Before interpreting the product model or historical implementation, read:
 
 1. `docs/README.md`
 2. `docs/11-decision-summary.md`
 3. `CONTEXT-MAP.md` and the relevant `contexts/*/CONTEXT.md`
-4. the applicable ADRs and implementation plan
+4. `docs/adr/0008-archive-hunter-platform.md`
+
+## Archived repository policy
+
+- Do not begin implementation, Provider probes, releases, or scope expansion
+  without an explicit owner decision that reactivates the repository and adds
+  a new ADR.
+- There is no active implementation plan. Orca and Herdr Tasks 2–8 remain
+  `NOT_RUN`; do not automatically start Pi or resume an older plan.
+- Preserve source, Evidence, failure history, schemas, and the unique
+  `codex/windows-pc-daily-preview` work. Archiving is not authorization to
+  delete or rewrite them.
+- Read-only inspection, reproducibility checks, and narrowly scoped security or
+  preservation work are allowed when explicitly requested.
+- Do not interpret installation, login, status, idle, process exit, old CI, or
+  Fake contracts as a production Provider or product PASS.
 
 ## Product invariants
 
@@ -38,7 +53,8 @@ Before changing the product model or adding implementation code, read:
 
 ## Delivery rules
 
-- Follow the test-first task sequence in `docs/plans/`.
+- Historical work followed the test-first task sequence in `docs/plans/`; no
+  plan there is currently active.
 - Preserve user-authored changes and avoid editing unrelated files.
 - Record volatile upstream capability claims in research with primary-source
   links and dates; record local proof under `docs/validation/`.

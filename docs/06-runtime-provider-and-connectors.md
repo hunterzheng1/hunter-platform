@@ -1,5 +1,9 @@
 # 06. Runtime Provider 与 Agent Connector 设计
 
+> 归档状态（2026-07-28）：[ADR-0008](adr/0008-archive-hunter-platform.md)
+> 已停止主动产品开发。Orca/Herdr 结果保持 `BLOCKED`，Fake 契约保持
+> `CONTRACT_ONLY`；本文不声明活跃或生产 Provider。
+
 > 状态：Approved Design，2026-07-28 delivery scope revised
 > 当前范围：一个 Herdr Adapter + 一个 Herdr-hosted real Agent
 > 核心判断：Herdr 是 Orca Stop 后的有界替换候选；能力仍由原子 receipt 计算，Hunter 必须诚实降级。

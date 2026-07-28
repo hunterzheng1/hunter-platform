@@ -1,5 +1,9 @@
 # Hunter Platform 系统架构
 
+> 归档状态（2026-07-28）：[ADR-0008](adr/0008-archive-hunter-platform.md)
+> 已停止主动产品开发。本文保留已实现/目标架构；Herdr 与 Orca 的“当前”
+> 描述属于已停止 gate，不表示活跃 Provider。
+
 ## 架构结论
 
 Hunter Platform 当前采用**本地优先的模块化控制面 + 可替换外部工作台**：

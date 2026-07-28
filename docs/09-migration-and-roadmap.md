@@ -1,5 +1,9 @@
 # 09. 迁移策略与实施路线
 
+> 归档状态（2026-07-28）：[ADR-0008](adr/0008-archive-hunter-platform.md)
+> 已停止主动产品开发且没有 active roadmap。本文全部 Phase 和“当前路线”
+> 均作为历史计划保存，不能自动恢复。
+
 > 状态：Approved Design Draft
 > 目标仓库：`hunterzheng1/hunter-platform`
 > 产品结构：一个主产品 Monorepo + 一个独立的 Hunter Harness 内容/分发仓库

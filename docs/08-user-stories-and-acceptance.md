@@ -1,5 +1,9 @@
 # 08. 用户故事与验收标准
 
+> 归档状态（2026-07-28）：[ADR-0008](adr/0008-archive-hunter-platform.md)
+> 已停止主动产品开发。本文保留未完成的验收目标；Herdr gate 在 Task 1
+> `BLOCKED`，后续故事与十分钟验收均不是 PASS。
+
 > 状态：Approved Design，2026-07-28 active gate revised
 > 当前目标用户：单用户、单台 Windows 开发机、Herdr replacement Runtime + 普通本机浏览器
 > 首发验收平台：Windows；核心契约从第一天在 Linux CI 运行。

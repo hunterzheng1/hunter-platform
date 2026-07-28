@@ -1,11 +1,11 @@
 # Hunter Platform documentation
 
-This documentation set is the canonical design baseline created after the
-2026-07-21 product reset, narrowed by the 2026-07-28 Orca-first delivery pivot,
-and advanced after that experiment's planned Stop by the owner-approved Herdr
-replacement gate. When an older target-product section conflicts with ADR-0007
-or the post-Orca-Stop section of the decision summary, the newer decision
-controls. Historical validation is never rewritten by that precedence.
+This documentation set is the archived canonical design and evidence baseline.
+It was created after the 2026-07-21 product reset, narrowed by the Orca-first
+delivery pivot, and tested once more through the Herdr replacement gate.
+ADR-0008 now controls repository status: there is no active implementation
+plan, while all older design and validation remain preserved rather than
+rewritten.
 
 ## Product and architecture
 
@@ -27,14 +27,16 @@ controls. Historical validation is never rewritten by that precedence.
 - [Context map](../CONTEXT-MAP.md) routes each bounded context to its glossary.
 - [Architecture decisions](adr/README.md) record hard-to-reverse choices and their trade-offs.
 - [Decision summary](11-decision-summary.md) is the compact list of owner-approved product decisions.
-- [ADR-0007](adr/0007-herdr-replacement-control-plane-gate.md) is the active
-  delivery-host decision. ADR-0006 retains the Orca experiment and Stop result.
+- [ADR-0008](adr/0008-archive-hunter-platform.md) archives Hunter and defines
+  the explicit reactivation gate.
+- ADR-0007 and ADR-0006 retain the Herdr and Orca experiments and their Stop
+  results.
 
 ## Research, planning, and review
 
 - [Research index](research/README.md) distinguishes current synthesis from supporting and superseded investigations.
-- [Implementation plans](plans/README.md) identifies the single active Herdr
-  replacement plan and preserves older plans as historical baselines.
+- [Implementation plans](plans/README.md) confirms that no plan is active and
+  preserves every stopped or completed plan as a historical baseline.
 - [Validation evidence](validation/README.md) separates locally reproduced facts from upstream claims.
 - [Review disposition](reviews/2026-07-21-review-disposition.md) maps every internal finding to its current resolution or Phase 0 evidence gate.
 - [Review guide](reviews/fable5-review-guide.md) tells Fable5 what to challenge and what evidence is still missing.
