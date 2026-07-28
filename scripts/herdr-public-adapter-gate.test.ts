@@ -8,8 +8,12 @@ import {
 } from "@hunter/spike-testkit";
 import { describe, expect, it } from "vitest";
 import {
+  HerdrAdapterError,
+} from "@hunter/provider-herdr";
+import {
   HerdrPublicAdapterGateSchema,
   assertOwnedSessionAbsent,
+  collectPermissionArgumentGate,
   createHerdrPublicAdapterGateEvidence,
   fingerprintHerdrPublicAdapterGateContent,
   prepareHerdrPublicAdapterGateOutput,
@@ -197,6 +201,25 @@ describe("Herdr public Adapter real gate evidence", () => {
     expect(() => assertOwnedSessionAbsent("stopped")).toThrow(
       "HERDR_OWNED_SESSION_COLLISION",
     );
+  });
+
+  it("records both permission probes only after both fail closed before I/O", async () => {
+    const calls: string[][] = [];
+    const receipt = await collectPermissionArgumentGate({
+      run: async (args) => {
+        calls.push([...args]);
+        if (args.includes("--yolo")) {
+          throw new HerdrAdapterError("HERDR_ARGUMENT_FORBIDDEN");
+        }
+        throw new HerdrAdapterError("HERDR_COMMAND_FORBIDDEN");
+      },
+    });
+
+    expect(receipt).toEqual({
+      dangerousArgumentRejectedBeforeIo: true,
+      forceRemovalRejectedBeforeIo: true,
+    });
+    expect(calls).toHaveLength(2);
   });
 
   it("allows only the canonical Task 1 output and refuses to archive unsafe prior content", async () => {

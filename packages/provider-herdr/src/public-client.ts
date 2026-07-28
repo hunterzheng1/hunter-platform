@@ -169,6 +169,7 @@ function canonicalize(value: unknown): unknown {
 }
 
 export interface HerdrWorktreeOpenInput {
+  readonly sourcePath: string;
   readonly path: string;
   readonly operationLabel: string;
 }
@@ -198,6 +199,7 @@ export class HerdrPublicClient {
   ): Promise<HerdrWorktreeOpenReceipt> {
     if (
       !isAbsolute(input.path)
+      || !isAbsolute(input.sourcePath)
       || !/^hunter-opn_[a-z0-9][a-z0-9_-]{7,91}$/u.test(
         input.operationLabel,
       )
@@ -209,6 +211,8 @@ export class HerdrPublicClient {
       await this.runner.run([
         "worktree",
         "open",
+        "--cwd",
+        input.sourcePath,
         "--path",
         input.path,
         "--label",

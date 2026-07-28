@@ -50,6 +50,9 @@ export class HerdrPublicAdapter
     private readonly workspacePathBoundary: WorkspacePathBoundary,
     private readonly options: {
       readonly repositoryPathFor: (repositoryId: RepositoryId) => string | null;
+      readonly repositorySourcePathFor: (
+        repositoryId: RepositoryId,
+      ) => string | null;
       readonly observedAt?: (() => string) | undefined;
     },
   ) {}
@@ -115,12 +118,23 @@ export class HerdrPublicAdapter
       operation.payload.repositoryId,
       reportedPath,
     );
+    const reportedSourcePath = this.options.repositorySourcePathFor(
+      operation.payload.repositoryId,
+    );
+    if (reportedSourcePath === null) {
+      throw new Error("HERDR_REPOSITORY_SOURCE_BINDING_NOT_FOUND");
+    }
+    const sourcePath = this.workspacePathBoundary.verify(
+      operation.payload.repositoryId,
+      reportedSourcePath,
+    );
     let opened: Awaited<
       ReturnType<HerdrPublicClient["openExistingWorktree"]>
     >;
     let verifiedPath: VerifiedWorkspacePath;
     try {
       opened = await this.client.openExistingWorktree({
+        sourcePath,
         path: expectedPath,
         operationLabel: `hunter-${operation.operationId}`,
       });

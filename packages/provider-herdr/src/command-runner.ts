@@ -129,13 +129,15 @@ function validateCommandShape(
   }
   const valid =
     (command === "worktree open"
-      && args.length === 8
-      && args[2] === "--path"
-      && args[4] === "--label"
-      && args[6] === "--no-focus"
-      && args[7] === "--json"
+      && args.length === 10
+      && args[2] === "--cwd"
+      && args[4] === "--path"
+      && args[6] === "--label"
+      && args[8] === "--no-focus"
+      && args[9] === "--json"
       && isAbsolute(args[3] ?? "")
-      && /^hunter-opn_[a-z0-9][a-z0-9_-]{7,91}$/u.test(args[5] ?? ""))
+      && isAbsolute(args[5] ?? "")
+      && /^hunter-opn_[a-z0-9][a-z0-9_-]{7,91}$/u.test(args[7] ?? ""))
     || (command === "workspace close"
       && args.length === 3
       && /^w[1-9][0-9]*$/u.test(args[2] ?? ""))

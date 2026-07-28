@@ -204,6 +204,8 @@ function createAdapter(fake: FakeExec): HerdrPublicAdapter {
     {
       repositoryPathFor: (candidate) =>
         candidate === repositoryId ? fixturePath : null,
+      repositorySourcePathFor: (candidate) =>
+        candidate === repositoryId ? fixtureRoot : null,
       observedAt: () => "2026-07-28T08:30:00.000Z",
     },
   );
@@ -215,6 +217,7 @@ describe("Herdr public Adapter Task 1", () => {
     const client = new HerdrPublicClient(createRunner(fake));
 
     const opened = await client.openExistingWorktree({
+      sourcePath: fixtureRoot,
       path: fixturePath,
       operationLabel: "hunter-opn_herdprepare01",
     });
@@ -230,6 +233,8 @@ describe("Herdr public Adapter Task 1", () => {
       "hunter-task1-gate",
       "worktree",
       "open",
+      "--cwd",
+      fixtureRoot,
       "--path",
       fixturePath,
       "--label",
@@ -381,6 +386,7 @@ describe("Herdr public Adapter Task 1", () => {
     await expect(
       new HerdrPublicClient(createRunner(new FakeExec(extraField)))
         .openExistingWorktree({
+          sourcePath: fixtureRoot,
           path: fixturePath,
           operationLabel: "hunter-opn_herdprepare01",
         }),
@@ -405,6 +411,7 @@ describe("Herdr public Adapter Task 1", () => {
     await expect(
       new HerdrPublicClient(createRunner(new FakeExec(unsafeWorktree)))
         .openExistingWorktree({
+          sourcePath: fixtureRoot,
           path: fixturePath,
           operationLabel: "hunter-opn_herdprepare01",
         }),
@@ -420,6 +427,7 @@ describe("Herdr public Adapter Task 1", () => {
       new HerdrPublicClient(
         createRunner(new FakeExec(unrelatedAlreadyOpen)),
       ).openExistingWorktree({
+        sourcePath: fixtureRoot,
         path: fixturePath,
         operationLabel: "hunter-opn_herdprepare01",
       }),

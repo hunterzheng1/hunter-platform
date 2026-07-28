@@ -656,6 +656,50 @@ export function assertOwnedSessionAbsent(
   }
 }
 
+export async function collectPermissionArgumentGate(
+  runner: Pick<HerdrCommandRunner, "run">,
+): Promise<{
+  readonly dangerousArgumentRejectedBeforeIo: boolean;
+  readonly forceRemovalRejectedBeforeIo: boolean;
+}> {
+  let dangerousArgumentRejectedBeforeIo = false;
+  let forceRemovalRejectedBeforeIo = false;
+  try {
+    await runner.run([
+      "agent",
+      "start",
+      "probe",
+      "--kind",
+      "codex",
+      "--pane",
+      "w1:p1",
+      "--yolo",
+    ]);
+  } catch (error) {
+    dangerousArgumentRejectedBeforeIo =
+      error instanceof HerdrAdapterError
+      && error.code === "HERDR_ARGUMENT_FORBIDDEN"
+      && !error.effectPossible;
+  }
+  try {
+    await runner.run([
+      "worktree",
+      "remove",
+      "fixture",
+      "--force",
+    ]);
+  } catch (error) {
+    forceRemovalRejectedBeforeIo =
+      error instanceof HerdrAdapterError
+      && error.code === "HERDR_COMMAND_FORBIDDEN"
+      && !error.effectPossible;
+  }
+  return {
+    dangerousArgumentRejectedBeforeIo,
+    forceRemovalRejectedBeforeIo,
+  };
+}
+
 async function exerciseGate(options: {
   readonly executable: string;
   readonly generatedAt: string;
@@ -720,38 +764,16 @@ async function exerciseGate(options: {
         const before = await client.inventorySessions(sessionName);
         assertOwnedSessionAbsent(before.target);
         sessionOwned = true;
-        let dangerousArgumentRejectedBeforeIo = false;
-        let forceRemovalRejectedBeforeIo = false;
-        try {
-          await runner.run([
-            "agent",
-            "start",
-            "probe",
-            "--kind",
-            "codex",
-            "--pane",
-            "w1:p1",
-            "--yolo",
-          ]);
-        } catch (error) {
-          dangerousArgumentRejectedBeforeIo =
-            error instanceof HerdrAdapterError
-            && error.code === "HERDR_ARGUMENT_FORBIDDEN"
-            && !error.effectPossible;
-        }
-        try {
-          await runner.run([
-            "worktree",
-            "remove",
-            "fixture",
-            "--force",
-          ]);
-        } catch (error) {
-          forceRemovalRejectedBeforeIo =
-            error instanceof HerdrAdapterError
-            && error.code === "HERDR_COMMAND_FORBIDDEN"
-            && !error.effectPossible;
-        }
+        observations = {
+          ...observations,
+          identityVerified: true,
+          noRemote: remoteList.length === 0,
+          targetBefore: before.target,
+          unrelatedDigestBefore: before.unrelatedDigest,
+        };
+        const permissionGate =
+          await collectPermissionArgumentGate(runner);
+        observations = { ...observations, ...permissionGate };
         const repositoryId =
           RepositoryIdSchema.parse("rep_herdrgate01");
         const workspaceId =
@@ -768,6 +790,8 @@ async function exerciseGate(options: {
           {
             repositoryPathFor: (candidate) =>
               candidate === repositoryId ? attachedPath : null,
+            repositorySourcePathFor: (candidate) =>
+              candidate === repositoryId ? fixture.path : null,
             observedAt: () => options.generatedAt,
           },
         );
@@ -791,6 +815,20 @@ async function exerciseGate(options: {
         });
         const prepared = await adapter.execute(prepare);
         const replay = await adapter.execute(prepare);
+        observations = {
+          ...observations,
+          exactPathAttached:
+            prepared.operationStatus === "completed"
+            && prepared.workspaceResult?.reportedWorkspacePath
+              === attachedPath,
+          prepareStatus: prepared.operationStatus,
+          prepareReceiptHash: receiptHash(prepared),
+          duplicateReturnedSameReceipt:
+            receiptHash(prepared) === receiptHash(replay),
+        };
+        if (prepared.operationStatus !== "completed") {
+          throw new Error("HERDR_PREPARE_NOT_COMPLETED");
+        }
         const release = createExternalOperation({
           schemaVersion: 1,
           operationVersion: 1,
@@ -803,6 +841,13 @@ async function exerciseGate(options: {
           payload: { workspaceId },
         });
         const released = await adapter.execute(release);
+        observations = {
+          ...observations,
+          releaseStatus: released.operationStatus,
+          releaseReceiptHash: receiptHash(released),
+          workspaceStateClosed:
+            released.operationStatus === "completed",
+        };
         const afterClose = await client.inventorySessions(sessionName);
         const actualHead = await runGit(
           fixture,
@@ -819,31 +864,14 @@ async function exerciseGate(options: {
         );
         observations = {
           ...observations,
-          identityVerified: true,
-          noRemote: remoteList.length === 0,
-          exactPathAttached:
-            prepared.operationStatus === "completed"
-            && prepared.workspaceResult?.reportedWorkspacePath
-              === attachedPath,
           headPreservedAfterClose: expectedHead === actualHead,
           branchPreservedAfterClose:
             expectedBranch === actualBranch
             && expectedBranch === branchName,
           contentPreservedAfterClose: expectedContent === actualContent,
           gitPathPreservedAfterClose: existsSync(attachedPath),
-          prepareStatus: prepared.operationStatus,
-          prepareReceiptHash: receiptHash(prepared),
-          duplicateReturnedSameReceipt:
-            receiptHash(prepared) === receiptHash(replay),
-          releaseStatus: released.operationStatus,
-          releaseReceiptHash: receiptHash(released),
-          targetBefore: before.target,
           targetAfterClose: afterClose.target,
-          unrelatedDigestBefore: before.unrelatedDigest,
           unrelatedDigestAfterClose: afterClose.unrelatedDigest,
-          dangerousArgumentRejectedBeforeIo,
-          forceRemovalRejectedBeforeIo,
-          workspaceStateClosed: released.operationStatus === "completed",
         };
       } finally {
         if (client !== null && sessionOwned) {
