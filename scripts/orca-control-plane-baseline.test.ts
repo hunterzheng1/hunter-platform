@@ -1,5 +1,6 @@
 import {
   mkdtemp,
+  mkdir,
   readFile,
   rm,
   writeFile,
@@ -17,6 +18,7 @@ import {
   OrcaControlPlaneBaselineSchema,
   collectOrcaControlPlaneBaseline,
   createOrcaControlPlaneBaseline,
+  findBaselineTimeboxStart,
   inspectControlPlaneSource,
   prepareBaselineEvidenceOutput,
   resolveBaselineOutputPath,
@@ -51,6 +53,7 @@ class FixtureRunner implements CommandRunner {
               state: "ready",
               reachable: true,
               runtimeId: "runtime-private",
+              appVersion: "0.8.0",
             },
             graph: { state: "ready" },
           },
@@ -72,8 +75,14 @@ class FixtureRunner implements CommandRunner {
         "C:\\Users\\private\\orca.exe\u0000terminal\u0000--help",
         "Commands: create list send read wait close",
       ],
-      ["codex\u0000--version", "codex-cli 0.1.0"],
-      ["codex\u0000login\u0000status", "Logged in using secret@example.invalid"],
+      [
+        "powershell.exe\u0000-NoLogo\u0000-NoProfile\u0000-NonInteractive\u0000-File\u0000C:\\Users\\private\\codex.ps1\u0000--version",
+        "codex-cli 0.1.0",
+      ],
+      [
+        "powershell.exe\u0000-NoLogo\u0000-NoProfile\u0000-NonInteractive\u0000-File\u0000C:\\Users\\private\\codex.ps1\u0000login\u0000status",
+        "Logged in using secret@example.invalid",
+      ],
     ]);
     const stdout = outputs.get(key);
     try {
@@ -221,7 +230,14 @@ describe("Orca control-plane baseline evidence", () => {
       runner,
       cwd: "C:\\Users\\private\\hunter-platform",
       orcaExecutable: "C:\\Users\\private\\orca.exe",
-      codexExecutable: "codex",
+      codexExecutable: "powershell.exe",
+      codexPrefixArguments: [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        "C:\\Users\\private\\codex.ps1",
+      ],
       now: () => new Date("2026-07-28T04:15:00.000Z"),
       source: {
         commit: "1".repeat(40),
@@ -243,13 +259,28 @@ describe("Orca control-plane baseline evidence", () => {
       ["worktree", "--help"],
       ["worktree", "create", "--help"],
       ["terminal", "--help"],
-      ["--version"],
-      ["login", "status"],
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        "C:\\Users\\private\\codex.ps1",
+        "--version",
+      ],
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-File",
+        "C:\\Users\\private\\codex.ps1",
+        "login",
+        "status",
+      ],
     ]);
     expect(evidence.tools).toContainEqual({
       id: "orca",
       availability: "DETECTED",
-      version: null,
+      version: "0.8.0",
       authentication: "NOT_PROVEN",
       authenticationRequired: true,
     });
@@ -344,6 +375,38 @@ describe("Orca control-plane baseline evidence", () => {
       );
       await expect(readFile(archived, "utf8")).resolves.toBe(failedEvidence);
       await expect(readFile(target, "utf8")).rejects.toThrow();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the earliest valid timebox start across archived retries", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "hunter-orca-timebox-test-"));
+    const target = join(directory, "baseline.json");
+    const attempts = join(directory, "baseline.attempts");
+    try {
+      await mkdir(attempts);
+      await writeFile(
+        target,
+        JSON.stringify({
+          timebox: { startedAt: "2026-07-28T04:25:00.000Z" },
+        }),
+        "utf8",
+      );
+      await writeFile(
+        join(attempts, `${"a".repeat(64)}.json`),
+        JSON.stringify({
+          timebox: { startedAt: "2026-07-28T04:19:30.589Z" },
+        }),
+        "utf8",
+      );
+
+      expect(
+        findBaselineTimeboxStart(
+          target,
+          "2026-07-28T04:30:00.000Z",
+        ),
+      ).toBe("2026-07-28T04:19:30.589Z");
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

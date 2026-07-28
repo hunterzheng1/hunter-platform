@@ -5,6 +5,7 @@ import {
   lstatSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   readlinkSync,
   renameSync,
   unlinkSync,
@@ -13,9 +14,11 @@ import {
 import { arch, release } from "node:os";
 import {
   basename,
+  delimiter,
   dirname,
   extname,
   isAbsolute,
+  join,
   relative,
   resolve,
   sep,
@@ -220,7 +223,9 @@ export interface OrcaControlPlaneBaselineCollectionOptions {
   readonly cwd: string;
   readonly orcaExecutable: string;
   readonly codexExecutable: string;
+  readonly codexPrefixArguments?: readonly string[];
   readonly now: () => Date;
+  readonly timeboxStartedAt?: string;
   readonly source: ControlPlaneSourceIdentity;
   readonly host: OrcaControlPlaneBaseline["host"];
 }
@@ -471,6 +476,7 @@ const OrcaStatusSchema = z.object({
     runtime: z.object({
       state: z.string().min(1),
       reachable: z.boolean(),
+      appVersion: z.string().min(1).max(128).optional(),
     }),
     graph: z.object({ state: z.string().min(1) }),
   }),
@@ -497,6 +503,12 @@ function parseVersion(result: CommandResult, product: "node" | "git" | "orca" | 
       ? /^git version ([0-9]+(?:\.[0-9]+){1,3}(?:\.[A-Za-z0-9.-]+)?)$/iu
       : /\b([0-9]+(?:\.[0-9]+){1,3}(?:[-+][A-Za-z0-9.-]+)?)\b/u;
   return pattern.exec(normalized)?.[1] ?? null;
+}
+
+function parseVersionText(value: string | undefined): string | null {
+  if (value === undefined) return null;
+  return /^v?([0-9]+(?:\.[0-9]+){1,3}(?:[-+][A-Za-z0-9.-]+)?)$/u
+    .exec(value.trim())?.[1] ?? null;
 }
 
 function helpHas(result: CommandResult, word: string): boolean {
@@ -544,12 +556,16 @@ export async function collectOrcaControlPlaneBaseline(
     ["terminal", "--help"],
     10_000,
   );
-  const codexVersion = await run(options.codexExecutable, ["--version"], 10_000);
-  const codexLogin = await run(
+  const codexPrefixArguments = options.codexPrefixArguments ?? [];
+  const runCodex = async (
+    args: readonly string[],
+  ): Promise<CommandResult> => await run(
     options.codexExecutable,
-    ["login", "status"],
+    [...codexPrefixArguments, ...args],
     10_000,
   );
+  const codexVersionWithPrefix = await runCodex(["--version"]);
+  const codexLogin = await runCodex(["login", "status"]);
 
   let statusJson: unknown;
   if (commandSucceeded(orcaStatus)) {
@@ -566,6 +582,9 @@ export async function collectOrcaControlPlaneBaseline(
     ? {
         app: { running: parsedStatus.data.result.app.running },
         runtime: {
+          ...(parsedStatus.data.result.runtime.appVersion === undefined
+            ? {}
+            : { appVersion: parsedStatus.data.result.runtime.appVersion }),
           reachable: parsedStatus.data.result.runtime.reachable,
           state: parsedStatus.data.result.runtime.state,
         },
@@ -591,7 +610,7 @@ export async function collectOrcaControlPlaneBaseline(
       orcaWorktreeCreateHelp,
     ],
     ["orca_terminal_help", "orca", ["terminal", "--help"], orcaTerminalHelp],
-    ["codex_version", "codex", ["--version"], codexVersion],
+    ["codex_version", "codex", ["--version"], codexVersionWithPrefix],
     ["codex_login_status", "codex", ["login", "status"], codexLogin],
   ] as const;
   const commandReceipts = commandInputs.map(
@@ -618,7 +637,11 @@ export async function collectOrcaControlPlaneBaseline(
   );
 
   const orcaDetected = commandSucceeded(orcaStatus);
-  const codexDetected = commandSucceeded(codexVersion);
+  const codexDetected = commandSucceeded(codexVersionWithPrefix);
+  const observedOrcaVersion =
+    parsedStatus?.success === true
+      ? parseVersionText(parsedStatus.data.result.runtime.appVersion)
+      : null;
   const detectedInterface = (
     operation: string,
     detected: boolean,
@@ -632,7 +655,7 @@ export async function collectOrcaControlPlaneBaseline(
   const generatedAt = options.now().toISOString();
   return createOrcaControlPlaneBaseline({
     generatedAt,
-    timeboxStartedAt: generatedAt,
+    timeboxStartedAt: options.timeboxStartedAt ?? generatedAt,
     source: options.source,
     host: options.host,
     tools: [
@@ -653,14 +676,14 @@ export async function collectOrcaControlPlaneBaseline(
       {
         id: "orca",
         availability: orcaDetected ? "DETECTED" : "BLOCKED",
-        version: null,
+        version: observedOrcaVersion,
         authentication: "NOT_PROVEN",
         authenticationRequired: true,
       },
       {
         id: "codex",
         availability: codexDetected ? "DETECTED" : "BLOCKED",
-        version: parseVersion(codexVersion, "codex"),
+        version: parseVersion(codexVersionWithPrefix, "codex"),
         authentication: commandSucceeded(codexLogin)
           ? "DETECTED"
           : codexDetected ? "NOT_PROVEN" : "BLOCKED",
@@ -711,9 +734,11 @@ export async function collectOrcaControlPlaneBaseline(
       },
       {
         id: "fixed_version",
-        status: "NOT_PROVEN",
-        reason: "public_cli_did_not_return_a_numeric_version",
-        receiptHash: null,
+        status: observedOrcaVersion === null ? "NOT_PROVEN" : "PASS",
+        reason: observedOrcaVersion === null
+          ? "public_cli_did_not_return_a_numeric_version"
+          : "status_json_returned_numeric_app_version",
+        receiptHash: observedOrcaVersion === null ? null : statusReceiptHash,
       },
       {
         id: "workspace_attach_existing",
@@ -772,6 +797,54 @@ export function prepareBaselineEvidenceOutput(outputPathInput: string): string |
   return archivePath;
 }
 
+const BaselineTimeboxFragmentSchema = z.object({
+  timebox: z.object({ startedAt: z.iso.datetime() }),
+});
+
+export function findBaselineTimeboxStart(
+  outputPathInput: string,
+  fallbackInput: string,
+): string {
+  const fallback = z.iso.datetime().parse(fallbackInput);
+  const outputPath = resolve(outputPathInput);
+  const extension = extname(outputPath) || ".json";
+  const stem = basename(outputPath, extname(outputPath));
+  const archiveRoot = resolve(dirname(outputPath), `${stem}.attempts`);
+  const candidates = existsSync(outputPath) ? [outputPath] : [];
+  if (existsSync(archiveRoot)) {
+    for (const entry of readdirSync(archiveRoot, { withFileTypes: true })) {
+      if (
+        entry.isFile()
+        && new RegExp(`^[a-f0-9]{64}\\${extension}$`, "u").test(entry.name)
+      ) {
+        candidates.push(resolve(archiveRoot, entry.name));
+      }
+    }
+  }
+
+  let earliest = fallback;
+  for (const candidate of candidates) {
+    try {
+      const contents = readFileSync(candidate, "utf8");
+      if (Buffer.byteLength(contents) > 1024 * 1024) continue;
+      const parsed = BaselineTimeboxFragmentSchema.safeParse(
+        JSON.parse(contents) as unknown,
+      );
+      if (
+        parsed.success
+        && new Date(parsed.data.timebox.startedAt).valueOf()
+          < new Date(earliest).valueOf()
+      ) {
+        earliest = parsed.data.timebox.startedAt;
+      }
+    } catch {
+      // Invalid historical material remains preserved but cannot extend the
+      // timebox or become current evidence.
+    }
+  }
+  return earliest;
+}
+
 function writeBaselineEvidenceAtomic(outputPath: string, serialized: string): void {
   if (existsSync(outputPath)) {
     throw new Error("BASELINE_EVIDENCE_ALREADY_EXISTS");
@@ -791,11 +864,32 @@ function writeBaselineEvidenceAtomic(outputPath: string, serialized: string): vo
   }
 }
 
+function findFileOnPath(fileName: string): string | null {
+  const pathValue = process.env.PATH;
+  if (pathValue === undefined) return null;
+  for (const rawDirectory of pathValue.split(delimiter)) {
+    const directory = rawDirectory.trim().replace(/^"|"$/gu, "");
+    if (directory.length === 0) continue;
+    const candidate = join(directory, fileName);
+    try {
+      if (existsSync(candidate) && lstatSync(candidate).isFile()) return candidate;
+    } catch {
+      // An unreadable PATH entry is not an executable candidate.
+    }
+  }
+  return null;
+}
+
 async function main(): Promise<void> {
   const repositoryRoot = process.cwd();
   const outputPath = resolveBaselineOutputPath(
     repositoryRoot,
     parseOutputArgument(process.argv.slice(2)),
+  );
+  const generatedAt = new Date();
+  const timeboxStartedAt = findBaselineTimeboxStart(
+    outputPath,
+    generatedAt.toISOString(),
   );
   prepareBaselineEvidenceOutput(outputPath);
   const source = inspectControlPlaneSource({
@@ -804,14 +898,31 @@ async function main(): Promise<void> {
   });
   if (!source.clean) throw new Error("CONTROL_PLANE_SOURCE_NOT_CLEAN");
 
+  const configuredCodexCommand = process.env.CODEX_CLI_COMMAND?.trim();
+  const codexScript =
+    configuredCodexCommand === undefined && process.platform === "win32"
+      ? findFileOnPath("codex.ps1")
+      : null;
   const evidence = await collectOrcaControlPlaneBaseline({
     runner: new NodeCommandRunner(),
     cwd: repositoryRoot,
     orcaExecutable: process.env.ORCA_CLI_COMMAND?.trim() || "orca",
     codexExecutable:
-      process.env.CODEX_CLI_COMMAND?.trim()
-      || (process.platform === "win32" ? "codex.exe" : "codex"),
-    now: () => new Date(),
+      configuredCodexCommand
+      ?? (codexScript === null ? "codex" : "powershell.exe"),
+    ...(codexScript === null
+      ? {}
+      : {
+          codexPrefixArguments: [
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-File",
+            codexScript,
+          ],
+        }),
+    now: () => generatedAt,
+    timeboxStartedAt,
     source,
     host: {
       platform: process.platform,
