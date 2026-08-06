@@ -24,6 +24,53 @@ export interface Actor {
   actorId: string;
 }
 
+export interface UserRecord {
+  userId: string;
+  username: string;
+  displayName: string;
+  passwordHash: string;
+  actorId: string;
+  createdAt: string;
+  disabledAt: string | null;
+}
+
+export interface UserSessionRecord {
+  userId: string;
+  expiresAt: string;
+  revokedAt: string | null;
+}
+
+export const PROJECT_KEY_SCOPES = [
+  "push",
+  "knowledge:write",
+  "progress:write",
+  "files:read"
+] as const;
+
+export type ProjectKeyScope = (typeof PROJECT_KEY_SCOPES)[number];
+
+export interface KnowledgeIngestRecord {
+  projectId: string;
+  entryId: string;
+  contentSha256: string;
+  payload: Record<string, unknown>;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  projectedAt: string | null;
+}
+
+export interface ProjectApiKeyRecord {
+  keyId: string;
+  projectId: string;
+  actorId: string;
+  label: string;
+  scopes: ProjectKeyScope[];
+  createdAt: string;
+  revokedAt: string | null;
+  lastUsedAt: string | null;
+}
+
 export interface ProjectRecord {
   projectId: string;
   ownerActorId: string;
@@ -221,4 +268,69 @@ export interface ServerRepository extends TransactionRepository {
     actorId: string;
     limit: number;
   }): Promise<AuditEvent[]>;
+  // --- P2 auth: human accounts + session tokens (machine access stays on api_tokens) ---
+  countUsers(): Promise<number>;
+  createUser(input: {
+    userId: string;
+    username: string;
+    displayName: string;
+    passwordHash: string;
+    actorId: string;
+  }): Promise<UserRecord>;
+  getUserByUsername(username: string): Promise<UserRecord | null>;
+  getUserById(userId: string): Promise<UserRecord | null>;
+  createUserSession(input: {
+    tokenHash: string;
+    userId: string;
+    expiresAt: string;
+  }): Promise<void>;
+  /** Resolve a session token hash to its user/actor; null when missing, expired, or revoked. */
+  authenticateSessionHash(tokenHash: string, now: string): Promise<UserRecord | null>;
+  revokeUserSession(tokenHash: string): Promise<void>;
+  createInviteCode(input: {
+    codeHash: string;
+    createdBy: string;
+    expiresAt: string;
+  }): Promise<void>;
+  /** Atomically mark an invite used; false when missing, expired, or already used. */
+  consumeInviteCode(codeHash: string, usedBy: string, now: string): Promise<boolean>;
+  // --- P2: project-scoped API keys ---
+  createProjectApiKey(input: {
+    keyId: string;
+    keyHash: string;
+    projectId: string;
+    actorId: string;
+    label: string;
+    scopes: ProjectKeyScope[];
+  }): Promise<ProjectApiKeyRecord>;
+  listProjectApiKeys(projectId: string): Promise<ProjectApiKeyRecord[]>;
+  /** Returns false when the key does not exist or is already revoked. */
+  revokeProjectApiKey(projectId: string, keyId: string): Promise<boolean>;
+  /** Resolve a key hash to its record; null when missing or revoked. Touches last_used_at. */
+  authenticateProjectKeyHash(keyHash: string, now: string): Promise<ProjectApiKeyRecord | null>;
+  // --- P3: server-side knowledge ingest (idempotent, hash-deduped outbox) ---
+  /**
+   * Idempotent upsert keyed by (projectId, entryId):
+   * "duplicate" when the content hash is unchanged, otherwise created/updated
+   * and the row re-enters the projection outbox (projected_at = NULL).
+   */
+  upsertKnowledgeEntry(input: {
+    projectId: string;
+    entryId: string;
+    contentSha256: string;
+    payload: Record<string, unknown>;
+    status: string;
+  }): Promise<"created" | "updated" | "duplicate">;
+  listUnprojectedKnowledge(projectId: string, limit: number): Promise<KnowledgeIngestRecord[]>;
+  markKnowledgeProjected(projectId: string, entryIds: string[], at: string): Promise<void>;
+  listKnowledgeEntries(input: {
+    projectId: string;
+    status?: string;
+    limit: number;
+  }): Promise<KnowledgeIngestRecord[]>;
+  updateKnowledgeStatus(
+    projectId: string,
+    entryId: string,
+    status: string
+  ): Promise<KnowledgeIngestRecord | null>;
 }

@@ -37,6 +37,12 @@ function Sidebar() {
         <Link href="/projects" className={isActive("/projects") ? "active" : ""}>
           {t.nav.projects}
         </Link>
+        <Link href="/knowledge" className={isActive("/knowledge") ? "active" : ""}>
+          {t.nav.knowledge}
+        </Link>
+        <Link href="/runs" className={isActive("/runs") ? "active" : ""}>
+          {t.nav.runs}
+        </Link>
         <Link href="/workflows" className={isActive("/workflows") ? "active" : ""}>
           {t.nav.workflows}
         </Link>

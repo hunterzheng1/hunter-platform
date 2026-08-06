@@ -9,6 +9,7 @@ import { PostgresRegistryPersistence } from "./registry/persistence.js";
 import { runMigrations } from "./repositories/migrate.js";
 import { PostgresRepository } from "./repositories/postgres.js";
 import { PgSemanticStore } from "./semantic/pg-store.js";
+import { PgRunStore } from "./runs/pg-store.js";
 import { LocalArtifactStorage } from "./storage/local.js";
 
 async function secret(name: string, required: boolean): Promise<string | undefined> {
@@ -68,6 +69,7 @@ const app = await createServer({
   registryPersistence: new PostgresRegistryPersistence(pool),
   aiJobStore: new PgAiJobStore(pool),
   semanticStore: new PgSemanticStore(pool),
+  runStore: new PgRunStore(pool),
   logger: true
 });
 const port = Number(process.env.PORT ?? "3001");

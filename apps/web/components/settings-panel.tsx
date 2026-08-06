@@ -1,7 +1,88 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+
+import {
+  clearStoredToken,
+  createInvite,
+  fetchMe,
+  isSessionToken,
+  logout,
+  storedToken,
+  type AuthUser
+} from "../lib/auth";
 import { useI18n } from "../lib/i18n";
+
+function AccountSection() {
+  const { t } = useI18n();
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [invite, setInvite] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const token = storedToken();
+    if (!isSessionToken(token)) {
+      setLoaded(true);
+      return;
+    }
+    void fetchMe(token as string).then((me) => {
+      setUser(me);
+      setLoaded(true);
+    });
+  }, []);
+
+  async function handleLogout(): Promise<void> {
+    const token = storedToken();
+    if (isSessionToken(token)) await logout(token as string);
+    clearStoredToken();
+    window.location.assign("/login");
+  }
+
+  async function handleInvite(): Promise<void> {
+    const token = storedToken();
+    if (!isSessionToken(token)) return;
+    setBusy(true);
+    try {
+      const created = await createInvite(token as string);
+      setInvite(created.inviteCode);
+    } catch {
+      setInvite(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!loaded) return null;
+  return (
+    <div>
+      <label className="settings-label">{t.auth.account}</label>
+      {user === null ? (
+        <div className="token-row">
+          <span>{t.auth.notLoggedIn}</span>
+          <a className="token-set-btn" href="/login">{t.auth.goLogin}</a>
+        </div>
+      ) : (
+        <>
+          <div className="token-row">
+            <span>{t.auth.loggedInAs}: <strong>{user.display_name}</strong></span>
+            <button className="token-set-btn" onClick={() => void handleLogout()}>
+              {t.auth.logout}
+            </button>
+          </div>
+          <div className="token-row">
+            <button className="token-set-btn" disabled={busy} onClick={() => void handleInvite()}>
+              {t.auth.inviteButton}
+            </button>
+          </div>
+          {invite === null ? null : (
+            <small>{t.auth.inviteCreated}<code>{invite}</code></small>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
 
 export function ThemeToggle({ theme, setTheme }: { theme: "dark" | "light"; setTheme: (t: "dark" | "light") => void }) {
   const { t } = useI18n();
@@ -185,6 +266,8 @@ export function SettingsPanel({ theme, setTheme }: { theme: "dark" | "light"; se
           <LanguageSwitch />
           <ThemeToggle theme={theme} setTheme={setTheme} />
           <DefaultAgentSection />
+          <div className="settings-divider" />
+          <AccountSection />
           <div className="settings-divider" />
           <TokenSection />
         </div>

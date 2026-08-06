@@ -9,13 +9,17 @@ import type {
   ArtifactRecord,
   AuditEvent,
   IdempotencyRecord,
+  KnowledgeIngestRecord,
+  ProjectApiKeyRecord,
   ProjectFileRecord,
+  ProjectKeyScope,
   ProjectRecord,
   ProposalRecord,
   ProposalSessionRecord,
   ReviewRecord,
   ServerRepository,
-  TransactionRepository
+  TransactionRepository,
+  UserRecord
 } from "./interfaces.js";
 import { ServerDomainError } from "./interfaces.js";
 import { applyProjectFileOperations } from "./project-files.js";
@@ -27,6 +31,44 @@ function id(prefix: string): string {
 
 function tokenHash(token: string): string {
   return sha256Bytes("hunter-harness-token\0" + token);
+}
+
+function knowledgeIngestFrom(row: QueryResultRow): KnowledgeIngestRecord {
+  return {
+    projectId: String(row.project_id),
+    entryId: String(row.entry_id),
+    contentSha256: String(row.content_sha256),
+    payload: (row.payload ?? {}) as Record<string, unknown>,
+    status: String(row.status),
+    createdAt: timestamp(row.created_at),
+    updatedAt: timestamp(row.updated_at),
+    projectedAt: row.projected_at == null ? null : timestamp(row.projected_at)
+  };
+}
+
+function projectApiKeyFrom(row: QueryResultRow): ProjectApiKeyRecord {
+  return {
+    keyId: String(row.key_id),
+    projectId: String(row.project_id),
+    actorId: String(row.actor_id),
+    label: String(row.label),
+    scopes: (Array.isArray(row.scopes) ? row.scopes : []) as ProjectKeyScope[],
+    createdAt: timestamp(row.created_at),
+    revokedAt: row.revoked_at == null ? null : timestamp(row.revoked_at),
+    lastUsedAt: row.last_used_at == null ? null : timestamp(row.last_used_at)
+  };
+}
+
+function userFrom(row: QueryResultRow): UserRecord {
+  return {
+    userId: String(row.user_id),
+    username: String(row.username),
+    displayName: String(row.display_name),
+    passwordHash: String(row.password_hash),
+    actorId: String(row.actor_id),
+    createdAt: timestamp(row.created_at),
+    disabledAt: row.disabled_at == null ? null : timestamp(row.disabled_at)
+  };
 }
 
 function timestamp(value: unknown): string {
@@ -180,6 +222,255 @@ export class PostgresRepository implements ServerRepository {
       [tokenHash(token)]
     );
     return result.rowCount === 0 ? null : { actorId: String(result.rows[0]?.actor_id) };
+  }
+
+  async countUsers(): Promise<number> {
+    const result = await this.pool.query(`SELECT count(*)::int AS n FROM users`);
+    return Number(result.rows[0]?.n ?? 0);
+  }
+
+  async createUser(input: {
+    userId: string;
+    username: string;
+    displayName: string;
+    passwordHash: string;
+    actorId: string;
+  }): Promise<UserRecord> {
+    return this.transaction(async (client) => {
+      await client.query(
+        `INSERT INTO actors(actor_id, display_name)
+         VALUES ($1, $2)
+         ON CONFLICT (actor_id) DO NOTHING`,
+        [input.actorId, input.displayName]
+      );
+      const result = await client.query(
+        `INSERT INTO users(user_id, username, display_name, password_hash, actor_id)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING *`,
+        [input.userId, input.username, input.displayName, input.passwordHash, input.actorId]
+      );
+      return userFrom(result.rows[0] ?? {});
+    });
+  }
+
+  async getUserByUsername(username: string): Promise<UserRecord | null> {
+    const result = await this.pool.query(
+      `SELECT * FROM users WHERE username = $1`,
+      [username]
+    );
+    return result.rowCount === 0 ? null : userFrom(result.rows[0] ?? {});
+  }
+
+  async getUserById(userId: string): Promise<UserRecord | null> {
+    const result = await this.pool.query(
+      `SELECT * FROM users WHERE user_id = $1`,
+      [userId]
+    );
+    return result.rowCount === 0 ? null : userFrom(result.rows[0] ?? {});
+  }
+
+  async createUserSession(input: {
+    tokenHash: string;
+    userId: string;
+    expiresAt: string;
+  }): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO user_sessions(session_token_hash, user_id, expires_at)
+       VALUES ($1, $2, $3)`,
+      [input.tokenHash, input.userId, input.expiresAt]
+    );
+  }
+
+  async authenticateSessionHash(hash: string, now: string): Promise<UserRecord | null> {
+    const result = await this.pool.query(
+      `UPDATE user_sessions s SET last_seen_at = $2
+       FROM users u
+       WHERE s.session_token_hash = $1
+         AND s.user_id = u.user_id
+         AND s.revoked_at IS NULL
+         AND s.expires_at > $2
+         AND u.disabled_at IS NULL
+       RETURNING u.*`,
+      [hash, now]
+    );
+    return result.rowCount === 0 ? null : userFrom(result.rows[0] ?? {});
+  }
+
+  async revokeUserSession(hash: string): Promise<void> {
+    await this.pool.query(
+      `UPDATE user_sessions SET revoked_at = now()
+       WHERE session_token_hash = $1 AND revoked_at IS NULL`,
+      [hash]
+    );
+  }
+
+  async createInviteCode(input: {
+    codeHash: string;
+    createdBy: string;
+    expiresAt: string;
+  }): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO invite_codes(code_hash, created_by, expires_at)
+       VALUES ($1, $2, $3)`,
+      [input.codeHash, input.createdBy, input.expiresAt]
+    );
+  }
+
+  async consumeInviteCode(codeHash: string, usedBy: string, now: string): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE invite_codes SET used_by = $2, used_at = $3
+       WHERE code_hash = $1 AND used_at IS NULL AND expires_at > $3`,
+      [codeHash, usedBy, now]
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async createProjectApiKey(input: {
+    keyId: string;
+    keyHash: string;
+    projectId: string;
+    actorId: string;
+    label: string;
+    scopes: ProjectKeyScope[];
+  }): Promise<ProjectApiKeyRecord> {
+    const result = await this.pool.query(
+      `INSERT INTO project_api_keys(key_id, key_hash, project_id, actor_id, label, scopes)
+       VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+       RETURNING *`,
+      [
+        input.keyId,
+        input.keyHash,
+        input.projectId,
+        input.actorId,
+        input.label,
+        JSON.stringify(input.scopes)
+      ]
+    );
+    return projectApiKeyFrom(result.rows[0] ?? {});
+  }
+
+  async listProjectApiKeys(projectId: string): Promise<ProjectApiKeyRecord[]> {
+    const result = await this.pool.query(
+      `SELECT * FROM project_api_keys
+       WHERE project_id = $1
+       ORDER BY created_at DESC`,
+      [projectId]
+    );
+    return result.rows.map((row) => projectApiKeyFrom(row));
+  }
+
+  async revokeProjectApiKey(projectId: string, keyId: string): Promise<boolean> {
+    const result = await this.pool.query(
+      `UPDATE project_api_keys SET revoked_at = now()
+       WHERE project_id = $1 AND key_id = $2 AND revoked_at IS NULL`,
+      [projectId, keyId]
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async authenticateProjectKeyHash(
+    keyHash: string,
+    now: string
+  ): Promise<ProjectApiKeyRecord | null> {
+    const result = await this.pool.query(
+      `UPDATE project_api_keys SET last_used_at = $2
+       WHERE key_hash = $1 AND revoked_at IS NULL
+       RETURNING *`,
+      [keyHash, now]
+    );
+    return result.rowCount === 0 ? null : projectApiKeyFrom(result.rows[0] ?? {});
+  }
+
+  async upsertKnowledgeEntry(input: {
+    projectId: string;
+    entryId: string;
+    contentSha256: string;
+    payload: Record<string, unknown>;
+    status: string;
+  }): Promise<"created" | "updated" | "duplicate"> {
+    const result = await this.pool.query(
+      `INSERT INTO knowledge_ingest_entries(project_id, entry_id, content_sha256, payload, status)
+       VALUES ($1, $2, $3, $4::jsonb, $5)
+       ON CONFLICT (project_id, entry_id) DO UPDATE SET
+         content_sha256 = EXCLUDED.content_sha256,
+         payload = EXCLUDED.payload,
+         status = EXCLUDED.status,
+         updated_at = now(),
+         projected_at = NULL
+       WHERE knowledge_ingest_entries.content_sha256 <> EXCLUDED.content_sha256
+       RETURNING (xmax = 0) AS inserted`,
+      [input.projectId, input.entryId, input.contentSha256, JSON.stringify(input.payload), input.status]
+    );
+    if (result.rowCount === 0) return "duplicate";
+    return result.rows[0]?.inserted === true ? "created" : "updated";
+  }
+
+  async listUnprojectedKnowledge(
+    projectId: string,
+    limit: number
+  ): Promise<KnowledgeIngestRecord[]> {
+    const result = await this.pool.query(
+      `SELECT * FROM knowledge_ingest_entries
+       WHERE project_id = $1 AND projected_at IS NULL
+       ORDER BY updated_at ASC
+       LIMIT $2`,
+      [projectId, limit]
+    );
+    return result.rows.map((row) => knowledgeIngestFrom(row));
+  }
+
+  async markKnowledgeProjected(
+    projectId: string,
+    entryIds: string[],
+    at: string
+  ): Promise<void> {
+    if (entryIds.length === 0) return;
+    await this.pool.query(
+      `UPDATE knowledge_ingest_entries SET projected_at = $3
+       WHERE project_id = $1 AND entry_id = ANY($2::text[])`,
+      [projectId, entryIds, at]
+    );
+  }
+
+  async listKnowledgeEntries(input: {
+    projectId: string;
+    status?: string;
+    limit: number;
+  }): Promise<KnowledgeIngestRecord[]> {
+    const result = input.status === undefined
+      ? await this.pool.query(
+        `SELECT * FROM knowledge_ingest_entries
+         WHERE project_id = $1
+         ORDER BY updated_at DESC
+         LIMIT $2`,
+        [input.projectId, input.limit]
+      )
+      : await this.pool.query(
+        `SELECT * FROM knowledge_ingest_entries
+         WHERE project_id = $1 AND status = $3
+         ORDER BY updated_at DESC
+         LIMIT $2`,
+        [input.projectId, input.limit, input.status]
+      );
+    return result.rows.map((row) => knowledgeIngestFrom(row));
+  }
+
+  async updateKnowledgeStatus(
+    projectId: string,
+    entryId: string,
+    status: string
+  ): Promise<KnowledgeIngestRecord | null> {
+    const result = await this.pool.query(
+      `UPDATE knowledge_ingest_entries
+       SET status = $3,
+           payload = jsonb_set(payload, '{status}', to_jsonb($3::text)),
+           updated_at = now(),
+           projected_at = NULL
+       WHERE project_id = $1 AND entry_id = $2
+       RETURNING *`,
+      [projectId, entryId, status]
+    );
+    return result.rowCount === 0 ? null : knowledgeIngestFrom(result.rows[0] ?? {});
   }
 
   async resolveProject(input: {

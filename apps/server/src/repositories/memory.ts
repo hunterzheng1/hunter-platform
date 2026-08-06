@@ -11,8 +11,12 @@ import type {
   ProposalRecord,
   ProposalSessionRecord,
   ReviewRecord,
+  KnowledgeIngestRecord,
+  ProjectApiKeyRecord,
+  ProjectKeyScope,
   ServerRepository,
-  TransactionRepository
+  TransactionRepository,
+  UserRecord
 } from "./interfaces.js";
 import { ServerDomainError } from "./interfaces.js";
 import { applyProjectFileOperations } from "./project-files.js";
@@ -30,6 +34,21 @@ export class MemoryRepository implements ServerRepository {
   private readonly proposals = new Map<string, ProposalRecord>();
   private readonly artifacts = new Map<string, ArtifactRecord>();
   private readonly idempotency = new Map<string, IdempotencyRecord>();
+  private readonly users = new Map<string, UserRecord>();
+  private readonly userSessions = new Map<string, {
+    userId: string;
+    expiresAt: string;
+    revokedAt: string | null;
+  }>();
+  private readonly inviteCodes = new Map<string, {
+    createdBy: string;
+    expiresAt: string;
+    usedBy: string | null;
+  }>();
+  /** key: keyHash */
+  private readonly projectApiKeys = new Map<string, ProjectApiKeyRecord>();
+  /** key: projectId + "\0" + entryId */
+  private readonly knowledgeEntries = new Map<string, KnowledgeIngestRecord>();
   private readonly auditEvents: AuditEvent[] = [];
   private readonly idempotencyLocks = new Map<string, Promise<void>>();
   private counters = {
@@ -74,6 +93,219 @@ export class MemoryRepository implements ServerRepository {
 
   async authenticateToken(token: string): Promise<Actor | null> {
     return this.tokens.get(tokenHash(token)) ?? null;
+  }
+
+  async countUsers(): Promise<number> {
+    return this.users.size;
+  }
+
+  async createUser(input: {
+    userId: string;
+    username: string;
+    displayName: string;
+    passwordHash: string;
+    actorId: string;
+  }): Promise<UserRecord> {
+    for (const user of this.users.values()) {
+      if (user.username === input.username) {
+        throw new ServerDomainError(409, "USERNAME_TAKEN", "username already exists");
+      }
+    }
+    const record: UserRecord = {
+      ...input,
+      createdAt: new Date().toISOString(),
+      disabledAt: null
+    };
+    this.users.set(input.userId, record);
+    return record;
+  }
+
+  async getUserByUsername(username: string): Promise<UserRecord | null> {
+    for (const user of this.users.values()) {
+      if (user.username === username) return user;
+    }
+    return null;
+  }
+
+  async getUserById(userId: string): Promise<UserRecord | null> {
+    return this.users.get(userId) ?? null;
+  }
+
+  async createUserSession(input: {
+    tokenHash: string;
+    userId: string;
+    expiresAt: string;
+  }): Promise<void> {
+    this.userSessions.set(input.tokenHash, {
+      userId: input.userId,
+      expiresAt: input.expiresAt,
+      revokedAt: null
+    });
+  }
+
+  async authenticateSessionHash(hash: string, now: string): Promise<UserRecord | null> {
+    const session = this.userSessions.get(hash);
+    if (session === undefined || session.revokedAt !== null || session.expiresAt <= now) {
+      return null;
+    }
+    const user = this.users.get(session.userId);
+    if (user === undefined || user.disabledAt !== null) return null;
+    return user;
+  }
+
+  async revokeUserSession(hash: string): Promise<void> {
+    const session = this.userSessions.get(hash);
+    if (session !== undefined && session.revokedAt === null) {
+      session.revokedAt = new Date().toISOString();
+    }
+  }
+
+  async createInviteCode(input: {
+    codeHash: string;
+    createdBy: string;
+    expiresAt: string;
+  }): Promise<void> {
+    this.inviteCodes.set(input.codeHash, {
+      createdBy: input.createdBy,
+      expiresAt: input.expiresAt,
+      usedBy: null
+    });
+  }
+
+  async consumeInviteCode(codeHash: string, usedBy: string, now: string): Promise<boolean> {
+    const invite = this.inviteCodes.get(codeHash);
+    if (invite === undefined || invite.usedBy !== null || invite.expiresAt <= now) {
+      return false;
+    }
+    invite.usedBy = usedBy;
+    return true;
+  }
+
+  async createProjectApiKey(input: {
+    keyId: string;
+    keyHash: string;
+    projectId: string;
+    actorId: string;
+    label: string;
+    scopes: ProjectKeyScope[];
+  }): Promise<ProjectApiKeyRecord> {
+    const record: ProjectApiKeyRecord = {
+      keyId: input.keyId,
+      projectId: input.projectId,
+      actorId: input.actorId,
+      label: input.label,
+      scopes: [...input.scopes],
+      createdAt: new Date().toISOString(),
+      revokedAt: null,
+      lastUsedAt: null
+    };
+    this.projectApiKeys.set(input.keyHash, record);
+    return record;
+  }
+
+  async listProjectApiKeys(projectId: string): Promise<ProjectApiKeyRecord[]> {
+    return [...this.projectApiKeys.values()]
+      .filter((key) => key.projectId === projectId)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async revokeProjectApiKey(projectId: string, keyId: string): Promise<boolean> {
+    for (const key of this.projectApiKeys.values()) {
+      if (key.projectId === projectId && key.keyId === keyId && key.revokedAt === null) {
+        key.revokedAt = new Date().toISOString();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async authenticateProjectKeyHash(
+    keyHash: string,
+    now: string
+  ): Promise<ProjectApiKeyRecord | null> {
+    const record = this.projectApiKeys.get(keyHash);
+    if (record === undefined || record.revokedAt !== null) return null;
+    record.lastUsedAt = now;
+    return record;
+  }
+
+  async upsertKnowledgeEntry(input: {
+    projectId: string;
+    entryId: string;
+    contentSha256: string;
+    payload: Record<string, unknown>;
+    status: string;
+  }): Promise<"created" | "updated" | "duplicate"> {
+    const key = input.projectId + "\0" + input.entryId;
+    const existing = this.knowledgeEntries.get(key);
+    const now = new Date().toISOString();
+    if (existing === undefined) {
+      this.knowledgeEntries.set(key, {
+        projectId: input.projectId,
+        entryId: input.entryId,
+        contentSha256: input.contentSha256,
+        payload: input.payload,
+        status: input.status,
+        createdAt: now,
+        updatedAt: now,
+        projectedAt: null
+      });
+      return "created";
+    }
+    if (existing.contentSha256 === input.contentSha256) return "duplicate";
+    existing.contentSha256 = input.contentSha256;
+    existing.payload = input.payload;
+    existing.status = input.status;
+    existing.updatedAt = now;
+    existing.projectedAt = null;
+    return "updated";
+  }
+
+  async listUnprojectedKnowledge(
+    projectId: string,
+    limit: number
+  ): Promise<KnowledgeIngestRecord[]> {
+    return [...this.knowledgeEntries.values()]
+      .filter((entry) => entry.projectId === projectId && entry.projectedAt === null)
+      .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))
+      .slice(0, limit);
+  }
+
+  async markKnowledgeProjected(
+    projectId: string,
+    entryIds: string[],
+    at: string
+  ): Promise<void> {
+    for (const entryId of entryIds) {
+      const record = this.knowledgeEntries.get(projectId + "\0" + entryId);
+      if (record !== undefined) record.projectedAt = at;
+    }
+  }
+
+  async listKnowledgeEntries(input: {
+    projectId: string;
+    status?: string;
+    limit: number;
+  }): Promise<KnowledgeIngestRecord[]> {
+    return [...this.knowledgeEntries.values()]
+      .filter((entry) => entry.projectId === input.projectId &&
+        (input.status === undefined || entry.status === input.status))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .slice(0, input.limit);
+  }
+
+  async updateKnowledgeStatus(
+    projectId: string,
+    entryId: string,
+    status: string
+  ): Promise<KnowledgeIngestRecord | null> {
+    const record = this.knowledgeEntries.get(projectId + "\0" + entryId);
+    if (record === undefined) return null;
+    record.status = status;
+    record.payload = { ...record.payload, status };
+    record.updatedAt = new Date().toISOString();
+    record.projectedAt = null;
+    return record;
   }
 
   async resolveProject(input: {

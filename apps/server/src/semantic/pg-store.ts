@@ -7,7 +7,7 @@ import type {
 } from "@hunter-harness/contracts";
 import type { Pool } from "pg";
 
-import { overviewFromDocuments, type SemanticStore } from "./store.js";
+import { INGEST_ARTIFACT_ID, overviewFromDocuments, type SemanticStore } from "./store.js";
 
 function documentFromRow(row: Record<string, unknown>): SemanticDocument {
   return {
@@ -43,7 +43,11 @@ export class PgSemanticStore implements SemanticStore {
     try {
       await client.query("BEGIN");
       await client.query("DELETE FROM semantic_edges WHERE project_id = $1", [build.project_id]);
-      await client.query("DELETE FROM semantic_documents WHERE project_id = $1", [build.project_id]);
+      // Ingest-projected documents are owned by the P3 knowledge API, not the push snapshot.
+      await client.query(
+        "DELETE FROM semantic_documents WHERE project_id = $1 AND artifact_id <> $2",
+        [build.project_id, INGEST_ARTIFACT_ID]
+      );
       if (build.documents.length > 0) {
         await client.query(
           `INSERT INTO semantic_documents(
@@ -78,6 +82,30 @@ export class PgSemanticStore implements SemanticStore {
     } finally {
       client.release();
     }
+  }
+
+  async upsertDocuments(documents: readonly SemanticDocument[]): Promise<void> {
+    if (documents.length === 0) return;
+    await this.pool.query(
+      `INSERT INTO semantic_documents(
+         document_id, project_id, artifact_id, kind, source_path, title, body, metadata, content_sha256
+       )
+       SELECT document_id, project_id, artifact_id, kind, source_path, title, body,
+              metadata, content_sha256
+       FROM jsonb_to_recordset($1::jsonb) AS document(
+         document_id text, project_id text, artifact_id text, kind text,
+         source_path text, title text, body text, metadata jsonb, content_sha256 text
+       )
+       ON CONFLICT (document_id) DO UPDATE SET
+         artifact_id = EXCLUDED.artifact_id,
+         kind = EXCLUDED.kind,
+         source_path = EXCLUDED.source_path,
+         title = EXCLUDED.title,
+         body = EXCLUDED.body,
+         metadata = EXCLUDED.metadata,
+         content_sha256 = EXCLUDED.content_sha256`,
+      [JSON.stringify(documents)]
+    );
   }
 
   async overview(projectId: string): Promise<SemanticOverview> {

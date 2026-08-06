@@ -5,6 +5,7 @@ import {
   canonicalJson,
   fileOperationSchema,
   finalizeProposalSchema,
+  knowledgeIngestEntrySchema,
   providerModelSchema,
   publishSkillRequestSchema,
   publishUnifiedSkillRequestSchema,
@@ -56,7 +57,12 @@ import { MemoryAiJobStore, type AiJobStore } from "./ai/ai-job-store.js";
 import { createLlmClient } from "./ai/llm-factory.js";
 import { loadAiSecret, writeAiSecret } from "./ai/secret-loader.js";
 import { writeAudit } from "./audit/audit.js";
-import { authenticateRequest } from "./auth/tokens.js";
+import { registerAuthRoutes } from "./auth/routes.js";
+import {
+  assertProjectKeyScope,
+  authenticateRequest,
+  requestProjectKey
+} from "./auth/tokens.js";
 import { defaultServerConfig, type ServerConfig } from "./config.js";
 import { buildDashboardOverview } from "./dashboard/overview.js";
 import { isNpmPublishConfigured, loadNpmPublishConfig } from "./npm/config.js";
@@ -70,12 +76,20 @@ import type { RegistryPersistence } from "./registry/persistence.js";
 import type {
   Actor,
   IdempotencyRecord,
+  ProjectKeyScope,
   ProjectRecord,
   ServerRepository
 } from "./repositories/interfaces.js";
 import { ServerDomainError } from "./repositories/interfaces.js";
 import type { ArtifactStorage } from "./storage/interface.js";
 import { buildSemanticIndex, isSemanticSourcePath } from "./semantic/indexer.js";
+import {
+  knowledgeContentHash,
+  projectPendingKnowledge
+} from "./semantic/knowledge-projection.js";
+import { MemoryRunStore } from "./runs/memory-store.js";
+import { registerRunRoutes } from "./runs/routes.js";
+import type { RunStore } from "./runs/store.js";
 import { SemanticMemoryStore } from "./semantic/memory-store.js";
 import type { SemanticStore } from "./semantic/store.js";
 import { registerSemanticMcpRoutes } from "./mcp/register.js";
@@ -88,6 +102,7 @@ export interface CreateServerOptions {
   bootstrapBundle?: BootstrapBundle;
   registryPersistence?: RegistryPersistence;
   semanticStore?: SemanticStore;
+  runStore?: RunStore;
   // AiJobStore ???PG ??? PgAiJobStore ????? + ?? recoverOrphans??? MemoryAiJobStore ??? fallback?
   aiJobStore?: AiJobStore;
   // AI LlmClient ????? createLlmClient ?? DeepSeek?????? mock?
@@ -309,12 +324,24 @@ function resolveUploadFiles(
 
 async function authenticated(
   request: FastifyRequest,
-  repository: ServerRepository
+  repository: ServerRepository,
+  projectScope?: ProjectKeyScope
 ): Promise<{ actor: Actor; requestId: string }> {
-  return {
-    actor: await authenticateRequest(request, repository),
-    requestId: routeRequestId(request)
-  };
+  const actor = await authenticateRequest(request, repository);
+  if (requestProjectKey(request) !== undefined) {
+    // Project API keys are default-deny: only routes that declare a scope accept them.
+    if (projectScope === undefined) {
+      throw new ServerDomainError(
+        403,
+        "PROJECT_KEY_SCOPE",
+        "project API keys cannot access this endpoint"
+      );
+    }
+    const params = request.params as Record<string, unknown> | null;
+    const projectId = typeof params?.projectId === "string" ? params.projectId : undefined;
+    assertProjectKeyScope(request, projectScope, projectId);
+  }
+  return { actor, requestId: routeRequestId(request) };
 }
 
 async function mutation(
@@ -390,6 +417,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   // AiJobStore ???�3.2??PG ??? PgAiJobStore ???????? MemoryAiJobStore ??? fallback?
   const aiJobStore = options.aiJobStore ?? new MemoryAiJobStore();
   const semanticStore = options.semanticStore ?? new SemanticMemoryStore();
+  const runStore = options.runStore ?? new MemoryRunStore();
   // R3???????? running/pending job?PG ??? failed ?? partial unique index?memory no-op??
   await aiJobStore.recoverOrphans();
   // AI LlmClient ???�12.9??? defaultProvider ??? provider + secret file key ?? DeepSeek ????
@@ -514,6 +542,12 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
 
   app.get("/health", async () => ({ status: "ok" }));
 
+  // P2 auth: username/password login -> hhs_ session token (Bearer-compatible).
+  registerAuthRoutes(app, {
+    repository,
+    ownerActorId: process.env.HUNTER_HARNESS_BOOTSTRAP_ACTOR ?? "actor_owner"
+  });
+
   app.get("/api/v1/dashboard/overview", async (request, reply) => {
     const { actor, requestId } = await authenticated(request, repository);
     const query = z.object({ days: z.coerce.number().int().min(7).max(30).default(7) }).strict().parse(request.query);
@@ -528,7 +562,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   app.post("/api/v1/projects:resolve", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository);
+    const { actor, requestId } = await authenticated(request, repository, "push");
     const body = resolveSchema.parse(request.body);
     const result = await mutation(request, repository, actor, requestId, async () => {
       const resolved = await repository.resolveProject({
@@ -692,7 +726,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   app.get("/api/v1/projects/:projectId/files", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository);
+    const { actor, requestId } = await authenticated(request, repository, "files:read");
     const { projectId } = request.params as { projectId: string };
     const project = await repository.getProject(actor.actorId, projectId);
     const files = await repository.listProjectFiles(actor.actorId, projectId);
@@ -714,7 +748,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   app.get("/api/v1/projects/:projectId/files/content", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository);
+    const { actor, requestId } = await authenticated(request, repository, "files:read");
     const { projectId } = request.params as { projectId: string };
     const query = request.query as Record<string, string | undefined>;
     if (query.path === undefined || query.path.length === 0) {
@@ -744,7 +778,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   app.post("/api/v1/projects/:projectId/proposal-sessions", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository);
+    const { actor, requestId } = await authenticated(request, repository, "push");
     const { projectId } = request.params as { projectId: string };
     const body = sessionSchema.parse(request.body);
     const result = await mutation(request, repository, actor, requestId, async () => {
@@ -822,7 +856,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   app.post("/api/v1/proposal-sessions/:sessionId/blobs:query", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository);
+    const { actor, requestId } = await authenticated(request, repository, "push");
     const { sessionId } = request.params as { sessionId: string };
     const body = blobQuerySchema.parse(request.body);
     const result = await mutation(request, repository, actor, requestId, async () => {
@@ -844,7 +878,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   app.put("/api/v1/proposal-sessions/:sessionId/blobs/:hash", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository);
+    const { actor, requestId } = await authenticated(request, repository, "push");
     const { sessionId, hash } = request.params as { sessionId: string; hash: string };
     const result = await mutation(request, repository, actor, requestId, async () => {
       const session = await repository.getProposalSession(actor.actorId, sessionId);
@@ -909,7 +943,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   app.post(
     "/api/v1/proposal-sessions/:sessionId(^ups_[^:]+):finalize",
     async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository);
+    const { actor, requestId } = await authenticated(request, repository, "push");
     const { sessionId } = request.params as { sessionId: string };
     const body = finalizeProposalSchema.parse(request.body);
     const result = await mutation(request, repository, actor, requestId, async () => {
@@ -1124,7 +1158,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   app.get("/api/v1/projects/:projectId/update-manifest", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository);
+    const { actor, requestId } = await authenticated(request, repository, "files:read");
     const { projectId } = request.params as { projectId: string };
     await repository.getProject(actor.actorId, projectId);
     const query = request.query as Record<string, string | undefined>;
@@ -1152,7 +1186,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   app.get("/api/v1/artifacts/:artifactId/manifest", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository);
+    const { actor, requestId } = await authenticated(request, repository, "files:read");
     const { artifactId } = request.params as { artifactId: string };
     const artifact = await repository.getArtifact(actor.actorId, artifactId);
     reply.header("X-Request-Id", requestId);
@@ -1161,7 +1195,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   app.get("/api/v1/artifacts/:artifactId/blobs/:hash", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository);
+    const { actor, requestId } = await authenticated(request, repository, "files:read");
     const { artifactId, hash } = request.params as { artifactId: string; hash: string };
     const artifact = await repository.getArtifact(actor.actorId, artifactId);
     if (!artifact.manifest.files.some((operation) =>
@@ -1744,6 +1778,93 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     await repository.getProject(actor.actorId, projectId);
     reply.header("X-Request-Id", requestId);
     return { binding: registry.getProjectBinding(projectId), request_id: requestId };
+  });
+
+  // P3: server-side knowledge ingest — idempotent batch upsert with content-hash
+  // dedupe; projection into the semantic index runs asynchronously (outbox drain).
+  app.post("/api/v1/projects/:projectId/knowledge/ingest", async (request, reply) => {
+    const { actor, requestId } = await authenticated(request, repository, "knowledge:write");
+    const { projectId } = request.params as { projectId: string };
+    await repository.getProject(actor.actorId, projectId);
+    const body = z.object({
+      schema_version: z.literal(1),
+      entries: z.array(knowledgeIngestEntrySchema).min(1).max(200)
+    }).strict().parse(request.body);
+    const counts = { created: 0, updated: 0, duplicate: 0 };
+    for (const entry of body.entries) {
+      const outcome = await repository.upsertKnowledgeEntry({
+        projectId,
+        entryId: entry.id,
+        contentSha256: knowledgeContentHash(entry),
+        payload: entry as unknown as Record<string, unknown>,
+        status: entry.status
+      });
+      counts[outcome] += 1;
+    }
+    // Fire-and-forget outbox drain; ingest durability does not depend on it.
+    void projectPendingKnowledge(repository, semanticStore, projectId).catch((error) => {
+      app.log.error({ error, projectId }, "knowledge projection failed");
+    });
+    reply.header("X-Request-Id", requestId);
+    return reply.code(202).send({
+      accepted: body.entries.length,
+      created: counts.created,
+      updated: counts.updated,
+      duplicates: counts.duplicate,
+      request_id: requestId
+    });
+  });
+
+  // Raw ingested entries (candidate review works on these, not the projection).
+  app.get("/api/v1/projects/:projectId/knowledge/entries", async (request, reply) => {
+    const { actor, requestId } = await authenticated(request, repository);
+    const { projectId } = request.params as { projectId: string };
+    await repository.getProject(actor.actorId, projectId);
+    const query = z.object({
+      status: z.string().min(1).optional(),
+      limit: z.coerce.number().int().min(1).max(200).default(50)
+    }).strict().parse(request.query);
+    const items = await repository.listKnowledgeEntries({
+      projectId,
+      ...(query.status === undefined ? {} : { status: query.status }),
+      limit: query.limit
+    });
+    reply.header("X-Request-Id", requestId);
+    return {
+      items: items.map((item) => ({
+        entry_id: item.entryId,
+        status: item.status,
+        content_sha256: item.contentSha256,
+        payload: item.payload,
+        updated_at: item.updatedAt,
+        projected_at: item.projectedAt
+      })),
+      request_id: requestId
+    };
+  });
+
+  // Candidate adjudication: approve -> active, reject -> deprecated (server-side judge).
+  app.post("/api/v1/projects/:projectId/knowledge/entries/:entryId/status", async (request, reply) => {
+    const { actor, requestId } = await authenticated(request, repository);
+    const { projectId, entryId } = request.params as { projectId: string; entryId: string };
+    await repository.getProject(actor.actorId, projectId);
+    const body = z.object({
+      status: z.enum(["candidate", "active", "stale", "superseded", "deprecated", "conflicted"])
+    }).strict().parse(request.body);
+    const updated = await repository.updateKnowledgeStatus(projectId, entryId, body.status);
+    if (updated === null) {
+      throw new ServerDomainError(404, "KNOWLEDGE_ENTRY_NOT_FOUND", "knowledge entry not found");
+    }
+    void projectPendingKnowledge(repository, semanticStore, projectId).catch((error) => {
+      app.log.error({ error, projectId }, "knowledge projection failed");
+    });
+    reply.header("X-Request-Id", requestId);
+    return {
+      entry_id: updated.entryId,
+      status: updated.status,
+      updated_at: updated.updatedAt,
+      request_id: requestId
+    };
   });
 
   app.get("/api/v1/projects/:projectId/semantic/overview", async (request, reply) => {
@@ -2565,6 +2686,8 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   registerSemanticMcpRoutes(app, { repository, semanticStore });
+
+  registerRunRoutes(app, { repository, runStore, authenticated });
 
   const cleanupExpiredProjects = async (): Promise<void> => {
     const now = new Date().toISOString();

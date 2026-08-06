@@ -48,6 +48,43 @@ export interface AiJobState {
   expiresAt: string;
 }
 
+/** Raw knowledge ingest entry as returned by GET .../knowledge/entries. */
+export interface KnowledgeIngestListItem {
+  entry_id: string;
+  status: string;
+  content_sha256: string;
+  payload: Record<string, unknown>;
+  updated_at: string;
+  projected_at: string | null;
+}
+
+export interface RunSummary {
+  run_id: string;
+  project_id: string;
+  change_key: string;
+  title: string | null;
+  run_status: string;
+  connection_status: string;
+  sync_completeness: string;
+  current_phase: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  last_event_at: string | null;
+  last_heartbeat_at: string | null;
+  server_cursor: number;
+}
+
+export interface RunEventSummary {
+  server_cursor: number;
+  run_id: string;
+  event_id: string;
+  producer_seq: number;
+  event_type: string;
+  phase: string | null;
+  occurred_at: string;
+  payload: Record<string, unknown>;
+}
+
 export interface ProjectSummary {
   project_id: string;
   display_name: string;
@@ -246,6 +283,22 @@ export interface HunterApi {
   listProjectSemanticChanges?(projectId: string): Promise<SemanticDocument[]>;
   getProjectSemanticGraph?(projectId: string, focusDocumentId?: string): Promise<ProjectSemanticGraph>;
   searchSemanticDocuments?(query: string, projectId?: string): Promise<Array<{ document: SemanticDocument; project_id: string }>>;
+  listKnowledgeEntries?(projectId: string, options?: {
+    status?: string;
+    limit?: number;
+  }): Promise<KnowledgeIngestListItem[]>;
+  updateKnowledgeEntryStatus?(
+    projectId: string,
+    entryId: string,
+    status: string
+  ): Promise<{ entry_id: string; status: string; updated_at: string }>;
+  listProjectRuns?(projectId: string): Promise<RunSummary[]>;
+  getProjectRun?(projectId: string, runId: string): Promise<RunSummary>;
+  listProjectRunEvents?(
+    projectId: string,
+    runId: string,
+    afterCursor?: number
+  ): Promise<{ items: RunEventSummary[]; next_cursor: number }>;
   uploadSkillDraft?(form: FormData, agent: RegistryAgent): Promise<DraftState>;
   getSkillDraft?(slug: string, agent: RegistryAgent): Promise<DraftState>;
   discardSkillDraft?(slug: string, agent: RegistryAgent, revision: number): Promise<{ slug: string; discarded: boolean }>;
@@ -818,6 +871,64 @@ export class HttpHunterApi implements HunterApi {
       "GET", "/api/v1/semantic/search?" + params.toString()
     );
     return result.items;
+  }
+
+  async listKnowledgeEntries(
+    projectId: string,
+    options: { status?: string; limit?: number } = {}
+  ): Promise<KnowledgeIngestListItem[]> {
+    const params = new URLSearchParams();
+    if (options.status !== undefined) params.set("status", options.status);
+    if (options.limit !== undefined) params.set("limit", String(options.limit));
+    const query = params.toString() === "" ? "" : "?" + params.toString();
+    const result = await this.request<{ items: KnowledgeIngestListItem[] }>(
+      "GET",
+      "/api/v1/projects/" + encodeURIComponent(projectId) + "/knowledge/entries" + query
+    );
+    return result.items;
+  }
+
+  async updateKnowledgeEntryStatus(
+    projectId: string,
+    entryId: string,
+    status: string
+  ): Promise<{ entry_id: string; status: string; updated_at: string }> {
+    return this.request(
+      "POST",
+      "/api/v1/projects/" + encodeURIComponent(projectId) +
+        "/knowledge/entries/" + encodeURIComponent(entryId) + "/status",
+      { status }
+    );
+  }
+
+  async listProjectRuns(projectId: string): Promise<RunSummary[]> {
+    const result = await this.request<{ items: RunSummary[] }>(
+      "GET",
+      "/api/v1/projects/" + encodeURIComponent(projectId) + "/runs"
+    );
+    return result.items;
+  }
+
+  async getProjectRun(projectId: string, runId: string): Promise<RunSummary> {
+    const result = await this.request<{ run: RunSummary }>(
+      "GET",
+      "/api/v1/projects/" + encodeURIComponent(projectId) +
+        "/runs/" + encodeURIComponent(runId)
+    );
+    return result.run;
+  }
+
+  async listProjectRunEvents(
+    projectId: string,
+    runId: string,
+    afterCursor = 0
+  ): Promise<{ items: RunEventSummary[]; next_cursor: number }> {
+    return this.request(
+      "GET",
+      "/api/v1/projects/" + encodeURIComponent(projectId) +
+        "/runs/" + encodeURIComponent(runId) +
+        "/events?after_cursor=" + encodeURIComponent(String(afterCursor))
+    );
   }
 
   private async multipartRequest<T>(path: string, formData: FormData): Promise<T> {

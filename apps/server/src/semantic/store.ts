@@ -6,8 +6,16 @@ import type {
   SemanticOverview
 } from "@hunter-harness/contracts";
 
+/**
+ * Documents created by the P3 knowledge ingest API carry this artifact id.
+ * `rebuild` (push-triggered full replace) must not delete them.
+ */
+export const INGEST_ARTIFACT_ID = "ingest";
+
 export interface SemanticStore {
   rebuild(build: SemanticIndexBuild): Promise<void>;
+  /** Insert or replace individual documents (P3 ingest projection). */
+  upsertDocuments(documents: readonly SemanticDocument[]): Promise<void>;
   overview(projectId: string): Promise<SemanticOverview>;
   listByKinds(projectId: string, kinds: readonly SemanticDocumentKind[]): Promise<SemanticDocument[]>;
   listEdges(projectId: string): Promise<SemanticEdge[]>;

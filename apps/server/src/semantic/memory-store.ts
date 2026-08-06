@@ -6,7 +6,7 @@ import type {
   SemanticOverview
 } from "@hunter-harness/contracts";
 
-import { overviewFromDocuments, type SemanticStore } from "./store.js";
+import { INGEST_ARTIFACT_ID, overviewFromDocuments, type SemanticStore } from "./store.js";
 
 export class SemanticMemoryStore implements SemanticStore {
   private readonly documents = new Map<string, SemanticDocument>();
@@ -15,7 +15,8 @@ export class SemanticMemoryStore implements SemanticStore {
 
   async rebuild(build: SemanticIndexBuild): Promise<void> {
     for (const [documentId, document] of [...this.documents.entries()]) {
-      if (document.project_id === build.project_id) {
+      if (document.project_id === build.project_id &&
+          document.artifact_id !== INGEST_ARTIFACT_ID) {
         this.documents.delete(documentId);
       }
     }
@@ -31,6 +32,12 @@ export class SemanticMemoryStore implements SemanticStore {
       this.edges.set(edge.edge_id, edge);
     }
     this.latestArtifactByProject.set(build.project_id, build.artifact_id);
+  }
+
+  async upsertDocuments(documents: readonly SemanticDocument[]): Promise<void> {
+    for (const document of documents) {
+      this.documents.set(document.document_id, document);
+    }
   }
 
   async overview(projectId: string): Promise<SemanticOverview> {

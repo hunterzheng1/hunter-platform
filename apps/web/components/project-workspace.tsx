@@ -12,6 +12,7 @@ import {
   type ProjectFileMetadata
 } from "../lib/api";
 import { classifyManagedFile, isProposalEditable } from "../lib/file-policy";
+import { ProjectApiKeysPanel } from "./project-api-keys";
 import { useI18n } from "../lib/i18n";
 import { runPreservingWindowScroll, suppressMouseFocusScroll } from "../lib/preserve-scroll";
 import { ProjectSemanticPanels } from "./project-semantic-panels";
@@ -25,7 +26,7 @@ interface WorkspaceData {
 }
 
 type DraftAction = "add" | "modify" | "rename" | "delete";
-type WorkspaceTab = "workbench" | "files" | "knowledge" | "versions";
+type WorkspaceTab = "workbench" | "files" | "knowledge" | "versions" | "keys";
 
 interface Draft {
   action: DraftAction;
@@ -48,7 +49,7 @@ const COPY = {
   zh: {
     back: "返回项目列表",
     eyebrow: "项目工作台",
-    tabs: { workbench: "工作台", files: "文件", knowledge: "项目知识", versions: "版本记录" },
+    tabs: { workbench: "工作台", files: "文件", knowledge: "项目知识", versions: "版本记录", keys: "API 密钥" },
     healthy: "项目状态正常",
     healthyHint: "文件快照、知识索引和版本记录已同步到最新保存。",
     noVersion: "尚未生成项目版本",
@@ -97,7 +98,7 @@ const COPY = {
   en: {
     back: "Back to projects",
     eyebrow: "Project workbench",
-    tabs: { workbench: "Workbench", files: "Files", knowledge: "Project knowledge", versions: "Version history" },
+    tabs: { workbench: "Workbench", files: "Files", knowledge: "Project knowledge", versions: "Version history", keys: "API keys" },
     healthy: "Project is healthy",
     healthyHint: "The file snapshot, knowledge index, and version history are synchronized.",
     noVersion: "No project version yet",
@@ -446,7 +447,8 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
     ["workbench", copy.tabs.workbench],
     ["files", copy.tabs.files],
     ["knowledge", copy.tabs.knowledge],
-    ["versions", copy.tabs.versions]
+    ["versions", copy.tabs.versions],
+    ["keys", copy.tabs.keys]
   ];
   const lastUpdated = data.project.updated_at ?? data.project.created_at;
 
@@ -551,6 +553,8 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
     {activeTab === "knowledge" ? <ProjectSemanticPanels api={api} projectId={projectId} /> : null}
 
     {activeTab === "versions" ? <ProjectVersionsPanel api={api} artifacts={data.artifacts} lang={lang} /> : null}
+
+    {activeTab === "keys" ? <ProjectApiKeysPanel projectId={projectId} /> : null}
 
     {message === null ? null : <div className="project-toast success">✓ {message}</div>}
     {error === null || data === null ? null : <div className="project-toast danger">{error}</div>}
