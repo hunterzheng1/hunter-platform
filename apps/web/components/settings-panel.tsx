@@ -57,6 +57,7 @@ function AccountSection() {
   return (
     <div>
       <label className="settings-label">{t.auth.account}</label>
+      <p className="settings-hint">{t.settings.accountLoginHint}</p>
       {user === null ? (
         <div className="token-row">
           <span>{t.auth.notLoggedIn}</span>
@@ -152,6 +153,7 @@ function TokenSection() {
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
 
   useEffect(() => {
     const stored = sessionStorage.getItem("hunter-harness-token");
@@ -164,7 +166,7 @@ function TokenSection() {
     setMessage(null);
     if (trimmed === "") {
       sessionStorage.removeItem("hunter-harness-token");
-      setMessage("Session token removed.");
+      setMessage(t.token.removed);
       return;
     }
     setBusy(true);
@@ -178,31 +180,52 @@ function TokenSection() {
       });
       if (!response.ok) {
         setMessage(response.status === 401 || response.status === 403
-          ? "Token was rejected by the server."
-          : "Token check failed with HTTP " + response.status + ".");
+          ? t.token.rejected
+          : t.token.httpError + response.status + ".");
         return;
       }
       sessionStorage.setItem("hunter-harness-token", trimmed);
       setSaved(true);
-      setMessage("Token verified for this browser session.");
+      setMessage(t.token.verified);
       window.setTimeout(() => window.location.reload(), 250);
     } catch {
-      setMessage("The governance API could not be reached.");
+      setMessage(t.token.unreachable);
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <div>
-      <label className="settings-label" htmlFor="settings-api-token">{t.settings.apiToken}</label>
-      <div className="token-row">
-        <input id="settings-api-token" className="token-input" type="password" autoComplete="off" value={token} onChange={(event) => setToken(event.target.value)} placeholder={t.token.placeholder} />
-        <button className="token-set-btn" disabled={busy} onClick={() => void handleSet()}>
-          {busy ? t.token.checking : saved ? t.token.saved : t.token.setButton}
-        </button>
-      </div>
-      {message === null ? null : <small>{message}</small>}
+    <div className="settings-advanced">
+      <button
+        type="button"
+        className="settings-advanced-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        {t.settings.advancedToken}
+      </button>
+      {open ? (
+        <div className="settings-advanced-body">
+          <p className="settings-hint">{t.settings.advancedTokenHint}</p>
+          <label className="settings-label" htmlFor="settings-api-token">{t.settings.apiToken}</label>
+          <div className="token-row">
+            <input
+              id="settings-api-token"
+              className="token-input"
+              type="password"
+              autoComplete="off"
+              value={token}
+              onChange={(event) => setToken(event.target.value)}
+              placeholder={t.token.placeholder}
+            />
+            <button className="token-set-btn" disabled={busy} onClick={() => void handleSet()}>
+              {busy ? t.token.checking : saved ? t.token.saved : t.token.setButton}
+            </button>
+          </div>
+          {message === null ? null : <small className="form-message">{message}</small>}
+        </div>
+      ) : null}
     </div>
   );
 }

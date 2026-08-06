@@ -498,15 +498,18 @@ export function ProjectSemanticPanels({ api, projectId }: { api: HunterApi; proj
   const [searching, setSearching] = useState(false);
   const [hits, setHits] = useState<SemanticDocument[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pendingCount, setPendingCount] = useState(0);
 
   const copy = lang === "zh" ? {
-    title: "项目知识", subtitle: "从项目文件自动建立的可检索知识与关系。", library: "知识库", rules: "项目规则", changes: "变更总结", relations: "关系探索",
-    search: "搜索标题、正文或路径", export: "导出上下文", noKnowledge: "暂无项目知识。", noRules: "暂无项目规则。", noChanges: "暂无变更总结。",
-    loading: "正在加载项目知识…", loadingGraph: "正在更新关系…", failed: "项目知识暂不可用。", documents: "索引文档", knowledge: "知识", edges: "关系"
+    title: "项目知识", subtitle: "从项目文件与 ingest 投影建立的可检索知识与关系。", library: "知识库", rules: "项目规则", changes: "变更总结", relations: "关系探索",
+    search: "搜索标题、正文或路径", export: "导出上下文", noKnowledge: "暂无项目知识。来源包括：push 文件索引，以及 knowledge ingest 投影。", noRules: "暂无项目规则。", noChanges: "暂无变更总结。",
+    loading: "正在加载项目知识…", loadingGraph: "正在更新关系…", failed: "项目知识暂不可用。", documents: "索引文档", knowledge: "知识", edges: "关系",
+    pending: "待投影 {n} 条 ingest 条目，语义库可能暂时不完整。", emptyPushHint: "若库为空：请先 CLI push，或等待 ingest 投影；若曾 purge/换库需重新 push。"
   } : {
-    title: "Project knowledge", subtitle: "Searchable knowledge and relationships derived from project files.", library: "Knowledge library", rules: "Project rules", changes: "Change summaries", relations: "Relationship explorer",
-    search: "Search titles, content, or paths", export: "Export context", noKnowledge: "No project knowledge yet.", noRules: "No project rules yet.", noChanges: "No change summaries yet.",
-    loading: "Loading project knowledge…", loadingGraph: "Updating relations…", failed: "Project knowledge is unavailable.", documents: "Indexed documents", knowledge: "Knowledge", edges: "Relationships"
+    title: "Project knowledge", subtitle: "Searchable knowledge from push-indexed files and ingest projection.", library: "Knowledge library", rules: "Project rules", changes: "Change summaries", relations: "Relationship explorer",
+    search: "Search titles, content, or paths", export: "Export context", noKnowledge: "No project knowledge yet. Sources: push file index and knowledge ingest projection.", noRules: "No project rules yet.", noChanges: "No change summaries yet.",
+    loading: "Loading project knowledge…", loadingGraph: "Updating relations…", failed: "Project knowledge is unavailable.", documents: "Indexed documents", knowledge: "Knowledge", edges: "Relationships",
+    pending: "{n} ingest entries pending projection — the semantic library may be incomplete.", emptyPushHint: "If empty: CLI push first, or wait for ingest projection; after purge/DB swap, push again."
   };
 
   useEffect(() => {
@@ -522,8 +525,18 @@ export function ProjectSemanticPanels({ api, projectId }: { api: HunterApi; proj
         api.getProjectSemanticOverview(projectId), api.listProjectSemanticKnowledge(projectId),
         api.listProjectSemanticRules(projectId), api.listProjectSemanticChanges(projectId)
       ]);
+      let pending = 0;
+      if (api.getKnowledgeProjectionStatus !== undefined) {
+        try {
+          const status = await api.getKnowledgeProjectionStatus(projectId);
+          pending = status.pending_count;
+        } catch {
+          pending = 0;
+        }
+      }
       if (!active) return;
       setData({ overview, knowledge, rules, changes });
+      setPendingCount(pending);
       setSelectedId(knowledge[0]?.document_id ?? null);
     })().catch(() => { if (active) setError(copy.failed); });
     return () => { active = false; };
@@ -566,10 +579,18 @@ export function ProjectSemanticPanels({ api, projectId }: { api: HunterApi; proj
   if (error !== null && data === null) return <div className="empty-state">{error}</div>;
   if (data === null) return <div className="empty-state">{copy.loading}</div>;
   const items = tab === "rules" ? data.rules : tab === "changes" ? data.changes : hits ?? data.knowledge;
+  const emptyCopy = tab === "rules"
+    ? copy.noRules
+    : tab === "changes"
+      ? copy.noChanges
+      : (data.knowledge.length === 0
+        ? `${copy.noKnowledge} ${copy.emptyPushHint}`
+        : copy.noKnowledge);
 
   return <section className="project-knowledge-v2">
     <header className="knowledge-header"><div><p className="eyebrow">{copy.title}</p><h2>{copy.subtitle}</h2></div><button type="button" className="secondary" onClick={() => exportContextPack(projectId, data)}>⇩ {copy.export}</button></header>
     <div className="knowledge-metrics"><span><strong>{data.overview.counts.documents}</strong>{copy.documents}</span><span><strong>{data.overview.counts.knowledge}</strong>{copy.knowledge}</span><span><strong>{data.overview.counts.edges}</strong>{copy.edges}</span></div>
+    {pendingCount > 0 ? <p className="notice warning" role="status">{copy.pending.replace("{n}", String(pendingCount))}</p> : null}
     <div className="knowledge-controls">
       <div className="knowledge-tabs" role="tablist" aria-label={copy.title}>{(["library", "rules", "changes", "relations"] as const).map((id) => <button key={id} type="button" role="tab" aria-selected={tab === id} className={tab === id ? "selected" : ""} onMouseDown={suppressMouseFocusScroll} onClick={() => switchTab(id)}>{copy[id]}</button>)}</div>
       {tab === "library" ? <div className="knowledge-search"><span>⌕</span><input aria-label={copy.search} placeholder={copy.search} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void search(); }} /><button type="button" disabled={searching} onClick={() => void search()}>{lang === "zh" ? "搜索" : "Search"}</button></div> : null}
@@ -583,7 +604,7 @@ export function ProjectSemanticPanels({ api, projectId }: { api: HunterApi; proj
         onSelect={selectDocument}
         lang={lang}
       />
-    </div> : <DocumentBrowser items={items} selectedId={selectedId} onSelect={selectDocument} empty={tab === "rules" ? copy.noRules : tab === "changes" ? copy.noChanges : copy.noKnowledge} lang={lang} enableStatusFilter={tab === "library"} />}
+    </div> : <DocumentBrowser items={items} selectedId={selectedId} onSelect={selectDocument} empty={emptyCopy} lang={lang} enableStatusFilter={tab === "library"} />}
     {error === null || data === null ? null : <div className="notice danger">{error}</div>}
   </section>;
 }

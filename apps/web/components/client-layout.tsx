@@ -26,8 +26,8 @@ function Sidebar() {
           alt="Hunter Harness"
         />
         <span className="brand-copy">
-          <strong>Harness 工作台</strong>
-          <small>Governed developer console</small>
+          <strong>{t.brand}</strong>
+          <small>{t.brandSub}</small>
         </span>
       </Link>
       <nav>

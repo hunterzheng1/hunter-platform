@@ -17,7 +17,7 @@ describe("KnowledgeCenter (P3)", () => {
     cleanup();
   });
 
-  it("searches globally and shows hits", async () => {
+  it("browses without a query and searches with a query", async () => {
     const searchSemanticDocuments = vi.fn().mockResolvedValue([
       {
         project_id: "prj_demo",
@@ -34,20 +34,30 @@ describe("KnowledgeCenter (P3)", () => {
         }
       }
     ]);
+    const listProjectSemanticKnowledge = vi.fn().mockResolvedValue([]);
     const api = {
       searchSemanticDocuments,
-      listProjects: vi.fn().mockResolvedValue([]),
-      listKnowledgeEntries: vi.fn().mockResolvedValue([])
+      listProjects: vi.fn().mockResolvedValue([
+        { project_id: "prj_demo", display_name: "Demo", role: "owner", created_at: "2026-01-01T00:00:00Z" }
+      ]),
+      listProjectSemanticKnowledge,
+      listKnowledgeEntries: vi.fn().mockResolvedValue([]),
+      getKnowledgeProjectionStatus: vi.fn().mockResolvedValue({ pending_count: 0, pending_capped: false })
     } as unknown as HunterApi;
 
     wrap(<KnowledgeCenter api={api} />);
+
+    await waitFor(() => {
+      expect(listProjectSemanticKnowledge).toHaveBeenCalled();
+    });
+
     fireEvent.change(screen.getByLabelText(/搜索决策|Search decisions/i), {
       target: { value: "scrypt" }
     });
     fireEvent.click(screen.getByRole("button", { name: /搜索|Search/i }));
 
     await waitFor(() => {
-      expect(searchSemanticDocuments).toHaveBeenCalledWith("scrypt");
+      expect(searchSemanticDocuments).toHaveBeenCalledWith("scrypt", undefined);
       expect(screen.getAllByText("Use scrypt").length).toBeGreaterThan(0);
       expect(screen.getByText("Hash passwords with scrypt.")).toBeTruthy();
     });
@@ -76,15 +86,18 @@ describe("KnowledgeCenter (P3)", () => {
       listProjects: vi.fn().mockResolvedValue([
         { project_id: "prj_demo", display_name: "Demo", role: "owner", created_at: "2026-01-01T00:00:00Z" }
       ]),
+      listProjectSemanticKnowledge: vi.fn().mockResolvedValue([]),
       listKnowledgeEntries,
+      getKnowledgeProjectionStatus: vi.fn().mockResolvedValue({ pending_count: 2, pending_capped: false }),
       updateKnowledgeEntryStatus
     } as unknown as HunterApi;
 
     wrap(<KnowledgeCenter api={api} />);
-    fireEvent.click(screen.getByRole("tab", { name: /Candidate|审核/i }));
+    fireEvent.click(screen.getByRole("tab", { name: /Candidate|候选审核/i }));
 
     await waitFor(() => {
       expect(screen.getByText("Candidate decision")).toBeTruthy();
+      expect(screen.getByText(/待投影 2|2 knowledge entries pending/i)).toBeTruthy();
     });
 
     fireEvent.click(screen.getByRole("button", { name: /批准|Approve/i }));

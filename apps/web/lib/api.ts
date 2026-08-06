@@ -287,6 +287,10 @@ export interface HunterApi {
     status?: string;
     limit?: number;
   }): Promise<KnowledgeIngestListItem[]>;
+  getKnowledgeProjectionStatus?(projectId: string): Promise<{
+    pending_count: number;
+    pending_capped: boolean;
+  }>;
   updateKnowledgeEntryStatus?(
     projectId: string,
     entryId: string,
@@ -299,6 +303,16 @@ export interface HunterApi {
     runId: string,
     afterCursor?: number
   ): Promise<{ items: RunEventSummary[]; next_cursor: number }>;
+  streamProjectRunEvents?(
+    projectId: string,
+    runId: string,
+    afterCursor: number,
+    handlers: {
+      onEvent: (event: RunEventSummary) => void;
+      onRun?: (run: RunSummary) => void;
+      onError?: (error: unknown) => void;
+    }
+  ): Promise<{ abort: () => void } | null>;
   uploadSkillDraft?(form: FormData, agent: RegistryAgent): Promise<DraftState>;
   getSkillDraft?(slug: string, agent: RegistryAgent): Promise<DraftState>;
   discardSkillDraft?(slug: string, agent: RegistryAgent, revision: number): Promise<{ slug: string; discarded: boolean }>;
@@ -881,11 +895,21 @@ export class HttpHunterApi implements HunterApi {
     if (options.status !== undefined) params.set("status", options.status);
     if (options.limit !== undefined) params.set("limit", String(options.limit));
     const query = params.toString() === "" ? "" : "?" + params.toString();
-    const result = await this.request<{ items: KnowledgeIngestListItem[] }>(
+    const result = await this.request<{ items: KnowledgeIngestListItem[]; projected_pending?: number }>(
       "GET",
       "/api/v1/projects/" + encodeURIComponent(projectId) + "/knowledge/entries" + query
     );
     return result.items;
+  }
+
+  async getKnowledgeProjectionStatus(projectId: string): Promise<{
+    pending_count: number;
+    pending_capped: boolean;
+  }> {
+    return this.request(
+      "GET",
+      "/api/v1/projects/" + encodeURIComponent(projectId) + "/knowledge/projection-status"
+    );
   }
 
   async updateKnowledgeEntryStatus(
@@ -929,6 +953,80 @@ export class HttpHunterApi implements HunterApi {
         "/runs/" + encodeURIComponent(runId) +
         "/events?after_cursor=" + encodeURIComponent(String(afterCursor))
     );
+  }
+
+  /**
+   * SSE stream via fetch (Authorization header supported). Returns null if the
+   * stream cannot be opened; callers should fall back to REST polling.
+   */
+  async streamProjectRunEvents(
+    projectId: string,
+    runId: string,
+    afterCursor: number,
+    handlers: {
+      onEvent: (event: RunEventSummary) => void;
+      onRun?: (run: RunSummary) => void;
+      onError?: (error: unknown) => void;
+    }
+  ): Promise<{ abort: () => void } | null> {
+    const token = this.tokenProvider();
+    if (token === null || token === "") return null;
+    const controller = new AbortController();
+    const path =
+      "/api/v1/projects/" + encodeURIComponent(projectId) +
+      "/runs/" + encodeURIComponent(runId) +
+      "/stream?after_cursor=" + encodeURIComponent(String(afterCursor));
+    try {
+      const response = await this.fetch(this.baseUrl + path, {
+        headers: {
+          Accept: "text/event-stream",
+          Authorization: "Bearer " + token,
+          "X-Request-Id": globalThis.crypto.randomUUID()
+        },
+        signal: controller.signal
+      });
+      if (!response.ok || response.body === null) {
+        handlers.onError?.(new ApiClientError(response.status, "SSE_FAILED", "SSE stream failed"));
+        return null;
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      void (async () => {
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const chunks = buffer.split("\n\n");
+            buffer = chunks.pop() ?? "";
+            for (const chunk of chunks) {
+              const lines = chunk.split("\n");
+              let eventName = "message";
+              const dataLines: string[] = [];
+              for (const line of lines) {
+                if (line.startsWith("event:")) eventName = line.slice(6).trim();
+                else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+              }
+              if (dataLines.length === 0) continue;
+              try {
+                const data = JSON.parse(dataLines.join("\n")) as unknown;
+                if (eventName === "event") handlers.onEvent(data as RunEventSummary);
+                else if (eventName === "run" || eventName === "snapshot") handlers.onRun?.(data as RunSummary);
+              } catch {
+                // ignore malformed SSE payloads
+              }
+            }
+          }
+        } catch (error) {
+          if (!controller.signal.aborted) handlers.onError?.(error);
+        }
+      })();
+      return { abort: () => controller.abort() };
+    } catch (error) {
+      handlers.onError?.(error);
+      return null;
+    }
   }
 
   private async multipartRequest<T>(path: string, formData: FormData): Promise<T> {

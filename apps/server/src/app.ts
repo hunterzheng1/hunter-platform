@@ -1829,6 +1829,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
       ...(query.status === undefined ? {} : { status: query.status }),
       limit: query.limit
     });
+    const pending = await repository.listUnprojectedKnowledge(projectId, 500);
     reply.header("X-Request-Id", requestId);
     return {
       items: items.map((item) => ({
@@ -1839,6 +1840,20 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
         updated_at: item.updatedAt,
         projected_at: item.projectedAt
       })),
+      projected_pending: pending.length,
+      request_id: requestId
+    };
+  });
+
+  app.get("/api/v1/projects/:projectId/knowledge/projection-status", async (request, reply) => {
+    const { actor, requestId } = await authenticated(request, repository);
+    const { projectId } = request.params as { projectId: string };
+    await repository.getProject(actor.actorId, projectId);
+    const pending = await repository.listUnprojectedKnowledge(projectId, 500);
+    reply.header("X-Request-Id", requestId);
+    return {
+      pending_count: pending.length,
+      pending_capped: pending.length >= 500,
       request_id: requestId
     };
   });

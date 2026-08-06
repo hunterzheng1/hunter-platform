@@ -931,50 +931,344 @@ tbody tr:last-child td {
   justify-self: start;
 }
 
-/* ── Project API keys panel (P2) ────────────────────────── */
+/* ── Project API keys panel (P2) + form affordances ─────── */
 
 .api-keys-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.panel-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.panel-section-header h3 {
+  margin: 0 0 4px;
+}
+
+.api-keys-steps {
+  margin: 0;
+  padding: 10px 12px 10px 28px;
+  border: 1px solid var(--line-dim);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.api-keys-steps li span {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.api-keys-create,
+.form-stack {
   display: grid;
   gap: 12px;
 }
 
-.api-keys-create {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
+.form-field {
+  display: grid;
+  gap: 6px;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
 }
 
-.api-keys-create input[type="text"],
-.api-keys-create input:not([type]) {
+.form-label {
+  color: var(--muted);
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+}
+
+.form-label abbr {
+  color: var(--danger);
+  text-decoration: none;
+}
+
+.form-field input,
+.form-field select,
+.form-stack input {
   border: 1px solid var(--line);
   background: var(--bg);
   color: var(--text);
   border-radius: var(--radius-sm);
-  padding: 7px 9px;
-  font-size: 12px;
+  padding: 8px 10px;
+  font-size: 12.5px;
+}
+
+.form-field input:focus,
+.form-field select:focus,
+.form-stack input:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.form-error,
+.form-message {
+  color: var(--danger);
+  font-size: 11.5px;
 }
 
 .api-keys-scopes {
-  display: flex;
-  gap: 10px;
-  font-size: 12px;
+  display: grid;
+  gap: 8px;
 }
 
-.api-keys-scopes label {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+.api-keys-scope-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-dim);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  cursor: pointer;
+}
+
+.api-keys-scope-row:hover {
+  border-color: var(--line);
+  background: var(--panel-hover);
+}
+
+.api-keys-scope-row strong {
+  display: block;
+  font-size: 12.5px;
+}
+
+.api-keys-scope-row small {
+  display: block;
+  color: var(--muted);
+  font-size: 11.5px;
+  margin-top: 2px;
+}
+
+.api-keys-plaintext {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-raised));
 }
 
 .api-keys-plaintext code {
+  display: block;
   user-select: all;
   word-break: break-all;
+  padding: 8px;
+  border-radius: 4px;
+  background: var(--bg);
+  font-size: 12px;
 }
 
 .api-keys-message {
   color: var(--danger, #e5484d);
   font-size: 12px;
+}
+
+.api-keys-message a {
+  color: var(--accent);
+}
+
+.api-keys-skeleton {
+  min-height: 120px;
+}
+
+button.primary,
+.primary {
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-raised));
+  color: var(--text);
+}
+
+button.primary:hover:not(:disabled),
+.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 28%, var(--bg-raised));
+}
+
+button.primary:disabled,
+button.secondary:disabled,
+.primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+button.secondary,
+.secondary {
+  border: 1px solid var(--line);
+  background: var(--bg-raised);
+  color: var(--text);
+}
+
+button.secondary:hover:not(:disabled),
+.secondary:hover:not(:disabled) {
+  background: var(--panel-hover);
+}
+
+button.danger,
+.danger-button {
+  border: 1px solid var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+button.danger:hover:not(:disabled),
+.danger-button:hover:not(:disabled) {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 16%, var(--bg-raised));
+}
+
+button.danger:disabled,
+.danger-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.data-table th,
+.data-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line-dim);
+  text-align: left;
+}
+
+.data-table tbody tr:hover {
+  background: var(--panel-hover);
+}
+
+.settings-hint {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.settings-advanced-toggle {
+  width: 100%;
+  justify-content: flex-start;
+  border: 1px dashed var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 8px 10px;
+}
+
+.settings-advanced-toggle:hover {
+  color: var(--text);
+  border-color: var(--line);
+  background: var(--panel-hover);
+}
+
+.settings-advanced-body {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.notice.warning {
+  border: 1px solid var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.knowledge-count {
+  color: var(--muted);
+  font-size: 12px;
+  align-self: center;
+}
+
+.knowledge-search-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: end;
+}
+
+.knowledge-filter {
+  min-width: 160px;
+}
+
+.runs-live-badge {
+  align-self: start;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.runs-live-badge.sse {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  color: var(--accent);
+}
+
+.summary-report-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.summary-report-fields {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+}
+
+.summary-report-fields div {
+  display: grid;
+  gap: 4px;
+}
+
+.summary-report-fields dt {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.summary-report-fields dd {
+  margin: 0;
+}
+
+.summary-report-fields ul {
+  margin: 0;
+  padding-left: 16px;
+}
+
+.knowledge-hit-list button,
+.runs-list button {
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  background: transparent;
+  color: inherit;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.knowledge-hit-list button:hover,
+.runs-list button:hover {
+  background: var(--panel-hover);
+  border-color: var(--line-dim);
+}
+
+.knowledge-hit-list button.active,
+.runs-list button.active {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-raised));
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
 }
 
 /* ── Lede ───────────────────────────────────────────────── */
