@@ -77,7 +77,7 @@ function GlobalKnowledgeSearch({
   copy
 }: {
   api: HunterApi;
-  copy: (typeof COPY)["zh"];
+  copy: (typeof COPY)[keyof typeof COPY];
 }) {
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
@@ -163,7 +163,7 @@ function CandidateReviewPanel({
   copy
 }: {
   api: HunterApi;
-  copy: (typeof COPY)["zh"];
+  copy: (typeof COPY)[keyof typeof COPY];
 }) {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [projectId, setProjectId] = useState("");
