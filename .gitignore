@@ -1,0 +1,95 @@
+# ===== 依赖 =====
+node_modules/
+.pnp/
+.pnp.js
+jspm_packages/
+
+# ===== 构建产物 =====
+dist/
+build/
+out/
+lib/
+!apps/web/lib/
+!apps/web/lib/**
+*.tsbuildinfo
+.tsbuildinfo
+__pycache__/
+
+# ===== 日志 =====
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ===== 测试与覆盖率 =====
+coverage/
+*.lcov
+.nyc_output/
+
+# ===== 环境变量与密钥 =====
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+.npmrc
+.npmpc
+
+# ===== 缓存 =====
+.cache/
+.npm/
+.eslintcache
+.stylelintcache
+.parcel-cache/
+.turbo/
+.next/
+.nuxt/
+.vite/
+
+# ===== 包管理器 =====
+.yarn/cache/
+.yarn/unplugged/
+.yarn/build-state.yml
+.yarn/install-state.gz
+
+# ===== 编辑器 / IDE =====
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+*.swp
+*.swo
+*~
+
+# ===== 操作系统 =====
+.DS_Store
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ===== 临时文件 =====
+*.tmp
+*.temp
+tmp/
+temp/
+.worktrees/
+.playwright-mcp/
+
+# ===== AI 工具本地目录 =====
+.agents/
+.codex/
+.claude/
+.codebuddy/
+.cursor/
+.codegraph/
+.mcp.json
+.harness/
+.sync-staging/
+.codex-release/
+
+# ===== 本机迁移核对临时文件 =====
+.harness-status-before.txt
