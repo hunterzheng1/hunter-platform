@@ -41,4 +41,4 @@
 ## 已完成记录
 
 - **生成内容语言约定（2026-08-07）**：`harness/shared/p0-trust.md` 新增"生成内容语言约定"（文档/规则/知识/架构优先中文，标识符与字段名保持原文），`harness-knowledge-ingest/SKILL.md` 已引用。
-- **C1–C4（2026-08-08）**：见上各节；CLI/workflow 发版与双仓 commit 属后续收尾阶段。
+- **C1–C4（2026-08-08）**：见上各节；已发版 `hunter-harness@0.2.52` / `@hunter-harness/workflow-harness@0.2.50`。
