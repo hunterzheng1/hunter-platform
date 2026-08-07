@@ -10,6 +10,8 @@ import {
   setStoredToken
 } from "../lib/auth";
 import { useI18n } from "../lib/i18n";
+import { Icon } from "./ui/icons";
+import { Spinner } from "./ui/Spinner";
 
 type Mode = "login" | "register-first" | "register-invite";
 
@@ -22,7 +24,7 @@ export function LoginForm() {
   const [displayName, setDisplayName] = useState("");
   const [inviteCode, setInviteCode] = useState("");
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+  const [message, setMessage] = useState<{ text: string; tone: "success" | "danger" } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -61,18 +63,18 @@ export function LoginForm() {
           displayName: displayName.trim(),
           ...(mode === "register-invite" ? { inviteCode: inviteCode.trim() } : {})
         });
-        setMessage(t.auth.registered);
+        setMessage({ text: t.auth.registered, tone: "success" });
         await completeLogin(username.trim(), password);
       }
     } catch (error) {
       if (error instanceof AuthError) {
         if (mode === "login") {
-          setMessage(error.status === 401 ? t.auth.loginFailed : t.auth.networkError);
+          setMessage({ text: error.status === 401 ? t.auth.loginFailed : t.auth.networkError, tone: "danger" });
         } else {
-          setMessage(t.auth.registerFailed + (error.message || error.code));
+          setMessage({ text: t.auth.registerFailed + (error.message || error.code), tone: "danger" });
         }
       } else {
-        setMessage(t.auth.networkError);
+        setMessage({ text: t.auth.networkError, tone: "danger" });
       }
     } finally {
       setBusy(false);
@@ -88,7 +90,10 @@ export function LoginForm() {
       : t.auth.loginSubtitle;
 
   return (
-    <section className="login-card">
+    <section className="login-card rise-in">
+      <span className="login-brand">
+        <Icon name="zap" size={22} strokeWidth={1.6} />
+      </span>
       <h1>{title}</h1>
       <p>{subtitle}</p>
       <form className="token-form" onSubmit={(event) => { void handleSubmit(event); }}>
@@ -131,10 +136,16 @@ export function LoginForm() {
             />
           </>
         ) : null}
-        <button type="submit" disabled={busy || !statusLoaded}>
+        <button type="submit" className="prominent-action" disabled={busy || !statusLoaded}>
+          {busy ? <Spinner size={14} /> : <Icon name={isRegister ? "sparkles" : "shield"} size={14} />}
           {busy ? t.auth.working : isRegister ? t.auth.registerButton : t.auth.loginButton}
         </button>
-        {message === null ? null : <span>{message}</span>}
+        {message === null ? null : (
+          <span className={`login-message login-message-${message.tone}`}>
+            <Icon name={message.tone === "success" ? "success" : "error"} size={14} />
+            {message.text}
+          </span>
+        )}
       </form>
       {mode === "login" ? (
         <button className="link-button" type="button" onClick={() => setMode("register-invite")}>

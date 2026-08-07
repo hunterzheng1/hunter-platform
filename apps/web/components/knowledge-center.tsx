@@ -12,6 +12,11 @@ import {
   type ProjectSummary
 } from "../lib/api";
 import { useI18n } from "../lib/i18n";
+import { mockApi } from "../lib/mock-api";
+import { EmptyState } from "./ui/EmptyState";
+import { Icon } from "./ui/icons";
+import { PageHeader } from "./ui/PageHeader";
+import { Spinner } from "./ui/Spinner";
 
 type KnowledgeTab = "search" | "review";
 
@@ -37,19 +42,15 @@ function statusLabel(value: string, labels: Record<string, string>): string {
 
 export function KnowledgeCenter({ api }: { api?: HunterApi }) {
   const { lang } = useI18n();
-  const client = useMemo(() => api ?? browserApi(), [api]);
+  const client = useMemo<HunterApi>(() => api ?? (
+    process.env.NEXT_PUBLIC_HUNTER_HARNESS_DEMO === "true" ? mockApi : browserApi()
+  ), [api]);
   const copy = COPY[lang];
   const [tab, setTab] = useState<KnowledgeTab>("search");
 
   return (
     <section className="knowledge-center">
-      <header className="page-header">
-        <div>
-          <p className="eyebrow">{copy.eyebrow}</p>
-          <h1>{copy.title}</h1>
-          <p className="lede">{copy.lede}</p>
-        </div>
-      </header>
+      <PageHeader eyebrow={copy.eyebrow} title={copy.title} lede={copy.lede} />
       <div className="workspace-tabs" role="tablist">
         <button
           type="button"
@@ -227,6 +228,7 @@ function GlobalKnowledgeSearch({
           aria-label={copy.searchPlaceholder}
         />
         <button type="submit" className="primary" disabled={busy}>
+          {busy ? <Spinner size={13} label={copy.searching} /> : <Icon name="search" size={13} />}
           {busy ? copy.searching : query.trim() === "" ? copy.browse : copy.search}
         </button>
       </form>
@@ -242,11 +244,11 @@ function GlobalKnowledgeSearch({
       {hits === null || busy ? (
         <div className="skeleton-block" aria-busy="true" aria-label={copy.loading} />
       ) : hits.length === 0 ? (
-        <div className="knowledge-empty">
-          <span>◇</span>
-          <p>{emptyMessage()}</p>
-          {libraryEmpty ? <p className="lede">{copy.emptyHint}</p> : null}
-        </div>
+        <EmptyState
+          icon="brain"
+          title={emptyMessage()}
+          hint={libraryEmpty ? copy.emptyHint : undefined}
+        />
       ) : (
         <div className="knowledge-split">
           <ul className="knowledge-hit-list">
@@ -399,7 +401,7 @@ function CandidateReviewPanel({
       {message === null ? null : <p className="lede">{message}</p>}
       {error === null ? null : <p className="api-keys-message">{error}</p>}
       {rows.length === 0 && !busy ? (
-        <div className="knowledge-empty"><span>◇</span><p>{copy.noCandidates}</p></div>
+        <EmptyState icon="tasks" title={copy.noCandidates} />
       ) : (
         <div className="knowledge-review-list">
           {rows.map((row) => {

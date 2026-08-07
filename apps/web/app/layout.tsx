@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import { ClientLayout } from "../components/client-layout";
 import "./globals.css";
+import "./ui-v4.css";
 
 export const metadata: Metadata = {
   title: "Hunter Harness Console",

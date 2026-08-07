@@ -30,6 +30,7 @@ const COPY = {
     ],
     label: "用途标签",
     labelRequired: "用途标签为必填项。",
+    requiredHint: "必填",
     scopes: "权限范围",
     scopesRequired: "请至少勾选一项权限。",
     create: "签发密钥",
@@ -67,6 +68,7 @@ const COPY = {
     ],
     label: "Purpose label",
     labelRequired: "A purpose label is required.",
+    requiredHint: "required",
     scopes: "Scopes",
     scopesRequired: "Select at least one scope.",
     create: "Issue key",
@@ -243,7 +245,7 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
 
       <div className="api-keys-create form-stack">
         <label className="form-field">
-          <span className="form-label">{copy.label} <abbr title="required">*</abbr></span>
+          <span className="form-label">{copy.label} <abbr title={copy.requiredHint}>*</abbr></span>
           <input
             value={label}
             placeholder={copy.label}
@@ -261,7 +263,7 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
         </label>
 
         <fieldset className="form-field">
-          <legend className="form-label">{copy.scopes} <abbr title="required">*</abbr></legend>
+          <legend className="form-label">{copy.scopes} <abbr title={copy.requiredHint}>*</abbr></legend>
           <div className="api-keys-scopes">
             {SCOPES.map((scope) => (
               <label key={scope} className="api-keys-scope-row">

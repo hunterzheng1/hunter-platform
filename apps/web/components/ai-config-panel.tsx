@@ -6,6 +6,12 @@ import { ApiClientError, browserApi, type HunterApi } from "../lib/api";
 import { mockApi } from "../lib/mock-api";
 import type { AiProviderConfig, AiProviderWithKeySet, AiQuotaUsage } from "@hunter-harness/contracts";
 import { useI18n } from "../lib/i18n";
+import { EmptyState } from "./ui/EmptyState";
+import { Icon } from "./ui/icons";
+import { Modal } from "./ui/Modal";
+import { PageHeader } from "./ui/PageHeader";
+import { Skeleton } from "./ui/Skeleton";
+import { useToast } from "./ui/Toast";
 
 // demo 模式（NEXT_PUBLIC_HUNTER_HARNESS_DEMO=true）用 MockApiClient，不调真治理 API
 function resolveApi(): HunterApi {
@@ -51,11 +57,6 @@ interface UsageRecord {
   outputTokens: number;
   cacheHitTokens: number;
   cost: number;
-}
-
-interface Toast {
-  msg: string;
-  tone: "success" | "info" | "danger";
 }
 
 const uid = (): string => Math.random().toString(36).slice(2, 9);
@@ -141,7 +142,9 @@ const fmt = (n: number): string => new Intl.NumberFormat("en-US").format(n);
 
 export function AiConfigPanel() {
   const { t } = useI18n();
+  const toast = useToast();
   const [providers, setProviders] = useState<ProviderDraft[]>([]);
+  const [loading, setLoading] = useState(true);
   const [revisions, setRevisions] = useState<Map<string, number>>(new Map());
   const revisionsRef = useRef<Map<string, number>>(new Map());
   // Keep ref in sync with state so async closures always read latest revision
@@ -151,7 +154,6 @@ export function AiConfigPanel() {
   const [usageProviderId, setUsageProviderId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
-  const [toast, setToast] = useState<Toast | null>(null);
 
   useEffect(() => {
     const api = resolveApi();
@@ -167,14 +169,8 @@ export function AiConfigPanel() {
       // token 缺失是预期状态（用户尚未配置），非错误；用户主动操作失败才提示
       setProviders([]);
       setUsage([]);
-    });
+    }).finally(() => setLoading(false));
   }, [t]);
-
-  useEffect(() => {
-    if (toast === null) return;
-    const id = setTimeout(() => setToast(null), 2800);
-    return () => clearTimeout(id);
-  }, [toast]);
 
   const editing = providers.find((p) => p.provider_id === editingId) ?? null;
   const enabledCount = providers.filter((p) => p.enabled).length;
@@ -199,7 +195,7 @@ export function AiConfigPanel() {
       await api.reorderAiProviders?.(next.map((p) => p.provider_id));
     } catch {
       setProviders(prev);
-      setToast({ msg: t.aiConfig.saveFailed, tone: "danger" });
+      toast.danger(t.aiConfig.saveFailed);
     }
   }
 
@@ -237,7 +233,7 @@ export function AiConfigPanel() {
       }
     } catch {
       setProviders(prev);
-      setToast({ msg: t.aiConfig.saveFailed, tone: "danger" });
+      toast.danger(t.aiConfig.saveFailed);
     }
   }
 
@@ -267,9 +263,9 @@ export function AiConfigPanel() {
       if (created !== undefined) {
         setRevisions((cur) => { const m = new Map(cur); m.set(created.provider_id, created.revision); return m; });
       }
-      setToast({ msg: t.aiConfig.duplicated.replace("{provider}", src.label), tone: "success" });
+      toast.success(t.aiConfig.duplicated.replace("{provider}", src.label));
     } catch {
-      setToast({ msg: t.aiConfig.saveFailed, tone: "danger" });
+      toast.danger(t.aiConfig.saveFailed);
     }
   }
 
@@ -279,12 +275,12 @@ export function AiConfigPanel() {
       const api = resolveApi();
       const res = await api.testAiProvider?.(id);
       if (res?.ok === true) {
-        setToast({ msg: t.aiConfig.testPassed.replace("{provider}", p?.label ?? ""), tone: "success" });
+        toast.success(t.aiConfig.testPassed.replace("{provider}", p?.label ?? ""));
       } else {
-        setToast({ msg: t.aiConfig.saveFailed, tone: "danger" });
+        toast.danger(t.aiConfig.saveFailed);
       }
     } catch {
-      setToast({ msg: t.aiConfig.saveFailed, tone: "danger" });
+      toast.danger(t.aiConfig.saveFailed);
     }
   }
 
@@ -296,9 +292,9 @@ export function AiConfigPanel() {
       await api.deleteAiProvider?.(id);
       setProviders((cur) => cur.filter((p) => p.provider_id !== id));
       setConfirmDeleteId(null);
-      setToast({ msg: t.aiConfig.deletedNotice.replace("{provider}", target.label), tone: "info" });
+      toast.info(t.aiConfig.deletedNotice.replace("{provider}", target.label));
     } catch {
-      setToast({ msg: t.aiConfig.saveFailed, tone: "danger" });
+      toast.danger(t.aiConfig.saveFailed);
     }
   }
 
@@ -327,7 +323,7 @@ export function AiConfigPanel() {
           setRevisions((cur) => { const m = new Map(cur); m.set(editing.provider_id, created.revision); return m; });
           patch(editing.provider_id, () => ({ ...toDraft(created), keySet: nextKeySet }));
         }
-        setToast({ msg: t.aiConfig.saveSuccess.replace("{provider}", editing.label || editing.provider_id), tone: "success" });
+        toast.success(t.aiConfig.saveSuccess.replace("{provider}", editing.label || editing.provider_id));
         setEditingId(null);
         return;
       }
@@ -353,10 +349,10 @@ export function AiConfigPanel() {
           throw err;
         }
       }
-      setToast({ msg: t.aiConfig.saveSuccess.replace("{provider}", editing.label || editing.provider_id), tone: "success" });
+      toast.success(t.aiConfig.saveSuccess.replace("{provider}", editing.label || editing.provider_id));
       setEditingId(null);
     } catch {
-      setToast({ msg: t.aiConfig.saveFailed, tone: "danger" });
+      toast.danger(t.aiConfig.saveFailed);
     }
   }
 
@@ -387,22 +383,19 @@ export function AiConfigPanel() {
       }
     } catch {
       setProviders(prev);
-      setToast({ msg: t.aiConfig.saveFailed, tone: "danger" });
+      toast.danger(t.aiConfig.saveFailed);
     }
   }
 
   if (editing !== null) {
     return (
-      <>
-        <ProviderDetail
-          draft={editing}
-          t={t}
-          onChange={(fn) => patch(editing.provider_id, fn)}
-          onBack={() => setEditingId(null)}
-          onSave={saveDetail}
-        />
-        <ToastView toast={toast} />
-      </>
+      <ProviderDetail
+        draft={editing}
+        t={t}
+        onChange={(fn) => patch(editing.provider_id, fn)}
+        onBack={() => setEditingId(null)}
+        onSave={saveDetail}
+      />
     );
   }
 
@@ -411,25 +404,37 @@ export function AiConfigPanel() {
 
   return (
     <section className="stack governance-page page-module-v2">
-      <header className="project-registry-hero">
-        <div>
-          <p className="eyebrow">{t.aiConfig.eyebrow}</p>
-          <h1>{t.aiConfig.title}</h1>
-          <p>{t.aiConfig.description}</p>
-        </div>
-        <div className="hero-actions">
-          <span className="status status-clear">{enabledCount} {t.aiConfig.enabled}</span>
-          <button type="button" className="prominent-action" onClick={addProvider}>+ {t.aiConfig.addProvider}</button>
-        </div>
-      </header>
+      <PageHeader
+        eyebrow={t.aiConfig.eyebrow}
+        title={t.aiConfig.title}
+        lede={t.aiConfig.description}
+        actions={
+          <>
+            <span className="status status-clear">{enabledCount} {t.aiConfig.enabled}</span>
+            <button type="button" className="prominent-action" onClick={addProvider}>
+              <Icon name="plus" size={15} /> {t.aiConfig.addProvider}
+            </button>
+          </>
+        }
+      />
 
-      <div className="panel provider-table">
+      <div className="panel provider-table rise-in">
         <div className="panel-title">
           <h2>{t.aiConfig.providers}</h2>
           <span>{providers.length}</span>
         </div>
-        {providers.length === 0 ? (
-          <div className="empty-state">{t.aiConfig.noProviders}</div>
+        {loading ? (
+          <Skeleton variant="table" lines={4} />
+        ) : providers.length === 0 ? (
+          <EmptyState
+            icon="sparkles"
+            title={t.aiConfig.noProviders}
+            action={
+              <button type="button" className="prominent-action" onClick={addProvider}>
+                <Icon name="plus" size={15} /> {t.aiConfig.addProvider}
+              </button>
+            }
+          />
         ) : (
           <div className="provider-rows">
             {providers.map((p) => (
@@ -466,31 +471,23 @@ export function AiConfigPanel() {
         />
       ) : null}
 
-      {confirmTarget !== null ? (
-        <div className="modal-backdrop" onClick={() => setConfirmDeleteId(null)}>
-          <div className="delete-confirm-modal check-confirm-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="panel-title"><h2>{t.aiConfig.deleteConfirm.replace("{provider}", confirmTarget.label)}</h2></div>
-            <p>{t.aiConfig.deleteHint}</p>
-            <div className="modal-actions">
+      <Modal
+        open={confirmTarget !== null}
+        onClose={() => setConfirmDeleteId(null)}
+        title={confirmTarget !== null ? t.aiConfig.deleteConfirm.replace("{provider}", confirmTarget.label) : ""}
+        closeLabel={t.common.cancel}
+        footer={
+          confirmTarget !== null ? (
+            <>
               <button type="button" onClick={() => setConfirmDeleteId(null)}>{t.common.cancel}</button>
               <button type="button" className="danger" onClick={() => void remove(confirmTarget.provider_id)}>{t.common.delete}</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      <ToastView toast={toast} />
+            </>
+          ) : undefined
+        }
+      >
+        <p>{t.aiConfig.deleteHint}</p>
+      </Modal>
     </section>
-  );
-}
-
-// ── Toast ──────────────────────────────────────────────────
-function ToastView({ toast }: { toast: Toast | null }) {
-  if (toast === null) return null;
-  return (
-    <div className="toast-stack" role="status" aria-live="polite">
-      <div className={`toast toast-${toast.tone}`}>{toast.msg}</div>
-    </div>
   );
 }
 
@@ -527,7 +524,7 @@ function ProviderRow(props: ProviderRowProps) {
         onDragStart={(e) => { if (e.dataTransfer) { e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", p.provider_id); } props.onDragStart(); }}
         onDragEnd={props.onDragEnd}
         aria-hidden
-      >⋮⋮</span>
+      ><Icon name="grip" size={14} /></span>
       <span className={`service-dot ${p.enabled ? "operational" : "disabled"}`} />
       <div className="provider-row-main">
         <div className="provider-row-title">
@@ -561,7 +558,7 @@ function ProviderRow(props: ProviderRowProps) {
         <button type="button" className="icon-action" onClick={props.onDuplicate} title={t.aiConfig.duplicate}>{t.aiConfig.duplicate}</button>
         <button type="button" className="icon-action" onClick={props.onTest} title={t.aiConfig.testConnection}>{t.aiConfig.testConnection}</button>
         <button type="button" className="icon-action" onClick={props.onUsage} title={t.aiConfig.usageStats}>{t.aiConfig.usage}</button>
-        <button type="button" className="icon-action danger" onClick={props.onDelete} title={t.common.delete}>✕</button>
+        <button type="button" className="icon-action danger" onClick={props.onDelete} title={t.common.delete} aria-label={t.common.delete}><Icon name="trash" size={14} /></button>
       </div>
     </div>
   );
@@ -603,7 +600,7 @@ function ProviderDetail(props: ProviderDetailProps) {
       <header className="page-heading command-hero">
         <div className="skill-detail-hero">
           <div className="page-heading-main">
-            <button type="button" className="back-button" onClick={props.onBack} title={t.common.back} aria-label={t.common.back}>←</button>
+            <button type="button" className="back-button" onClick={props.onBack} title={t.common.back} aria-label={t.common.back}><Icon name="back" size={15} /></button>
             <div>
               <p className="eyebrow">{t.aiConfig.editProvider}</p>
               <h1>{p.label || t.aiConfig.newProvider}</h1>
@@ -629,13 +626,13 @@ function ProviderDetail(props: ProviderDetailProps) {
               <label className="span-2">{t.aiConfig.baseUrl}<input value={p.base_url} onChange={(e) => setField("base_url", e.target.value)} placeholder="https://" /></label>
               <label>{t.aiConfig.apiFormat}
                 <select value={p.api_format} onChange={(e) => setField("api_format", e.target.value as ApiFormat)}>
-                  {API_FORMATS.map((f) => <option key={f} value={f}>{f}</option>)}
+                  {API_FORMATS.map((f) => <option key={f} value={f}>{t.aiConfig.apiFormatLabels[f] ?? f}</option>)}
                 </select>
               </label>
               <label>{t.aiConfig.apiKey}
                 <div className="api-key-input">
                   <input type={showKey ? "text" : "password"} value={p.apiKey} onChange={(e) => setField("apiKey", e.target.value)} placeholder={t.aiConfig.apiKeyPlaceholder} />
-                  <button type="button" className="icon-action" onClick={() => setShowKey((v) => !v)} aria-label={t.aiConfig.toggleKey}>{showKey ? "🙈" : "👁"}</button>
+                  <button type="button" className="icon-action" onClick={() => setShowKey((v) => !v)} aria-label={t.aiConfig.toggleKey} title={t.aiConfig.toggleKey}><Icon name={showKey ? "eye-off" : "eye"} size={15} /></button>
                   <span className={`key-badge ${p.keySet ? "set" : "not-set"}`}>{p.keySet ? t.aiConfig.keySet : t.aiConfig.keyNotSet}</span>
                 </div>
               </label>
@@ -647,16 +644,16 @@ function ProviderDetail(props: ProviderDetailProps) {
         <article className="panel provider-models-panel">
           <div className="panel-title">
             <h2>{t.aiConfig.modelMapping}</h2>
-            <button type="button" className="add-model-btn" onClick={addModel}>+ {t.aiConfig.addModel}</button>
+            <button type="button" className="add-model-btn" onClick={addModel}><Icon name="plus" size={14} /> {t.aiConfig.addModel}</button>
           </div>
           <div className="model-mapping-list">
-            {p.models.length === 0 ? <div className="empty-state">{t.aiConfig.noModels}</div> : null}
+            {p.models.length === 0 ? <EmptyState icon="box" title={t.aiConfig.noModels} /> : null}
             {p.models.map((m) => (
               <div key={m.id} className="model-mapping-card">
                 <div className="model-mapping-head">
                   <label>{t.aiConfig.displayModel}<input value={m.displayModel} onChange={(e) => setModel(m.id, (cur) => ({ ...cur, displayModel: e.target.value }))} placeholder={t.aiConfig.displayModelPh} /></label>
                   <label>{t.aiConfig.requestModel}<input value={m.requestModel} onChange={(e) => setModel(m.id, (cur) => ({ ...cur, requestModel: e.target.value }))} placeholder={t.aiConfig.requestModelPh} /></label>
-                  <button type="button" className="icon-action danger" onClick={() => removeModel(m.id)} title={t.common.delete} aria-label={t.common.delete}>✕</button>
+                  <button type="button" className="icon-action danger" onClick={() => removeModel(m.id)} title={t.common.delete} aria-label={t.common.delete}><Icon name="close" size={14} /></button>
                 </div>
                 <div className="pricing-grid">
                   <label className="pricing-cell">{t.aiConfig.inputCost}<input type="number" min={0} step={0.01} value={m.inputCost} onChange={(e) => setModel(m.id, (cur) => ({ ...cur, inputCost: Number(e.target.value) }))} /><span>$/M</span></label>
@@ -714,13 +711,14 @@ function UsageModal(props: UsageModalProps) {
   const maxDayTokens = dateRows.reduce((m, [, v]) => Math.max(m, v.tokens), 1);
 
   return (
-    <div className="modal-backdrop" onClick={props.onClose}>
-      <div className="usage-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="panel-title">
-          <h2>{p.label} · {t.aiConfig.usageStats}</h2>
-          <button type="button" className="icon-action" onClick={props.onClose} aria-label={t.common.cancel}>✕</button>
-        </div>
-
+    <Modal
+      open
+      onClose={props.onClose}
+      title={<>{p.label} · {t.aiConfig.usageStats}</>}
+      closeLabel={t.common.cancel}
+      wide
+    >
+      <div className="usage-modal-body">
         <div className="usage-overview">
           <article><strong>{fmt(totalRequests)}</strong><span>{t.aiConfig.requests}</span></article>
           <article><strong>{fmt(totalTokens)}</strong><span>{t.aiConfig.tokens}</span></article>
@@ -761,6 +759,6 @@ function UsageModal(props: UsageModalProps) {
           </div>
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

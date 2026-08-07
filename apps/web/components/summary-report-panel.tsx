@@ -60,7 +60,9 @@ function parseSummary(document: SemanticDocument): SummaryFields {
 }
 
 export function SummaryReportPanel({ api, projectId }: { api: HunterApi; projectId: string }) {
-  const { lang } = useI18n();
+  const { lang, t } = useI18n();
+  const statusLabels = t.status as Record<string, string>;
+  const statusText = (value: string): string => statusLabels[value] ?? statusLabels[value.replaceAll("_", "-")] ?? value.replaceAll("_", " ");
   const copy = lang === "zh" ? {
     title: "归档摘要报告",
     lede: "只读视图：从 summary-data.json（语义归档记录）提取关键字段，不做 HTML 复刻。",
@@ -136,7 +138,7 @@ export function SummaryReportPanel({ api, projectId }: { api: HunterApi; project
                   onClick={() => setSelectedId(doc.document_id)}
                 >
                   <strong>{doc.title}</strong>
-                  <small>{String(doc.metadata.final_status ?? doc.source_path)}</small>
+                  <small>{doc.metadata.final_status === undefined ? doc.source_path : statusText(String(doc.metadata.final_status))}</small>
                 </button>
               </li>
             ))}
@@ -147,11 +149,11 @@ export function SummaryReportPanel({ api, projectId }: { api: HunterApi; project
               <dl className="summary-report-fields">
                 <div>
                   <dt>{copy.status}</dt>
-                  <dd><span className="status">{summary.finalStatus}</span></dd>
+                  <dd><span className="status">{summary.finalStatus === "—" ? "—" : statusText(summary.finalStatus)}</span></dd>
                 </div>
                 <div>
                   <dt>{copy.review}</dt>
-                  <dd>{summary.reviewStatus ?? "—"}</dd>
+                  <dd>{summary.reviewStatus === null ? "—" : statusText(summary.reviewStatus)}</dd>
                 </div>
                 <div>
                   <dt>{copy.verification}</dt>

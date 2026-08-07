@@ -47,6 +47,9 @@ import type {
   ProposalDetailModel,
   ReviewInput,
   ReviewResult,
+  RunSummary,
+  RunEventSummary,
+  KnowledgeIngestListItem,
 } from "./api";
 
 // ── Rich mock data for local dev / demo ─────────────────────
@@ -371,7 +374,7 @@ const MOCK_MANIFEST_FILES: Record<string, ArtifactManifestModel["files"]> = {
 
 // ── MockApiClient — returns mock data without any network call ──
 
-const DELAY_MS = 400; // simulate a slight async feel
+const DELAY_MS = 60; // 保留一点异步感，但不再拖慢切换体验（原 400ms 叠加多请求导致明显卡顿）
 
 const ALL_AGENTS: RegistryAgent[] = ["claude-code", "codex", "cursor", "generic", "mcp"];
 
@@ -627,6 +630,94 @@ function clone<T>(value: T): T {
 
 function delay<T>(value: T): Promise<T> {
   return new Promise((resolve) => setTimeout(() => resolve(value), DELAY_MS));
+}
+
+// ── Mock runs（运行监控 demo 数据）────────────────────────
+
+interface MockRunSeed {
+  id: string;
+  title: string;
+  run_status: string;
+  connection_status: string;
+  sync_completeness: string;
+  current_phase: string | null;
+  ageMin: number;
+  durationMin: number | null;
+}
+
+const MOCK_RUN_SEED: MockRunSeed[] = [
+  { id: "run_7f3a91c2", title: "同步 .claude/skills 变更集", run_status: "running", connection_status: "online", sync_completeness: "partial", current_phase: "push", ageMin: 4, durationMin: null },
+  { id: "run_2b8e04d5", title: "发布 skill-registry v1.8.0", run_status: "succeeded", connection_status: "offline", sync_completeness: "complete", current_phase: null, ageMin: 62, durationMin: 3 },
+  { id: "run_9c1d47a8", title: "harness-archive 周检", run_status: "failed", connection_status: "offline", sync_completeness: "partial", current_phase: "verify", ageMin: 190, durationMin: 7 },
+  { id: "run_4e6b02f1", title: "知识库索引重建", run_status: "queued", connection_status: "online", sync_completeness: "pending", current_phase: null, ageMin: 260, durationMin: null },
+  { id: "run_5a0c83e9", title: "全量文件校验", run_status: "succeeded", connection_status: "offline", sync_completeness: "complete", current_phase: null, ageMin: 1440, durationMin: 12 }
+];
+
+const MOCK_RUN_EVENT_FLOW: Array<{ type: string; phase: string | null; tone: "info" | "success" | "warning" | "danger" }> = [
+  { type: "run.created", phase: null, tone: "info" },
+  { type: "run.started", phase: "prepare", tone: "info" },
+  { type: "phase.entered", phase: "plan", tone: "info" },
+  { type: "files.scanned", phase: "plan", tone: "info" },
+  { type: "phase.entered", phase: "push", tone: "info" },
+  { type: "files.synced", phase: "push", tone: "success" },
+  { type: "heartbeat", phase: null, tone: "info" },
+  { type: "phase.entered", phase: "verify", tone: "info" },
+  { type: "verify.warning", phase: "verify", tone: "warning" },
+  { type: "run.failed", phase: "verify", tone: "danger" }
+];
+
+function buildMockRuns(projectId: string): RunSummary[] {
+  const base = Date.now();
+  return MOCK_RUN_SEED.map((seed, index) => {
+    const started = new Date(base - seed.ageMin * 60_000);
+    const ended = seed.durationMin === null ? null : new Date(started.getTime() + seed.durationMin * 60_000);
+    const live = seed.run_status === "running" || seed.run_status === "queued";
+    return {
+      run_id: `${seed.id}_${projectId.slice(0, 6)}${index}`,
+      project_id: projectId,
+      change_key: `chg_${seed.id.slice(4)}`,
+      title: seed.title,
+      run_status: seed.run_status,
+      connection_status: seed.connection_status,
+      sync_completeness: seed.sync_completeness,
+      current_phase: seed.current_phase,
+      started_at: started.toISOString(),
+      ended_at: ended === null ? null : ended.toISOString(),
+      last_event_at: (live ? new Date(base - 20_000) : ended ?? started).toISOString(),
+      last_heartbeat_at: live ? new Date(base - 15_000).toISOString() : null,
+      server_cursor: (index + 1) * 10
+    };
+  });
+}
+
+function buildMockRunEvents(run: RunSummary): RunEventSummary[] {
+  const start = run.started_at === null ? Date.now() : Date.parse(run.started_at);
+  const end = run.ended_at === null ? Date.parse(run.last_event_at ?? "") : Date.parse(run.ended_at);
+  const isFailed = run.run_status === "failed";
+  const isSucceeded = run.run_status === "succeeded";
+  const flow = MOCK_RUN_EVENT_FLOW.filter((item) => {
+    if (item.type === "run.failed") return isFailed;
+    return true;
+  }).map((item) => {
+    if (isSucceeded && item.type === "verify.warning") {
+      return { ...item, type: "run.completed", tone: "success" as const };
+    }
+    return item;
+  });
+  const count = isSucceeded || isFailed ? flow.length : Math.max(3, flow.length - 4);
+  return flow.slice(0, count).map((item, index) => {
+    const at = new Date(start + ((end - start) || 60_000) * (index / Math.max(1, count - 1)) * 0.9);
+    return {
+      server_cursor: index + 1,
+      run_id: run.run_id,
+      event_id: `evt_${run.run_id.slice(4, 12)}_${String(index + 1).padStart(3, "0")}`,
+      producer_seq: index + 1,
+      event_type: item.type,
+      phase: item.phase,
+      occurred_at: at.toISOString(),
+      payload: { tone: item.tone }
+    };
+  });
 }
 
 export class MockApiClient implements HunterApi {
@@ -1177,6 +1268,88 @@ export class MockApiClient implements HunterApi {
   }
   async applyFixSuggestion(slug: string, agent: RegistryAgent): Promise<DraftState> {
     return this.getSkillDraft(slug, agent);
+  }
+
+  // ── Runs（运行监控 demo）────────────────────────────────
+  async listProjectRuns(projectId: string): Promise<RunSummary[]> {
+    return delay(buildMockRuns(projectId));
+  }
+
+  async getProjectRun(projectId: string, runId: string): Promise<RunSummary> {
+    const run = buildMockRuns(projectId).find((item) => item.run_id === runId);
+    if (run === undefined) throw new ApiClientError(404, "NOT_FOUND", "run not found");
+    return delay(clone(run));
+  }
+
+  async listProjectRunEvents(
+    projectId: string,
+    runId: string,
+    afterCursor?: number
+  ): Promise<{ items: RunEventSummary[]; next_cursor: number }> {
+    const run = buildMockRuns(projectId).find((item) => item.run_id === runId);
+    if (run === undefined) return delay({ items: [], next_cursor: afterCursor ?? 0 });
+    const events = buildMockRunEvents(run).filter((item) => item.server_cursor > (afterCursor ?? 0));
+    return delay({ items: clone(events), next_cursor: run.server_cursor });
+  }
+
+  // ── Knowledge ingest（候选审核 demo）────────────────────
+  async listKnowledgeEntries(
+    projectId: string,
+    options?: { status?: string; limit?: number }
+  ): Promise<KnowledgeIngestListItem[]> {
+    void projectId;
+    const seed: KnowledgeIngestListItem[] = [
+      {
+        entry_id: "kn_cand_001",
+        status: "candidate",
+        content_sha256: "sha256:" + "a".repeat(64),
+        payload: {
+          title: "决策：事件上报改用 NDJSON 追加写",
+          summary: "为降低锁竞争，events 上报从整文件重写改为 NDJSON 追加写，读端按 cursor 增量消费。"
+        },
+        updated_at: "2026-07-30T09:12:00Z",
+        projected_at: null
+      },
+      {
+        entry_id: "kn_cand_002",
+        status: "candidate",
+        content_sha256: "sha256:" + "b".repeat(64),
+        payload: {
+          title: "风险：技能发布缺少签名校验",
+          summary: "当前发布流程未校验 artifact 签名，存在被篡改风险，建议引入 cosign 或内置校验。"
+        },
+        updated_at: "2026-07-29T15:40:00Z",
+        projected_at: null
+      },
+      {
+        entry_id: "kn_cand_003",
+        status: "candidate",
+        content_sha256: "sha256:" + "c".repeat(64),
+        payload: {
+          title: "实现笔记：工作流草稿三态机",
+          summary: "工作流草稿采用 draft/staged/published 三态，staged 用于发布前 diff 预览。"
+        },
+        updated_at: "2026-07-28T11:05:00Z",
+        projected_at: null
+      }
+    ];
+    const filtered = options?.status === undefined ? seed : seed.filter((item) => item.status === options.status);
+    const limited = options?.limit === undefined ? filtered : filtered.slice(0, options.limit);
+    return delay(clone(limited));
+  }
+
+  async getKnowledgeProjectionStatus(projectId: string): Promise<{ pending_count: number; pending_capped: boolean }> {
+    void projectId;
+    return delay({ pending_count: 3, pending_capped: false });
+  }
+
+  async updateKnowledgeEntryStatus(
+    projectId: string,
+    entryId: string,
+    status: string
+  ): Promise<{ entry_id: string; status: string; updated_at: string }> {
+    void projectId;
+    return delay({ entry_id: entryId, status, updated_at: new Date().toISOString() });
   }
 }
 

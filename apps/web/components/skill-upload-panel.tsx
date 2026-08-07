@@ -181,7 +181,7 @@ export function SkillUploadPanel(props: {
       <p>{copy.sensitiveReviewHint}</p>
       <div className="skill-review-findings">
         {review.findings.map((finding) => <article key={finding.fingerprint}>
-          <div><strong>{finding.rule_id}</strong><span className={`risk-badge risk-${finding.severity}`}>{finding.severity}</span></div>
+          <div><strong>{finding.rule_id}</strong><span className={`risk-badge risk-${finding.severity}`}>{(t.status as Record<string, string>)[finding.severity] ?? finding.severity}</span></div>
           <code>{finding.path}:{finding.line}</code>
           <small>{finding.redacted_preview}</small>
         </article>)}

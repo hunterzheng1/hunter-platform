@@ -39,6 +39,11 @@ import {
   parseSkillFrontmatter,
   required
 } from "./skill-shared";
+import { EmptyState } from "./ui/EmptyState";
+import { Icon } from "./ui/icons";
+import { Modal } from "./ui/Modal";
+import { Pagination } from "./ui/Pagination";
+import { Skeleton } from "./ui/Skeleton";
 
 function useApi(value?: HunterApi): HunterApi {
   return useMemo(() => value ?? (
@@ -239,18 +244,24 @@ export function SkillRegistry({ api: apiValue }: { api?: HunterApi }) {
                   <div className="skill-row-main"><strong className="skill-row-name">{skill.name}</strong><p className="skill-row-desc" title={displayValue(skill.description, t.skillDetail)}>{displayValue(skill.description, t.skillDetail)}</p><div className="tag-row">{skill.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}</div></div>
                   <div className="skill-meta"><span className="meta-pill meta-pill-version">v{skill.latest_version ?? "0.0.0"}</span><span className="skill-meta-cell"><strong>{skill.agents.length}</strong>{t.skills.adapters}</span><span className="skill-meta-cell"><strong>{usageCount}</strong>{t.skills.workflowsPl}</span><span className="skill-meta-cell" title={`${t.skills.updated} ${skill.updated_at.slice(0, 10)}`}>{skill.updated_at.slice(0, 10)}</span><span className={`status ${skill.status === "published" ? "status-published" : "status-draft"}`}>{skillStatusLabel(skill.status, t.skills)}</span></div>
                 </Link>
-                <button type="button" className="skill-delete-button" aria-label={t.common.delete} title={t.common.delete} onClick={(event) => { event.preventDefault(); event.stopPropagation(); deleteSkill(skill); }}>×</button>
+                <button type="button" className="skill-delete-button" aria-label={t.common.delete} title={t.common.delete} onClick={(event) => { event.preventDefault(); event.stopPropagation(); deleteSkill(skill); }}><Icon name="trash" size={14} /></button>
               </div>
             );
           })}
           </div>
-          <div className="pagination-bar">
-            <button type="button" className="secondary" disabled={currentPage <= 1} onClick={() => setPage(1)}>{t.skills.firstPage}</button>
-            <button type="button" className="secondary" disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>{t.skills.prevPage}</button>
-            <span>{t.skills.pageInfo.replace("{page}", String(currentPage)).replace("{total}", String(totalPages))}</span>
-            <button type="button" className="secondary" disabled={currentPage >= totalPages} onClick={() => setPage((value) => Math.min(totalPages, value + 1))}>{t.skills.nextPage}</button>
-            <button type="button" className="secondary" disabled={currentPage >= totalPages} onClick={() => setPage(totalPages)}>{t.skills.lastPage}</button>
-          </div>
+          <Pagination
+            page={currentPage}
+            totalPages={totalPages}
+            total={filtered.length}
+            onChange={setPage}
+            labels={{
+              first: t.skills.firstPage,
+              prev: t.skills.prevPage,
+              next: t.skills.nextPage,
+              last: t.skills.lastPage,
+              pageInfo: t.skills.pageInfo
+            }}
+          />
         </div>
         <aside className="hub-rail">
           <div className="panel panel-themed panel-upload compact-form">
@@ -282,38 +293,32 @@ export function SkillRegistry({ api: apiValue }: { api?: HunterApi }) {
       </div>
       {message === null ? null : <div className="notice success">{message}</div>}
       {error === null ? null : <div className="notice danger">{error}</div>}
-      {deleteModal === null ? null : (
-        <div className="modal-backdrop" role="presentation" onClick={cancelDelete}>
-          <div className="check-confirm-modal delete-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-skill-title" onClick={(event) => event.stopPropagation()}>
-            <div className="panel-title">
-              <h2 id="delete-skill-title">{t.common.delete}</h2>
-              <button type="button" className="icon-button" aria-label={t.common.cancel} onClick={cancelDelete}>×</button>
-            </div>
-            <p>{t.skills.deleteConfirm.replace("{name}", deleteModal.name)}</p>
-            <div className="modal-actions">
-              <button type="button" className="secondary" onClick={cancelDelete}>{t.common.cancel}</button>
-              <button type="button" className="danger" onClick={() => void confirmDelete()}>{t.common.delete}</button>
-            </div>
-          </div>
-        </div>
-      )}
-      {importOpen ? (
-        <div className="modal-backdrop" role="presentation" onClick={() => setImportOpen(false)}>
-          <div className="check-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="import-external-title" onClick={(event) => event.stopPropagation()}>
-            <div className="panel-title">
-              <h2 id="import-external-title">{t.skills.importExternal}</h2>
-              <button type="button" className="icon-button" aria-label={t.common.cancel} onClick={() => setImportOpen(false)}>×</button>
-            </div>
-            <p>{t.skills.importExternalHint}</p>
-            <label>{t.skills.slug}<input value={importRef} onChange={(event) => setImportRef(event.target.value)} placeholder={t.skills.importExternalPlaceholder} /></label>
-            <label>{t.skills.importExternalNote}<textarea value={importNote} onChange={(event) => setImportNote(event.target.value)} rows={3} /></label>
-            <div className="modal-actions">
-              <button type="button" className="secondary" onClick={() => setImportOpen(false)}>{t.common.cancel}</button>
-              <button type="button" disabled={importRef.trim() === "" || importing} onClick={() => void submitImport()}>{t.skills.importExternalSubmit}</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <Modal
+        open={deleteModal !== null}
+        onClose={cancelDelete}
+        title={t.common.delete}
+        closeLabel={t.common.cancel}
+        footer={<>
+          <button type="button" className="secondary" onClick={cancelDelete}>{t.common.cancel}</button>
+          <button type="button" className="danger" onClick={() => void confirmDelete()}>{t.common.delete}</button>
+        </>}
+      >
+        <p>{deleteModal === null ? "" : t.skills.deleteConfirm.replace("{name}", deleteModal.name)}</p>
+      </Modal>
+      <Modal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        title={t.skills.importExternal}
+        closeLabel={t.common.cancel}
+        footer={<>
+          <button type="button" className="secondary" onClick={() => setImportOpen(false)}>{t.common.cancel}</button>
+          <button type="button" disabled={importRef.trim() === "" || importing} onClick={() => void submitImport()}>{t.skills.importExternalSubmit}</button>
+        </>}
+      >
+        <p>{t.skills.importExternalHint}</p>
+        <label>{t.skills.slug}<input value={importRef} onChange={(event) => setImportRef(event.target.value)} placeholder={t.skills.importExternalPlaceholder} /></label>
+        <label>{t.skills.importExternalNote}<textarea value={importNote} onChange={(event) => setImportNote(event.target.value)} rows={3} /></label>
+      </Modal>
     </section>
   );
 }
@@ -437,7 +442,7 @@ export function SkillDetail({ api: apiValue, skillId }: { api?: HunterApi; skill
       const artifact = await required(api, "downloadSkillArtifact")(skillId, agent);
       const url = URL.createObjectURL(artifact.blob);
       const anchor = document.createElement("a"); anchor.href = url; anchor.download = artifact.filename; anchor.click();
-      URL.revokeObjectURL(url); setMessage(`{t.skillDetail.downloadedAudit}${artifact.hash.slice(0, 20)}…`);
+      URL.revokeObjectURL(url); setMessage(`${t.skillDetail.downloadedAudit}${artifact.hash.slice(0, 20)}…`);
     } catch (reason) { setError(apiError(reason, t)); }
   }
   function saveLocalMeta(next: { description: string; tags: string[] }): void {
@@ -487,7 +492,7 @@ export function SkillDetail({ api: apiValue, skillId }: { api?: HunterApi; skill
             <p className="eyebrow">{t.skillDetail.eyebrow}</p>
             <h1>{skill.name}</h1>
             <p className="lede">{displayValue(skill.description, t.skillDetail)}</p>
-            <div className="tag-row">{skill.tags.map((tag) => <button type="button" className="tag tag-remove" aria-label={`remove-tag  ${tag}`} onClick={() => removeLocalTag(tag)} key={tag}>{tag}<span aria-hidden="true">×</span></button>)}</div>
+            <div className="tag-row">{skill.tags.map((tag) => <button type="button" className="tag tag-remove" aria-label={t.skillDetail.removeTagLabel.replace("{tag}", tag)} onClick={() => removeLocalTag(tag)} key={tag}>{tag}<span aria-hidden="true">×</span></button>)}</div>
           </div>
         </div>
         <div className="skill-meta skill-detail-meta">
@@ -507,7 +512,7 @@ export function SkillDetail({ api: apiValue, skillId }: { api?: HunterApi; skill
 
       {fallback ? <div className="notice warning agent-fallback-banner">{t.skillDetail.fallbackBanner.replace("{agent}", selectedAgent.label).replace("{defaultAgent}", defaultAgent.label).replace("{path}", selectedAgent.targetPath)}</div> : null}
 
-      <div className="skill-detail-tabs" role="tablist" aria-label="Skill detail sections">
+      <div className="skill-detail-tabs" role="tablist" aria-label={t.skillDetail.detailSectionsLabel}>
         {([
           ["source", t.skillDetail.tabSource],
           ["examples", t.skillDetail.tabExamples],

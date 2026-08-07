@@ -329,11 +329,11 @@ function AgentCheckPanel({
           return;
         }
         if (job.status === "failed") {
-          setError(sd.aiCheckFailed + " " + (job.error ?? "AI 检查失败"));
+          setError(sd.aiCheckFailed + " " + (job.error ?? sd.aiJobErrorFallback));
           return;
         }
       }
-      setError(sd.aiCheckFailed + " 轮询超时");
+      setError(sd.aiCheckFailed + " " + sd.aiPollTimeout);
     } catch (reason) { setError(sd.aiCheckFailed + " " + apiError(reason, t)); }
     finally { setAiChecking(false); }
   }
@@ -486,7 +486,7 @@ function AgentCheckPanel({
       <aside className="version-file-tree">
         <div className="version-file-tree-title">{sd.fixPreview}</div>
         {fixPlan.items.map((item) => <div className="check-row" key={item.checkId}>
-          <span className={`fix-action fix-action-${item.action}`}>{item.action}</span>
+          <span className={`fix-action fix-action-${item.action}`}>{(t.status as Record<string, string>)[item.action] ?? item.action}</span>
           <div><strong>{item.label}</strong><p>{item.message}</p>{item.riskDelta === null ? null : <small className="risk">{sd.riskDelta}: {item.riskDelta}</small>}{item.riskDelta !== null && item.riskDelta.includes("degraded") ? <p className="degraded-fix-notice" data-testid="degraded-fix-notice">{sd.fixDegradedHint}</p> : null}</div>
         </div>)}
       </aside>
@@ -643,14 +643,14 @@ function VersionHistoryPanel({
       {agentVersions.map((v) => <button type="button" className={v.version === current.version ? "selected" : ""} key={v.version} onClick={() => selectVersion(v.version)}>
         <strong>v{v.version}</strong>
         <span>{new Date(v.created_at).toLocaleString()}</span>
-        <small>{v.source_proposal_id ?? "bootstrap"}</small>
+        <small>{v.source_proposal_id ?? t.bootstrapSource}</small>
       </button>)}
     </aside>
     <section className="version-history-main">
       <article className="release-note-card">
         <div className="editable-card-heading">
           <div><span className="config-card-label">{t.releaseNote}</span><h3>v{current.version}</h3></div>
-          <small>v{current.version} · {current.artifacts.length} artifacts</small>
+          <small>v{current.version} · {t.artifactsCount.replace("{count}", String(current.artifacts.length))}</small>
         </div>
         <p>{current.changeNote ?? t.defaultReleaseNote}</p>
       </article>

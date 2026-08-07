@@ -15,6 +15,8 @@ import {
 import { useI18n } from "../lib/i18n";
 import { mockApi } from "../lib/mock-api";
 import { apiError, Status } from "./skill-shared";
+import { Icon, type IconName } from "./ui/icons";
+import { Skeleton } from "./ui/Skeleton";
 
 export { ProjectRegistry } from "./project-registry";
 
@@ -58,7 +60,20 @@ export function DashboardConsole({ api: propApi }: { api?: HunterApi }) {
 
   if (error !== null) return <Empty>{error}</Empty>;
   if (overview === null) {
-    return <Empty>{t.dashboard.loading}</Empty>;
+    return (
+      <section className="stack governance-page page-module-v2 dashboard-stack" aria-busy="true" aria-label={t.dashboard.loading}>
+        <div className="dashboard-metric-grid">
+          <Skeleton variant="metric" />
+          <Skeleton variant="metric" />
+          <Skeleton variant="metric" />
+        </div>
+        <div className="dashboard-main-grid">
+          <Skeleton variant="block" />
+          <Skeleton variant="block" />
+        </div>
+        <Skeleton variant="table" lines={5} />
+      </section>
+    );
   }
 
   const attention = overview.health.some((item) => item.status === "attention");
@@ -80,7 +95,7 @@ export function DashboardConsole({ api: propApi }: { api?: HunterApi }) {
         <Status value={attention ? "attention" : "clear"} />
       </header>
 
-      <div className="dashboard-metric-grid">
+      <div className="dashboard-metric-grid rise-in">
         {metricCards.map((metric) => (
           <Link className="dashboard-metric" href={metric.href} key={metric.label}>
             <DashboardIcon name={metric.icon} />
@@ -91,7 +106,7 @@ export function DashboardConsole({ api: propApi }: { api?: HunterApi }) {
         ))}
       </div>
 
-      <div className="dashboard-main-grid">
+      <div className="dashboard-main-grid rise-in" style={{ animationDelay: "60ms" }}>
         <section className="panel dashboard-chart-panel">
           <div className="panel-title dashboard-panel-title">
             <div><p className="eyebrow">{t.dashboard.sevenDaySignal}</p><h2>{t.dashboard.proposalActivity}</h2></div>
@@ -106,7 +121,7 @@ export function DashboardConsole({ api: propApi }: { api?: HunterApi }) {
         </section>
       </div>
 
-      <div className="dashboard-work-grid">
+      <div className="dashboard-work-grid rise-in" style={{ animationDelay: "120ms" }}>
         <section className="panel dashboard-work-panel dashboard-project-panel">
           <div className="panel-title dashboard-panel-title">
             <div><p className="eyebrow">{t.dashboard.projectsPanelEyebrow}</p><h2>{t.dashboard.recentProjects}</h2></div>
@@ -117,7 +132,7 @@ export function DashboardConsole({ api: propApi }: { api?: HunterApi }) {
               <Link href={`/projects/${project.project_id}`} key={project.project_id}>
                 <span className="dashboard-project-mark" aria-hidden="true">{project.display_name.slice(0, 1).toUpperCase()}</span>
                 <div><strong>{project.display_name}</strong><code>{project.latest_project_version ?? t.dashboard.noVersion}</code></div>
-                <span className="dashboard-role">{project.role}</span>
+                <span className="dashboard-role">{statusLabel(project.role, t)}</span>
               </Link>
             ))}
           </div>
@@ -133,13 +148,13 @@ export function DashboardConsole({ api: propApi }: { api?: HunterApi }) {
             <div><span>{t.dashboard.workflowBindings}</span><strong>{overview.metrics.workflows}</strong><small>{t.dashboard.activeWorkflows}</small></div>
           </div>
           <div className="dashboard-skill-list">
-            {skills.slice(0, 3).map((skill) => <Link href={`/skills/${skill.slug}`} key={skill.skill_id}><span>{skill.kind ?? t.dashboard.unknownKind}</span><strong>{skill.name}</strong><code>{skill.latest_version ?? t.dashboard.unversioned}</code></Link>)}
+            {skills.slice(0, 3).map((skill) => <Link href={`/skills/${skill.slug}`} key={skill.skill_id}><span>{skill.kind == null ? t.dashboard.unknownKind : statusLabel(skill.kind, t)}</span><strong>{skill.name}</strong><code>{skill.latest_version ?? t.dashboard.unversioned}</code></Link>)}
             {skills.length === 0 ? <Empty>{t.dashboard.noSkills}</Empty> : null}
           </div>
         </section>
       </div>
 
-      <div className="dashboard-lower-grid">
+      <div className="dashboard-lower-grid rise-in" style={{ animationDelay: "180ms" }}>
         <section className="panel dashboard-list-panel">
           <div className="panel-title dashboard-panel-title"><div><p className="eyebrow">{t.dashboard.controlChecks}</p><h2>{t.dashboard.governanceHealth}</h2></div><Status value={attention ? "attention" : "clear"} /></div>
           <div className="signal-list">
@@ -157,7 +172,7 @@ export function DashboardConsole({ api: propApi }: { api?: HunterApi }) {
         <section className="panel dashboard-list-panel">
           <div className="panel-title dashboard-panel-title"><div><p className="eyebrow">{t.dashboard.immutableEvidence}</p><h2>{t.dashboard.recentActivity}</h2></div><Link href="/projects">{t.dashboard.openRegistry}</Link></div>
           <div className="activity-list">
-            {overview.activity.length === 0 ? <Empty>{t.dashboard.noActivity}</Empty> : overview.activity.map((event) => <article key={event.event_id}><DashboardIcon name="activity" /><div><strong>{event.action}</strong><p>{event.target_id} · {event.project_id ?? t.dashboard.registryScope}</p></div><time dateTime={event.created_at}>{new Date(event.created_at).toLocaleString(locale)}</time></article>)}
+            {overview.activity.length === 0 ? <Empty>{t.dashboard.noActivity}</Empty> : overview.activity.map((event) => <article key={event.event_id}><DashboardIcon name="activity" /><div><strong>{actionLabel(event.action, t)}</strong><p>{event.target_id} · {event.project_id ?? t.dashboard.registryScope}</p></div><time dateTime={event.created_at}>{new Date(event.created_at).toLocaleString(locale)}</time></article>)}
           </div>
         </section>
       </div>
@@ -217,14 +232,26 @@ function localizeDashboardValue(value: string, lang: "zh" | "en"): string {
     .replace(/\brecent events\b/gi, "条近期记录");
 }
 
+// 把枚举值（role / kind / 分类 key 等）映射到当前语言文案，查不到时做可读化兜底
+function statusLabel(value: string, t: ReturnType<typeof useI18n>["t"]): string {
+  const labels = t.status as Record<string, string>;
+  return labels[value] ?? labels[value.replaceAll("_", "-")] ?? value.replaceAll("_", " ");
+}
+
+// 活动流 action（如 skill.proposal.created）→ 当前语言文案
+function actionLabel(action: string, t: ReturnType<typeof useI18n>["t"]): string {
+  const map = t.dashboard.activityActions as Record<string, string>;
+  return map[action] ?? action;
+}
+
 function DashboardIcon({ name }: { name: "projects" | "workflow" | "skill" | "activity" }) {
-  const paths: Record<typeof name, React.ReactNode> = {
-    projects: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M7 8h10M7 12h6M7 16h4" /></>,
-    workflow: <><circle cx="6" cy="6" r="2" /><circle cx="18" cy="12" r="2" /><circle cx="6" cy="18" r="2" /><path d="M8 7.5 16 11M8 16.5 16 13" /></>,
-    skill: <><path d="m12 3 2.4 5.1L20 9l-4 4.1.9 5.9-4.9-2.7L7.1 19l.9-5.9L4 9l5.6-.9L12 3Z" /></>,
-    activity: <><path d="M4 12h3l2-6 4 12 2-6h5" /></>
+  const map: Record<typeof name, IconName> = {
+    projects: "folder",
+    workflow: "workflow",
+    skill: "sparkles",
+    activity: "activity"
   };
-  return <svg className="dashboard-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
+  return <Icon name={map[name]} size={22} className="dashboard-icon" />;
 }
 
 function TrendChart({ trend }: { trend: DashboardOverview["trend"] }) {
@@ -249,7 +276,7 @@ function DistributionChart({ items }: { items: DashboardOverview["distributions"
   const palette = ["#17d4ff", "#8f7cff", "#20e3a2", "#f6a956"];
   const segments = items.map((item, index) => { const share = total === 0 ? 0 : item.count / total; const segment = { ...item, color: palette[index % palette.length], offset, share }; offset += share; return segment; });
   const style = { background: total === 0 ? "conic-gradient(var(--line) 0 100%)" : `conic-gradient(${segments.map((segment) => `${segment.color} ${segment.offset * 100}% ${(segment.offset + segment.share) * 100}%`).join(", ")})` };
-  return <div className="distribution-chart"><div className="distribution-donut" style={style}><span>{total}</span><small>{t.dashboard.publishedSkills}</small></div><div className="distribution-list">{segments.map((item) => <div key={item.key}><i style={{ background: item.color }} /><span>{item.key}</span><b>{item.count}</b><small>{total === 0 ? 0 : Math.round(item.share * 100)}%</small></div>)}</div></div>;
+  return <div className="distribution-chart"><div className="distribution-donut" style={style}><span>{total}</span><small>{t.dashboard.publishedSkills}</small></div><div className="distribution-list">{segments.map((item) => <div key={item.key}><i style={{ background: item.color }} /><span>{statusLabel(item.key, t)}</span><b>{item.count}</b><small>{total === 0 ? 0 : Math.round(item.share * 100)}%</small></div>)}</div></div>;
 }
 
 export function AuthTokenForm() {

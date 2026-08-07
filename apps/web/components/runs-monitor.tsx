@@ -11,11 +11,38 @@ import {
   type RunSummary
 } from "../lib/api";
 import { useI18n } from "../lib/i18n";
+import { mockApi } from "../lib/mock-api";
+import { EmptyState } from "./ui/EmptyState";
+import { Icon } from "./ui/icons";
+import { PageHeader } from "./ui/PageHeader";
+import { Spinner } from "./ui/Spinner";
+
+type Tone = "success" | "danger" | "warning" | "info" | "neutral";
+
+function statusTone(value: string): Tone {
+  if (["succeeded", "complete", "online", "completed"].includes(value)) return "success";
+  if (["failed", "error"].includes(value)) return "danger";
+  if (["partial", "queued", "pending", "offline"].includes(value)) return "warning";
+  if (value === "running") return "info";
+  return "neutral";
+}
+
+function eventTone(event: RunEventSummary): Tone {
+  const tone = event.payload?.tone;
+  if (tone === "success" || tone === "danger" || tone === "warning" || tone === "info") return tone;
+  if (/fail|error/i.test(event.event_type)) return "danger";
+  if (/complete|synced|succeed/i.test(event.event_type)) return "success";
+  if (/warn/i.test(event.event_type)) return "warning";
+  return "info";
+}
 
 export function RunsMonitor({ api }: { api?: HunterApi }) {
   const { lang, t } = useI18n();
-  const client = useMemo(() => api ?? browserApi(), [api]);
+  const client = useMemo<HunterApi>(() => api ?? (
+    process.env.NEXT_PUBLIC_HUNTER_HARNESS_DEMO === "true" ? mockApi : browserApi()
+  ), [api]);
   const copy = COPY[lang];
+  const locale = lang === "zh" ? "zh-CN" : "en-US";
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [projectId, setProjectId] = useState("");
   const [runs, setRuns] = useState<RunSummary[]>([]);
@@ -25,12 +52,19 @@ export function RunsMonitor({ api }: { api?: HunterApi }) {
   const [busy, setBusy] = useState(false);
   const [liveMode, setLiveMode] = useState<"sse" | "poll" | "idle">("idle");
   const streamAbortRef = useRef<(() => void) | null>(null);
+  const timelineRef = useRef<HTMLDivElement>(null);
 
   const selected = runs.find((run) => run.run_id === selectedRunId) ?? null;
 
   function mapStatus(value: string): string {
     const labels = t.status as Record<string, string>;
     return labels[value] ?? value.replaceAll("_", " ");
+  }
+
+  function formatTime(value: string | null): string {
+    if (value === null) return "—";
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString(locale);
   }
 
   const refreshProjects = useCallback(async () => {
@@ -164,20 +198,25 @@ export function RunsMonitor({ api }: { api?: HunterApi }) {
     };
   }, [client, copy.networkError, projectId, selectedRunId]);
 
+  // 新事件到达时滚动到底部
+  useEffect(() => {
+    const node = timelineRef.current;
+    if (node !== null) node.scrollTop = node.scrollHeight;
+  }, [events.length]);
+
   return (
     <section className="runs-monitor">
-      <header className="page-header">
-        <div>
-          <p className="eyebrow">{copy.eyebrow}</p>
-          <h1>{copy.title}</h1>
-          <p className="lede">{copy.lede}</p>
-        </div>
-        {liveMode === "idle" ? null : (
+      <PageHeader
+        eyebrow={copy.eyebrow}
+        title={copy.title}
+        lede={copy.lede}
+        actions={liveMode === "idle" ? undefined : (
           <span className={`runs-live-badge ${liveMode}`}>
+            {liveMode === "sse" ? <Icon name="zap" size={13} /> : <Icon name="refresh" size={13} />}
             {liveMode === "sse" ? copy.liveSse : copy.livePoll}
           </span>
         )}
-      </header>
+      />
 
       <div className="runs-toolbar">
         <label>
@@ -198,6 +237,7 @@ export function RunsMonitor({ api }: { api?: HunterApi }) {
           </select>
         </label>
         <button type="button" className="secondary" disabled={busy || projectId === ""} onClick={() => void refreshRuns(projectId)}>
+          {busy ? <Spinner size={13} label={copy.loading} /> : <Icon name="refresh" size={13} />}
           {busy ? copy.loading : copy.refresh}
         </button>
       </div>
@@ -205,58 +245,75 @@ export function RunsMonitor({ api }: { api?: HunterApi }) {
       {error === null ? null : <p className="api-keys-message">{error}</p>}
 
       <div className="runs-split">
-        <ul className="runs-list">
-          {runs.length === 0 ? (
-            <li className="lede">{copy.empty}</li>
-          ) : (
-            runs.map((run) => (
-              <li key={run.run_id}>
-                <button
-                  type="button"
-                  className={selectedRunId === run.run_id ? "active" : ""}
-                  onClick={() => setSelectedRunId(run.run_id)}
-                >
-                  <strong>{run.title ?? run.change_key}</strong>
-                  <small>
-                    {mapStatus(run.run_status)} · {mapStatus(run.connection_status)} · {mapStatus(run.sync_completeness)}
-                  </small>
-                </button>
-              </li>
-            ))
-          )}
-        </ul>
+        {runs.length === 0 ? (
+          <div className="panel">
+            <EmptyState icon="activity" title={copy.empty} />
+          </div>
+        ) : (
+          <ul className="runs-list">
+            {runs.map((run) => {
+              const tone = statusTone(run.run_status);
+              return (
+                <li key={run.run_id}>
+                  <button
+                    type="button"
+                    className={selectedRunId === run.run_id ? "active" : ""}
+                    onClick={() => setSelectedRunId(run.run_id)}
+                  >
+                    <span className="run-row">
+                      <i className={`run-dot run-dot-${tone}`} aria-hidden="true" />
+                      <strong>{run.title ?? run.change_key}</strong>
+                    </span>
+                    <small>
+                      {mapStatus(run.run_status)} · {mapStatus(run.connection_status)} · {mapStatus(run.sync_completeness)}
+                    </small>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
 
         <div className="runs-detail">
           {selected === null ? (
-            <p className="lede">{copy.selectHint}</p>
+            <EmptyState icon="inbox" title={copy.selectHint} />
           ) : (
             <>
               <h2>{selected.title ?? selected.change_key}</h2>
               <div className="runs-status-grid">
-                <StatusChip label={copy.runStatus} value={mapStatus(selected.run_status)} />
-                <StatusChip label={copy.connection} value={mapStatus(selected.connection_status)} />
-                <StatusChip label={copy.sync} value={mapStatus(selected.sync_completeness)} />
-                <StatusChip label={copy.phase} value={selected.current_phase ?? "—"} />
+                <StatusChip label={copy.runStatus} value={mapStatus(selected.run_status)} tone={statusTone(selected.run_status)} />
+                <StatusChip label={copy.connection} value={mapStatus(selected.connection_status)} tone={statusTone(selected.connection_status)} />
+                <StatusChip label={copy.sync} value={mapStatus(selected.sync_completeness)} tone={statusTone(selected.sync_completeness)} />
+                <StatusChip label={copy.phase} value={selected.current_phase === null ? "—" : mapStatus(selected.current_phase)} tone="neutral" />
               </div>
               <p className="lede">
-                {copy.lastEvent}: {selected.last_event_at ?? "—"} · {copy.lastHeartbeat}:{" "}
-                {selected.last_heartbeat_at ?? "—"}
+                {copy.lastEvent}: {formatTime(selected.last_event_at)} · {copy.lastHeartbeat}: {formatTime(selected.last_heartbeat_at)}
               </p>
               <h3>{copy.timeline}</h3>
               {events.length === 0 ? (
-                <div className="knowledge-empty"><span>◇</span><p>{copy.noEvents}</p></div>
+                <EmptyState icon="clock" title={copy.noEvents} />
               ) : (
-                <ol className="runs-timeline">
-                  {events.map((event) => (
-                    <li key={event.event_id}>
-                      <code>{event.occurred_at}</code>
-                      <span>
-                        {event.event_type}
-                        {event.phase === null ? "" : ` · ${event.phase}`}
-                      </span>
-                    </li>
-                  ))}
-                </ol>
+                <div className="log-panel">
+                  <div className="log-panel-head">
+                    <span>{copy.eventsCount.replace("{count}", String(events.length))}</span>
+                    <span className="log-panel-actions">
+                      {liveMode === "idle" ? null : <Spinner size={12} />}
+                    </span>
+                  </div>
+                  <div className="log-panel-body runs-timeline-scroll" ref={timelineRef}>
+                    <ol className="timeline">
+                      {events.map((event) => (
+                        <li className={`timeline-item timeline-${eventTone(event)}`} key={event.event_id}>
+                          <div className="timeline-meta">
+                            <time dateTime={event.occurred_at}>{formatTime(event.occurred_at)}</time>
+                            <span className="timeline-title">{copy.eventTypes[event.event_type] ?? event.event_type}</span>
+                          </div>
+                          {event.phase === null ? null : <p className="timeline-detail">{copy.phaseLabel} · {mapStatus(event.phase)}</p>}
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                </div>
               )}
             </>
           )}
@@ -266,9 +323,9 @@ export function RunsMonitor({ api }: { api?: HunterApi }) {
   );
 }
 
-function StatusChip({ label, value }: { label: string; value: string }) {
+function StatusChip({ label, value, tone }: { label: string; value: string; tone: Tone }) {
   return (
-    <div className="runs-status-chip">
+    <div className={`runs-status-chip tone-${tone}`}>
       <small>{label}</small>
       <strong>{value}</strong>
     </div>
@@ -296,7 +353,20 @@ const COPY = {
     noEvents: "尚无事件。",
     liveSse: "实时（SSE）",
     livePoll: "轮询回退",
-    networkError: "无法连接到服务器。"
+    networkError: "无法连接到服务器。",
+    eventsCount: "{count} 条事件",
+    phaseLabel: "阶段",
+    eventTypes: {
+      "run.created": "运行已创建",
+      "run.started": "运行已开始",
+      "run.completed": "运行已完成",
+      "run.failed": "运行失败",
+      "phase.entered": "进入阶段",
+      "files.scanned": "文件扫描",
+      "files.synced": "文件已同步",
+      "heartbeat": "心跳",
+      "verify.warning": "校验警告"
+    } as Record<string, string>
   },
   en: {
     eyebrow: "Monitoring",
@@ -318,6 +388,19 @@ const COPY = {
     noEvents: "No events yet.",
     liveSse: "Live (SSE)",
     livePoll: "Polling fallback",
-    networkError: "Unable to reach the server."
+    networkError: "Unable to reach the server.",
+    eventsCount: "{count} events",
+    phaseLabel: "phase",
+    eventTypes: {
+      "run.created": "Run created",
+      "run.started": "Run started",
+      "run.completed": "Run completed",
+      "run.failed": "Run failed",
+      "phase.entered": "Phase entered",
+      "files.scanned": "Files scanned",
+      "files.synced": "Files synced",
+      "heartbeat": "Heartbeat",
+      "verify.warning": "Verify warning"
+    } as Record<string, string>
   }
 } as const;

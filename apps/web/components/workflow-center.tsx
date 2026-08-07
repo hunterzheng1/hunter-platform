@@ -13,6 +13,8 @@ import { browserApi, buildUploadFormData, type HunterApi } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import { mockApi } from "../lib/mock-api";
 import { apiError, required, Status } from "./skill-shared";
+import { EmptyState } from "./ui/EmptyState";
+import { Icon } from "./ui/icons";
 
 function resolveApi(): HunterApi {
   return process.env.NEXT_PUBLIC_HUNTER_HARNESS_DEMO === "true" ? mockApi : browserApi();
@@ -194,7 +196,7 @@ export function WorkflowCenter({ api: apiValue }: { api?: HunterApi }) {
           <p>{t.workflows.familyDescription}</p>
         </div>
         <button type="button" className="primary-button" onClick={() => setShowCreate((value) => !value)}>
-          + {t.workflows.newFamily}
+          <Icon name="plus" size={14} /> {t.workflows.newFamily}
         </button>
       </header>
 
@@ -216,7 +218,7 @@ export function WorkflowCenter({ api: apiValue }: { api?: HunterApi }) {
 
       <div className="workflow-list-toolbar">
         <label className="search-wide">
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+          <Icon name="search" size={16} />
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t.workflows.searchPlaceholder} />
         </label>
         <span className="muted-stat">{filtered.length} / {families?.length ?? 0}</span>
@@ -226,7 +228,7 @@ export function WorkflowCenter({ api: apiValue }: { api?: HunterApi }) {
         <div className="panel workflow-index">
           <div className="panel-title"><h2>{t.workflows.families}</h2><span>{filtered.length}</span></div>
           {families === null ? <div className="skeleton-block" /> : filtered.length === 0 ? (
-            <div className="empty-state">{t.workflows.noFamilies}</div>
+            <EmptyState icon="workflow" title={t.workflows.noFamilies} />
           ) : filtered.map((family) => (
             <button
               type="button"
@@ -242,7 +244,7 @@ export function WorkflowCenter({ api: apiValue }: { api?: HunterApi }) {
         </div>
 
         {selected === null ? (
-          <div className="panel workflow-editor"><div className="empty-state">{t.workflows.selectFamily}</div></div>
+          <div className="panel workflow-editor"><EmptyState icon="workflow" title={t.workflows.selectFamily} /></div>
         ) : (
           <div className="panel workflow-editor compact-form">
             <div className="panel-title">
@@ -300,7 +302,7 @@ export function WorkflowCenter({ api: apiValue }: { api?: HunterApi }) {
               <div className="notice">{t.workflows.noDraft}</div>
             ) : (
               <div className="panel panel-themed">
-                <div className="panel-title"><h3>{t.workflows.draftTitle}</h3><span>rev {draft.revision}</span></div>
+                <div className="panel-title"><h3>{t.workflows.draftTitle}</h3><span>{t.workflows.revision.replace("{rev}", String(draft.revision))}</span></div>
                 <p><small>{t.workflows.draftProfiles}: {draft.profiles.map((item) => item.profile).join(", ") || "—"}</small></p>
                 <div className="compact-form">
                   <button type="button" disabled={busy} onClick={() => void runChecks()}>{t.workflows.runChecks}</button>

@@ -209,7 +209,9 @@ function UsageExamples({ examples, t }: { examples: readonly DemoUsageExample[];
 }
 
 function CheckLight({ status }: { status: "green" | "yellow" | "red" }) {
-  return <span className={`check-light check-light-${status}`} aria-label={status} />;
+  const { t } = useI18n();
+  const labels = t.status as Record<string, string>;
+  return <span className={`check-light check-light-${status}`} aria-label={labels[status] ?? status} />;
 }
 
 function nextPatchVersion(version: string | undefined): string {

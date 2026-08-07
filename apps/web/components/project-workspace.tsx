@@ -18,6 +18,9 @@ import { runPreservingWindowScroll, suppressMouseFocusScroll } from "../lib/pres
 import { ProjectSemanticPanels } from "./project-semantic-panels";
 import { ProjectVersionsPanel } from "./project-versions-panel";
 import { SummaryReportPanel } from "./summary-report-panel";
+import { Icon } from "./ui/icons";
+import { Skeleton } from "./ui/Skeleton";
+import { useToast } from "./ui/Toast";
 
 interface WorkspaceData {
   project: ProjectDetailModel;
@@ -71,6 +74,7 @@ const COPY = {
     collapseAll: "全部折叠",
     expandToSelected: "展开到选中",
     folderCount: (count: number) => `${count} 项`,
+    treeLabel: "项目文件",
     allFiles: "全部文件",
     editableFiles: "可编辑",
     systemFiles: "系统只读",
@@ -120,6 +124,7 @@ const COPY = {
     collapseAll: "Collapse all",
     expandToSelected: "Expand to selected",
     folderCount: (count: number) => `${count} items`,
+    treeLabel: "Project files",
     allFiles: "All files",
     editableFiles: "Editable",
     systemFiles: "System read-only",
@@ -207,6 +212,7 @@ function DirectoryTree({
   onOpenChange,
   onSelect,
   folderCountLabel,
+  treeLabel,
   depth = 0
 }: {
   node: TreeNode;
@@ -215,6 +221,7 @@ function DirectoryTree({
   onOpenChange: (path: string, open: boolean) => void;
   onSelect: (file: ProjectFileMetadata) => void;
   folderCountLabel: (count: number) => string;
+  treeLabel: string;
   depth?: number;
 }) {
   const directories = [...node.directories.values()].sort((left, right) => left.name.localeCompare(right.name));
@@ -243,6 +250,7 @@ function DirectoryTree({
             onOpenChange={onOpenChange}
             onSelect={onSelect}
             folderCountLabel={folderCountLabel}
+            treeLabel={treeLabel}
             depth={depth + 1}
           />
         </details>
@@ -262,7 +270,7 @@ function DirectoryTree({
       </li>
     ))}
   </ul>;
-  return depth === 0 ? <nav className="project-tree" aria-label="Project files">{content}</nav> : content;
+  return depth === 0 ? <nav className="project-tree" aria-label={treeLabel}>{content}</nav> : content;
 }
 
 async function loadWorkspace(api: HunterApi, projectId: string): Promise<WorkspaceData> {
@@ -278,6 +286,7 @@ async function loadWorkspace(api: HunterApi, projectId: string): Promise<Workspa
 
 export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId: string }) {
   const { lang } = useI18n();
+  const toast = useToast();
   const copy = COPY[lang];
   const [data, setData] = useState<WorkspaceData | null>(null);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("workbench");
@@ -289,7 +298,6 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
   const [filter, setFilter] = useState<"all" | "editable" | "system">("all");
   const [openPaths, setOpenPaths] = useState<Set<string>>(() => new Set());
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const contentRequest = useRef(0);
 
@@ -380,7 +388,6 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
       targetPath: "",
       content: "# New knowledge\n"
     });
-    setMessage(null);
   }
 
   function beginEdit(action: Exclude<DraftAction, "add">): void {
@@ -393,7 +400,6 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
       content: selectedContent ?? "",
       baseContentHash: selected.content_sha256
     });
-    setMessage(null);
   }
 
   async function refreshWorkspace(preferredPath?: string): Promise<void> {
@@ -432,17 +438,30 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
         ...(draft.action === "delete" ? {} : { content: draft.content })
       });
       setDraft(null);
-      setMessage(copy.saved);
+      toast.success(copy.saved);
       await refreshWorkspace(draft.action === "delete" ? undefined : targetPath);
     } catch {
-      setError(copy.saveFailed);
+      toast.danger(copy.saveFailed);
     } finally {
       setBusy(false);
     }
   }
 
   if (error !== null && data === null) return <section className="empty-state">{error}</section>;
-  if (data === null) return <section className="empty-state">{lang === "zh" ? "正在加载项目…" : "Loading project…"}</section>;
+  if (data === null) {
+    return (
+      <section className="stack governance-page project-workspace-v2" aria-busy="true">
+        <Skeleton variant="text" lines={2} />
+        <div className="project-registry-metrics">
+          <Skeleton variant="metric" />
+          <Skeleton variant="metric" />
+          <Skeleton variant="metric" />
+          <Skeleton variant="metric" />
+        </div>
+        <Skeleton variant="block" />
+      </section>
+    );
+  }
 
   const tabs: Array<[WorkspaceTab, string]> = [
     ["workbench", copy.tabs.workbench],
@@ -457,7 +476,7 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
   return <section className="stack governance-page project-workspace-v2">
     <header className="project-workspace-hero">
       <div className="project-workspace-title">
-        <Link href="/projects" className="project-back" aria-label={copy.back}>←</Link>
+        <Link href="/projects" className="project-back" aria-label={copy.back}><Icon name="back" size={15} /></Link>
         <div>
           <p className="eyebrow">{copy.eyebrow}</p>
           <h1>{data.project.display_name}</h1>
@@ -480,7 +499,7 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
 
     {activeTab === "workbench" ? <div className="project-workbench-grid">
       <section className="project-health-card">
-        <div className="project-health-icon">✓</div>
+        <div className="project-health-icon"><Icon name="success" size={20} /></div>
         <div><p className="eyebrow">{copy.healthy}</p><h2>{copy.healthyHint}</h2><p>{new Date(lastUpdated).toLocaleString(lang === "zh" ? "zh-CN" : "en-US")}</p></div>
       </section>
       <section className="project-metric-strip">
@@ -492,8 +511,8 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
       <section className="project-quick-card">
         <div className="panel-title"><h2>{copy.quickActions}</h2></div>
         <div className="project-quick-actions">
-          <button type="button" onMouseDown={suppressMouseFocusScroll} onClick={() => runPreservingWindowScroll(() => setActiveTab("files"))}><span>↗</span>{copy.manageFiles}</button>
-          <button type="button" onMouseDown={suppressMouseFocusScroll} onClick={() => runPreservingWindowScroll(() => setActiveTab("knowledge"))}><span>⌕</span>{copy.browseKnowledge}</button>
+          <button type="button" onMouseDown={suppressMouseFocusScroll} onClick={() => runPreservingWindowScroll(() => setActiveTab("files"))}><Icon name="file" size={14} />{copy.manageFiles}</button>
+          <button type="button" onMouseDown={suppressMouseFocusScroll} onClick={() => runPreservingWindowScroll(() => setActiveTab("knowledge"))}><Icon name="brain" size={14} />{copy.browseKnowledge}</button>
         </div>
       </section>
       <section className="project-recent-card">
@@ -510,8 +529,8 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
 
     {activeTab === "files" ? <div className="project-files-shell">
       <aside className="project-files-sidebar">
-        <div className="project-files-heading"><div><p className="eyebrow">{copy.fileTitle}</p><strong>{data.files.length}</strong></div><button type="button" onClick={beginAdd}>＋ {copy.newFile}</button></div>
-        <div className="project-file-search"><span>⌕</span><input aria-label={copy.searchFiles} placeholder={copy.searchFiles} value={query} onChange={(event) => setQuery(event.target.value)} /></div>
+        <div className="project-files-heading"><div><p className="eyebrow">{copy.fileTitle}</p><strong>{data.files.length}</strong></div><button type="button" onClick={beginAdd}><Icon name="plus" size={13} /> {copy.newFile}</button></div>
+        <div className="project-file-search"><span><Icon name="search" size={13} /></span><input aria-label={copy.searchFiles} placeholder={copy.searchFiles} value={query} onChange={(event) => setQuery(event.target.value)} /></div>
         <div className="project-file-filters">
           {(["all", "editable", "system"] as const).map((value) => <button key={value} type="button" className={filter === value ? "selected" : ""} onClick={() => setFilter(value)}>{value === "all" ? copy.allFiles : value === "editable" ? copy.editableFiles : copy.systemFiles}</button>)}
         </div>
@@ -531,10 +550,11 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
           onOpenChange={setDirectoryOpen}
           onSelect={(file) => void choose(file)}
           folderCountLabel={copy.folderCount}
+          treeLabel={copy.treeLabel}
         />}
       </aside>
       <main className="project-file-detail-v2">
-        {selected === null && draft === null ? <div className="project-file-placeholder"><span>⌘</span><h2>{copy.chooseFile}</h2></div> : null}
+        {selected === null && draft === null ? <div className="project-file-placeholder"><Icon name="file" size={26} /><h2>{copy.chooseFile}</h2></div> : null}
         {selected !== null ? <>
           <header className="project-file-detail-header">
             <div><p className="project-file-path">{selected.path}</p><div className="project-file-badges"><span className={selectedPolicy !== null && isProposalEditable(selectedPolicy) ? "editable" : "readonly"}>{selectedPolicy !== null && isProposalEditable(selectedPolicy) ? copy.editable : copy.readOnly}</span><span>{selected.size_bytes} {copy.bytes}</span></div></div>
@@ -543,7 +563,7 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
           <pre className="project-file-content">{loadingContent && selectedContent === undefined ? copy.loadingContent : selectedContent ?? ""}</pre>
         </> : null}
         {draft !== null ? <section className="project-file-editor">
-          <header><h2>{draft.action === "add" ? copy.newFile : draft.action === "delete" ? copy.confirmDelete : copy.edit}</h2><button type="button" className="icon-button" onClick={() => setDraft(null)}>×</button></header>
+          <header><h2>{draft.action === "add" ? copy.newFile : draft.action === "delete" ? copy.confirmDelete : copy.edit}</h2><button type="button" className="icon-button" aria-label={copy.cancel} onClick={() => setDraft(null)}><Icon name="close" size={14} /></button></header>
           <label>{copy.filePath}<input aria-label={copy.filePath} value={draft.path} disabled={draft.action !== "add"} onChange={(event) => setDraft({ ...draft, path: event.target.value })} /></label>
           {draft.action === "rename" ? <label>{copy.targetPath}<input aria-label={copy.targetPath} value={draft.targetPath} onChange={(event) => setDraft({ ...draft, targetPath: event.target.value })} /></label> : null}
           {draft.action === "delete" ? <p className="notice danger">{lang === "zh" ? "删除后会立即生成新版本；可通过历史版本追溯。" : "Deleting creates a new version immediately; prior versions remain traceable."}</p> : <label className="project-editor-content">{copy.fileContent}<textarea aria-label={copy.fileContent} value={draft.content} onChange={(event) => setDraft({ ...draft, content: event.target.value })} /></label>}
@@ -563,7 +583,6 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
       <ProjectApiKeysPanel projectId={projectId} />
     </div>
 
-    {message === null ? null : <div className="project-toast success">✓ {message}</div>}
     {error === null || data === null ? null : <div className="project-toast danger">{error}</div>}
   </section>;
 }

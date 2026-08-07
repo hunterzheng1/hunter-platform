@@ -15,6 +15,10 @@ import {
 } from "../lib/project-list";
 import { suppressMouseFocusScroll } from "../lib/preserve-scroll";
 import { apiError } from "./skill-shared";
+import { EmptyState } from "./ui/EmptyState";
+import { Icon } from "./ui/icons";
+import { Pagination } from "./ui/Pagination";
+import { Skeleton } from "./ui/Skeleton";
 
 function resolveApi(): HunterApi {
   return process.env.NEXT_PUBLIC_HUNTER_HARNESS_DEMO === "true" ? mockApi : browserApi();
@@ -50,9 +54,9 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
     purgeAt: "自动清理", confirmArchive: "将此项目移到回收站？30 天内可以恢复。",
     confirmRestore: "恢复此项目？", confirmPurge: "永久删除后无法恢复，是否继续？",
     confirmEmpty: "永久删除回收站中的所有项目？此操作无法撤销。", confirm: "确认", cancel: "取消",
-    prev: "上一页", next: "下一页",
-    count: (n: number) => `${n} 个`,
-    page: (current: number, total: number, count: number) => `第 ${current}/${total} 页 · ${count} 个`
+    prev: "上一页", next: "下一页", first: "第一页", last: "最后一页",
+    pageInfo: "第 {page} / {total} 页", totalCount: "共 {count} 项",
+    count: (n: number) => `${n} 个`
   } : {
     eyebrow: "Project workspace", title: "Projects", description: "View project files, knowledge health, and version history in one place.",
     active: "Active projects", trash: "Recycle bin", search: "Search projects", searchPlaceholder: "Search by name or ID",
@@ -64,9 +68,9 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
     purgeAt: "Auto removal", confirmArchive: "Move this project to the recycle bin? You can restore it for 30 days.",
     confirmRestore: "Restore this project?", confirmPurge: "Permanent deletion cannot be undone. Continue?",
     confirmEmpty: "Permanently delete every project in the recycle bin? This cannot be undone.", confirm: "Confirm", cancel: "Cancel",
-    prev: "Previous", next: "Next",
-    count: (n: number) => `${n}`,
-    page: (current: number, total: number, count: number) => `Page ${current}/${total} · ${count} projects`
+    prev: "Previous", next: "Next", first: "First page", last: "Last page",
+    pageInfo: "Page {page} / {total}", totalCount: "{count} total",
+    count: (n: number) => `${n}`
   };
 
   async function reload(): Promise<void> {
@@ -124,7 +128,18 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
   }, [pendingAction]);
 
   if (error !== null && projects === null) return <div className="empty-state">{error}</div>;
-  if (projects === null) return <div className="empty-state">{t.projects.loading}</div>;
+  if (projects === null) {
+    return (
+      <section className="stack governance-page project-registry-v2" aria-busy="true">
+        <div className="project-registry-metrics">
+          <Skeleton variant="metric" />
+          <Skeleton variant="metric" />
+          <Skeleton variant="metric" />
+        </div>
+        <Skeleton variant="table" lines={6} />
+      </section>
+    );
+  }
 
   const source = view === "active" ? projects : archived;
   const needle = query.trim().toLowerCase();
@@ -179,19 +194,24 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
       </div>
     </header>
 
-    {view === "active" ? <div className="project-registry-metrics">
-      <article><span>⌘</span><div><strong>{fileCount}</strong><small>{copy.files}</small></div></article>
-      <article><span>↗</span><div><strong>{withVersion}</strong><small>{copy.versioned}</small></div></article>
-      <article><span>◴</span><div><strong>{recent}</strong><small>{copy.recentlyUpdated}</small></div></article>
-    </div> : <div className="project-trash-banner"><span>♲</span><div><strong>{copy.trashHint}</strong><p>{archived.length}</p></div>{archived.length > 0 ? <button type="button" className="danger secondary" onClick={() => setPendingAction({ kind: "empty" })}>{copy.emptyTrash}</button> : null}</div>}
+    {view === "active" ? <div className="project-registry-metrics rise-in">
+      <article><span><Icon name="layers" size={18} /></span><div><strong>{fileCount}</strong><small>{copy.files}</small></div></article>
+      <article><span><Icon name="tag" size={18} /></span><div><strong>{withVersion}</strong><small>{copy.versioned}</small></div></article>
+      <article><span><Icon name="clock" size={18} /></span><div><strong>{recent}</strong><small>{copy.recentlyUpdated}</small></div></article>
+    </div> : <div className="project-trash-banner"><span><Icon name="trash" size={18} /></span><div><strong>{copy.trashHint}</strong><p>{archived.length}</p></div>{archived.length > 0 ? <button type="button" className="danger secondary" onClick={() => setPendingAction({ kind: "empty" })}>{copy.emptyTrash}</button> : null}</div>}
 
     <div className="project-registry-toolbar">
-      <label><span>⌕</span><input aria-label={copy.search} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={copy.searchPlaceholder} /></label>
+      <label><span><Icon name="search" size={14} /></span><input aria-label={copy.search} value={query} onChange={(event) => setQuery(event.target.value)} placeholder={copy.searchPlaceholder} /></label>
       <span>{copy.count(filtered.length)}</span>
     </div>
 
     <div className="project-card-list">
-      {filtered.length === 0 ? <div className="empty-state">{needle !== "" ? copy.noMatch : view === "active" ? copy.noProjects : copy.noTrash}</div> : pageItems.map((project) => {
+      {filtered.length === 0 ? (
+        <EmptyState
+          icon={view === "trash" ? "trash" : "folder"}
+          title={needle !== "" ? copy.noMatch : view === "active" ? copy.noProjects : copy.noTrash}
+        />
+      ) : pageItems.map((project) => {
         const version = project.latest_project_version;
         const hasVersion = version !== null && version !== "";
         return <article key={project.project_id} className="project-list-card">
@@ -210,13 +230,22 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
           </div>
         </article>;
       })}
-      {filtered.length === 0 || pageCount <= 1 ? null : <div className="knowledge-pager project-list-pager">
-        <span>{copy.page(safePage + 1, pageCount, filtered.length)}</span>
-        <div>
-          <button type="button" className="text-button" disabled={safePage <= 0} onMouseDown={suppressMouseFocusScroll} onClick={() => setPage((current) => Math.max(0, current - 1))}>{copy.prev}</button>
-          <button type="button" className="text-button" disabled={safePage >= pageCount - 1} onMouseDown={suppressMouseFocusScroll} onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))}>{copy.next}</button>
-        </div>
-      </div>}
+      {filtered.length === 0 || pageCount <= 1 ? null : (
+        <Pagination
+          page={safePage + 1}
+          totalPages={pageCount}
+          total={filtered.length}
+          onChange={(next) => setPage(next - 1)}
+          labels={{
+            first: copy.first,
+            prev: copy.prev,
+            next: copy.next,
+            last: copy.last,
+            pageInfo: copy.pageInfo,
+            totalCount: copy.totalCount
+          }}
+        />
+      )}
     </div>
 
     {error === null || projects === null ? null : <div className="notice danger">{error}</div>}
@@ -234,7 +263,7 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
         aria-describedby="project-confirm-desc"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="project-confirm-icon" aria-hidden="true">!</div>
+        <div className="project-confirm-icon" aria-hidden="true"><Icon name="warning" size={20} /></div>
         <h2 id="project-confirm-title">{pendingAction.project?.display_name ?? copy.emptyTrash}</h2>
         <p id="project-confirm-desc">{confirmText}</p>
         <div className="actions">

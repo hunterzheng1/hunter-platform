@@ -45,14 +45,16 @@ function humanKind(document: SemanticDocument, lang: "zh" | "en"): string {
   return labels[document.kind];
 }
 
-function documentStatus(document: SemanticDocument, lang: "zh" | "en"): string {
+function documentStatus(document: SemanticDocument, lang: "zh" | "en", statusLabels: Record<string, string>): string {
   const status = document.metadata.status;
-  if (typeof status === "string" && status.trim() !== "") return status;
+  if (typeof status === "string" && status.trim() !== "") {
+    return statusLabels[status] ?? statusLabels[status.replaceAll("_", "-")] ?? status.replaceAll("_", " ");
+  }
   return lang === "zh" ? "有效" : "Active";
 }
 
 function DocumentBrowser({
-  items, selectedId, onSelect, empty, lang, enableStatusFilter = false
+  items, selectedId, onSelect, empty, lang, enableStatusFilter = false, statusLabels
 }: {
   items: SemanticDocument[];
   selectedId: string | null;
@@ -60,6 +62,7 @@ function DocumentBrowser({
   empty: string;
   lang: "zh" | "en";
   enableStatusFilter?: boolean;
+  statusLabels: Record<string, string>;
 }) {
   const [page, setPage] = useState(0);
   const [statusFilter, setStatusFilter] = useState("all");
@@ -135,12 +138,12 @@ function DocumentBrowser({
     <div className="knowledge-list-pane">
       {showStatusFilters ? <div className="knowledge-status-filters" role="toolbar" aria-label={lang === "zh" ? "按状态筛选" : "Filter by status"}>
           <button type="button" className={statusFilter === "all" ? "selected" : ""} onMouseDown={suppressMouseFocusScroll} onClick={() => { setStatusFilter("all"); setPage(0); }}>{copy.all}</button>
-          {statuses.map((status) => <button key={status} type="button" className={statusFilter === status ? "selected" : ""} onMouseDown={suppressMouseFocusScroll} onClick={() => { setStatusFilter(status); setPage(0); }}>{status}</button>)}
+          {statuses.map((status) => <button key={status} type="button" className={statusFilter === status ? "selected" : ""} onMouseDown={suppressMouseFocusScroll} onClick={() => { setStatusFilter(status); setPage(0); }}>{statusLabels[status] ?? statusLabels[status.replaceAll("_", "-")] ?? status.replaceAll("_", " ")}</button>)}
         </div> : null}
       <div className="knowledge-list">
         {pageItems.length === 0 ? <div className="knowledge-empty compact"><p>{copy.emptyFilter}</p></div> : pageItems.map((item) => <button key={item.document_id} type="button" className={item.document_id === selected?.document_id ? "selected" : ""} onMouseDown={suppressMouseFocusScroll} onClick={() => onSelect(item.document_id)}>
           <span className="knowledge-kind-icon">{item.kind === "rule" ? "R" : item.kind === "archive_record" ? "V" : "K"}</span>
-          <span><strong>{item.title}</strong><small>{humanKind(item, lang)} · {documentStatus(item, lang)}</small></span>
+          <span><strong>{item.title}</strong><small>{humanKind(item, lang)} · {documentStatus(item, lang, statusLabels)}</small></span>
           <i>›</i>
         </button>)}
       </div>
@@ -156,7 +159,7 @@ function DocumentBrowser({
       {selected === null ? <div className="knowledge-empty"><span>◇</span><p>{empty}</p></div> : <>
         <header><div><span>{humanKind(selected, lang)}</span><h2>{selected.title}</h2></div><p className="knowledge-source-path" title={selected.source_path}>{lang === "zh" ? "来源" : "Source"} · <code>{selected.source_path}</code></p></header>
         <div className="knowledge-body"><MarkdownDocument content={selected.body} /></div>
-        <footer>{Object.entries(selected.metadata).filter(([, value]) => typeof value === "string" || Array.isArray(value)).slice(0, 5).map(([key, value]) => <span key={key}>{key}: {Array.isArray(value) ? value.join(", ") : String(value)}</span>)}</footer>
+        <footer>{Object.entries(selected.metadata).filter(([, value]) => typeof value === "string" || Array.isArray(value)).slice(0, 5).map(([key, value]) => <span key={key}>{key}: {Array.isArray(value) ? value.join(", ") : (statusLabels[String(value)] ?? String(value))}</span>)}</footer>
       </>}
     </article>
   </div>;
@@ -488,7 +491,8 @@ function RelationWorkbench({
 }
 
 export function ProjectSemanticPanels({ api, projectId }: { api: HunterApi; projectId: string }) {
-  const { lang } = useI18n();
+  const { lang, t } = useI18n();
+  const statusLabels = t.status as Record<string, string>;
   const [tab, setTab] = useState<SemanticTab>("library");
   const [data, setData] = useState<SemanticData | null>(null);
   const [graph, setGraph] = useState<ProjectSemanticGraph | null>(null);
@@ -604,7 +608,7 @@ export function ProjectSemanticPanels({ api, projectId }: { api: HunterApi; proj
         onSelect={selectDocument}
         lang={lang}
       />
-    </div> : <DocumentBrowser items={items} selectedId={selectedId} onSelect={selectDocument} empty={emptyCopy} lang={lang} enableStatusFilter={tab === "library"} />}
+    </div> : <DocumentBrowser items={items} selectedId={selectedId} onSelect={selectDocument} empty={emptyCopy} lang={lang} enableStatusFilter={tab === "library"} statusLabels={statusLabels} />}
     {error === null || data === null ? null : <div className="notice danger">{error}</div>}
   </section>;
 }

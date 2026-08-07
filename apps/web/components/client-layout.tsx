@@ -6,6 +6,49 @@ import { usePathname } from "next/navigation";
 import { I18nProvider, useI18n } from "../lib/i18n";
 import { ThemeProvider, useTheme } from "../lib/theme";
 import { SettingsPanel } from "./settings-panel";
+import { Icon, type IconName } from "./ui/icons";
+import { ToastProvider } from "./ui/Toast";
+
+interface NavItem {
+  href: string;
+  icon: IconName;
+  labelKey: "overview" | "projects" | "knowledge" | "runs" | "workflows" | "skills" | "aiConfig";
+}
+
+interface NavGroup {
+  sectionKey: "sectionWorkspace" | "sectionRegistry" | "sectionGovernance" | "sectionSystem";
+  items: NavItem[];
+}
+
+const NAV_GROUPS: NavGroup[] = [
+  {
+    sectionKey: "sectionWorkspace",
+    items: [
+      { href: "/", icon: "overview", labelKey: "overview" },
+      { href: "/runs", icon: "activity", labelKey: "runs" }
+    ]
+  },
+  {
+    sectionKey: "sectionRegistry",
+    items: [
+      { href: "/projects", icon: "folder", labelKey: "projects" },
+      { href: "/skills", icon: "sparkles", labelKey: "skills" },
+      { href: "/knowledge", icon: "brain", labelKey: "knowledge" }
+    ]
+  },
+  {
+    sectionKey: "sectionGovernance",
+    items: [
+      { href: "/workflows", icon: "workflow", labelKey: "workflows" }
+    ]
+  },
+  {
+    sectionKey: "sectionSystem",
+    items: [
+      { href: "/ai-config", icon: "settings", labelKey: "aiConfig" }
+    ]
+  }
+];
 
 function Sidebar() {
   const { t } = useI18n();
@@ -31,27 +74,21 @@ function Sidebar() {
         </span>
       </Link>
       <nav>
-        <Link href="/" className={isActive("/") ? "active" : ""}>
-          {t.nav.overview}
-        </Link>
-        <Link href="/projects" className={isActive("/projects") ? "active" : ""}>
-          {t.nav.projects}
-        </Link>
-        <Link href="/knowledge" className={isActive("/knowledge") ? "active" : ""}>
-          {t.nav.knowledge}
-        </Link>
-        <Link href="/runs" className={isActive("/runs") ? "active" : ""}>
-          {t.nav.runs}
-        </Link>
-        <Link href="/workflows" className={isActive("/workflows") ? "active" : ""}>
-          {t.nav.workflows}
-        </Link>
-        <Link href="/skills" className={isActive("/skills") ? "active" : ""}>
-          {t.nav.skills}
-        </Link>
-        <Link href="/ai-config" className={isActive("/ai-config") ? "active" : ""}>
-          {t.nav.aiConfig}
-        </Link>
+        {NAV_GROUPS.map((group) => (
+          <div className="nav-group" key={group.sectionKey}>
+            <p className="nav-section">{t.nav[group.sectionKey]}</p>
+            {group.items.map((item) => (
+              <Link
+                href={item.href}
+                className={isActive(item.href) ? "active" : ""}
+                key={item.href}
+              >
+                <Icon name={item.icon} size={15} />
+                <span>{t.nav[item.labelKey]}</span>
+              </Link>
+            ))}
+          </div>
+        ))}
       </nav>
 
       <SettingsPanel theme={theme} setTheme={setTheme} />
@@ -63,7 +100,9 @@ export function ClientLayout({ children }: { children: React.ReactNode }) {
   return (
     <ThemeProvider>
       <I18nProvider>
-        <ClientLayoutInner>{children}</ClientLayoutInner>
+        <ToastProvider>
+          <ClientLayoutInner>{children}</ClientLayoutInner>
+        </ToastProvider>
       </I18nProvider>
     </ThemeProvider>
   );
