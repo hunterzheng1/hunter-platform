@@ -12,7 +12,7 @@ import {
 } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import { mockApi } from "../lib/mock-api";
-import { mockChangeArchive, type ArchiveFileEntry } from "../lib/mock-archive";
+import { mockChangeArchive, type ArchiveFileEntry, type ChangeArchive } from "../lib/mock-archive";
 import { EmptyState } from "./ui/EmptyState";
 import { Icon } from "./ui/icons";
 import { Modal } from "./ui/Modal";
@@ -66,15 +66,20 @@ type PhaseState = "done" | "active" | "failed" | "pending";
 interface PhaseStep {
   name: string;
   state: PhaseState;
+  durationMs: number | null;
 }
 
 /**
  * 基于 harness 阶段模板推导每阶段状态：完成=绿 / 进行中=蓝 / 失败=红 / 未开始=灰。
  * 当前阶段优先取 run.current_phase，缺失时回退到事件流中最近上报的 phase。
+ * 若 run.phases[] 有服务端聚合耗时则叠加显示。
  */
 function derivePhaseSteps(events: RunEventSummary[], run: RunSummary): PhaseStep[] {
   const failed = run.run_status === "failed" || run.run_status === "error";
   const finished = ["succeeded", "completed", "complete"].includes(run.run_status);
+  const durationByPhase = new Map(
+    (run.phases ?? []).map((phase) => [phase.id, phase.duration_ms])
+  );
 
   const observed = new Set<string>();
   let lastSeen: string | null = null;
@@ -84,6 +89,7 @@ function derivePhaseSteps(events: RunEventSummary[], run: RunSummary): PhaseStep
       lastSeen = event.phase;
     }
   }
+  for (const phase of run.phases ?? []) observed.add(phase.id);
   const currentName = run.current_phase ?? lastSeen;
   if (currentName !== null) observed.add(currentName);
 
@@ -96,7 +102,8 @@ function derivePhaseSteps(events: RunEventSummary[], run: RunSummary): PhaseStep
     : (template as readonly string[]).indexOf(currentName);
 
   return template.map((name, index) => {
-    if (finished) return { name, state: "done" };
+    const durationMs = durationByPhase.get(name) ?? null;
+    if (finished) return { name, state: "done" as const, durationMs };
     let state: PhaseState;
     if (currentIndex === -1) {
       // 还没有任何阶段上报：运行中则第一个阶段视为进行中，否则全部未开始
@@ -108,8 +115,17 @@ function derivePhaseSteps(events: RunEventSummary[], run: RunSummary): PhaseStep
     } else {
       state = "pending";
     }
-    return { name, state };
+    return { name, state, durationMs };
   });
+}
+
+function formatPhaseDuration(ms: number | null): string | null {
+  if (ms === null || !Number.isFinite(ms) || ms < 0) return null;
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`;
 }
 
 export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterApi; projectId?: string }) {
@@ -131,14 +147,12 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
   const [liveMode, setLiveMode] = useState<"sse" | "poll" | "idle">("idle");
   const [streamNonce, setStreamNonce] = useState(0);
   const [viewingFile, setViewingFile] = useState<ArchiveFileEntry | null>(null);
+  const [selectedArchive, setSelectedArchive] = useState<ChangeArchive | null>(null);
+  const [archiveIsSample, setArchiveIsSample] = useState(false);
   const streamAbortRef = useRef<(() => void) | null>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
 
   const selected = runs.find((run) => run.run_id === selectedRunId) ?? null;
-  // 归档清单端点未落地前使用与真实归档同构的示例数据（见 docs/platform-server-gaps.md）
-  const selectedArchive = selected !== null && ["succeeded", "completed", "complete"].includes(selected.run_status)
-    ? mockChangeArchive(selected.change_key)
-    : null;
 
   const stats = useMemo(() => {
     let running = 0;
@@ -213,10 +227,9 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
     setBusy(true);
     setError(null);
     try {
-      const items = await client.listProjectRuns(id);
-      const sorted = [...items].sort((left, right) => runSortKey(right).localeCompare(runSortKey(left)));
-      setRuns(sorted);
-      setSelectedRunId((current) => current ?? sorted[0]?.run_id ?? null);
+      const page = await client.listProjectRuns(id);
+      setRuns(page.items);
+      setSelectedRunId((current) => current ?? page.items[0]?.run_id ?? null);
     } catch (err) {
       setRuns([]);
       setError(err instanceof ApiClientError ? err.message : copy.networkError);
@@ -224,6 +237,46 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
       setBusy(false);
     }
   }, [client, copy.networkError]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadArchive(): Promise<void> {
+      if (
+        selected === null ||
+        !["succeeded", "completed", "complete"].includes(selected.run_status)
+      ) {
+        setSelectedArchive(null);
+        setArchiveIsSample(false);
+        return;
+      }
+      if (client.getChangeArchive === undefined) {
+        setSelectedArchive(mockChangeArchive(selected.change_key));
+        setArchiveIsSample(true);
+        return;
+      }
+      try {
+        const archive = await client.getChangeArchive(selected.project_id, selected.change_key);
+        if (cancelled) return;
+        if (archive.files.length === 0) {
+          setSelectedArchive(null);
+          setArchiveIsSample(false);
+          return;
+        }
+        setSelectedArchive({
+          changeKey: archive.changeKey,
+          archivedAt: archive.archivedAt ?? new Date().toISOString(),
+          files: archive.files
+        });
+        setArchiveIsSample(false);
+      } catch {
+        if (cancelled) return;
+        setSelectedArchive(mockChangeArchive(selected.change_key));
+        setArchiveIsSample(true);
+      }
+    }
+    void loadArchive();
+    return () => { cancelled = true; };
+  }, [client, selected]);
 
   useEffect(() => {
     if (embedded) return;
@@ -469,12 +522,16 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
               <div className="runs-phases">
                 <h3>{copy.phasesTitle}</h3>
                 <ol className="phase-steps">
-                  {phaseSteps.map((step) => (
-                    <li className="phase-step" data-state={step.state} key={step.name}>
-                      <span className="phase-step-dot" aria-hidden="true" />
-                      <span className="phase-step-label">{mapPhase(step.name)}</span>
-                    </li>
-                  ))}
+                  {phaseSteps.map((step) => {
+                    const duration = formatPhaseDuration(step.durationMs);
+                    return (
+                      <li className="phase-step" data-state={step.state} key={step.name}>
+                        <span className="phase-step-dot" aria-hidden="true" />
+                        <span className="phase-step-label">{mapPhase(step.name)}</span>
+                        {duration === null ? null : <span className="phase-step-duration">{duration}</span>}
+                      </li>
+                    );
+                  })}
                 </ol>
               </div>
               {selectedArchive === null ? null : (
@@ -482,7 +539,9 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
                   <summary>
                     <span>{copy.archiveTitle}</span>
                     <span className="run-archive-count">{copy.filesCount.replace("{n}", String(selectedArchive.files.length))}</span>
-                    <span className="sample-badge" title={copy.sampleDataHint}>{copy.sampleData}</span>
+                    {archiveIsSample ? (
+                      <span className="sample-badge" title={copy.sampleDataHint}>{copy.sampleData}</span>
+                    ) : null}
                   </summary>
                   <p className="run-archive-meta">{copy.archivedAt} {formatDateTime(selectedArchive.archivedAt)} · {copy.archiveHint}</p>
                   <ul className="run-archive-list">
@@ -493,7 +552,24 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
                           type="button"
                           className="archive-file-open"
                           title={copy.viewFile}
-                          onClick={() => setViewingFile(file)}
+                          onClick={() => {
+                            void (async () => {
+                              if (file.content !== undefined || selected === null || client.getChangeArchiveContent === undefined) {
+                                setViewingFile(file);
+                                return;
+                              }
+                              try {
+                                const result = await client.getChangeArchiveContent(
+                                  selected.project_id,
+                                  selected.change_key,
+                                  file.path
+                                );
+                                setViewingFile({ ...file, content: result.content });
+                              } catch {
+                                setViewingFile(file);
+                              }
+                            })();
+                          }}
                         >
                           <code>{file.path}</code>
                         </button>

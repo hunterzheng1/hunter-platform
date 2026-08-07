@@ -101,7 +101,14 @@ describe("run monitoring (P4)", () => {
       headers: { authorization: "Bearer api-token" }
     });
     expect(list.statusCode).toBe(200);
-    expect((list.json() as { items: unknown[] }).items).toHaveLength(1);
+    const listed = list.json() as {
+      items: Array<{ phases?: Array<{ id: string; duration_ms: number | null }> }>;
+      total: number;
+      next_cursor: string | null;
+    };
+    expect(listed.items).toHaveLength(1);
+    expect(listed.total).toBe(1);
+    expect(listed.items[0]?.phases?.some((phase) => phase.id === "plan")).toBe(true);
 
     const events = await app.inject({
       method: "GET",

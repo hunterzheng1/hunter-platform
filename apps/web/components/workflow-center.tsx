@@ -31,6 +31,7 @@ export function WorkflowCenter({ api: apiValue }: { api?: HunterApi }) {
     sync: "检查更新",
     syncing: "检查中…",
     syncUpToDate: "已是最新版本。",
+    syncUpdated: "已拉取 {version} 为草稿，可检查后发布。",
     syncPending: "同步端点尚未落地；npm / GitHub 关联后可自动检查新版本。",
     tags: "标签",
     updatedAt: "更新于",
@@ -41,6 +42,7 @@ export function WorkflowCenter({ api: apiValue }: { api?: HunterApi }) {
     sync: "Check updates",
     syncing: "Checking…",
     syncUpToDate: "Already up to date.",
+    syncUpdated: "Pulled {version} as a draft; review and publish when ready.",
     syncPending: "Sync endpoint not available yet; new versions are detected once npm / GitHub association lands.",
     tags: "Tags",
     updatedAt: "Updated",
@@ -97,7 +99,11 @@ export function WorkflowCenter({ api: apiValue }: { api?: HunterApi }) {
         return;
       }
       const result = await api.syncWorkflowFamily(selectedSlug);
-      setSyncMessage(result.updated ? copy.syncUpToDate : copy.syncUpToDate);
+      setSyncMessage(
+        result.updated
+          ? (copy.syncUpdated ?? copy.syncUpToDate).replace("{version}", result.version ?? "")
+          : copy.syncUpToDate
+      );
       await refreshFamilies();
       await loadFamilyDetail(selectedSlug);
     } catch (reason) {

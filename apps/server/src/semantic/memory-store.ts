@@ -63,7 +63,14 @@ export class SemanticMemoryStore implements SemanticStore {
     const allowed = new Set(kinds);
     return [...this.documents.values()]
       .filter((document) => document.project_id === projectId && allowed.has(document.kind))
+      .filter((document) => document.metadata.status !== "deprecated")
       .sort((left, right) => left.source_path.localeCompare(right.source_path));
+  }
+
+  async getDocument(projectId: string, documentId: string): Promise<SemanticDocument | null> {
+    const document = this.documents.get(documentId);
+    if (document === undefined || document.project_id !== projectId) return null;
+    return document;
   }
 
   async listEdges(projectId: string): Promise<SemanticEdge[]> {
@@ -109,6 +116,7 @@ export class SemanticMemoryStore implements SemanticStore {
     if (needle === "") return [];
     return [...this.documents.values()]
       .filter((document) => projectId === undefined || document.project_id === projectId)
+      .filter((document) => document.metadata.status !== "deprecated")
       .filter((document) =>
         document.title.toLowerCase().includes(needle) ||
         document.body.toLowerCase().includes(needle) ||

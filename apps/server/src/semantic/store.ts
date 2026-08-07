@@ -18,6 +18,7 @@ export interface SemanticStore {
   upsertDocuments(documents: readonly SemanticDocument[]): Promise<void>;
   overview(projectId: string): Promise<SemanticOverview>;
   listByKinds(projectId: string, kinds: readonly SemanticDocumentKind[]): Promise<SemanticDocument[]>;
+  getDocument(projectId: string, documentId: string): Promise<SemanticDocument | null>;
   listEdges(projectId: string): Promise<SemanticEdge[]>;
   graph(projectId: string, focusDocumentId?: string): Promise<{
     nodes: SemanticDocument[];

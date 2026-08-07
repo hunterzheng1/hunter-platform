@@ -133,10 +133,22 @@ export class PgSemanticStore implements SemanticStore {
       `SELECT document_id, project_id, artifact_id, kind, source_path, title, body, metadata, content_sha256
        FROM semantic_documents
        WHERE project_id = $1 AND kind = ANY($2::text[])
+         AND COALESCE(metadata->>'status', '') <> 'deprecated'
        ORDER BY source_path ASC`,
       [projectId, [...kinds]]
     );
     return result.rows.map((row) => documentFromRow(row as Record<string, unknown>));
+  }
+
+  async getDocument(projectId: string, documentId: string): Promise<SemanticDocument | null> {
+    const result = await this.pool.query(
+      `SELECT document_id, project_id, artifact_id, kind, source_path, title, body, metadata, content_sha256
+       FROM semantic_documents
+       WHERE project_id = $1 AND document_id = $2`,
+      [projectId, documentId]
+    );
+    if (result.rowCount === 0) return null;
+    return documentFromRow(result.rows[0] as Record<string, unknown>);
   }
 
   async listEdges(projectId: string): Promise<SemanticEdge[]> {
@@ -214,6 +226,7 @@ export class PgSemanticStore implements SemanticStore {
         `SELECT document_id, project_id, artifact_id, kind, source_path, title, body, metadata, content_sha256
          FROM semantic_documents
          WHERE search_vector @@ plainto_tsquery('simple', $1)
+           AND COALESCE(metadata->>'status', '') <> 'deprecated'
          ORDER BY title ASC
          LIMIT 100`,
         [needle]
@@ -222,6 +235,7 @@ export class PgSemanticStore implements SemanticStore {
         `SELECT document_id, project_id, artifact_id, kind, source_path, title, body, metadata, content_sha256
          FROM semantic_documents
          WHERE project_id = $2 AND search_vector @@ plainto_tsquery('simple', $1)
+           AND COALESCE(metadata->>'status', '') <> 'deprecated'
          ORDER BY title ASC
          LIMIT 100`,
         [needle, projectId]

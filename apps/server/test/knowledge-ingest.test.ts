@@ -118,11 +118,11 @@ describe("server-side knowledge ingest (P3)", () => {
     expect(documents.map((document) => document.metadata.entry_id)).toEqual(["kn-200"]);
   });
 
-  it("lists raw entries and adjudicates candidate status", async () => {
+  it("auto-promotes high-confidence candidates on ingest", async () => {
     await ingest([entry("kn-300")]);
     const list = await app.inject({
       method: "GET",
-      url: `/api/v1/projects/${projectId}/knowledge/entries?status=candidate`,
+      url: `/api/v1/projects/${projectId}/knowledge/entries?status=active`,
       headers: { authorization: "Bearer api-token" }
     });
     expect(list.statusCode).toBe(200);
@@ -130,18 +130,37 @@ describe("server-side knowledge ingest (P3)", () => {
     expect(items).toHaveLength(1);
     expect(items[0]?.entry_id).toBe("kn-300");
 
-    const approve = await app.inject({
-      method: "POST",
-      url: `/api/v1/projects/${projectId}/knowledge/entries/kn-300/status`,
-      headers: { authorization: "Bearer api-token" },
-      payload: { status: "active" }
-    });
-    expect(approve.statusCode).toBe(200);
-    expect((approve.json() as { status: string }).status).toBe("active");
-
     await new Promise((resolve) => setTimeout(resolve, 20));
     const documents = await semanticStore.listByKinds(projectId, ["knowledge_entry"]);
     expect(documents[0]?.metadata.status).toBe("active");
+  });
+
+  it("keeps deprecated sticky across content upserts and excludes from search", async () => {
+    await ingest([entry("kn-dep")]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const docs = await semanticStore.listByKinds(projectId, ["knowledge_entry"]);
+    const documentId = docs[0]?.document_id;
+    expect(documentId).toBeTruthy();
+
+    const deprecate = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectId}/semantic/knowledge/${documentId}/deprecate`,
+      headers: { authorization: "Bearer api-token" }
+    });
+    expect(deprecate.statusCode).toBe(200);
+
+    await ingest([entry("kn-dep", { body: "Revised body after deprecate." })]);
+    const listed = await repository.listKnowledgeEntries({
+      projectId,
+      status: "deprecated",
+      limit: 10
+    });
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.status).toBe("deprecated");
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const after = await semanticStore.listByKinds(projectId, ["knowledge_entry"]);
+    expect(after.find((doc) => doc.metadata.entry_id === "kn-dep")).toBeUndefined();
   });
 
   it("rejects invalid entry payloads", async () => {

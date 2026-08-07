@@ -91,6 +91,7 @@ export class WorkflowFamilyStore {
       required_profiles: input.required_profiles,
       revision: 1,
       npmReleases: [],
+      ...(input.source === undefined ? {} : { source: input.source }),
       created_at: now,
       updated_at: now
     });

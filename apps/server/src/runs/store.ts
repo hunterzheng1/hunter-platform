@@ -96,7 +96,11 @@ export interface RunStore {
     runId: string;
     clientTime: string;
   }): Promise<RunRecord | null>;
-  listRuns(projectId: string, limit?: number): Promise<RunRecord[]>;
+  listRuns(projectId: string, options?: {
+    limit?: number;
+    cursor?: string | null;
+    status?: string;
+  }): Promise<{ items: RunRecord[]; nextCursor: string | null; total: number }>;
   getRun(projectId: string, runId: string): Promise<RunRecord | null>;
   listEvents(
     runId: string,
@@ -130,7 +134,55 @@ export function deriveRunStatus(
     : "running";
 }
 
-export function publicRun(run: RunRecord): Record<string, unknown> {
+export interface RunPhaseSummary {
+  id: string;
+  started_at: string;
+  ended_at: string | null;
+  duration_ms: number | null;
+}
+
+/** Aggregate phase.start / phase.end (and phase field) into per-phase timing. */
+export function aggregateRunPhases(events: readonly RunEventRecord[]): RunPhaseSummary[] {
+  const order: string[] = [];
+  const started = new Map<string, string>();
+  const ended = new Map<string, string>();
+  for (const event of events) {
+    const phase = event.phase ??
+      (typeof event.payload.phase === "string" ? event.payload.phase : null);
+    if (phase === null || phase.length === 0) continue;
+    if (!started.has(phase)) {
+      started.set(phase, event.occurredAt);
+      order.push(phase);
+    }
+    if (event.eventType === "phase.start") {
+      started.set(phase, event.occurredAt);
+      if (!order.includes(phase)) order.push(phase);
+    }
+    if (event.eventType === "phase.end") {
+      ended.set(phase, event.occurredAt);
+    }
+  }
+  return order.map((id) => {
+    const startedAt = started.get(id) ?? null;
+    const endedAt = ended.get(id) ?? null;
+    let durationMs: number | null = null;
+    if (startedAt !== null && endedAt !== null) {
+      const ms = Date.parse(endedAt) - Date.parse(startedAt);
+      durationMs = Number.isFinite(ms) && ms >= 0 ? ms : null;
+    }
+    return {
+      id,
+      started_at: startedAt ?? endedAt ?? new Date(0).toISOString(),
+      ended_at: endedAt,
+      duration_ms: durationMs
+    };
+  });
+}
+
+export function publicRun(
+  run: RunRecord,
+  phases?: readonly RunPhaseSummary[]
+): Record<string, unknown> {
   return {
     run_id: run.runId,
     project_id: run.projectId,
@@ -145,6 +197,7 @@ export function publicRun(run: RunRecord): Record<string, unknown> {
     last_event_at: run.lastEventAt,
     last_heartbeat_at: run.lastHeartbeatAt,
     server_cursor: run.serverCursor,
+    phases: phases === undefined ? [] : phases.map((phase) => ({ ...phase })),
     created_at: run.createdAt,
     updated_at: run.updatedAt
   };

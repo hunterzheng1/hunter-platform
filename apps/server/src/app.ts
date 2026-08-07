@@ -57,12 +57,21 @@ import { MemoryAiJobStore, type AiJobStore } from "./ai/ai-job-store.js";
 import { createLlmClient } from "./ai/llm-factory.js";
 import { loadAiSecret, writeAiSecret } from "./ai/secret-loader.js";
 import { writeAudit } from "./audit/audit.js";
+import {
+  generateProjectApiKey,
+  projectApiKeyHash
+} from "./auth/accounts.js";
 import { registerAuthRoutes } from "./auth/routes.js";
 import {
   assertProjectKeyScope,
   authenticateRequest,
   requestProjectKey
 } from "./auth/tokens.js";
+import {
+  archiveRootPrefix,
+  buildChangeArchive,
+  resolveArchiveContentPath
+} from "./archive/change-archive.js";
 import { defaultServerConfig, type ServerConfig } from "./config.js";
 import { buildDashboardOverview } from "./dashboard/overview.js";
 import { isNpmPublishConfigured, loadNpmPublishConfig } from "./npm/config.js";
@@ -80,11 +89,12 @@ import type {
   ProjectRecord,
   ServerRepository
 } from "./repositories/interfaces.js";
-import { ServerDomainError } from "./repositories/interfaces.js";
+import { PROJECT_KEY_SCOPES, ServerDomainError } from "./repositories/interfaces.js";
 import type { ArtifactStorage } from "./storage/interface.js";
 import { buildSemanticIndex, isSemanticSourcePath } from "./semantic/indexer.js";
 import {
   knowledgeContentHash,
+  prepareKnowledgeIngestPayload,
   projectPendingKnowledge
 } from "./semantic/knowledge-projection.js";
 import { MemoryRunStore } from "./runs/memory-store.js";
@@ -93,6 +103,7 @@ import type { RunStore } from "./runs/store.js";
 import { SemanticMemoryStore } from "./semantic/memory-store.js";
 import type { SemanticStore } from "./semantic/store.js";
 import { registerSemanticMcpRoutes } from "./mcp/register.js";
+import { randomUUID } from "node:crypto";
 
 export interface CreateServerOptions {
   repository: ServerRepository;
@@ -123,7 +134,12 @@ const resolveSchema = z.object({
   local_project_key: z.uuid(),
   display_name: z.string().min(1).max(200),
   requested_project_id: z.string().regex(/^prj_/).nullable(),
-  client_id: z.string().regex(/^cli_/)
+  client_id: z.string().regex(/^cli_/),
+  recreate: z.boolean().optional()
+}).strict();
+
+const createProjectSchema = z.object({
+  display_name: z.string().min(1).max(200)
 }).strict();
 
 const sessionSchema = z.object({
@@ -569,7 +585,8 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
         actorId: actor.actorId,
         localProjectKey: body.local_project_key,
         displayName: body.display_name,
-        requestedProjectId: body.requested_project_id
+        requestedProjectId: body.requested_project_id,
+        ...(body.recreate === undefined ? {} : { recreate: body.recreate })
       });
       await writeAudit(repository, {
         actorId: actor.actorId,
@@ -650,12 +667,67 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
         purge_after: project.purgeAfter,
         current_files_version: project.currentFilesVersion ?? project.latestProjectVersion,
         current_file_count: project.currentFileCount,
+        local_project_key: project.localProjectKey,
         updated_at: project.updatedAt,
         created_at: project.createdAt
       })),
       page: { next_cursor: listed.nextCursor, limit },
       request_id: requestId
     };
+  });
+
+  app.post("/api/v1/projects", async (request, reply) => {
+    const { actor, requestId } = await authenticated(request, repository);
+    const body = createProjectSchema.parse(request.body);
+    const query = request.query as Record<string, string | undefined>;
+    const withKey = query.withKey === "true" || query.withKey === "1";
+    const result = await mutation(request, repository, actor, requestId, async () => {
+      const project = await repository.createProject({
+        actorId: actor.actorId,
+        displayName: body.display_name
+      });
+      await writeAudit(repository, {
+        actorId: actor.actorId,
+        projectId: project.projectId,
+        action: "project.created",
+        targetId: project.projectId,
+        requestId,
+        details: { with_key: withKey }
+      });
+      const summary = {
+        project_id: project.projectId,
+        display_name: project.displayName,
+        role: "owner" as const,
+        latest_project_version: project.latestProjectVersion,
+        latest_artifact_id: project.latestArtifactId,
+        lifecycle_state: project.lifecycleState,
+        current_files_version: project.currentFilesVersion,
+        current_file_count: project.currentFileCount,
+        updated_at: project.updatedAt,
+        created_at: project.createdAt
+      };
+      if (!withKey) {
+        return { statusCode: 201, body: { project: summary } };
+      }
+      const plaintext = generateProjectApiKey();
+      const key = await repository.createProjectApiKey({
+        keyId: "key_" + randomUUID().replaceAll("-", ""),
+        keyHash: projectApiKeyHash(plaintext),
+        projectId: project.projectId,
+        actorId: actor.actorId,
+        label: "initial",
+        scopes: [...PROJECT_KEY_SCOPES]
+      });
+      return {
+        statusCode: 201,
+        body: {
+          project: summary,
+          api_key: plaintext,
+          key_id: key.keyId
+        }
+      };
+    });
+    return send(reply, requestId, result);
   });
 
   app.delete("/api/v1/projects/:projectId", async (request, reply) => {
@@ -1753,7 +1825,8 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
         displayName: body.displayName,
         description: body.description,
         tags: body.tags,
-        required_profiles: body.required_profiles
+        required_profiles: body.required_profiles,
+        ...(body.source === undefined ? {} : { source: body.source })
       });
       await registry.persist();
       await writeAudit(repository, {
@@ -1763,6 +1836,16 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
       return { statusCode: 201, body: family };
     });
     return send(reply, requestId, result);
+  });
+
+  app.post("/api/v1/workflow-families/:slug/sync", async (request, reply) => {
+    const { actor, requestId } = await authenticated(request, repository);
+    const { slug } = request.params as { slug: string };
+    const result = await registry.syncWorkflowFamilyFromSource(slug, actor.actorId, {
+      githubToken: process.env.GITHUB_TOKEN ?? null
+    });
+    reply.header("X-Request-Id", requestId);
+    return { ...result, request_id: requestId };
   });
 
   app.get("/api/v1/workflow-families/:slug", async (request, reply) => {
@@ -1792,12 +1875,15 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     }).strict().parse(request.body);
     const counts = { created: 0, updated: 0, duplicate: 0 };
     for (const entry of body.entries) {
+      // Hash the inbound entry (pre-adjudication) so confidence timestamps do not break dedupe.
+      const contentSha256 = knowledgeContentHash(entry);
+      const prepared = prepareKnowledgeIngestPayload(entry);
       const outcome = await repository.upsertKnowledgeEntry({
         projectId,
         entryId: entry.id,
-        contentSha256: knowledgeContentHash(entry),
-        payload: entry as unknown as Record<string, unknown>,
-        status: entry.status
+        contentSha256,
+        payload: prepared.payload,
+        status: prepared.status
       });
       counts[outcome] += 1;
     }
@@ -1894,9 +1980,145 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     const { actor, requestId } = await authenticated(request, repository);
     const { projectId } = request.params as { projectId: string };
     await repository.getProject(actor.actorId, projectId);
+    const query = z.object({
+      limit: z.coerce.number().int().min(1).max(200).default(50),
+      cursor: z.string().min(1).optional(),
+      include_body: z.enum(["0", "1"]).optional()
+    }).strict().parse(request.query);
+    const all = await semanticStore.listByKinds(projectId, ["knowledge_entry", "knowledge_markdown"]);
+    const offset = query.cursor === undefined
+      ? 0
+      : Number.parseInt(Buffer.from(query.cursor, "base64url").toString("utf8"), 10);
+    if (!Number.isSafeInteger(offset) || offset < 0) {
+      throw new ServerDomainError(400, "INVALID_CURSOR", "cursor is invalid");
+    }
+    const page = all.slice(offset, offset + query.limit);
+    const includeBody = query.include_body === "1";
+    const items = page.map((document) => includeBody
+      ? document
+      : { ...document, body: "" });
+    const nextOffset = offset + page.length;
     reply.header("X-Request-Id", requestId);
     return {
-      items: await semanticStore.listByKinds(projectId, ["knowledge_entry", "knowledge_markdown"]),
+      items,
+      total: all.length,
+      next_cursor: nextOffset < all.length
+        ? Buffer.from(String(nextOffset)).toString("base64url")
+        : null,
+      request_id: requestId
+    };
+  });
+
+  app.post("/api/v1/projects/:projectId/semantic/knowledge/:documentId/deprecate", async (request, reply) => {
+    const { actor, requestId } = await authenticated(request, repository);
+    const { projectId, documentId } = request.params as { projectId: string; documentId: string };
+    await repository.getProject(actor.actorId, projectId);
+    const document = await semanticStore.getDocument(projectId, documentId);
+    if (document === null || document.kind !== "knowledge_entry") {
+      throw new ServerDomainError(404, "KNOWLEDGE_DOCUMENT_NOT_FOUND", "knowledge document not found");
+    }
+    const entryId = typeof document.metadata.entry_id === "string" ? document.metadata.entry_id : null;
+    if (entryId === null) {
+      throw new ServerDomainError(422, "KNOWLEDGE_ENTRY_MISSING", "document is not backed by an ingest entry");
+    }
+    const updated = await repository.updateKnowledgeStatus(projectId, entryId, "deprecated");
+    if (updated === null) {
+      throw new ServerDomainError(404, "KNOWLEDGE_ENTRY_NOT_FOUND", "knowledge entry not found");
+    }
+    await projectPendingKnowledge(repository, semanticStore, projectId);
+    reply.header("X-Request-Id", requestId);
+    return {
+      document_id: documentId,
+      entry_id: entryId,
+      status: "deprecated",
+      request_id: requestId
+    };
+  });
+
+  app.post("/api/v1/projects/:projectId/semantic/knowledge/:documentId/revive", async (request, reply) => {
+    const { actor, requestId } = await authenticated(request, repository);
+    const { projectId, documentId } = request.params as { projectId: string; documentId: string };
+    await repository.getProject(actor.actorId, projectId);
+    const document = await semanticStore.getDocument(projectId, documentId);
+    if (document === null || document.kind !== "knowledge_entry") {
+      throw new ServerDomainError(404, "KNOWLEDGE_DOCUMENT_NOT_FOUND", "knowledge document not found");
+    }
+    const entryId = typeof document.metadata.entry_id === "string" ? document.metadata.entry_id : null;
+    if (entryId === null) {
+      throw new ServerDomainError(422, "KNOWLEDGE_ENTRY_MISSING", "document is not backed by an ingest entry");
+    }
+    const updated = await repository.updateKnowledgeStatus(projectId, entryId, "active");
+    if (updated === null) {
+      throw new ServerDomainError(404, "KNOWLEDGE_ENTRY_NOT_FOUND", "knowledge entry not found");
+    }
+    // Revive explicitly overwrites sticky deprecated on the next content upsert.
+    await repository.upsertKnowledgeEntry({
+      projectId,
+      entryId,
+      contentSha256: updated.contentSha256,
+      payload: { ...updated.payload, status: "active" },
+      status: "active",
+      allowDeprecatedOverwrite: true
+    });
+    await projectPendingKnowledge(repository, semanticStore, projectId);
+    reply.header("X-Request-Id", requestId);
+    return {
+      document_id: documentId,
+      entry_id: entryId,
+      status: "active",
+      request_id: requestId
+    };
+  });
+
+  app.get("/api/v1/projects/:projectId/changes/:changeKey/archive", async (request, reply) => {
+    const { actor, requestId } = await authenticated(request, repository, "files:read");
+    const { projectId, changeKey } = request.params as { projectId: string; changeKey: string };
+    await repository.getProject(actor.actorId, projectId);
+    const files = await repository.listProjectFiles(actor.actorId, projectId);
+    const prefix = archiveRootPrefix(changeKey);
+    const archive = buildChangeArchive({
+      changeKey,
+      files: files
+        .filter((file) => file.path.startsWith(prefix))
+        .map((file) => ({
+          path: file.path,
+          sizeBytes: file.sizeBytes,
+          updatedAt: file.updatedAt
+        }))
+    });
+    reply.header("X-Request-Id", requestId);
+    return { ...archive, request_id: requestId };
+  });
+
+  app.get("/api/v1/projects/:projectId/changes/:changeKey/archive/content", async (request, reply) => {
+    const { actor, requestId } = await authenticated(request, repository, "files:read");
+    const { projectId, changeKey } = request.params as { projectId: string; changeKey: string };
+    await repository.getProject(actor.actorId, projectId);
+    const query = z.object({
+      path: z.string().min(1)
+    }).strict().parse(request.query);
+    let absolutePath: string;
+    try {
+      absolutePath = resolveArchiveContentPath(changeKey, query.path);
+    } catch {
+      throw new ServerDomainError(400, "ARCHIVE_PATH_INVALID", "archive path is invalid");
+    }
+    const file = await repository.getProjectFile(actor.actorId, projectId, absolutePath);
+    const bytes = await storage.getBlob(file.contentSha256);
+    let content: string;
+    try {
+      content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      throw new ServerDomainError(422, "PROJECT_FILE_INVALID", "archive file is not UTF-8 text");
+    }
+    reply.header("X-Request-Id", requestId);
+    return {
+      changeKey,
+      path: query.path.replaceAll("\\", "/").replace(/^\/+/, "").startsWith(".harness/")
+        ? query.path
+        : query.path,
+      sizeBytes: file.sizeBytes,
+      content,
       request_id: requestId
     };
   });

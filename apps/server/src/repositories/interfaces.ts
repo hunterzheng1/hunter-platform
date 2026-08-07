@@ -207,14 +207,24 @@ export interface ServerRepository extends TransactionRepository {
     localProjectKey: string;
     displayName: string;
     requestedProjectId: string | null;
+    /** Explicit recreate after purge — clears the tombstone binding first. */
+    recreate?: boolean;
   }): Promise<{ project: ProjectRecord; bindingStatus: "created" | "bound" }>;
+  /** Web/UI create: allocate an active project owned by the actor (no local binding). */
+  createProject(input: {
+    actorId: string;
+    displayName: string;
+  }): Promise<ProjectRecord>;
   getProject(actorId: string, projectId: string): Promise<ProjectRecord>;
   listProjects(input: {
     actorId: string;
     limit: number;
     cursor: string | null;
     state?: "active" | "archived";
-  }): Promise<{ items: ProjectRecord[]; nextCursor: string | null }>;
+  }): Promise<{
+    items: Array<ProjectRecord & { localProjectKey: string | null }>;
+    nextCursor: string | null;
+  }>;
   archiveProject(actorId: string, projectId: string, archivedAt: string): Promise<ProjectRecord>;
   restoreProject(actorId: string, projectId: string): Promise<ProjectRecord>;
   purgeProject(actorId: string, projectId: string, purgedAt: string): Promise<ProjectRecord>;
@@ -313,6 +323,8 @@ export interface ServerRepository extends TransactionRepository {
    * Idempotent upsert keyed by (projectId, entryId):
    * "duplicate" when the content hash is unchanged, otherwise created/updated
    * and the row re-enters the projection outbox (projected_at = NULL).
+   * When the existing status is `deprecated`, content updates keep deprecated
+   * unless `allowDeprecatedOverwrite` is true (explicit revive path).
    */
   upsertKnowledgeEntry(input: {
     projectId: string;
@@ -320,6 +332,7 @@ export interface ServerRepository extends TransactionRepository {
     contentSha256: string;
     payload: Record<string, unknown>;
     status: string;
+    allowDeprecatedOverwrite?: boolean;
   }): Promise<"created" | "updated" | "duplicate">;
   listUnprojectedKnowledge(projectId: string, limit: number): Promise<KnowledgeIngestRecord[]>;
   markKnowledgeProjected(projectId: string, entryIds: string[], at: string): Promise<void>;

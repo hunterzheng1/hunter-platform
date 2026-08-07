@@ -11,6 +11,7 @@ import type {
   KnowledgeIngestRecord,
   ServerRepository
 } from "../repositories/interfaces.js";
+import { adjudicateKnowledgeEntry } from "./knowledge-judge.js";
 import { INGEST_ARTIFACT_ID, type SemanticStore } from "./store.js";
 
 export function knowledgeContentHash(entry: KnowledgeIngestEntry): string {
@@ -19,7 +20,7 @@ export function knowledgeContentHash(entry: KnowledgeIngestEntry): string {
     .digest("hex");
 }
 
-function documentIdFor(projectId: string, entryId: string): string {
+export function documentIdForKnowledgeEntry(projectId: string, entryId: string): string {
   return "doc_" + createHash("sha256")
     .update(projectId + "\0ingest\0" + entryId, "utf8")
     .digest("hex")
@@ -32,7 +33,7 @@ export function knowledgeEntryDocument(record: KnowledgeIngestRecord): SemanticD
   if (!parsed.success) return null;
   const entry = parsed.data;
   return {
-    document_id: documentIdFor(record.projectId, record.entryId),
+    document_id: documentIdForKnowledgeEntry(record.projectId, record.entryId),
     project_id: record.projectId,
     artifact_id: INGEST_ARTIFACT_ID,
     kind: "knowledge_entry",
@@ -55,6 +56,14 @@ export function knowledgeEntryDocument(record: KnowledgeIngestRecord): SemanticD
   };
 }
 
+/** Score + auto-promote candidate entries before they land in the ingest table. */
+export function prepareKnowledgeIngestPayload(
+  entry: KnowledgeIngestEntry
+): { payload: Record<string, unknown>; status: string } {
+  const judged = adjudicateKnowledgeEntry(entry as unknown as Record<string, unknown>);
+  return { payload: judged.payload, status: judged.status };
+}
+
 /**
  * Async projection worker (outbox drain): converts pending ingest rows into
  * semantic documents. Invalid payloads are marked projected so they do not
@@ -74,9 +83,10 @@ export async function projectPendingKnowledge(
     const document = knowledgeEntryDocument(record);
     if (document === null) {
       skipped += 1;
-    } else {
-      documents.push(document);
+      continue;
     }
+    // Deprecated documents stay indexed for revive, but list/search filters exclude them.
+    documents.push(document);
   }
   await semanticStore.upsertDocuments(documents);
   await repository.markKnowledgeProjected(

@@ -155,7 +155,7 @@ describe("project recycle bin lifecycle", () => {
     expect(cannotRestore.statusCode).toBe(410);
     expect(cannotRestore.json()).toMatchObject({ error: { code: "PROJECT_PURGED" } });
 
-    const replacement = await app.inject({
+    const blocked = await app.inject({
       method: "POST",
       url: "/api/v1/projects:resolve",
       headers: headers(),
@@ -165,6 +165,24 @@ describe("project recycle bin lifecycle", () => {
         display_name: "purge-me-again",
         requested_project_id: null,
         client_id: "cli_project_lifecycle"
+      }
+    });
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json()).toMatchObject({
+      error: { code: "PROJECT_PURGED", details: { recreate_required: true } }
+    });
+
+    const replacement = await app.inject({
+      method: "POST",
+      url: "/api/v1/projects:resolve",
+      headers: headers(),
+      payload: {
+        schema_version: 1,
+        local_project_key: localProjectKey,
+        display_name: "purge-me-again",
+        requested_project_id: null,
+        client_id: "cli_project_lifecycle",
+        recreate: true
       }
     });
     expect(replacement.statusCode).toBe(200);

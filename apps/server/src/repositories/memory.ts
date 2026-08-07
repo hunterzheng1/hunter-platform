@@ -235,6 +235,7 @@ export class MemoryRepository implements ServerRepository {
     contentSha256: string;
     payload: Record<string, unknown>;
     status: string;
+    allowDeprecatedOverwrite?: boolean;
   }): Promise<"created" | "updated" | "duplicate"> {
     const key = input.projectId + "\0" + input.entryId;
     const existing = this.knowledgeEntries.get(key);
@@ -252,10 +253,17 @@ export class MemoryRepository implements ServerRepository {
       });
       return "created";
     }
+    if (existing.contentSha256 === input.contentSha256 && existing.status === input.status) {
+      return "duplicate";
+    }
     if (existing.contentSha256 === input.contentSha256) return "duplicate";
+    const stickyDeprecated =
+      existing.status === "deprecated" && input.allowDeprecatedOverwrite !== true;
     existing.contentSha256 = input.contentSha256;
-    existing.payload = input.payload;
-    existing.status = input.status;
+    existing.payload = stickyDeprecated
+      ? { ...input.payload, status: "deprecated" }
+      : input.payload;
+    existing.status = stickyDeprecated ? "deprecated" : input.status;
     existing.updatedAt = now;
     existing.projectedAt = null;
     return "updated";
@@ -313,18 +321,33 @@ export class MemoryRepository implements ServerRepository {
     localProjectKey: string;
     displayName: string;
     requestedProjectId: string | null;
+    recreate?: boolean;
   }): Promise<{ project: ProjectRecord; bindingStatus: "created" | "bound" }> {
     const bindingKey = input.actorId + "\0" + input.localProjectKey;
     const boundId = this.bindings.get(bindingKey);
     if (boundId !== undefined) {
-      if (input.requestedProjectId !== null && input.requestedProjectId !== boundId) {
-        throw new ServerDomainError(
-          409,
-          "PROJECT_BINDING_CONFLICT",
-          "local project key is already bound"
-        );
+      const bound = this.projects.get(boundId);
+      if (bound !== undefined && bound.lifecycleState === "purged") {
+        if (input.recreate === true) {
+          this.bindings.delete(bindingKey);
+        } else {
+          throw new ServerDomainError(
+            409,
+            "PROJECT_PURGED",
+            "local project key is bound to a purged project; pass recreate=true to create a replacement",
+            { recreate_required: true, purged_project_id: boundId }
+          );
+        }
+      } else {
+        if (input.requestedProjectId !== null && input.requestedProjectId !== boundId) {
+          throw new ServerDomainError(
+            409,
+            "PROJECT_BINDING_CONFLICT",
+            "local project key is already bound"
+          );
+        }
+        return { project: this.requireProject(input.actorId, boundId), bindingStatus: "bound" };
       }
-      return { project: this.requireProject(input.actorId, boundId), bindingStatus: "bound" };
     }
 
     if (input.requestedProjectId !== null) {
@@ -362,6 +385,31 @@ export class MemoryRepository implements ServerRepository {
     return { project, bindingStatus: "created" };
   }
 
+  async createProject(input: {
+    actorId: string;
+    displayName: string;
+  }): Promise<ProjectRecord> {
+    const projectId = "prj_" + String(++this.counters.project).padStart(8, "0");
+    const now = new Date().toISOString();
+    const project: ProjectRecord = {
+      projectId,
+      ownerActorId: input.actorId,
+      displayName: input.displayName,
+      latestProjectVersion: null,
+      latestArtifactId: null,
+      lifecycleState: "active",
+      archivedAt: null,
+      purgeAfter: null,
+      purgedAt: null,
+      currentFilesVersion: null,
+      currentFileCount: 0,
+      updatedAt: now,
+      createdAt: now
+    };
+    this.projects.set(projectId, project);
+    return structuredClone(project);
+  }
+
   private requireOwnedProject(actorId: string, projectId: string): ProjectRecord {
     const project = this.projects.get(projectId);
     if (project === undefined || project.ownerActorId !== actorId) {
@@ -392,19 +440,31 @@ export class MemoryRepository implements ServerRepository {
     limit: number;
     cursor: string | null;
     state?: "active" | "archived";
-  }): Promise<{ items: ProjectRecord[]; nextCursor: string | null }> {
+  }): Promise<{
+    items: Array<ProjectRecord & { localProjectKey: string | null }>;
+    nextCursor: string | null;
+  }> {
     const offset = input.cursor === null
       ? 0
       : Number.parseInt(Buffer.from(input.cursor, "base64url").toString("utf8"), 10);
     if (!Number.isSafeInteger(offset) || offset < 0) {
       throw new ServerDomainError(400, "INVALID_CURSOR", "cursor is invalid");
     }
+    const localKeyByProject = new Map<string, string>();
+    for (const [bindingKey, projectId] of this.bindings) {
+      if (!bindingKey.startsWith(input.actorId + "\0")) continue;
+      const localKey = bindingKey.slice(input.actorId.length + 1);
+      if (!localKeyByProject.has(projectId)) localKeyByProject.set(projectId, localKey);
+    }
     const values = [...this.projects.values()]
       .filter((project) => project.ownerActorId === input.actorId &&
         project.lifecycleState === (input.state ?? "active"))
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt) ||
         right.projectId.localeCompare(left.projectId));
-    const items = values.slice(offset, offset + input.limit);
+    const items = values.slice(offset, offset + input.limit).map((project) => ({
+      ...project,
+      localProjectKey: localKeyByProject.get(project.projectId) ?? null
+    }));
     const nextOffset = offset + items.length;
     return {
       items,
@@ -455,9 +515,7 @@ export class MemoryRepository implements ServerRepository {
     for (const [artifactId, artifact] of this.artifacts) {
       if (artifact.projectId === projectId) this.artifacts.delete(artifactId);
     }
-    for (const [bindingKey, boundProjectId] of this.bindings) {
-      if (boundProjectId === projectId) this.bindings.delete(bindingKey);
-    }
+    // Keep bindings as tombstones so resolve cannot silently recreate (S7).
     this.projectFiles.delete(projectId);
     project.latestProjectVersion = null;
     project.latestArtifactId = null;

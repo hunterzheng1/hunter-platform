@@ -58,6 +58,13 @@ export interface KnowledgeIngestListItem {
   projected_at: string | null;
 }
 
+export interface RunPhaseSummary {
+  id: string;
+  started_at: string;
+  ended_at: string | null;
+  duration_ms: number | null;
+}
+
 export interface RunSummary {
   run_id: string;
   project_id: string;
@@ -72,6 +79,18 @@ export interface RunSummary {
   last_event_at: string | null;
   last_heartbeat_at: string | null;
   server_cursor: number;
+  phases?: RunPhaseSummary[];
+}
+
+export interface ChangeArchiveSummary {
+  changeKey: string;
+  archivedAt: string | null;
+  files: Array<{
+    path: string;
+    sizeBytes: number;
+    kind: "design" | "plan" | "report" | "evidence" | "meta" | "log" | "knowledge";
+    tier: "core" | "supporting" | "diagnostic";
+  }>;
 }
 
 export interface RunEventSummary {
@@ -96,6 +115,7 @@ export interface ProjectSummary {
   purge_after?: string | null;
   current_files_version?: string | null;
   current_file_count?: number;
+  local_project_key?: string | null;
   updated_at?: string;
   created_at: string;
 }
@@ -232,11 +252,10 @@ export interface ReviewResult {
 export interface HunterApi {
   getDashboardOverview(days?: number): Promise<DashboardOverview>;
   listProjects(state?: "active" | "archived"): Promise<ProjectSummary[]>;
-  /**
-   * Web 端创建项目。服务端端点（POST /api/v1/projects）待落地，
-   * 见 docs/platform-server-gaps.md S2；落地前浏览器端会收到 404/405。
-   */
-  createProject?(input: { display_name: string }): Promise<ProjectSummary>;
+  createProject?(input: {
+    display_name: string;
+    withKey?: boolean;
+  }): Promise<ProjectSummary & { api_key?: string; key_id?: string }>;
   getProject(projectId: string): Promise<ProjectDetailModel>;
   listProjectProposals(projectId: string): Promise<ProposalSummary[]>;
   listAllProposals(): Promise<ProposalSummary[]>;
@@ -279,16 +298,17 @@ export interface HunterApi {
   publishWorkflowFamilyDraft?(slug: string, req: PublishWorkflowFamilyRequest): Promise<WorkflowFamilyVersion>;
   diffWorkflowFamilyDraft?(slug: string, profile?: string): Promise<SkillDiffFile[]>;
   listWorkflowFamilyVersions?(slug: string): Promise<WorkflowFamilyVersion[]>;
-  /**
-   * 触发工作流族来源同步（npm / GitHub 检查新版本）。端点待落地，
-   * 见 docs/platform-server-gaps.md；未实现时前端显示占位提示。
-   */
   syncWorkflowFamily?(slug: string): Promise<{ updated: boolean; version?: string }>;
+  getChangeArchive?(projectId: string, changeKey: string): Promise<ChangeArchiveSummary>;
+  getChangeArchiveContent?(projectId: string, changeKey: string, path: string): Promise<{ content: string }>;
   downloadWorkflowFamilyArtifact?(slug: string, profile: string, version?: string): Promise<{ blob: Blob; hash: string; filename: string }>;
   getProjectWorkflowBinding?(projectId: string): Promise<RegistryProjectWorkflowBinding | null>;
   bindProjectWorkflow?(projectId: string, familySlug: string, profile: string, revision: number | null, version?: string | null): Promise<RegistryProjectWorkflowBinding>;
   getProjectSemanticOverview?(projectId: string): Promise<SemanticOverview>;
-  listProjectSemanticKnowledge?(projectId: string): Promise<SemanticDocument[]>;
+  listProjectSemanticKnowledge?(
+    projectId: string,
+    options?: { limit?: number; cursor?: string | null; includeBody?: boolean }
+  ): Promise<{ items: SemanticDocument[]; total: number; next_cursor: string | null }>;
   listProjectSemanticRules?(projectId: string): Promise<SemanticDocument[]>;
   listProjectSemanticChanges?(projectId: string): Promise<SemanticDocument[]>;
   getProjectSemanticGraph?(projectId: string, focusDocumentId?: string): Promise<ProjectSemanticGraph>;
@@ -306,7 +326,10 @@ export interface HunterApi {
     entryId: string,
     status: string
   ): Promise<{ entry_id: string; status: string; updated_at: string }>;
-  listProjectRuns?(projectId: string): Promise<RunSummary[]>;
+  listProjectRuns?(
+    projectId: string,
+    options?: { limit?: number; cursor?: string | null; status?: string }
+  ): Promise<{ items: RunSummary[]; total: number; next_cursor: string | null }>;
   getProjectRun?(projectId: string, runId: string): Promise<RunSummary>;
   listProjectRunEvents?(
     projectId: string,
@@ -516,13 +539,27 @@ export class HttpHunterApi implements HunterApi {
     return this.request("GET", "/api/v1/projects/" + encodeURIComponent(projectId));
   }
 
-  async createProject(input: { display_name: string }): Promise<ProjectSummary> {
-    const result = await this.request<{ project: ProjectSummary } | ProjectSummary>(
+  async createProject(input: {
+    display_name: string;
+    withKey?: boolean;
+  }): Promise<ProjectSummary & { api_key?: string; key_id?: string }> {
+    const query = input.withKey === true ? "?withKey=true" : "";
+    const result = await this.request<
+      | { project: ProjectSummary; api_key?: string; key_id?: string }
+      | (ProjectSummary & { api_key?: string; key_id?: string })
+    >(
       "POST",
-      "/api/v1/projects",
+      "/api/v1/projects" + query,
       { display_name: input.display_name }
     );
-    return "project" in result ? result.project : result;
+    if ("project" in result) {
+      return {
+        ...result.project,
+        ...(result.api_key === undefined ? {} : { api_key: result.api_key }),
+        ...(result.key_id === undefined ? {} : { key_id: result.key_id })
+      };
+    }
+    return result;
   }
 
   async listProjectFiles(projectId: string): Promise<ProjectFilesSnapshot> {
@@ -866,11 +903,37 @@ export class HttpHunterApi implements HunterApi {
     return this.request("GET", "/api/v1/projects/" + encodeURIComponent(projectId) + "/semantic/overview");
   }
 
-  async listProjectSemanticKnowledge(projectId: string): Promise<SemanticDocument[]> {
-    const result = await this.request<{ items: SemanticDocument[] }>(
-      "GET", "/api/v1/projects/" + encodeURIComponent(projectId) + "/semantic/knowledge"
-    );
-    return result.items;
+  async listProjectSemanticKnowledge(
+    projectId: string,
+    options: { limit?: number; cursor?: string | null; includeBody?: boolean } = {}
+  ): Promise<{ items: SemanticDocument[]; total: number; next_cursor: string | null }> {
+    const items: SemanticDocument[] = [];
+    let cursor: string | null = options.cursor ?? null;
+    let total = 0;
+    const pageLimit = options.limit ?? 100;
+    const includeBody = options.includeBody === true;
+    // When caller passes an explicit cursor, return a single page; otherwise drain.
+    const singlePage = options.cursor !== undefined;
+    do {
+      const query = new URLSearchParams({
+        limit: String(pageLimit),
+        include_body: includeBody ? "1" : "0"
+      });
+      if (cursor !== null) query.set("cursor", cursor);
+      const result = await this.request<{
+        items: SemanticDocument[];
+        total: number;
+        next_cursor: string | null;
+      }>(
+        "GET",
+        "/api/v1/projects/" + encodeURIComponent(projectId) + "/semantic/knowledge?" + query.toString()
+      );
+      items.push(...result.items);
+      total = result.total;
+      cursor = result.next_cursor;
+      if (singlePage) break;
+    } while (cursor !== null);
+    return { items, total, next_cursor: singlePage ? cursor : null };
   }
 
   async listProjectSemanticRules(projectId: string): Promise<SemanticDocument[]> {
@@ -944,12 +1007,62 @@ export class HttpHunterApi implements HunterApi {
     );
   }
 
-  async listProjectRuns(projectId: string): Promise<RunSummary[]> {
-    const result = await this.request<{ items: RunSummary[] }>(
-      "GET",
-      "/api/v1/projects/" + encodeURIComponent(projectId) + "/runs"
+  async listProjectRuns(
+    projectId: string,
+    options: { limit?: number; cursor?: string | null; status?: string } = {}
+  ): Promise<{ items: RunSummary[]; total: number; next_cursor: string | null }> {
+    const items: RunSummary[] = [];
+    let cursor: string | null = options.cursor ?? null;
+    let total = 0;
+    const pageLimit = options.limit ?? 100;
+    const singlePage = options.cursor !== undefined;
+    do {
+      const query = new URLSearchParams({ limit: String(pageLimit) });
+      if (cursor !== null) query.set("cursor", cursor);
+      if (options.status !== undefined) query.set("status", options.status);
+      const result = await this.request<{
+        items: RunSummary[];
+        total: number;
+        next_cursor: string | null;
+      }>(
+        "GET",
+        "/api/v1/projects/" + encodeURIComponent(projectId) + "/runs?" + query.toString()
+      );
+      items.push(...result.items);
+      total = result.total;
+      cursor = result.next_cursor;
+      if (singlePage) break;
+    } while (cursor !== null);
+    return { items, total, next_cursor: singlePage ? cursor : null };
+  }
+
+  async syncWorkflowFamily(slug: string): Promise<{ updated: boolean; version?: string }> {
+    return this.request(
+      "POST",
+      "/api/v1/workflow-families/" + encodeURIComponent(slug) + "/sync",
+      {}
     );
-    return result.items;
+  }
+
+  async getChangeArchive(projectId: string, changeKey: string): Promise<ChangeArchiveSummary> {
+    return this.request(
+      "GET",
+      "/api/v1/projects/" + encodeURIComponent(projectId) +
+        "/changes/" + encodeURIComponent(changeKey) + "/archive"
+    );
+  }
+
+  async getChangeArchiveContent(
+    projectId: string,
+    changeKey: string,
+    path: string
+  ): Promise<{ content: string }> {
+    return this.request(
+      "GET",
+      "/api/v1/projects/" + encodeURIComponent(projectId) +
+        "/changes/" + encodeURIComponent(changeKey) +
+        "/archive/content?path=" + encodeURIComponent(path)
+    );
   }
 
   async getProjectRun(projectId: string, runId: string): Promise<RunSummary> {
@@ -1000,7 +1113,8 @@ export class HttpHunterApi implements HunterApi {
         headers: {
           Accept: "text/event-stream",
           Authorization: "Bearer " + token,
-          "X-Request-Id": globalThis.crypto.randomUUID()
+          "X-Request-Id": globalThis.crypto.randomUUID(),
+          ...(afterCursor > 0 ? { "Last-Event-ID": String(afterCursor) } : {})
         },
         signal: controller.signal
       });

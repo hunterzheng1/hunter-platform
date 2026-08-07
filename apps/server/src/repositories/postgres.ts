@@ -387,19 +387,41 @@ export class PostgresRepository implements ServerRepository {
     contentSha256: string;
     payload: Record<string, unknown>;
     status: string;
+    allowDeprecatedOverwrite?: boolean;
   }): Promise<"created" | "updated" | "duplicate"> {
+    const allowOverwrite = input.allowDeprecatedOverwrite === true;
     const result = await this.pool.query(
       `INSERT INTO knowledge_ingest_entries(project_id, entry_id, content_sha256, payload, status)
        VALUES ($1, $2, $3, $4::jsonb, $5)
        ON CONFLICT (project_id, entry_id) DO UPDATE SET
          content_sha256 = EXCLUDED.content_sha256,
-         payload = EXCLUDED.payload,
-         status = EXCLUDED.status,
+         payload = CASE
+           WHEN knowledge_ingest_entries.status = 'deprecated' AND $6::boolean = false
+             THEN jsonb_set(EXCLUDED.payload, '{status}', '"deprecated"'::jsonb)
+           ELSE EXCLUDED.payload
+         END,
+         status = CASE
+           WHEN knowledge_ingest_entries.status = 'deprecated' AND $6::boolean = false
+             THEN knowledge_ingest_entries.status
+           ELSE EXCLUDED.status
+         END,
          updated_at = now(),
          projected_at = NULL
        WHERE knowledge_ingest_entries.content_sha256 <> EXCLUDED.content_sha256
+          OR (
+            knowledge_ingest_entries.status = 'deprecated'
+            AND $6::boolean = true
+            AND knowledge_ingest_entries.status IS DISTINCT FROM EXCLUDED.status
+          )
        RETURNING (xmax = 0) AS inserted`,
-      [input.projectId, input.entryId, input.contentSha256, JSON.stringify(input.payload), input.status]
+      [
+        input.projectId,
+        input.entryId,
+        input.contentSha256,
+        JSON.stringify(input.payload),
+        input.status,
+        allowOverwrite
+      ]
     );
     if (result.rowCount === 0) return "duplicate";
     return result.rows[0]?.inserted === true ? "created" : "updated";
@@ -478,6 +500,7 @@ export class PostgresRepository implements ServerRepository {
     localProjectKey: string;
     displayName: string;
     requestedProjectId: string | null;
+    recreate?: boolean;
   }): Promise<{ project: ProjectRecord; bindingStatus: "created" | "bound" }> {
     return this.transaction(async (client) => {
       const bound = await client.query(
@@ -495,16 +518,29 @@ export class PostgresRepository implements ServerRepository {
           });
         }
         if (project.lifecycleState === "purged") {
-          throw new ServerDomainError(410, "PROJECT_PURGED", "project data was permanently purged");
+          if (input.recreate === true) {
+            await client.query(
+              `DELETE FROM project_bindings WHERE actor_id = $1 AND local_project_key = $2`,
+              [input.actorId, input.localProjectKey]
+            );
+          } else {
+            throw new ServerDomainError(
+              409,
+              "PROJECT_PURGED",
+              "local project key is bound to a purged project; pass recreate=true to create a replacement",
+              { recreate_required: true, purged_project_id: project.projectId }
+            );
+          }
+        } else {
+          if (input.requestedProjectId !== null && input.requestedProjectId !== project.projectId) {
+            throw new ServerDomainError(
+              409,
+              "PROJECT_BINDING_CONFLICT",
+              "local project key is already bound"
+            );
+          }
+          return { project, bindingStatus: "bound" as const };
         }
-        if (input.requestedProjectId !== null && input.requestedProjectId !== project.projectId) {
-          throw new ServerDomainError(
-            409,
-            "PROJECT_BINDING_CONFLICT",
-            "local project key is already bound"
-          );
-        }
-        return { project, bindingStatus: "bound" as const };
       }
       let project: ProjectRecord;
       let bindingStatus: "created" | "bound";
@@ -545,6 +581,19 @@ export class PostgresRepository implements ServerRepository {
     });
   }
 
+  async createProject(input: {
+    actorId: string;
+    displayName: string;
+  }): Promise<ProjectRecord> {
+    const projectId = id("prj_");
+    const created = await this.pool.query(
+      `INSERT INTO projects(project_id, owner_actor_id, display_name)
+       VALUES ($1, $2, $3) RETURNING *`,
+      [projectId, input.actorId, input.displayName]
+    );
+    return projectFrom(created.rows[0] ?? {});
+  }
+
   async getProject(actorId: string, projectId: string): Promise<ProjectRecord> {
     const result = await this.pool.query(
       `SELECT * FROM projects WHERE project_id = $1 AND owner_actor_id = $2`,
@@ -570,7 +619,10 @@ export class PostgresRepository implements ServerRepository {
     limit: number;
     cursor: string | null;
     state?: "active" | "archived";
-  }): Promise<{ items: ProjectRecord[]; nextCursor: string | null }> {
+  }): Promise<{
+    items: Array<ProjectRecord & { localProjectKey: string | null }>;
+    nextCursor: string | null;
+  }> {
     const offset = input.cursor === null
       ? 0
       : Number.parseInt(Buffer.from(input.cursor, "base64url").toString("utf8"), 10);
@@ -578,12 +630,21 @@ export class PostgresRepository implements ServerRepository {
       throw new ServerDomainError(400, "INVALID_CURSOR", "cursor is invalid");
     }
     const result = await this.pool.query(
-      `SELECT * FROM projects WHERE owner_actor_id = $1 AND lifecycle_state = $2
-       ORDER BY created_at DESC, project_id DESC LIMIT $3 OFFSET $4`,
+      `SELECT p.*, (
+         SELECT b.local_project_key FROM project_bindings b
+         WHERE b.project_id = p.project_id AND b.actor_id = $1
+         ORDER BY b.local_project_key ASC LIMIT 1
+       ) AS local_project_key
+       FROM projects p
+       WHERE p.owner_actor_id = $1 AND p.lifecycle_state = $2
+       ORDER BY p.created_at DESC, p.project_id DESC LIMIT $3 OFFSET $4`,
       [input.actorId, input.state ?? "active", input.limit + 1, offset]
     );
     return {
-      items: result.rows.slice(0, input.limit).map(projectFrom),
+      items: result.rows.slice(0, input.limit).map((row) => ({
+        ...projectFrom(row),
+        localProjectKey: row.local_project_key == null ? null : String(row.local_project_key)
+      })),
       nextCursor: result.rows.length > input.limit
         ? Buffer.from(String(offset + input.limit)).toString("base64url")
         : null
@@ -663,7 +724,7 @@ export class PostgresRepository implements ServerRepository {
     await client.query(`DELETE FROM artifacts WHERE project_id = $1`, [projectId]);
     await client.query(`DELETE FROM proposals WHERE project_id = $1`, [projectId]);
     await client.query(`DELETE FROM proposal_sessions WHERE project_id = $1`, [projectId]);
-    await client.query(`DELETE FROM project_bindings WHERE project_id = $1`, [projectId]);
+    // Keep project_bindings as tombstones so resolve cannot silently recreate (S7).
     const result = await client.query(
       `UPDATE projects SET lifecycle_state = 'purged', purge_after = NULL, purged_at = $2,
        updated_at = $2

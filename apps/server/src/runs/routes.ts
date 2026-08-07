@@ -4,9 +4,11 @@ import { z } from "zod";
 import type { Actor, ProjectKeyScope, ServerRepository } from "../repositories/interfaces.js";
 import { ServerDomainError } from "../repositories/interfaces.js";
 import {
+  aggregateRunPhases,
   publicEvent,
   publicRun,
   sanitizeEventPayload,
+  type RunRecord,
   type RunStore
 } from "./store.js";
 
@@ -43,6 +45,14 @@ const heartbeatSchema = z.object({
   title: z.string().min(1).max(200).optional()
 }).strict();
 
+async function publicRunWithPhases(
+  runStore: RunStore,
+  run: RunRecord
+): Promise<Record<string, unknown>> {
+  const events = await runStore.listEvents(run.runId, { afterCursor: 0, limit: 2000 });
+  return publicRun(run, aggregateRunPhases(events));
+}
+
 export function registerRunRoutes(app: FastifyInstance, options: RunRoutesOptions): void {
   const { repository, runStore, authenticated } = options;
 
@@ -73,7 +83,7 @@ export function registerRunRoutes(app: FastifyInstance, options: RunRoutesOption
     return {
       server_time: new Date().toISOString(),
       items: result.items,
-      run: publicRun(result.run),
+      run: await publicRunWithPhases(runStore, result.run),
       request_id: requestId
     };
   });
@@ -98,7 +108,7 @@ export function registerRunRoutes(app: FastifyInstance, options: RunRoutesOption
       throw new ServerDomainError(404, "RUN_NOT_FOUND", "run not found");
     }
     reply.header("X-Request-Id", requestId);
-    return { run: publicRun(run), request_id: requestId };
+    return { run: await publicRunWithPhases(runStore, run), request_id: requestId };
   });
 
   app.get("/api/v1/projects/:projectId/runs", async (request, reply) => {
@@ -106,11 +116,25 @@ export function registerRunRoutes(app: FastifyInstance, options: RunRoutesOption
     const { projectId } = request.params as { projectId: string };
     await repository.getProject(actor.actorId, projectId);
     const query = z.object({
-      limit: z.coerce.number().int().min(1).max(100).default(50)
+      limit: z.coerce.number().int().min(1).max(100).default(50),
+      cursor: z.string().min(1).optional(),
+      status: z.string().min(1).optional()
     }).strict().parse(request.query);
-    const items = await runStore.listRuns(projectId, query.limit);
+    const listed = await runStore.listRuns(projectId, {
+      limit: query.limit,
+      cursor: query.cursor ?? null,
+      ...(query.status === undefined ? {} : { status: query.status })
+    });
+    const items = await Promise.all(
+      listed.items.map((run) => publicRunWithPhases(runStore, run))
+    );
     reply.header("X-Request-Id", requestId);
-    return { items: items.map(publicRun), request_id: requestId };
+    return {
+      items,
+      total: listed.total,
+      next_cursor: listed.nextCursor,
+      request_id: requestId
+    };
   });
 
   app.get("/api/v1/projects/:projectId/runs/:runId", async (request, reply) => {
@@ -122,7 +146,7 @@ export function registerRunRoutes(app: FastifyInstance, options: RunRoutesOption
       throw new ServerDomainError(404, "RUN_NOT_FOUND", "run not found");
     }
     reply.header("X-Request-Id", requestId);
-    return { run: publicRun(run), request_id: requestId };
+    return { run: await publicRunWithPhases(runStore, run), request_id: requestId };
   });
 
   app.get("/api/v1/projects/:projectId/runs/:runId/events", async (request, reply) => {
@@ -161,8 +185,15 @@ export function registerRunRoutes(app: FastifyInstance, options: RunRoutesOption
       throw new ServerDomainError(404, "RUN_NOT_FOUND", "run not found");
     }
     const query = z.object({
-      after_cursor: z.coerce.number().int().min(0).default(0)
+      after_cursor: z.coerce.number().int().min(0).optional()
     }).strict().parse(request.query);
+    const lastEventIdHeader = request.headers["last-event-id"];
+    const lastEventId = typeof lastEventIdHeader === "string"
+      ? Number.parseInt(lastEventIdHeader, 10)
+      : Number.NaN;
+    const afterCursor = query.after_cursor !== undefined
+      ? query.after_cursor
+      : (Number.isFinite(lastEventId) && lastEventId >= 0 ? lastEventId : 0);
 
     reply.hijack();
     reply.raw.writeHead(200, {
@@ -172,24 +203,25 @@ export function registerRunRoutes(app: FastifyInstance, options: RunRoutesOption
       "X-Request-Id": requestId
     });
 
-    let cursor = query.after_cursor;
+    let cursor = afterCursor;
     let closed = false;
-    const send = (event: string, data: unknown): void => {
+    const send = (event: string, data: unknown, id?: number): void => {
       if (closed) return;
-      reply.raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      const idLine = id === undefined ? "" : `id: ${id}\n`;
+      reply.raw.write(`${idLine}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
     };
-    send("snapshot", publicRun(run));
+    send("snapshot", await publicRunWithPhases(runStore, run));
 
     const tick = async (): Promise<void> => {
       if (closed) return;
       try {
         const events = await runStore.listEvents(runId, { afterCursor: cursor, limit: 50 });
         for (const event of events) {
-          send("event", publicEvent(event));
+          send("event", publicEvent(event), event.serverCursor);
           cursor = event.serverCursor;
         }
         const latest = await runStore.getRun(projectId, runId);
-        if (latest !== null) send("run", publicRun(latest));
+        if (latest !== null) send("run", await publicRunWithPhases(runStore, latest));
       } catch {
         // ignore transient read errors during stream
       }

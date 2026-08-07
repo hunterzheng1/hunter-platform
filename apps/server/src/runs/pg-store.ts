@@ -207,15 +207,45 @@ export class PgRunStore implements RunStore {
     return result.rowCount === 0 ? null : runFrom(result.rows[0] ?? {});
   }
 
-  async listRuns(projectId: string, limit = 50): Promise<RunRecord[]> {
-    const result = await this.pool.query(
-      `SELECT * FROM runs
-       WHERE project_id = $1
-       ORDER BY COALESCE(last_event_at, created_at) DESC
-       LIMIT $2`,
-      [projectId, limit]
+  async listRuns(projectId: string, options: {
+    limit?: number;
+    cursor?: string | null;
+    status?: string;
+  } = {}): Promise<{ items: RunRecord[]; nextCursor: string | null; total: number }> {
+    const limit = options.limit ?? 50;
+    const offset = options.cursor === null || options.cursor === undefined || options.cursor === ""
+      ? 0
+      : Number.parseInt(Buffer.from(options.cursor, "base64url").toString("utf8"), 10);
+    if (!Number.isSafeInteger(offset) || offset < 0) {
+      throw new Error("INVALID_CURSOR");
+    }
+    const hasStatus = options.status !== undefined;
+    const count = await this.pool.query(
+      hasStatus
+        ? `SELECT COUNT(*)::int AS total FROM runs WHERE project_id = $1 AND run_status = $2`
+        : `SELECT COUNT(*)::int AS total FROM runs WHERE project_id = $1`,
+      hasStatus ? [projectId, options.status] : [projectId]
     );
-    return result.rows.map(runFrom);
+    const result = await this.pool.query(
+      hasStatus
+        ? `SELECT * FROM runs
+           WHERE project_id = $1 AND run_status = $4
+           ORDER BY COALESCE(started_at, last_event_at, created_at) DESC, run_id DESC
+           LIMIT $2 OFFSET $3`
+        : `SELECT * FROM runs
+           WHERE project_id = $1
+           ORDER BY COALESCE(started_at, last_event_at, created_at) DESC, run_id DESC
+           LIMIT $2 OFFSET $3`,
+      hasStatus ? [projectId, limit + 1, offset, options.status] : [projectId, limit + 1, offset]
+    );
+    const rows = result.rows.slice(0, limit);
+    return {
+      items: rows.map(runFrom),
+      total: Number(count.rows[0]?.total ?? 0),
+      nextCursor: result.rows.length > limit
+        ? Buffer.from(String(offset + limit)).toString("base64url")
+        : null
+    };
   }
 
   async getRun(projectId: string, runId: string): Promise<RunRecord | null> {

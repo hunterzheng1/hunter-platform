@@ -79,6 +79,7 @@ import {
   type ExternalFetcherDeps
 } from "../external/fetchers.js";
 import { WorkflowFamilyStore, type WorkflowFamilyState } from "./workflow-family-store.js";
+import { syncWorkflowFamilyFromSource as pullWorkflowFamilySource } from "./workflow-family-sync.js";
 
 // applyFixSuggestion 可写白名单（examples/allowed_capabilities/instructions/description）；
 // tags/null 为展示型建议不可写 → 422。与 output-parser FIX_APPLIES_TO_WHITELIST（5 值含 tags，解析白名单）语义不同，不可合并。
@@ -1366,6 +1367,15 @@ export class RegistryStore {
   }
   async getWorkflowFamilyProfileArtifactBytes(slug: string, profile: string, version?: string): Promise<Uint8Array> {
     return this.workflowFamilyStore.getProfileArtifactBytes(slug, profile, version);
+  }
+  async syncWorkflowFamilyFromSource(
+    slug: string,
+    actorId: string,
+    deps?: ExternalFetcherDeps
+  ): Promise<{ updated: boolean; version?: string }> {
+    const result = await pullWorkflowFamilySource(this.workflowFamilyStore, slug, actorId, deps);
+    await this.persist();
+    return result;
   }
 
   // ---- AI provider 配置（§12.9；key 不进 store，只存 provider 元数据 + 用量）----

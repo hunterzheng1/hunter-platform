@@ -63,6 +63,11 @@ export const workflowFamilyDraftStateSchema = z.object({
   updated_at: z.string()
 }).strict();
 
+export const workflowFamilySourceSchema = z.object({
+  type: z.enum(["npm", "github"]),
+  ref: z.string().min(1).max(200)
+}).strict();
+
 export const workflowFamilySchema = z.object({
   family_id: z.string().regex(/^wff_/),
   slug: registrySlugSchema,
@@ -73,6 +78,7 @@ export const workflowFamilySchema = z.object({
   required_profiles: z.array(registrySlugSchema).min(1),
   revision: z.number().int().positive(),
   npmReleases: z.array(npmReleaseRecordSchema).optional().default([]),
+  source: workflowFamilySourceSchema.optional(),
   created_at: z.iso.datetime(),
   updated_at: z.iso.datetime()
 }).strict();
@@ -82,7 +88,8 @@ export const workflowFamilyMutationSchema = z.object({
   displayName: z.string().min(1).max(120),
   description: z.string().min(1).max(1000),
   tags: z.array(registrySlugSchema).default([]),
-  required_profiles: z.array(registrySlugSchema).min(1)
+  required_profiles: z.array(registrySlugSchema).min(1),
+  source: workflowFamilySourceSchema.optional()
 }).strict();
 
 export const publishWorkflowFamilyRequestSchema = z.object({

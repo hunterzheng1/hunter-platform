@@ -29,6 +29,7 @@ import type {
 import { bootstrapSkills } from "./catalog";
 import { findDemoSourceSkill, sapFieldMapper } from "./demo-skills/sap-field-mapper";
 import { ApiClientError } from "./api";
+import { mockChangeArchive } from "./mock-archive";
 import type {
   AiJobState,
   HunterApi,
@@ -990,8 +991,31 @@ export class MockApiClient implements HunterApi {
     });
   }
 
-  async listProjectSemanticKnowledge(projectId: string): Promise<SemanticDocument[]> {
-    return delay(mockProjectKnowledge(projectId));
+  async listProjectSemanticKnowledge(
+    projectId: string,
+    _options?: { limit?: number; cursor?: string | null; includeBody?: boolean }
+  ): Promise<{ items: SemanticDocument[]; total: number; next_cursor: string | null }> {
+    void _options;
+    const items = mockProjectKnowledge(projectId);
+    return delay({ items, total: items.length, next_cursor: null });
+  }
+
+  async syncWorkflowFamily(_slug: string): Promise<{ updated: boolean; version?: string }> {
+    void _slug;
+    return delay({ updated: false });
+  }
+
+  async getChangeArchive(_projectId: string, changeKey: string) {
+    void _projectId;
+    const archive = mockChangeArchive(changeKey);
+    return delay(archive);
+  }
+
+  async getChangeArchiveContent(_projectId: string, changeKey: string, path: string) {
+    void _projectId;
+    const archive = mockChangeArchive(changeKey);
+    const file = archive.files.find((item) => item.path === path);
+    return delay({ content: file?.content ?? `# ${path}\n` });
   }
 
   async listProjectSemanticRules(projectId: string): Promise<SemanticDocument[]> {
@@ -1062,7 +1086,7 @@ export class MockApiClient implements HunterApi {
   }
 
   async getProjectSemanticGraph(projectId: string, focusDocumentId?: string): Promise<ProjectSemanticGraph> {
-    const knowledge = (await this.listProjectSemanticKnowledge(projectId)).slice(0, 12);
+    const knowledge = (await this.listProjectSemanticKnowledge(projectId)).items.slice(0, 12);
     const rules = await this.listProjectSemanticRules(projectId);
     const changes = (await this.listProjectSemanticChanges(projectId)).slice(0, 2);
     const nodes = [...knowledge, ...rules, ...changes];
@@ -1128,9 +1152,9 @@ export class MockApiClient implements HunterApi {
   async searchSemanticDocuments(query: string, projectId?: string): Promise<Array<{ document: SemanticDocument; project_id: string }>> {
     const fallback = MOCK_PROJECTS[0];
     const id = projectId ?? fallback?.project_id ?? "agent-harness";
-    const items = await this.listProjectSemanticKnowledge(id);
+    const page = await this.listProjectSemanticKnowledge(id, { includeBody: true });
     const needle = query.toLowerCase();
-    return delay(items
+    return delay(page.items
       .filter((document) => document.title.toLowerCase().includes(needle) || document.body.toLowerCase().includes(needle))
       .map((document) => ({ document, project_id: id })));
   }
@@ -1393,8 +1417,13 @@ export class MockApiClient implements HunterApi {
   }
 
   // ── Runs（运行监控 demo）────────────────────────────────
-  async listProjectRuns(projectId: string): Promise<RunSummary[]> {
-    return delay(buildMockRuns(projectId));
+  async listProjectRuns(
+    projectId: string,
+    _options?: { limit?: number; cursor?: string | null; status?: string }
+  ): Promise<{ items: RunSummary[]; total: number; next_cursor: string | null }> {
+    void _options;
+    const items = buildMockRuns(projectId);
+    return delay({ items, total: items.length, next_cursor: null });
   }
 
   async getProjectRun(projectId: string, runId: string): Promise<RunSummary> {

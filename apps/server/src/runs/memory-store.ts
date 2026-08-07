@@ -146,11 +146,35 @@ export class MemoryRunStore implements RunStore {
     return run;
   }
 
-  async listRuns(projectId: string, limit = 50): Promise<RunRecord[]> {
-    return [...this.runs.values()]
+  async listRuns(projectId: string, options: {
+    limit?: number;
+    cursor?: string | null;
+    status?: string;
+  } = {}): Promise<{ items: RunRecord[]; nextCursor: string | null; total: number }> {
+    const limit = options.limit ?? 50;
+    const offset = options.cursor === null || options.cursor === undefined || options.cursor === ""
+      ? 0
+      : Number.parseInt(Buffer.from(options.cursor, "base64url").toString("utf8"), 10);
+    if (!Number.isSafeInteger(offset) || offset < 0) {
+      throw new Error("INVALID_CURSOR");
+    }
+    const filtered = [...this.runs.values()]
       .filter((run) => run.projectId === projectId)
-      .sort((a, b) => (b.lastEventAt ?? b.createdAt).localeCompare(a.lastEventAt ?? a.createdAt))
-      .slice(0, limit);
+      .filter((run) => options.status === undefined || run.runStatus === options.status)
+      .sort((a, b) => {
+        const left = a.startedAt ?? a.lastEventAt ?? a.createdAt;
+        const right = b.startedAt ?? b.lastEventAt ?? b.createdAt;
+        return right.localeCompare(left) || b.runId.localeCompare(a.runId);
+      });
+    const items = filtered.slice(offset, offset + limit);
+    const nextOffset = offset + items.length;
+    return {
+      items,
+      total: filtered.length,
+      nextCursor: nextOffset < filtered.length
+        ? Buffer.from(String(nextOffset)).toString("base64url")
+        : null
+    };
   }
 
   async getRun(projectId: string, runId: string): Promise<RunRecord | null> {

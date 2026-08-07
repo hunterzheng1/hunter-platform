@@ -528,10 +528,11 @@ export function ProjectSemanticPanels({ api, projectId }: { api: HunterApi; proj
     setGraph(null);
     void (async () => {
       if (api.getProjectSemanticOverview === undefined || api.listProjectSemanticKnowledge === undefined || api.listProjectSemanticRules === undefined || api.listProjectSemanticChanges === undefined) throw new Error("semantic API unavailable");
-      const [overview, knowledge, rules, changes] = await Promise.all([
-        api.getProjectSemanticOverview(projectId), api.listProjectSemanticKnowledge(projectId),
+      const [overview, knowledgePage, rules, changes] = await Promise.all([
+        api.getProjectSemanticOverview(projectId), api.listProjectSemanticKnowledge(projectId, { includeBody: true }),
         api.listProjectSemanticRules(projectId), api.listProjectSemanticChanges(projectId)
       ]);
+      const knowledge = knowledgePage.items;
       let pending = 0;
       if (api.getKnowledgeProjectionStatus !== undefined) {
         try {

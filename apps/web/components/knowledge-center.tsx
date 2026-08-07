@@ -95,8 +95,8 @@ function GlobalKnowledgeSearch({
         : [selectedProjectId];
       // 并行拉取各项目知识，避免串行瀑布
       const perProject = await Promise.all(targetIds.map(async (id) => {
-        const docs = await listKnowledge(id);
-        return docs.map((document): SearchHit => ({ document, project_id: id }));
+        const page = await listKnowledge(id, { includeBody: true });
+        return page.items.map((document): SearchHit => ({ document, project_id: id }));
       }));
       const collected = perProject.flat();
       setHits(collected);
