@@ -17,6 +17,7 @@ import { suppressMouseFocusScroll } from "../lib/preserve-scroll";
 import { apiError } from "./skill-shared";
 import { EmptyState } from "./ui/EmptyState";
 import { Icon } from "./ui/icons";
+import { Modal } from "./ui/Modal";
 import { Pagination } from "./ui/Pagination";
 import { Skeleton } from "./ui/Skeleton";
 
@@ -38,6 +39,11 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
     kind: "archive" | "restore" | "purge" | "empty";
     project?: ProjectSummary;
   } | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
+  const [createName, setCreateName] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [createdProject, setCreatedProject] = useState<ProjectSummary | null>(null);
   const dialogRef = useRef<HTMLElement | null>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const busyRef = useRef(false);
@@ -56,7 +62,13 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
     confirmEmpty: "永久删除回收站中的所有项目？此操作无法撤销。", confirm: "确认", cancel: "取消",
     prev: "上一页", next: "下一页", first: "第一页", last: "最后一页",
     pageInfo: "第 {page} / {total} 页", totalCount: "共 {count} 项",
-    count: (n: number) => `${n} 个`
+    count: (n: number) => `${n} 个`,
+    createProject: "新建项目", createTitle: "创建项目", nameLabel: "项目名称", namePlaceholder: "例如：支付网关改造",
+    submitCreate: "创建", creating: "创建中…",
+    createdTitle: "项目已创建",
+    createdBody: "进入项目后，在「API 密钥」页签发密钥并执行 hunter-harness connect，即可开始首次同步。",
+    openProject: "打开项目",
+    createUnsupported: "服务端尚未支持 Web 端创建项目（端点落地中）。当前请先用 CLI：npx hunter-harness 首次同步会自动创建项目。"
   } : {
     eyebrow: "Project workspace", title: "Projects", description: "View project files, knowledge health, and version history in one place.",
     active: "Active projects", trash: "Recycle bin", search: "Search projects", searchPlaceholder: "Search by name or ID",
@@ -70,7 +82,13 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
     confirmEmpty: "Permanently delete every project in the recycle bin? This cannot be undone.", confirm: "Confirm", cancel: "Cancel",
     prev: "Previous", next: "Next", first: "First page", last: "Last page",
     pageInfo: "Page {page} / {total}", totalCount: "{count} total",
-    count: (n: number) => `${n}`
+    count: (n: number) => `${n}`,
+    createProject: "New project", createTitle: "Create project", nameLabel: "Project name", namePlaceholder: "e.g. Payments gateway overhaul",
+    submitCreate: "Create", creating: "Creating…",
+    createdTitle: "Project created",
+    createdBody: "Open the project, issue an API key under “API keys”, then run hunter-harness connect to start the first sync.",
+    openProject: "Open project",
+    createUnsupported: "The server does not support web-side project creation yet (endpoint in progress). For now, run npx hunter-harness — the first sync creates the project automatically."
   };
 
   async function reload(): Promise<void> {
@@ -79,6 +97,33 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
     ]);
     setProjects(activeItems);
     setArchived(archivedItems);
+  }
+
+  async function submitCreate(): Promise<void> {
+    const name = createName.trim();
+    if (name === "" || creating) return;
+    setCreating(true);
+    setCreateError(null);
+    try {
+      if (api.createProject === undefined) throw new Error("unsupported");
+      const project = await api.createProject({ display_name: name });
+      setCreatedProject(project);
+      await reload();
+    } catch (reason) {
+      const status = reason instanceof Error && "status" in reason ? (reason as { status: number }).status : 0;
+      setCreateError(status === 404 || status === 405 || status === 501 || status === 0
+        ? copy.createUnsupported
+        : apiError(reason, t));
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  function closeCreate(): void {
+    setShowCreate(false);
+    setCreateName("");
+    setCreateError(null);
+    setCreatedProject(null);
   }
 
   useEffect(() => {
@@ -188,9 +233,14 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
   return <section className="stack governance-page project-registry-v2">
     <header className="project-registry-hero">
       <div><p className="eyebrow">{copy.eyebrow}</p><h1>{copy.title}</h1><p>{copy.description}</p></div>
-      <div className="project-view-switch" role="tablist" aria-label={copy.title}>
-        <button type="button" role="tab" aria-selected={view === "active"} className={view === "active" ? "selected" : ""} onMouseDown={suppressMouseFocusScroll} onClick={() => setView("active")}>{copy.active}<span>{projects.length}</span></button>
-        <button type="button" role="tab" aria-selected={view === "trash"} className={view === "trash" ? "selected" : ""} onMouseDown={suppressMouseFocusScroll} onClick={() => setView("trash")}>{copy.trash}<span>{archived.length}</span></button>
+      <div className="project-hero-actions">
+        <button type="button" className="primary-button" onClick={() => setShowCreate(true)}>
+          <Icon name="plus" size={14} /> {copy.createProject}
+        </button>
+        <div className="project-view-switch" role="tablist" aria-label={copy.title}>
+          <button type="button" role="tab" aria-selected={view === "active"} className={view === "active" ? "selected" : ""} onMouseDown={suppressMouseFocusScroll} onClick={() => setView("active")}>{copy.active}<span>{projects.length}</span></button>
+          <button type="button" role="tab" aria-selected={view === "trash"} className={view === "trash" ? "selected" : ""} onMouseDown={suppressMouseFocusScroll} onClick={() => setView("trash")}>{copy.trash}<span>{archived.length}</span></button>
+        </div>
       </div>
     </header>
 
@@ -249,6 +299,48 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
     </div>
 
     {error === null || projects === null ? null : <div className="notice danger">{error}</div>}
+
+    <Modal
+      open={showCreate}
+      onClose={closeCreate}
+      title={createdProject === null ? copy.createTitle : copy.createdTitle}
+      closeLabel={copy.cancel}
+      footer={createdProject === null ? (
+        <>
+          <button type="button" className="secondary" disabled={creating} onClick={closeCreate}>{copy.cancel}</button>
+          <button type="button" disabled={creating || createName.trim() === ""} onClick={() => void submitCreate()}>
+            {creating ? copy.creating : copy.submitCreate}
+          </button>
+        </>
+      ) : undefined}
+    >
+      {createdProject === null ? (
+        <div className="form-stack">
+          <label className="form-field">
+            <span className="form-label">{copy.nameLabel}</span>
+            <input
+              value={createName}
+              placeholder={copy.namePlaceholder}
+              disabled={creating}
+              onChange={(event) => setCreateName(event.target.value)}
+              onKeyDown={(event) => { if (event.key === "Enter") void submitCreate(); }}
+            />
+          </label>
+          {createError === null ? null : <p className="notice warning">{createError}</p>}
+        </div>
+      ) : (
+        <div className="form-stack">
+          <p className="notice success">{copy.createdTitle}：{createdProject.display_name}</p>
+          <p className="lede">{copy.createdBody}</p>
+          <div className="actions">
+            <Link href={`/projects/${createdProject.project_id}`} onClick={closeCreate}>
+              {copy.openProject} →
+            </Link>
+          </div>
+        </div>
+      )}
+    </Modal>
+
     {pendingAction === null ? null : <div
       className="project-confirm-backdrop"
       role="presentation"

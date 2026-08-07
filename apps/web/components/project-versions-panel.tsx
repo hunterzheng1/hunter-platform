@@ -270,7 +270,8 @@ export function ProjectVersionsPanel({
           <div className="project-version-index">{versionIndex}</div>
           <div className="project-version-main">
             <div>
-              <strong>{copy.versionNumber(versionIndex)}</strong>
+              <strong>{new Date(artifact.created_at).toLocaleString(locale)}</strong>
+              <span className="version-tag">v{versionIndex}</span>
               {index === 0 ? <span>{copy.current}</span> : null}
             </div>
             <p>
@@ -278,7 +279,7 @@ export function ProjectVersionsPanel({
               {" · "}
               {basedOnLabel(artifact.base_project_version)}
               {" · "}
-              {new Date(artifact.created_at).toLocaleString(locale)}
+              <code className="version-id">{artifact.artifact_id.slice(0, 12)}</code>
             </p>
             {counts !== null ? <p className="project-version-ops">{copy.summary(counts)}</p> : null}
           </div>

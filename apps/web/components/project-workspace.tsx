@@ -17,7 +17,7 @@ import { useI18n } from "../lib/i18n";
 import { runPreservingWindowScroll, suppressMouseFocusScroll } from "../lib/preserve-scroll";
 import { ProjectSemanticPanels } from "./project-semantic-panels";
 import { ProjectVersionsPanel } from "./project-versions-panel";
-import { SummaryReportPanel } from "./summary-report-panel";
+import { RunsMonitor } from "./runs-monitor";
 import { Icon } from "./ui/icons";
 import { Skeleton } from "./ui/Skeleton";
 import { useToast } from "./ui/Toast";
@@ -30,7 +30,7 @@ interface WorkspaceData {
 }
 
 type DraftAction = "add" | "modify" | "rename" | "delete";
-type WorkspaceTab = "workbench" | "files" | "knowledge" | "reports" | "versions" | "keys";
+type WorkspaceTab = "monitor" | "files" | "knowledge" | "versions" | "keys";
 
 interface Draft {
   action: DraftAction;
@@ -53,7 +53,7 @@ const COPY = {
   zh: {
     back: "返回项目列表",
     eyebrow: "项目工作台",
-    tabs: { workbench: "工作台", files: "文件", knowledge: "项目知识", reports: "摘要报告", versions: "版本记录", keys: "API 密钥" },
+    tabs: { workbench: "工作台", monitor: "分支监控", files: "文件", knowledge: "项目知识", reports: "摘要报告", versions: "版本记录", keys: "API 密钥" },
     healthy: "项目状态正常",
     healthyHint: "文件快照、知识索引和版本记录已同步到最新保存。",
     noVersion: "尚未生成项目版本",
@@ -103,7 +103,7 @@ const COPY = {
   en: {
     back: "Back to projects",
     eyebrow: "Project workbench",
-    tabs: { workbench: "Workbench", files: "Files", knowledge: "Project knowledge", reports: "Summary report", versions: "Version history", keys: "API keys" },
+    tabs: { workbench: "Workbench", monitor: "Branch monitor", files: "Files", knowledge: "Project knowledge", reports: "Summary report", versions: "Version history", keys: "API keys" },
     healthy: "Project is healthy",
     healthyHint: "The file snapshot, knowledge index, and version history are synchronized.",
     noVersion: "No project version yet",
@@ -289,7 +289,7 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
   const toast = useToast();
   const copy = COPY[lang];
   const [data, setData] = useState<WorkspaceData | null>(null);
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>("workbench");
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>("monitor");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [contentByPath, setContentByPath] = useState<Map<string, string>>(new Map());
   const [loadingContent, setLoadingContent] = useState(false);
@@ -464,26 +464,37 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
   }
 
   const tabs: Array<[WorkspaceTab, string]> = [
-    ["workbench", copy.tabs.workbench],
+    ["monitor", copy.tabs.monitor],
     ["files", copy.tabs.files],
     ["knowledge", copy.tabs.knowledge],
-    ["reports", copy.tabs.reports],
     ["versions", copy.tabs.versions],
     ["keys", copy.tabs.keys]
   ];
   const lastUpdated = data.project.updated_at ?? data.project.created_at;
 
   return <section className="stack governance-page project-workspace-v2">
-    <header className="project-workspace-hero">
-      <div className="project-workspace-title">
-        <Link href="/projects" className="project-back" aria-label={copy.back}><Icon name="back" size={15} /></Link>
-        <div>
-          <p className="eyebrow">{copy.eyebrow}</p>
-          <h1>{data.project.display_name}</h1>
-          <p className="project-health-line"><span />{data.project.latest_project_version === null ? copy.noVersion : copy.healthy}</p>
-        </div>
+    <header className="project-hero-card">
+      <Link href="/projects" className="project-back" aria-label={copy.back}><Icon name="back" size={15} /></Link>
+      <div className="project-hero-mark" aria-hidden="true">{data.project.display_name.slice(0, 1).toUpperCase()}</div>
+      <div className="project-head-title">
+        <p className="eyebrow">{copy.eyebrow}</p>
+        <h1>{data.project.display_name}</h1>
+      </div>
+      <div className="project-hero-status">
+        <span className={`project-status-pill ${data.project.latest_project_version === null ? "waiting" : "healthy"}`}>
+          <span className="project-status-dot" />
+          {data.project.latest_project_version === null ? copy.noVersion : copy.healthy}
+        </span>
+        <time>{new Date(lastUpdated).toLocaleString(lang === "zh" ? "zh-CN" : "en-US")}</time>
       </div>
     </header>
+
+    <div className="project-overview-strip">
+      <article><strong>{data.files.length}</strong><span>{copy.fileCount}</span></article>
+      <article><strong>{editableFiles}</strong><span>{copy.editableCount}</span></article>
+      <article><strong>{data.overview?.counts.knowledge ?? "—"}</strong><span>{copy.knowledgeCount}</span></article>
+      <article><strong>{data.overview?.counts.edges ?? "—"}</strong><span>{copy.relations}</span></article>
+    </div>
 
     <div className="project-tabs" role="tablist" aria-label={copy.eyebrow}>
       {tabs.map(([id, label]) => <button
@@ -496,36 +507,6 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
         onClick={() => runPreservingWindowScroll(() => setActiveTab(id))}
       >{label}</button>)}
     </div>
-
-    {activeTab === "workbench" ? <div className="project-workbench-grid">
-      <section className="project-health-card">
-        <div className="project-health-icon"><Icon name="success" size={20} /></div>
-        <div><p className="eyebrow">{copy.healthy}</p><h2>{copy.healthyHint}</h2><p>{new Date(lastUpdated).toLocaleString(lang === "zh" ? "zh-CN" : "en-US")}</p></div>
-      </section>
-      <section className="project-metric-strip">
-        <article><strong>{data.files.length}</strong><span>{copy.fileCount}</span></article>
-        <article><strong>{editableFiles}</strong><span>{copy.editableCount}</span></article>
-        <article><strong>{data.overview?.counts.knowledge ?? "—"}</strong><span>{copy.knowledgeCount}</span></article>
-        <article><strong>{data.overview?.counts.edges ?? "—"}</strong><span>{copy.relations}</span></article>
-      </section>
-      <section className="project-quick-card">
-        <div className="panel-title"><h2>{copy.quickActions}</h2></div>
-        <div className="project-quick-actions">
-          <button type="button" onMouseDown={suppressMouseFocusScroll} onClick={() => runPreservingWindowScroll(() => setActiveTab("files"))}><Icon name="file" size={14} />{copy.manageFiles}</button>
-          <button type="button" onMouseDown={suppressMouseFocusScroll} onClick={() => runPreservingWindowScroll(() => setActiveTab("knowledge"))}><Icon name="brain" size={14} />{copy.browseKnowledge}</button>
-        </div>
-      </section>
-      <section className="project-recent-card">
-        <div className="panel-title"><h2>{copy.recentVersions}</h2><button type="button" className="text-button" onMouseDown={suppressMouseFocusScroll} onClick={() => runPreservingWindowScroll(() => setActiveTab("versions"))}>{copy.tabs.versions} →</button></div>
-        {data.artifacts.length === 0 ? <p className="project-empty-copy">{copy.noVersions}</p> : <div className="project-version-mini-list">
-          {data.artifacts.slice(0, 4).map((artifact, index) => <article key={artifact.artifact_id}>
-            <span className="project-version-dot" />
-            <div><strong>{copy.versionNumber(data.artifacts.length - index)}</strong><small>{copy.changedFiles(artifact.changed_item_count)}</small></div>
-            <time>{new Date(artifact.created_at).toLocaleDateString(lang === "zh" ? "zh-CN" : "en-US")}</time>
-          </article>)}
-        </div>}
-      </section>
-    </div> : null}
 
     {activeTab === "files" ? <div className="project-files-shell">
       <aside className="project-files-sidebar">
@@ -572,9 +553,9 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
       </main>
     </div> : null}
 
-    {activeTab === "knowledge" ? <ProjectSemanticPanels api={api} projectId={projectId} /> : null}
+    {activeTab === "monitor" ? <RunsMonitor api={api} projectId={projectId} /> : null}
 
-    {activeTab === "reports" ? <SummaryReportPanel api={api} projectId={projectId} /> : null}
+    {activeTab === "knowledge" ? <ProjectSemanticPanels api={api} projectId={projectId} /> : null}
 
     {activeTab === "versions" ? <ProjectVersionsPanel api={api} artifacts={data.artifacts} lang={lang} /> : null}
 

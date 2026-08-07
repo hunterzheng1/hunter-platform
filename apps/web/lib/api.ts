@@ -232,6 +232,11 @@ export interface ReviewResult {
 export interface HunterApi {
   getDashboardOverview(days?: number): Promise<DashboardOverview>;
   listProjects(state?: "active" | "archived"): Promise<ProjectSummary[]>;
+  /**
+   * Web 端创建项目。服务端端点（POST /api/v1/projects）待落地，
+   * 见 docs/platform-server-gaps.md S2；落地前浏览器端会收到 404/405。
+   */
+  createProject?(input: { display_name: string }): Promise<ProjectSummary>;
   getProject(projectId: string): Promise<ProjectDetailModel>;
   listProjectProposals(projectId: string): Promise<ProposalSummary[]>;
   listAllProposals(): Promise<ProposalSummary[]>;
@@ -274,6 +279,11 @@ export interface HunterApi {
   publishWorkflowFamilyDraft?(slug: string, req: PublishWorkflowFamilyRequest): Promise<WorkflowFamilyVersion>;
   diffWorkflowFamilyDraft?(slug: string, profile?: string): Promise<SkillDiffFile[]>;
   listWorkflowFamilyVersions?(slug: string): Promise<WorkflowFamilyVersion[]>;
+  /**
+   * 触发工作流族来源同步（npm / GitHub 检查新版本）。端点待落地，
+   * 见 docs/platform-server-gaps.md；未实现时前端显示占位提示。
+   */
+  syncWorkflowFamily?(slug: string): Promise<{ updated: boolean; version?: string }>;
   downloadWorkflowFamilyArtifact?(slug: string, profile: string, version?: string): Promise<{ blob: Blob; hash: string; filename: string }>;
   getProjectWorkflowBinding?(projectId: string): Promise<RegistryProjectWorkflowBinding | null>;
   bindProjectWorkflow?(projectId: string, familySlug: string, profile: string, revision: number | null, version?: string | null): Promise<RegistryProjectWorkflowBinding>;
@@ -504,6 +514,15 @@ export class HttpHunterApi implements HunterApi {
 
   async getProject(projectId: string): Promise<ProjectDetailModel> {
     return this.request("GET", "/api/v1/projects/" + encodeURIComponent(projectId));
+  }
+
+  async createProject(input: { display_name: string }): Promise<ProjectSummary> {
+    const result = await this.request<{ project: ProjectSummary } | ProjectSummary>(
+      "POST",
+      "/api/v1/projects",
+      { display_name: input.display_name }
+    );
+    return "project" in result ? result.project : result;
   }
 
   async listProjectFiles(projectId: string): Promise<ProjectFilesSnapshot> {

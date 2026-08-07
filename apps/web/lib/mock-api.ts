@@ -485,6 +485,24 @@ const MOCK_EXTERNAL_SKILLS: ExternalSkill[] = [
 ];
 
 const MOCK_WORKFLOW_FAMILIES: WorkflowFamily[] = [{
+  family_id: "wff_harness",
+  slug: "harness",
+  displayName: "Harness 工作流",
+  description: "hunter-harness CLI 的标准变更工作流：计划 → 编码 → 测试 → 评审 → 提交 → 归档（java overlay 另含打包与接口文档条件阶段）。",
+  tags: ["harness", "sdd"],
+  latest_version: "0.2.51",
+  required_profiles: ["general"],
+  revision: 12,
+  npmReleases: [{
+    packageName: "hunter-harness",
+    version: "0.2.51",
+    status: "published",
+    publishedAt: "2026-08-01T09:20:00Z",
+    error: null
+  }],
+  created_at: "2026-06-20T00:00:00Z",
+  updated_at: "2026-08-01T09:20:00Z"
+}, {
   family_id: "wff_demo_general",
   slug: "general",
   displayName: "General",
@@ -497,6 +515,24 @@ const MOCK_WORKFLOW_FAMILIES: WorkflowFamily[] = [{
   created_at: "2026-06-20T00:00:00Z",
   updated_at: "2026-06-20T00:00:00Z"
 }];
+
+const MOCK_HARNESS_VERSIONS: WorkflowFamilyVersion[] = [
+  { version: "0.2.51", changeNote: "events-sync 断点续传与 ACK 游标修复", created_at: "2026-08-01T09:20:00Z" },
+  { version: "0.2.50", changeNote: "archive 阶段产出归一化报告 normalizedReport", created_at: "2026-07-25T15:02:00Z" },
+  { version: "0.2.49", changeNote: "新增 java overlay 的 package / apidoc 条件阶段", created_at: "2026-07-18T11:40:00Z" }
+].map((entry) => ({
+  family_slug: "harness",
+  version: entry.version,
+  profiles: [{
+    profile: "general",
+    bundle_manifest: { schema_version: 1, profile: "general", files: [{ path: "workflow.yaml", sha256: "sha256:" + "a".repeat(64) }] },
+    artifact_id: `wfb_harness_${entry.version.replaceAll(".", "_")}`,
+    sourceFiles: []
+  }],
+  artifacts: [],
+  changeNote: entry.changeNote,
+  created_at: entry.created_at
+}));
 
 function mockSemanticDoc(
   projectId: string,
@@ -637,6 +673,7 @@ function delay<T>(value: T): Promise<T> {
 interface MockRunSeed {
   id: string;
   title: string;
+  changeKey: string;
   run_status: string;
   connection_status: string;
   sync_completeness: string;
@@ -646,24 +683,32 @@ interface MockRunSeed {
 }
 
 const MOCK_RUN_SEED: MockRunSeed[] = [
-  { id: "run_7f3a91c2", title: "同步 .claude/skills 变更集", run_status: "running", connection_status: "online", sync_completeness: "partial", current_phase: "push", ageMin: 4, durationMin: null },
-  { id: "run_2b8e04d5", title: "发布 skill-registry v1.8.0", run_status: "succeeded", connection_status: "offline", sync_completeness: "complete", current_phase: null, ageMin: 62, durationMin: 3 },
-  { id: "run_9c1d47a8", title: "harness-archive 周检", run_status: "failed", connection_status: "offline", sync_completeness: "partial", current_phase: "verify", ageMin: 190, durationMin: 7 },
-  { id: "run_4e6b02f1", title: "知识库索引重建", run_status: "queued", connection_status: "online", sync_completeness: "pending", current_phase: null, ageMin: 260, durationMin: null },
-  { id: "run_5a0c83e9", title: "全量文件校验", run_status: "succeeded", connection_status: "offline", sync_completeness: "complete", current_phase: null, ageMin: 1440, durationMin: 12 }
+  { id: "run_7f3a91c2", title: "空间治理生产发布", changeKey: "spatial-governance-production-release", run_status: "running", connection_status: "online", sync_completeness: "partial", current_phase: "review", ageMin: 4, durationMin: null },
+  { id: "run_2b8e04d5", title: "修复门禁策略校准", changeKey: "fix-gate-policy", run_status: "succeeded", connection_status: "offline", sync_completeness: "complete", current_phase: null, ageMin: 62, durationMin: 18 },
+  { id: "run_9c1d47a8", title: "知识裁决周检", changeKey: "knowledge-closeout", run_status: "failed", connection_status: "offline", sync_completeness: "partial", current_phase: "test", ageMin: 190, durationMin: 7 },
+  { id: "run_4e6b02f1", title: "语义索引重建", changeKey: "semantic-index-rebuild", run_status: "queued", connection_status: "online", sync_completeness: "pending", current_phase: null, ageMin: 260, durationMin: null },
+  { id: "run_5a0c83e9", title: "归档报告管线优化", changeKey: "archive-report-pipeline", run_status: "succeeded", connection_status: "offline", sync_completeness: "complete", current_phase: null, ageMin: 1440, durationMin: 23 }
 ];
 
+/** 真实 harness 事件词汇（Hunter-Harness events.ndjson schema_version 3）。 */
 const MOCK_RUN_EVENT_FLOW: Array<{ type: string; phase: string | null; tone: "info" | "success" | "warning" | "danger" }> = [
-  { type: "run.created", phase: null, tone: "info" },
-  { type: "run.started", phase: "prepare", tone: "info" },
-  { type: "phase.entered", phase: "plan", tone: "info" },
-  { type: "files.scanned", phase: "plan", tone: "info" },
-  { type: "phase.entered", phase: "push", tone: "info" },
-  { type: "files.synced", phase: "push", tone: "success" },
-  { type: "heartbeat", phase: null, tone: "info" },
-  { type: "phase.entered", phase: "verify", tone: "info" },
-  { type: "verify.warning", phase: "verify", tone: "warning" },
-  { type: "run.failed", phase: "verify", tone: "danger" }
+  { type: "phase.start", phase: "plan", tone: "info" },
+  { type: "decision", phase: "plan", tone: "info" },
+  { type: "phase.end", phase: "plan", tone: "success" },
+  { type: "phase.start", phase: "run", tone: "info" },
+  { type: "command", phase: "run", tone: "info" },
+  { type: "artifact", phase: "run", tone: "success" },
+  { type: "phase.end", phase: "run", tone: "success" },
+  { type: "phase.start", phase: "test", tone: "info" },
+  { type: "verification", phase: "test", tone: "success" },
+  { type: "phase.end", phase: "test", tone: "success" },
+  { type: "phase.start", phase: "review", tone: "info" },
+  { type: "phase.end", phase: "review", tone: "success" },
+  { type: "phase.start", phase: "submit", tone: "info" },
+  { type: "phase.end", phase: "submit", tone: "success" },
+  { type: "phase.start", phase: "archive", tone: "info" },
+  { type: "artifact", phase: "archive", tone: "success" },
+  { type: "phase.end", phase: "archive", tone: "success" }
 ];
 
 function buildMockRuns(projectId: string): RunSummary[] {
@@ -675,7 +720,7 @@ function buildMockRuns(projectId: string): RunSummary[] {
     return {
       run_id: `${seed.id}_${projectId.slice(0, 6)}${index}`,
       project_id: projectId,
-      change_key: `chg_${seed.id.slice(4)}`,
+      change_key: seed.changeKey,
       title: seed.title,
       run_status: seed.run_status,
       connection_status: seed.connection_status,
@@ -695,17 +740,27 @@ function buildMockRunEvents(run: RunSummary): RunEventSummary[] {
   const end = run.ended_at === null ? Date.parse(run.last_event_at ?? "") : Date.parse(run.ended_at);
   const isFailed = run.run_status === "failed";
   const isSucceeded = run.run_status === "succeeded";
-  const flow = MOCK_RUN_EVENT_FLOW.filter((item) => {
-    if (item.type === "run.failed") return isFailed;
-    return true;
-  }).map((item) => {
-    if (isSucceeded && item.type === "verify.warning") {
-      return { ...item, type: "run.completed", tone: "success" as const };
-    }
-    return item;
-  });
-  const count = isSucceeded || isFailed ? flow.length : Math.max(3, flow.length - 4);
-  return flow.slice(0, count).map((item, index) => {
+  const isQueued = run.run_status === "queued";
+
+  let flow = [...MOCK_RUN_EVENT_FLOW];
+  if (isQueued) {
+    flow = [];
+  } else if (isFailed) {
+    // 在 test 阶段的 verification 失败并被封存
+    const failIndex = flow.findIndex((item) => item.type === "verification" && item.phase === "test");
+    flow = flow.slice(0, failIndex + 1).map((item, index) =>
+      index === failIndex
+        ? { ...item, tone: "danger" as const }
+        : item
+    );
+  } else if (!isSucceeded && run.current_phase !== null) {
+    // 进行中：截断到当前阶段的 phase.start 之后一条
+    const phaseStart = flow.findIndex((item) => item.type === "phase.start" && item.phase === run.current_phase);
+    flow = flow.slice(0, Math.max(phaseStart + 2, 3));
+  }
+
+  const count = flow.length;
+  return flow.map((item, index) => {
     const at = new Date(start + ((end - start) || 60_000) * (index / Math.max(1, count - 1)) * 0.9);
     return {
       server_cursor: index + 1,
@@ -834,6 +889,7 @@ export class MockApiClient implements HunterApi {
   async listWorkflowFamilyVersions(slug: string): Promise<WorkflowFamilyVersion[]> {
     const family = MOCK_WORKFLOW_FAMILIES.find((item) => item.slug === slug);
     if (family === undefined || family.latest_version === null) return delay([]);
+    if (slug === "harness") return delay(clone(MOCK_HARNESS_VERSIONS));
     return delay([{
       family_slug: family.slug,
       version: family.latest_version,
@@ -865,9 +921,23 @@ export class MockApiClient implements HunterApi {
     return delay(projects);
   }
 
+  async createProject(input: { display_name: string }): Promise<ProjectSummary> {
+    const project: ProjectSummary = {
+      project_id: `prj_demo_${input.display_name.replaceAll(/\W+/g, "_").toLowerCase()}_${String(MOCK_PROJECTS.length).padStart(2, "0")}`,
+      display_name: input.display_name,
+      role: "owner",
+      latest_project_version: null,
+      latest_artifact_id: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      current_file_count: 0
+    };
+    MOCK_PROJECTS.push(project);
+    return delay(clone(project));
+  }
+
   async getProject(projectId: string): Promise<ProjectDetailModel> {
-    const project = MOCK_PROJECTS.find((p) => p.project_id === projectId);
-    if (!project) throw new Error("Project not found");
+    const project = MOCK_PROJECTS.find((p) => p.project_id === projectId);    if (!project) throw new Error("Project not found");
     return delay({
       ...project,
       request_id: "mock-" + crypto.randomUUID(),
@@ -933,9 +1003,61 @@ export class MockApiClient implements HunterApi {
 
   async listProjectSemanticChanges(projectId: string): Promise<SemanticDocument[]> {
     return delay([
-      mockSemanticDoc(projectId, "archive_record", "sample archive", '{"finalStatus":"OK"}', ".harness/archive/2026-06-30-sample/reports/final/summary-data.json", { status: "archived" }),
-      mockSemanticDoc(projectId, "archive_record", "gate policy archive", '{"finalStatus":"OK"}', ".harness/archive/2026-07-16-fix-gate-policy/reports/final/summary-data.json", { status: "archived" }),
-      mockSemanticDoc(projectId, "archive_record", "knowledge closeout", '{"finalStatus":"CONDITIONAL_OK"}', ".harness/archive/2026-07-17-knowledge-closeout/reports/final/summary-data.json", { status: "archived" })
+      mockSemanticDoc(
+        projectId,
+        "archive_record",
+        "fix-gate-policy",
+        JSON.stringify({
+          schemaVersion: "2.3",
+          changeName: "fix-gate-policy",
+          businessGoal: "校准门禁策略阈值，避免误拦截合法提案。",
+          finalStatus: "OK",
+          verification: {
+            unitTests: { status: "OK" },
+            apiTests: { status: "OK" },
+            dbCompatibility: { status: "OK" }
+          },
+          reviewSummary: { status: "ADVISORY" },
+          knownRisks: ["阈值调整后首周需人工抽查 10% 提案"],
+          gitFacts: { filesChanged: 6, insertions: 142, deletions: 38 }
+        }, null, 2),
+        ".harness/archive/2026-07-16-fix-gate-policy/reports/final/summary-data.json",
+        { status: "archived" }
+      ),
+      mockSemanticDoc(
+        projectId,
+        "archive_record",
+        "archive-report-pipeline",
+        JSON.stringify({
+          schemaVersion: "2.3",
+          changeName: "archive-report-pipeline",
+          businessGoal: "归档报告生成管线化，减少手工整理。",
+          finalStatus: "OK",
+          verification: { unitTests: { status: "OK" }, smoke: { status: "OK" } },
+          reviewSummary: { status: "PASS" },
+          knownRisks: [],
+          gitFacts: { filesChanged: 11, insertions: 486, deletions: 92 }
+        }, null, 2),
+        ".harness/archive/2026-08-01-archive-report-pipeline/reports/final/summary-data.json",
+        { status: "archived" }
+      ),
+      mockSemanticDoc(
+        projectId,
+        "archive_record",
+        "knowledge-closeout",
+        JSON.stringify({
+          schemaVersion: "2.3",
+          changeName: "knowledge-closeout",
+          businessGoal: "知识库周检与候选清理。",
+          finalStatus: "CONDITIONAL_OK",
+          verification: { unitTests: { status: "FAILED" } },
+          reviewSummary: { status: "ADVISORY" },
+          knownRisks: ["3 条候选知识置信度不足，被自动降级"],
+          gitFacts: { filesChanged: 2, insertions: 24, deletions: 9 }
+        }, null, 2),
+        ".harness/archive/2026-07-17-knowledge-closeout/reports/final/summary-data.json",
+        { status: "archived" }
+      )
     ]);
   }
 

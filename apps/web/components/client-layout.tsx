@@ -25,13 +25,12 @@ const NAV_GROUPS: NavGroup[] = [
     sectionKey: "sectionWorkspace",
     items: [
       { href: "/", icon: "overview", labelKey: "overview" },
-      { href: "/runs", icon: "activity", labelKey: "runs" }
+      { href: "/projects", icon: "folder", labelKey: "projects" }
     ]
   },
   {
     sectionKey: "sectionRegistry",
     items: [
-      { href: "/projects", icon: "folder", labelKey: "projects" },
       { href: "/skills", icon: "sparkles", labelKey: "skills" },
       { href: "/knowledge", icon: "brain", labelKey: "knowledge" }
     ]

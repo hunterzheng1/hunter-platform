@@ -5295,7 +5295,10 @@ button.danger:disabled,
 .relation-map circle { fill: var(--panel); stroke: var(--line-strong); stroke-width: 1.5; }
 .relation-map g.focus circle { stroke: var(--accent); stroke-width: 2.2; fill: var(--accent-glow); }
 .relation-map text { fill: var(--text); font-size: 9px; pointer-events: none; }
-.relation-edge-label { fill: var(--muted) !important; font-size: 8px !important; }
+.relation-map .relation-node-initial { font-size: 11px; font-weight: 600; fill: var(--muted); }
+.relation-map g.focus .relation-node-initial { fill: var(--accent); }
+.relation-map .relation-node-label { font-size: 9.5px; fill: var(--text); paint-order: stroke; stroke: var(--panel); stroke-width: 3px; }
+.relation-edge-label { fill: var(--muted) !important; font-size: 8.5px !important; paint-order: stroke; stroke: var(--panel); stroke-width: 3px; }
 .relation-ego-caption { margin: 0; color: var(--muted); font-size: .78rem; text-align: center; }
 .relation-ego-caption strong { color: var(--text); }
 
@@ -5451,8 +5454,16 @@ button.danger:disabled,
   overflow: auto;
 }
 
+.knowledge-hit-col {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  min-width: 0;
+}
+
 .knowledge-hit-list button {
   width: 100%;
+  min-width: 0;
   text-align: left;
   display: grid;
   gap: 2px;
@@ -5462,6 +5473,14 @@ button.danger:disabled,
   border-radius: var(--radius-sm);
   padding: 10px;
   cursor: pointer;
+}
+
+.knowledge-hit-list button > strong,
+.knowledge-hit-list button > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-right: 14px;
 }
 
 .knowledge-hit-list button.active,

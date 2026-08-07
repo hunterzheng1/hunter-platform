@@ -467,7 +467,9 @@ function RelationWorkbench({
           })}
           {[...egoPoints.entries()].map(([id, point]) => {
             const isFocus = id === focus.document_id;
-            const title = point.label.length > (isFocus ? 18 : 14) ? `${point.label.slice(0, isFocus ? 18 : 14)}…` : point.label;
+            const radius = isFocus ? 34 : 22;
+            const maxChars = isFocus ? 22 : 16;
+            const title = point.label.length > maxChars ? `${point.label.slice(0, maxChars)}…` : point.label;
             return <g
               key={id}
               className={isFocus ? "focus" : ""}
@@ -477,9 +479,10 @@ function RelationWorkbench({
               role="button"
               tabIndex={0}
             >
-              <circle r={isFocus ? 40 : 26} />
+              <circle r={radius} />
               <title>{point.label}</title>
-              <text textAnchor="middle" dy="4">{title}</text>
+              <text className="relation-node-initial" textAnchor="middle" dy="4">{point.label.slice(0, 1)}</text>
+              <text className="relation-node-label" textAnchor="middle" y={radius + 13}>{title}</text>
             </g>;
           })}
         </svg>

@@ -4,12 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 
 import type {
   WorkflowFamily,
-  WorkflowFamilyDraftState,
-  WorkflowFamilyMutation,
   WorkflowFamilyVersion
 } from "@hunter-harness/contracts";
 
-import { browserApi, buildUploadFormData, type HunterApi } from "../lib/api";
+import { browserApi, type HunterApi } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import { mockApi } from "../lib/mock-api";
 import { apiError, required, Status } from "./skill-shared";
@@ -20,37 +18,47 @@ function resolveApi(): HunterApi {
   return process.env.NEXT_PUBLIC_HUNTER_HARNESS_DEMO === "true" ? mockApi : browserApi();
 }
 
-const blankFamily: WorkflowFamilyMutation = {
-  slug: "",
-  displayName: "",
-  description: "",
-  tags: [],
-  required_profiles: ["general"]
-};
-
+/**
+ * 工作流目录（只读展示 + 更新）：展示 registry 中已发布的工作流族与版本。
+ * 创建 / 上传 / 发布由 harness 管线完成；「检查更新」触发来源同步（npm / GitHub），
+ * 端点落地前为占位行为，见 docs/platform-server-gaps.md。
+ */
 export function WorkflowCenter({ api: apiValue }: { api?: HunterApi }) {
-  const { t } = useI18n();
+  const { lang, t } = useI18n();
   const api = useMemo(() => apiValue ?? resolveApi(), [apiValue]);
+  const locale = lang === "zh" ? "zh-CN" : "en-US";
+  const copy = lang === "zh" ? {
+    sync: "检查更新",
+    syncing: "检查中…",
+    syncUpToDate: "已是最新版本。",
+    syncPending: "同步端点尚未落地；npm / GitHub 关联后可自动检查新版本。",
+    tags: "标签",
+    updatedAt: "更新于",
+    createdAt: "创建于",
+    latestChange: "最新变更",
+    versions: "个版本"
+  } : {
+    sync: "Check updates",
+    syncing: "Checking…",
+    syncUpToDate: "Already up to date.",
+    syncPending: "Sync endpoint not available yet; new versions are detected once npm / GitHub association lands.",
+    tags: "Tags",
+    updatedAt: "Updated",
+    createdAt: "Created",
+    latestChange: "Latest change",
+    versions: "versions"
+  };
   const [families, setFamilies] = useState<WorkflowFamily[] | null>(null);
   const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
-  const [draft, setDraft] = useState<WorkflowFamilyDraftState | null>(null);
   const [versions, setVersions] = useState<WorkflowFamilyVersion[]>([]);
-  const [profileUploads, setProfileUploads] = useState<Record<string, File[] | null>>({});
-  const [publishVersion, setPublishVersion] = useState("");
-  const [releaseNote, setReleaseNote] = useState("");
-  const [createForm, setCreateForm] = useState<WorkflowFamilyMutation>(blankFamily);
-  const [showCreate, setShowCreate] = useState(false);
   const [query, setQuery] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [publishingNpm, setPublishingNpm] = useState(false);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
   const selected = families?.find((family) => family.slug === selectedSlug) ?? null;
   const latestNpmRelease = selected?.npmReleases.find((entry) => entry.version === selected.latest_version) ?? null;
-  const npmPublishDisabled = process.env.NEXT_PUBLIC_HUNTER_HARNESS_DEMO === "true"
-    || selected?.latest_version === null
-    || latestNpmRelease?.status === "published";
 
   async function refreshFamilies(): Promise<void> {
     try {
@@ -64,123 +72,42 @@ export function WorkflowCenter({ api: apiValue }: { api?: HunterApi }) {
 
   async function loadFamilyDetail(slug: string): Promise<void> {
     setSelectedSlug(slug);
-    setDraft(null);
     setVersions([]);
-    setProfileUploads({});
+    setSyncMessage(null);
+    setLoadingDetail(true);
     try {
-      const [vers, nextDraft] = await Promise.all([
-        required(api, "listWorkflowFamilyVersions")(slug),
-        required(api, "getWorkflowFamilyDraft")(slug).catch(() => null)
-      ]);
+      const vers = await required(api, "listWorkflowFamilyVersions")(slug);
       setVersions(vers);
-      setDraft(nextDraft);
     } catch (reason) {
       setError(apiError(reason, t));
+    } finally {
+      setLoadingDetail(false);
+    }
+  }
+
+  async function syncFamily(): Promise<void> {
+    if (selectedSlug === null || syncing) return;
+    setSyncing(true);
+    setSyncMessage(null);
+    try {
+      if (api.syncWorkflowFamily === undefined) {
+        // 端点未落地：占位反馈（模拟检查耗时）
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        setSyncMessage(copy.syncPending);
+        return;
+      }
+      const result = await api.syncWorkflowFamily(selectedSlug);
+      setSyncMessage(result.updated ? copy.syncUpToDate : copy.syncUpToDate);
+      await refreshFamilies();
+      await loadFamilyDetail(selectedSlug);
+    } catch (reason) {
+      setError(apiError(reason, t));
+    } finally {
+      setSyncing(false);
     }
   }
 
   useEffect(() => { void refreshFamilies(); }, [api]);
-
-  async function createFamily(): Promise<void> {
-    setBusy(true);
-    try {
-      const saved = await required(api, "createWorkflowFamily")(createForm);
-      setShowCreate(false);
-      setCreateForm(blankFamily);
-      setMessage(t.workflows.familyCreated.replace("{name}", saved.displayName));
-      await refreshFamilies();
-      await loadFamilyDetail(saved.slug);
-    } catch (reason) {
-      setError(apiError(reason, t));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function uploadProfile(profile: string): Promise<void> {
-    if (selectedSlug === null) return;
-    const files = profileUploads[profile];
-    if (files === null || files === undefined || files.length === 0) return;
-    setBusy(true);
-    try {
-      const nextDraft = await required(api, "uploadWorkflowFamilyProfileDraft")(
-        selectedSlug,
-        profile,
-        buildUploadFormData(files)
-      );
-      setDraft(nextDraft);
-      setProfileUploads((current) => ({ ...current, [profile]: null }));
-      setMessage(t.workflows.profileUploaded.replace("{profile}", profile));
-      setError(null);
-    } catch (reason) {
-      setError(apiError(reason, t));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function runChecks(): Promise<void> {
-    if (selectedSlug === null) return;
-    setBusy(true);
-    try {
-      const result = await required(api, "runWorkflowFamilyDraftChecks")(selectedSlug);
-      setDraft((current) => current === null ? current : { ...current, checks: result });
-      setError(null);
-    } catch (reason) {
-      setError(apiError(reason, t));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function publish(): Promise<void> {
-    if (selectedSlug === null || publishVersion === "") return;
-    setBusy(true);
-    try {
-      await required(api, "publishWorkflowFamilyDraft")(selectedSlug, {
-        version: publishVersion,
-        ...(releaseNote === "" ? {} : { releaseNote })
-      });
-      setPublishVersion("");
-      setReleaseNote("");
-      setMessage(t.workflows.publishedVersion.replace("{version}", publishVersion));
-      await refreshFamilies();
-      await loadFamilyDetail(selectedSlug);
-    } catch (reason) {
-      setError(apiError(reason, t));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function publishToNpm(): Promise<void> {
-    if (selectedSlug === null || npmPublishDisabled) return;
-    setPublishingNpm(true);
-    try {
-      await required(api, "releaseWorkflowFamilyToNpm")(selectedSlug);
-      setMessage(t.workflows.npmPublished);
-      await refreshFamilies();
-      await loadFamilyDetail(selectedSlug);
-    } catch (reason) {
-      setError(apiError(reason, t));
-    } finally {
-      setPublishingNpm(false);
-    }
-  }
-
-  async function discardDraft(): Promise<void> {
-    if (selectedSlug === null || draft === null) return;
-    setBusy(true);
-    try {
-      await required(api, "discardWorkflowFamilyDraft")(selectedSlug, draft.revision);
-      setDraft(null);
-      setMessage(t.workflows.draftDiscarded);
-    } catch (reason) {
-      setError(apiError(reason, t));
-    } finally {
-      setBusy(false);
-    }
-  }
 
   const needle = query.trim().toLowerCase();
   const filtered = (families ?? []).filter((family) =>
@@ -195,31 +122,12 @@ export function WorkflowCenter({ api: apiValue }: { api?: HunterApi }) {
           <h1>{t.workflows.familyTitle}</h1>
           <p>{t.workflows.familyDescription}</p>
         </div>
-        <button type="button" className="primary-button" onClick={() => setShowCreate((value) => !value)}>
-          <Icon name="plus" size={14} /> {t.workflows.newFamily}
-        </button>
       </header>
-
-      {showCreate ? (
-        <div className="panel panel-themed compact-form">
-          <div className="panel-title"><h2>{t.workflows.newFamily}</h2></div>
-          <div className="form-grid">
-            <label>{t.workflows.name}<input value={createForm.displayName} onChange={(e) => setCreateForm({ ...createForm, displayName: e.target.value })} /></label>
-            <label>{t.workflows.key}<input value={createForm.slug} onChange={(e) => setCreateForm({ ...createForm, slug: e.target.value })} /></label>
-            <label className="span-2">{t.workflows.description2}<textarea value={createForm.description} onChange={(e) => setCreateForm({ ...createForm, description: e.target.value })} /></label>
-            <label>{t.workflows.requiredProfiles}<input value={createForm.required_profiles.join(", ")} onChange={(e) => setCreateForm({ ...createForm, required_profiles: e.target.value.split(",").map((item) => item.trim()).filter((item) => item !== "") })} placeholder="general, enterprise" /></label>
-          </div>
-          <div className="actions">
-            <button type="button" disabled={busy || !createForm.slug || !createForm.displayName || !createForm.description} onClick={() => void createFamily()}>{t.workflows.save}</button>
-            <button type="button" className="secondary" onClick={() => setShowCreate(false)}>{t.common.cancel}</button>
-          </div>
-        </div>
-      ) : null}
 
       <div className="workflow-list-toolbar">
         <label className="search-wide">
           <Icon name="search" size={16} />
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t.workflows.searchPlaceholder} />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t.workflows.searchPlaceholder} />
         </label>
         <span className="muted-stat">{filtered.length} / {families?.length ?? 0}</span>
       </div>
@@ -238,6 +146,10 @@ export function WorkflowCenter({ api: apiValue }: { api?: HunterApi }) {
             >
               <strong>{family.displayName}</strong>
               <span><code>{family.slug}</code> · {family.required_profiles.join(", ")}</span>
+              <span className="workflow-index-version">
+                {family.latest_version === null ? t.workflows.unpublished : `v${family.latest_version}`}
+                {" · "}{copy.updatedAt} {new Date(family.updated_at).toLocaleDateString(locale)}
+              </span>
               <Status value={family.latest_version === null ? "draft" : "published"} />
             </button>
           ))}
@@ -246,100 +158,78 @@ export function WorkflowCenter({ api: apiValue }: { api?: HunterApi }) {
         {selected === null ? (
           <div className="panel workflow-editor"><EmptyState icon="workflow" title={t.workflows.selectFamily} /></div>
         ) : (
-          <div className="panel workflow-editor compact-form">
-            <div className="panel-title">
-              <h2>{selected.displayName}</h2>
-              <span>{selected.latest_version ?? t.workflows.unpublished}</span>
-            </div>
-            <p>{selected.description}</p>
-            <p><small>{t.workflows.requiredProfiles}: {selected.required_profiles.join(", ")}</small></p>
-            {selected.latest_version === null ? null : (
-              <div className="actions">
+          <div className="panel workflow-editor">
+            <div className="workflow-detail-head">
+              <div className="workflow-detail-title">
+                <h2>{selected.displayName}</h2>
+                <code>{selected.slug}</code>
+              </div>
+              <div className="workflow-detail-badges">
+                {selected.latest_version === null ? (
+                  <span className="meta-pill">{t.workflows.unpublished}</span>
+                ) : (
+                  <span className="workflow-version-badge">v{selected.latest_version}</span>
+                )}
+                {latestNpmRelease === null ? null : (
+                  <span className="meta-pill">
+                    {latestNpmRelease.status === "published"
+                      ? `${t.workflows.npmBadgePublished} v${latestNpmRelease.version}`
+                      : latestNpmRelease.status === "failed"
+                        ? t.workflows.npmBadgeFailed
+                        : t.workflows.npmBadgeConflict}
+                  </span>
+                )}
                 <button
                   type="button"
-                  className="secondary"
-                  disabled={busy || publishingNpm || npmPublishDisabled}
-                  title={process.env.NEXT_PUBLIC_HUNTER_HARNESS_DEMO === "true" ? t.workflows.npmComingSoon : undefined}
-                  onClick={() => void publishToNpm()}
+                  className="secondary workflow-sync-btn"
+                  disabled={syncing}
+                  title={copy.syncPending}
+                  onClick={() => void syncFamily()}
                 >
-                  {publishingNpm ? t.workflows.npmPublishing : t.workflows.npmRelease}
+                  <Icon name="refresh" size={13} />
+                  {syncing ? copy.syncing : copy.sync}
                 </button>
-                <span className="meta-pill">
-                  {latestNpmRelease?.status === "published"
-                    ? `${t.workflows.npmBadgePublished} v${latestNpmRelease.version}`
-                    : latestNpmRelease?.status === "failed"
-                      ? t.workflows.npmBadgeFailed
-                      : latestNpmRelease?.status === "conflict"
-                        ? t.workflows.npmBadgeConflict
-                        : t.workflows.npmBadgeUnpublished}
-                </span>
               </div>
-            )}
+            </div>
 
-            <div className="panel-title"><h3>{t.workflows.profileUploads}</h3></div>
-            {selected.required_profiles.map((profile) => (
-              <div className="compact-form panel-upload" key={profile}>
-                <strong>{profile}</strong>
-                <input
-                  type="file"
-                  multiple
-                  accept=".zip"
-                  onChange={(e) => setProfileUploads((current) => ({
-                    ...current,
-                    [profile]: e.target.files === null || e.target.files.length === 0 ? null : Array.from(e.target.files)
-                  }))}
-                />
-                <button type="button" disabled={busy || profileUploads[profile] === null || profileUploads[profile] === undefined} onClick={() => void uploadProfile(profile)}>
-                  {t.workflows.uploadProfile}
-                </button>
-                {draft?.profiles.some((item) => item.profile === profile) ? (
-                  <span className="status status-published">{t.workflows.profileDraftReady}</span>
-                ) : null}
-              </div>
-            ))}
+            <p className="workflow-detail-desc">{selected.description}</p>
 
-            {draft === null ? (
-              <div className="notice">{t.workflows.noDraft}</div>
-            ) : (
-              <div className="panel panel-themed">
-                <div className="panel-title"><h3>{t.workflows.draftTitle}</h3><span>{t.workflows.revision.replace("{rev}", String(draft.revision))}</span></div>
-                <p><small>{t.workflows.draftProfiles}: {draft.profiles.map((item) => item.profile).join(", ") || "—"}</small></p>
-                <div className="compact-form">
-                  <button type="button" disabled={busy} onClick={() => void runChecks()}>{t.workflows.runChecks}</button>
-                  <input value={publishVersion} onChange={(e) => setPublishVersion(e.target.value)} placeholder="1.0.0" />
-                  <input value={releaseNote} onChange={(e) => setReleaseNote(e.target.value)} placeholder={t.workflows.releaseNotePlaceholder} />
-                  <button type="button" disabled={busy || publishVersion === ""} onClick={() => void publish()}>{t.workflows.publish}</button>
-                  <button type="button" className="secondary danger" disabled={busy} onClick={() => void discardDraft()}>{t.workflows.discardDraft}</button>
+            <div className="workflow-detail-meta">
+              <span>{t.workflows.requiredProfiles}: <strong>{selected.required_profiles.join(", ")}</strong></span>
+              {selected.tags.length === 0 ? null : <span>{copy.tags}: <strong>{selected.tags.join(", ")}</strong></span>}
+              <span>{copy.updatedAt} <strong>{new Date(selected.updated_at).toLocaleDateString(locale)}</strong></span>
+              <span>{copy.createdAt} <strong>{new Date(selected.created_at).toLocaleDateString(locale)}</strong></span>
+            </div>
+
+            {syncMessage === null ? null : <div className="notice">{syncMessage}</div>}
+
+            {loadingDetail ? <div className="skeleton-block" /> : versions.length === 0 ? null : (
+              <div className="workflow-versions">
+                <div className="panel-title">
+                  <h3>{t.workflows.versionHistory}</h3>
+                  <span>{versions.length} {copy.versions}</span>
                 </div>
-                {draft.checks === null ? null : (
-                  <ul className="check-list">
-                    {draft.checks.items.map((item) => (
-                      <li key={item.id}><Status value={item.status} /> <strong>{item.label}</strong> <span>{item.message}</span></li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-
-            {versions.length === 0 ? null : (
-              <div>
-                <div className="panel-title"><h3>{t.workflows.versionHistory}</h3></div>
-                <ul>
-                  {versions.map((version) => (
-                    <li key={version.version}>
-                      <strong>{version.version}</strong>{" "}
-                      <span>{version.profiles.map((item) => item.profile).join(", ")}</span>{" "}
-                      <span>{version.changeNote ?? ""}</span>
+                {versions[0]?.changeNote ? (
+                  <p className="workflow-latest-note">
+                    {copy.latestChange}: <strong>v{versions[0].version}</strong> — {versions[0].changeNote}
+                  </p>
+                ) : null}
+                <ol className="workflow-version-list">
+                  {versions.map((version, index) => (
+                    <li key={version.version} className={index === 0 ? "latest" : ""}>
+                      <strong>{version.version}</strong>
+                      <span className="workflow-version-profiles">{version.profiles.map((item) => item.profile).join(", ")}</span>
+                      <span className="workflow-version-note">{version.changeNote ?? t.workflows.changeNoteNone}</span>
+                      <time dateTime={version.created_at}>{new Date(version.created_at).toLocaleString(locale)}</time>
                     </li>
                   ))}
-                </ul>
+                </ol>
               </div>
             )}
           </div>
         )}
       </div>
 
-      {message === null ? null : <div className="notice success">{message}</div>}
       {error === null ? null : <div className="notice danger">{error}</div>}
     </section>
   );

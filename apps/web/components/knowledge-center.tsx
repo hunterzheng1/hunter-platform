@@ -8,7 +8,6 @@ import {
   ApiClientError,
   browserApi,
   type HunterApi,
-  type KnowledgeIngestListItem,
   type ProjectSummary
 } from "../lib/api";
 import { useI18n } from "../lib/i18n";
@@ -16,63 +15,34 @@ import { mockApi } from "../lib/mock-api";
 import { EmptyState } from "./ui/EmptyState";
 import { Icon } from "./ui/icons";
 import { PageHeader } from "./ui/PageHeader";
+import { Pagination, usePagination } from "./ui/Pagination";
 import { Spinner } from "./ui/Spinner";
-
-type KnowledgeTab = "search" | "review";
 
 interface SearchHit {
   document: SemanticDocument;
   project_id: string;
 }
 
-interface ReviewRow {
-  projectId: string;
-  projectName: string;
-  entry: KnowledgeIngestListItem;
-}
-
-function payloadField(payload: Record<string, unknown>, key: string): string {
-  const value = payload[key];
-  return typeof value === "string" ? value : "";
-}
-
 function statusLabel(value: string, labels: Record<string, string>): string {
   return labels[value] ?? value.replaceAll("_", " ");
 }
 
+/**
+ * 全局知识库：跨项目搜索与浏览。
+ * 知识候选的裁决在服务端 ingest 时自动完成（见 docs/backend-gaps-frontend-ux.md），
+ * 此处不再提供"候选审核"入口。
+ */
 export function KnowledgeCenter({ api }: { api?: HunterApi }) {
   const { lang } = useI18n();
   const client = useMemo<HunterApi>(() => api ?? (
     process.env.NEXT_PUBLIC_HUNTER_HARNESS_DEMO === "true" ? mockApi : browserApi()
   ), [api]);
   const copy = COPY[lang];
-  const [tab, setTab] = useState<KnowledgeTab>("search");
 
   return (
     <section className="knowledge-center">
       <PageHeader eyebrow={copy.eyebrow} title={copy.title} lede={copy.lede} />
-      <div className="workspace-tabs" role="tablist">
-        <button
-          type="button"
-          role="tab"
-          className={tab === "search" ? "active" : ""}
-          aria-selected={tab === "search"}
-          onClick={() => setTab("search")}
-        >
-          {copy.tabs.search}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          className={tab === "review" ? "active" : ""}
-          aria-selected={tab === "review"}
-          onClick={() => setTab("review")}
-        >
-          {copy.tabs.review}
-        </button>
-      </div>
-      {tab === "search" ? <GlobalKnowledgeSearch api={client} copy={copy} /> : null}
-      {tab === "review" ? <CandidateReviewPanel api={client} copy={copy} /> : null}
+      <GlobalKnowledgeSearch api={client} copy={copy} />
     </section>
   );
 }
@@ -93,8 +63,14 @@ function GlobalKnowledgeSearch({
   const [hits, setHits] = useState<SearchHit[] | null>(null);
   const [selected, setSelected] = useState<SearchHit | null>(null);
   const [mode, setMode] = useState<"idle" | "browse" | "search">("idle");
-  const [pendingTotal, setPendingTotal] = useState(0);
   const [libraryEmpty, setLibraryEmpty] = useState(false);
+  const {
+    page,
+    totalPages,
+    pageItems,
+    setPage,
+    total
+  } = usePagination(hits ?? [], 20, [hits?.length, mode, projectId]);
 
   const loadProjects = useCallback(async () => {
     try {
@@ -105,25 +81,9 @@ function GlobalKnowledgeSearch({
     }
   }, [api]);
 
-  const loadPending = useCallback(async (ids: string[]) => {
-    if (api.getKnowledgeProjectionStatus === undefined) {
-      setPendingTotal(0);
-      return;
-    }
-    let total = 0;
-    for (const id of ids) {
-      try {
-        const status = await api.getKnowledgeProjectionStatus(id);
-        total += status.pending_count;
-      } catch {
-        // ignore per-project projection status failures
-      }
-    }
-    setPendingTotal(total);
-  }, [api]);
-
   const browse = useCallback(async (selectedProjectId: string) => {
-    if (api.listProjectSemanticKnowledge === undefined) return;
+    const listKnowledge = api.listProjectSemanticKnowledge;
+    if (listKnowledge === undefined) return;
     setBusy(true);
     setError(null);
     setMode("browse");
@@ -133,17 +93,15 @@ function GlobalKnowledgeSearch({
       const targetIds = selectedProjectId === ""
         ? projectList.map((project) => project.project_id)
         : [selectedProjectId];
-      const collected: SearchHit[] = [];
-      for (const id of targetIds) {
-        const docs = await api.listProjectSemanticKnowledge(id);
-        for (const document of docs) {
-          collected.push({ document, project_id: id });
-        }
-      }
+      // 并行拉取各项目知识，避免串行瀑布
+      const perProject = await Promise.all(targetIds.map(async (id) => {
+        const docs = await listKnowledge(id);
+        return docs.map((document): SearchHit => ({ document, project_id: id }));
+      }));
+      const collected = perProject.flat();
       setHits(collected);
       setSelected(collected[0] ?? null);
       setLibraryEmpty(collected.length === 0);
-      await loadPending(targetIds);
     } catch (err) {
       setHits([]);
       setSelected(null);
@@ -151,7 +109,7 @@ function GlobalKnowledgeSearch({
     } finally {
       setBusy(false);
     }
-  }, [api, copy.networkError, loadPending, projects]);
+  }, [api, copy.networkError, projects]);
 
   useEffect(() => {
     void loadProjects();
@@ -180,10 +138,6 @@ function GlobalKnowledgeSearch({
       setHits(items);
       setSelected(items[0] ?? null);
       setLibraryEmpty(false);
-      const targetIds = projectId === ""
-        ? projects.map((project) => project.project_id)
-        : [projectId];
-      await loadPending(targetIds);
     } catch (err) {
       setHits([]);
       setSelected(null);
@@ -196,7 +150,6 @@ function GlobalKnowledgeSearch({
   function emptyMessage(): string {
     if (mode === "idle" || hits === null) return copy.searchHint;
     if (libraryEmpty && mode === "browse") {
-      if (pendingTotal > 0) return copy.emptyPending.replace("{n}", String(pendingTotal));
       return copy.emptyLibrary;
     }
     if (mode === "search") return copy.noResults;
@@ -233,12 +186,6 @@ function GlobalKnowledgeSearch({
         </button>
       </form>
 
-      {pendingTotal > 0 ? (
-        <p className="notice warning" role="status">
-          {copy.pendingBanner.replace("{n}", String(pendingTotal))}
-        </p>
-      ) : null}
-
       {error === null ? null : <p className="api-keys-message">{error}</p>}
 
       {hits === null || busy ? (
@@ -251,25 +198,44 @@ function GlobalKnowledgeSearch({
         />
       ) : (
         <div className="knowledge-split">
-          <ul className="knowledge-hit-list">
-            {hits.map((hit) => (
-              <li key={hit.document.document_id + hit.project_id}>
-                <button
-                  type="button"
-                  className={selected?.document.document_id === hit.document.document_id ? "active" : ""}
-                  onClick={() => setSelected(hit)}
-                >
-                  <strong>{hit.document.title}</strong>
-                  <small>
-                    {hit.project_id} · {statusLabel(
-                      String(hit.document.metadata.status ?? hit.document.kind),
-                      t.status as Record<string, string>
-                    )}
-                  </small>
-                </button>
-              </li>
-            ))}
-          </ul>
+          <div className="knowledge-hit-col">
+            <ul className="knowledge-hit-list">
+              {pageItems.map((hit) => (
+                <li key={hit.document.document_id + hit.project_id}>
+                  <button
+                    type="button"
+                    className={selected?.document.document_id === hit.document.document_id ? "active" : ""}
+                    onClick={() => setSelected(hit)}
+                  >
+                    <strong>{hit.document.title}</strong>
+                    <small>
+                      {hit.project_id} · {statusLabel(
+                        String(hit.document.metadata.status ?? hit.document.kind),
+                        t.status as Record<string, string>
+                      )}
+                    </small>
+                    <Icon className="hit-chevron" name="chevron-right" size={13} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+            {totalPages <= 1 ? null : (
+              <Pagination
+                page={page}
+                totalPages={totalPages}
+                total={total}
+                onChange={setPage}
+                labels={{
+                  first: copy.pageFirst,
+                  prev: copy.pagePrev,
+                  next: copy.pageNext,
+                  last: copy.pageLast,
+                  pageInfo: copy.pageInfo,
+                  totalCount: copy.totalCount
+                }}
+              />
+            )}
+          </div>
           {selected === null ? null : (
             <article className="knowledge-hit-detail">
               <h2>{selected.document.title}</h2>
@@ -288,172 +254,11 @@ function GlobalKnowledgeSearch({
   );
 }
 
-function CandidateReviewPanel({
-  api,
-  copy
-}: {
-  api: HunterApi;
-  copy: (typeof COPY)[keyof typeof COPY];
-}) {
-  const { t } = useI18n();
-  const [projects, setProjects] = useState<ProjectSummary[]>([]);
-  const [projectId, setProjectId] = useState("");
-  const [rows, setRows] = useState<ReviewRow[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [pendingTotal, setPendingTotal] = useState(0);
-
-  const refresh = useCallback(async (selectedProjectId: string) => {
-    if (api.listKnowledgeEntries === undefined) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const projectList = await api.listProjects("active");
-      setProjects(projectList);
-      const targetIds = selectedProjectId === ""
-        ? projectList.map((project) => project.project_id)
-        : [selectedProjectId];
-      const collected: ReviewRow[] = [];
-      let pending = 0;
-      for (const id of targetIds) {
-        const project = projectList.find((item) => item.project_id === id);
-        const entries = await api.listKnowledgeEntries(id, { status: "candidate", limit: 100 });
-        for (const entry of entries) {
-          collected.push({
-            projectId: id,
-            projectName: project?.display_name ?? id,
-            entry
-          });
-        }
-        if (api.getKnowledgeProjectionStatus !== undefined) {
-          try {
-            const status = await api.getKnowledgeProjectionStatus(id);
-            pending += status.pending_count;
-          } catch {
-            // ignore
-          }
-        }
-      }
-      setRows(collected);
-      setPendingTotal(pending);
-    } catch (err) {
-      setRows([]);
-      setError(err instanceof ApiClientError ? err.message : copy.networkError);
-    } finally {
-      setBusy(false);
-    }
-  }, [api, copy.networkError]);
-
-  useEffect(() => {
-    void refresh(projectId);
-  }, [projectId, refresh]);
-
-  async function adjudicate(row: ReviewRow, status: "active" | "deprecated"): Promise<void> {
-    if (api.updateKnowledgeEntryStatus === undefined) return;
-    setBusy(true);
-    setMessage(null);
-    setError(null);
-    try {
-      await api.updateKnowledgeEntryStatus(row.projectId, row.entry.entry_id, status);
-      setMessage(
-        status === "active"
-          ? copy.approved.replace("{id}", row.entry.entry_id)
-          : copy.rejected.replace("{id}", row.entry.entry_id)
-      );
-      await refresh(projectId);
-    } catch (err) {
-      setError(err instanceof ApiClientError ? err.message : copy.networkError);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="knowledge-review-panel">
-      <p className="lede">{copy.reviewHint}</p>
-      <div className="knowledge-review-toolbar">
-        <label>
-          {copy.filterProject}
-          <select
-            value={projectId}
-            onChange={(event) => setProjectId(event.target.value)}
-            disabled={busy}
-          >
-            <option value="">{copy.allProjects}</option>
-            {projects.map((project) => (
-              <option key={project.project_id} value={project.project_id}>
-                {project.display_name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <span className="knowledge-count">{copy.candidateCount.replace("{n}", String(rows.length))}</span>
-        <button type="button" className="secondary" disabled={busy} onClick={() => void refresh(projectId)}>
-          {busy ? copy.loading : copy.refresh}
-        </button>
-      </div>
-      {pendingTotal > 0 ? (
-        <p className="notice warning" role="status">
-          {copy.pendingBanner.replace("{n}", String(pendingTotal))}
-        </p>
-      ) : null}
-      {message === null ? null : <p className="lede">{message}</p>}
-      {error === null ? null : <p className="api-keys-message">{error}</p>}
-      {rows.length === 0 && !busy ? (
-        <EmptyState icon="tasks" title={copy.noCandidates} />
-      ) : (
-        <div className="knowledge-review-list">
-          {rows.map((row) => {
-            const title = payloadField(row.entry.payload, "title") || row.entry.entry_id;
-            const summary = payloadField(row.entry.payload, "summary") ||
-              payloadField(row.entry.payload, "body");
-            return (
-              <article key={row.projectId + ":" + row.entry.entry_id} className="knowledge-review-card">
-                <header>
-                  <h3>{title}</h3>
-                  <small>
-                    {row.projectName} · {row.entry.entry_id} ·{" "}
-                    {statusLabel(row.entry.status, t.status as Record<string, string>)}
-                  </small>
-                </header>
-                <p>{summary.slice(0, 400)}</p>
-                <div className="knowledge-review-actions">
-                  <button
-                    type="button"
-                    className="primary"
-                    disabled={busy}
-                    onClick={() => void adjudicate(row, "active")}
-                  >
-                    {copy.approve}
-                  </button>
-                  <button
-                    type="button"
-                    className="danger"
-                    disabled={busy}
-                    onClick={() => void adjudicate(row, "deprecated")}
-                  >
-                    {copy.reject}
-                  </button>
-                  <Link href={"/projects/" + encodeURIComponent(row.projectId)}>
-                    {copy.openProject}
-                  </Link>
-                </div>
-              </article>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
 const COPY = {
   zh: {
     eyebrow: "知识库",
     title: "全局知识",
-    lede: "跨项目浏览与搜索语义知识，并审核待批准的候选条目。",
-    tabs: { search: "跨项目搜索", review: "候选审核" },
+    lede: "跨项目浏览与搜索语义知识。候选条目在服务端 ingest 时自动裁决并投影。",
     searchPlaceholder: "搜索决策、风险、实现笔记…",
     search: "搜索",
     browse: "浏览",
@@ -461,29 +266,24 @@ const COPY = {
     searchHint: "输入关键词搜索，或留空浏览已投影的知识文档。",
     noResults: "没有匹配的知识条目。",
     emptyLibrary: "语义库当前为空。",
-    emptyPending: "库中暂无可见文档，但仍有 {n} 条待投影——请稍候或先 push。",
     emptyHint: "请先通过 CLI push 归档/知识，或等待 ingest 投影完成。若曾 purge/换库，需重新 push。",
-    pendingBanner: "待投影 {n} 条知识条目（尚未进入语义库）。",
     project: "项目",
     filterProject: "项目筛选",
     allProjects: "全部项目",
     refresh: "刷新",
     loading: "加载中…",
-    reviewHint: "仅显示待审候选条目；已批准内容可在「跨项目搜索」或项目知识库中查看。",
-    candidateCount: "待审 {n} 条",
-    noCandidates: "当前没有待审核的候选条目。",
-    approve: "批准为生效",
-    reject: "驳回（已废弃）",
-    openProject: "打开项目",
-    approved: "已批准 {id}",
-    rejected: "已驳回 {id}",
-    networkError: "无法连接到服务器。"
+    networkError: "无法连接到服务器。",
+    pageFirst: "第一页",
+    pagePrev: "上一页",
+    pageNext: "下一页",
+    pageLast: "最后一页",
+    pageInfo: "第 {page} / {total} 页",
+    totalCount: "共 {count} 条"
   },
   en: {
     eyebrow: "Knowledge",
     title: "Global knowledge",
-    lede: "Browse and search semantic knowledge across projects, and review pending candidates.",
-    tabs: { search: "Cross-project search", review: "Candidate review" },
+    lede: "Browse and search semantic knowledge across projects. Candidates are auto-adjudicated during server-side ingest.",
     searchPlaceholder: "Search decisions, risks, implementation notes…",
     search: "Search",
     browse: "Browse",
@@ -491,22 +291,18 @@ const COPY = {
     searchHint: "Enter a query to search, or leave empty to browse projected documents.",
     noResults: "No matching knowledge entries.",
     emptyLibrary: "The semantic library is empty.",
-    emptyPending: "No visible documents yet, but {n} entries are still pending projection — wait or push first.",
     emptyHint: "Push archives/knowledge via the CLI, or wait for ingest projection. If the DB was purged or replaced, push again.",
-    pendingBanner: "{n} knowledge entries pending projection (not yet in the semantic library).",
     project: "Project",
     filterProject: "Filter by project",
     allProjects: "All projects",
     refresh: "Refresh",
     loading: "Loading…",
-    reviewHint: "Only pending candidates are listed here. Approved entries appear in Cross-project search or project knowledge.",
-    candidateCount: "{n} pending",
-    noCandidates: "No candidate entries awaiting review.",
-    approve: "Approve as active",
-    reject: "Reject (deprecated)",
-    openProject: "Open project",
-    approved: "Approved {id}",
-    rejected: "Rejected {id}",
-    networkError: "Unable to reach the server."
+    networkError: "Unable to reach the server.",
+    pageFirst: "First page",
+    pagePrev: "Previous page",
+    pageNext: "Next page",
+    pageLast: "Last page",
+    pageInfo: "Page {page} of {total}",
+    totalCount: "{count} entries"
   }
 } as const;

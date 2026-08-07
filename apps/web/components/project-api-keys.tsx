@@ -5,6 +5,8 @@ import Link from "next/link";
 
 import { storedToken } from "../lib/auth";
 import { useI18n } from "../lib/i18n";
+import { Icon } from "./ui/icons";
+import { Modal } from "./ui/Modal";
 
 const SCOPES = ["push", "knowledge:write", "progress:write", "files:read"] as const;
 
@@ -41,6 +43,14 @@ const COPY = {
     empty: "尚未签发密钥。",
     revoke: "吊销",
     revokeConfirm: "确认吊销该密钥？吊销后不可恢复。",
+    revokeConfirmTitle: "吊销 API 密钥",
+    confirmRevoke: "确认吊销",
+    cancel: "取消",
+    revokeDone: "密钥已吊销。",
+    dismissPlaintext: "我已保存，关闭",
+    copyFailed: "复制失败，请手动选中复制。",
+    connectHint: "或在本机直接执行（密钥已包含在命令中）：",
+    copyCommand: "复制命令",
     revoked: "已吊销",
     lastUsed: "最近使用",
     never: "从未",
@@ -79,6 +89,14 @@ const COPY = {
     empty: "No keys issued yet.",
     revoke: "Revoke",
     revokeConfirm: "Revoke this key? This cannot be undone.",
+    revokeConfirmTitle: "Revoke API key",
+    confirmRevoke: "Revoke key",
+    cancel: "Cancel",
+    revokeDone: "Key revoked.",
+    dismissPlaintext: "I have saved it — dismiss",
+    copyFailed: "Copy failed. Please select and copy the key manually.",
+    connectHint: "Or run this locally (the key is embedded in the command):",
+    copyCommand: "Copy command",
     revoked: "Revoked",
     lastUsed: "Last used",
     never: "never",
@@ -106,10 +124,24 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
   const [loading, setLoading] = useState(false);
   const [plaintext, setPlaintext] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [commandCopied, setCommandCopied] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [messageTone, setMessageTone] = useState<"error" | "success">("error");
+  const [pendingRevoke, setPendingRevoke] = useState<KeyItem | null>(null);
+  const [revoking, setRevoking] = useState(false);
   const [labelError, setLabelError] = useState<string | null>(null);
   const [scopeError, setScopeError] = useState<string | null>(null);
   const [needLogin, setNeedLogin] = useState(false);
+
+  function showError(text: string): void {
+    setMessageTone("error");
+    setMessage(text);
+  }
+
+  function showSuccess(text: string): void {
+    setMessageTone("success");
+    setMessage(text);
+  }
 
   const token = storedToken();
 
@@ -134,11 +166,11 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
         setItems([]);
         const authFail = response.status === 401 || response.status === 403;
         setNeedLogin(authFail);
-        setMessage(authFail ? copy.needLogin : copy.failed);
+        showError(authFail ? copy.needLogin : copy.failed);
       }
     } catch {
       setItems([]);
-      setMessage(copy.failed);
+      showError(copy.failed);
     } finally {
       setLoading(false);
     }
@@ -175,7 +207,7 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
       if (!response.ok) {
         const authFail = response.status === 401 || response.status === 403;
         setNeedLogin(authFail);
-        setMessage(authFail ? copy.needLogin : copy.failed);
+        showError(authFail ? copy.needLogin : copy.failed);
         return;
       }
       const payload = (await response.json()) as { api_key: string };
@@ -184,22 +216,32 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
       setLabelError(null);
       await refresh();
     } catch {
-      setMessage(copy.failed);
+      showError(copy.failed);
     } finally {
       setBusy(false);
     }
   }
 
-  async function handleRevoke(keyId: string): Promise<void> {
-    if (token === null) return;
-    if (!window.confirm(copy.revokeConfirm)) return;
-    setMessage(null);
-    const response = await fetch(`/api/v1/projects/${projectId}/api-keys/${keyId}`, {
-      method: "DELETE",
-      headers: { Accept: "application/json", Authorization: "Bearer " + token }
-    });
-    if (!response.ok) setMessage(copy.failed);
-    await refresh();
+  async function confirmRevoke(): Promise<void> {
+    if (token === null || pendingRevoke === null) return;
+    setRevoking(true);
+    try {
+      const response = await fetch(`/api/v1/projects/${projectId}/api-keys/${pendingRevoke.key_id}`, {
+        method: "DELETE",
+        headers: { Accept: "application/json", Authorization: "Bearer " + token }
+      });
+      if (!response.ok) {
+        showError(copy.failed);
+      } else {
+        showSuccess(copy.revokeDone);
+      }
+      setPendingRevoke(null);
+      await refresh();
+    } catch {
+      showError(copy.failed);
+    } finally {
+      setRevoking(false);
+    }
   }
 
   function toggleScope(scope: string): void {
@@ -219,7 +261,22 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
     } catch {
-      setMessage(copy.failed);
+      showError(copy.copyFailed);
+    }
+  }
+
+  const connectCommand = plaintext === null
+    ? null
+    : `hunter-harness connect ${window.location.origin} --key ${plaintext}`;
+
+  async function copyConnectCommand(): Promise<void> {
+    if (connectCommand === null) return;
+    try {
+      await navigator.clipboard.writeText(connectCommand);
+      setCommandCopied(true);
+      window.setTimeout(() => setCommandCopied(false), 2000);
+    } catch {
+      showError(copy.copyFailed);
     }
   }
 
@@ -299,14 +356,30 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
         <div className="api-keys-plaintext" role="status">
           <p>{copy.created}</p>
           <code>{plaintext}</code>
-          <button type="button" className="secondary" onClick={() => void copyPlaintext()}>
-            {copied ? copy.copied : copy.copy}
-          </button>
+          <div className="api-keys-plaintext-actions">
+            <button type="button" className="secondary" onClick={() => void copyPlaintext()}>
+              {copied ? <Icon name="check" size={13} /> : <Icon name="copy" size={13} />}
+              {copied ? copy.copied : copy.copy}
+            </button>
+            <button type="button" className="text-button" onClick={() => setPlaintext(null)}>
+              {copy.dismissPlaintext}
+            </button>
+          </div>
+          <div className="api-keys-connect">
+            <p>{copy.connectHint}</p>
+            <div className="api-keys-connect-row">
+              <code>{connectCommand}</code>
+              <button type="button" className="secondary" onClick={() => void copyConnectCommand()}>
+                {commandCopied ? <Icon name="check" size={13} /> : <Icon name="copy" size={13} />}
+                {commandCopied ? copy.copied : copy.copyCommand}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
       {message === null ? null : (
-        <p className="api-keys-message" role="alert">
+        <p className={messageTone === "success" ? "notice success" : "api-keys-message"} role="alert">
           {message}
           {needLogin ? <>{" "}<Link href="/login">{copy.goLogin}</Link></> : null}
         </p>
@@ -328,15 +401,15 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
           </thead>
           <tbody>
             {items.map((item) => (
-              <tr key={item.key_id}>
+              <tr key={item.key_id} className={item.revoked_at !== null ? "api-key-revoked" : ""}>
                 <td>{item.label}</td>
                 <td>{item.scopes.join(", ")}</td>
                 <td>{item.last_used_at === null ? copy.never : item.last_used_at.slice(0, 19).replace("T", " ")}</td>
                 <td>
                   {item.revoked_at !== null ? (
-                    <span>{copy.revoked}</span>
+                    <span className="api-key-revoked-label">{copy.revoked}</span>
                   ) : (
-                    <button type="button" className="danger" onClick={() => void handleRevoke(item.key_id)}>
+                    <button type="button" className="danger" onClick={() => setPendingRevoke(item)}>
                       {copy.revoke}
                     </button>
                   )}
@@ -346,6 +419,26 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
           </tbody>
         </table>
       )}
+
+      <Modal
+        open={pendingRevoke !== null}
+        onClose={() => { if (!revoking) setPendingRevoke(null); }}
+        title={copy.revokeConfirmTitle}
+        closeLabel={copy.cancel}
+        footer={
+          <>
+            <button type="button" className="secondary" disabled={revoking} onClick={() => setPendingRevoke(null)}>
+              {copy.cancel}
+            </button>
+            <button type="button" className="danger" disabled={revoking} onClick={() => void confirmRevoke()}>
+              {revoking ? copy.loading : copy.confirmRevoke}
+            </button>
+          </>
+        }
+      >
+        <p>{copy.revokeConfirm}</p>
+        {pendingRevoke === null ? null : <p><strong>{pendingRevoke.label}</strong></p>}
+      </Modal>
     </section>
   );
 }
