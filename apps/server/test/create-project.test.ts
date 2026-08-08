@@ -75,4 +75,28 @@ describe("POST /api/v1/projects (S2)", () => {
     expect(String(response.json().api_key)).toMatch(/^hh_/);
     expect(response.json().key_id).toMatch(/^key_/);
   });
+
+  it("isolates an idempotency key across action-affecting query parameters", async () => {
+    const idempotencyKey = uuidV7();
+    const create = async (withKey: boolean) => app.inject({
+      method: "POST",
+      url: `/api/v1/projects?withKey=${String(withKey)}`,
+      headers: {
+        authorization: "Bearer " + sessionToken,
+        "idempotency-key": idempotencyKey
+      },
+      payload: { display_name: "Query-scoped project" }
+    });
+
+    const withoutKey = await create(false);
+    const withKey = await create(true);
+
+    expect(withoutKey.statusCode, withoutKey.body).toBe(201);
+    expect(withKey.statusCode, withKey.body).toBe(201);
+    expect(withoutKey.json().api_key).toBeUndefined();
+    expect(String(withKey.json().api_key)).toMatch(/^hh_/);
+    expect(withKey.json().project.project_id).not.toBe(
+      withoutKey.json().project.project_id
+    );
+  });
 });

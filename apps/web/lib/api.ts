@@ -909,7 +909,7 @@ export class HttpHunterApi implements HunterApi {
   ): Promise<{ items: SemanticDocument[]; total: number; next_cursor: string | null }> {
     const items: SemanticDocument[] = [];
     let cursor: string | null = options.cursor ?? null;
-    let total = 0;
+    let total: number;
     const pageLimit = options.limit ?? 100;
     const includeBody = options.includeBody === true;
     // When caller passes an explicit cursor, return a single page; otherwise drain.
@@ -1013,7 +1013,7 @@ export class HttpHunterApi implements HunterApi {
   ): Promise<{ items: RunSummary[]; total: number; next_cursor: string | null }> {
     const items: RunSummary[] = [];
     let cursor: string | null = options.cursor ?? null;
-    let total = 0;
+    let total: number;
     const pageLimit = options.limit ?? 100;
     const singlePage = options.cursor !== undefined;
     do {

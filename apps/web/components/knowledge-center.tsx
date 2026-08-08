@@ -104,7 +104,7 @@ function GlobalKnowledgeSearch({
 
   useEffect(() => {
     void browse(projectId);
-  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps -- browse on filter change only
+  }, [projectId]);
 
   async function handleSearch(event: FormEvent): Promise<void> {
     event.preventDefault();

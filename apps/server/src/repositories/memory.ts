@@ -5,6 +5,7 @@ import type {
   Actor,
   ArtifactRecord,
   AuditEvent,
+  ChangeArchivePackageRecord,
   IdempotencyRecord,
   ProjectRecord,
   ProjectFileRecord,
@@ -33,6 +34,7 @@ export class MemoryRepository implements ServerRepository {
   private readonly sessions = new Map<string, ProposalSessionRecord>();
   private readonly proposals = new Map<string, ProposalRecord>();
   private readonly artifacts = new Map<string, ArtifactRecord>();
+  private readonly archivePackages = new Map<string, ChangeArchivePackageRecord>();
   private readonly idempotency = new Map<string, IdempotencyRecord>();
   private readonly users = new Map<string, UserRecord>();
   private readonly userSessions = new Map<string, {
@@ -59,7 +61,8 @@ export class MemoryRepository implements ServerRepository {
     review: 0,
     artifact: 0,
     version: 0,
-    event: 0
+    event: 0,
+    archive: 0
   };
 
   async createActorWithToken(input: { actorId: string; token: string }): Promise<void> {
@@ -515,6 +518,9 @@ export class MemoryRepository implements ServerRepository {
     for (const [artifactId, artifact] of this.artifacts) {
       if (artifact.projectId === projectId) this.artifacts.delete(artifactId);
     }
+    for (const [key, archive] of this.archivePackages) {
+      if (archive.projectId === projectId) this.archivePackages.delete(key);
+    }
     // Keep bindings as tombstones so resolve cannot silently recreate (S7).
     this.projectFiles.delete(projectId);
     project.latestProjectVersion = null;
@@ -561,16 +567,26 @@ export class MemoryRepository implements ServerRepository {
         .filter((session) => session.projectId === projectId)
         .flatMap((session) => session.operations.flatMap((operation) =>
           operation.operation === "delete" ? [] : [operation.content_sha256]
-        ))
+        )),
+      ...[...this.archivePackages.values()]
+        .filter((archive) => archive.projectId === projectId)
+        .flatMap((archive) => [archive.packageSha256, ...archive.coreContentSha256])
     ])];
   }
 
   async isBlobReferenced(contentSha256: string): Promise<boolean> {
     return [...this.artifacts.values()].some((artifact) => artifact.manifest.files.some((operation) =>
       operation.operation !== "delete" && operation.content_sha256 === contentSha256
-    )) || [...this.sessions.values()].some((session) => session.operations.some((operation) =>
-      operation.operation !== "delete" && operation.content_sha256 === contentSha256
-    ));
+    )) || [...this.sessions.values()].some((session) =>
+      session.status === "open" &&
+      Date.parse(session.expiresAt) > Date.now() &&
+      session.operations.some((operation) =>
+        operation.operation !== "delete" && operation.content_sha256 === contentSha256
+      )
+    ) || [...this.archivePackages.values()].some(
+      (archive) => archive.packageSha256 === contentSha256 ||
+        archive.coreContentSha256.includes(contentSha256)
+    );
   }
 
   private ensureProjectFiles(project: ProjectRecord): ProjectFileRecord[] {
@@ -613,6 +629,85 @@ export class MemoryRepository implements ServerRepository {
       throw new ServerDomainError(404, "PROJECT_FILE_NOT_FOUND", "project file not found", { path });
     }
     return file;
+  }
+
+  async putChangeArchivePackage(input: {
+    actorId: string;
+    projectId: string;
+    changeKey: string;
+    packageSha256: string;
+    manifestSha256: string;
+    coreContentSha256: string[];
+    storedFiles: number;
+  }): Promise<{ record: ChangeArchivePackageRecord; created: boolean }> {
+    this.requireOwnedProject(input.actorId, input.projectId);
+    const key = input.projectId + "\0" + input.changeKey;
+    const existing = this.archivePackages.get(key);
+    if (existing !== undefined) {
+      return { record: structuredClone(existing), created: false };
+    }
+    const now = new Date().toISOString();
+    const record: ChangeArchivePackageRecord = {
+      archiveId: "arc_" + String(++this.counters.archive).padStart(8, "0"),
+      projectId: input.projectId,
+      changeKey: input.changeKey,
+      packageSha256: input.packageSha256,
+      manifestSha256: input.manifestSha256,
+      coreContentSha256: [...new Set(input.coreContentSha256)],
+      artifactId: null,
+      archiveStatus: "durable",
+      knowledgeStatus: "indexing",
+      attemptCount: 1,
+      failureStage: null,
+      lastErrorCode: null,
+      storedFiles: input.storedFiles,
+      createdAt: now,
+      updatedAt: now
+    };
+    this.archivePackages.set(key, record);
+    return { record: structuredClone(record), created: true };
+  }
+
+  async getChangeArchivePackage(
+    actorId: string,
+    projectId: string,
+    changeKey: string
+  ): Promise<ChangeArchivePackageRecord> {
+    this.requireOwnedProject(actorId, projectId);
+    const record = this.archivePackages.get(projectId + "\0" + changeKey);
+    if (record === undefined) {
+      throw new ServerDomainError(404, "ARCHIVE_PACKAGE_NOT_FOUND", "archive package not found");
+    }
+    return structuredClone(record);
+  }
+
+  async updateChangeArchivePackage(input: {
+    actorId: string;
+    projectId: string;
+    changeKey: string;
+    artifactId: string | null;
+    knowledgeStatus: ChangeArchivePackageRecord["knowledgeStatus"];
+    failureStage: ChangeArchivePackageRecord["failureStage"];
+    lastErrorCode: string | null;
+    coreContentSha256?: string[];
+    incrementAttempt?: boolean;
+  }): Promise<ChangeArchivePackageRecord> {
+    const record = await this.getChangeArchivePackage(
+      input.actorId,
+      input.projectId,
+      input.changeKey
+    );
+    record.artifactId = input.artifactId;
+    record.knowledgeStatus = input.knowledgeStatus;
+    record.failureStage = input.failureStage;
+    record.lastErrorCode = input.lastErrorCode;
+    if (input.coreContentSha256 !== undefined) {
+      record.coreContentSha256 = [...new Set(input.coreContentSha256)];
+    }
+    if (input.incrementAttempt === true) record.attemptCount += 1;
+    record.updatedAt = new Date().toISOString();
+    this.archivePackages.set(input.projectId + "\0" + input.changeKey, record);
+    return structuredClone(record);
   }
 
   async createProposalSession(

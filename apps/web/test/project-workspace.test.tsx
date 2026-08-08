@@ -5,6 +5,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ProjectWorkspace } from "../components/project-workspace";
+import { ToastProvider } from "../components/ui/Toast";
 import type { ArtifactManifestModel, HunterApi, ProjectFileContent, ProjectFileMetadata } from "../lib/api";
 
 const sha = (character: string) => "sha256:" + character.repeat(64);
@@ -94,7 +95,11 @@ describe("ProjectWorkspace", () => {
       artifact_id: "art_two",
       received_files: 1
     }));
-    render(<ProjectWorkspace api={api({ getProjectFileContent, createProjectFileProposal })} projectId="prj_one" />);
+    render(
+      <ToastProvider>
+        <ProjectWorkspace api={api({ getProjectFileContent, createProjectFileProposal })} projectId="prj_one" />
+      </ToastProvider>
+    );
 
     fireEvent.click(await screen.findByRole("tab", { name: "文件" }));
     expect(getProjectFileContent).not.toHaveBeenCalled();

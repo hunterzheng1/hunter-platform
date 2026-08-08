@@ -1,0 +1,132 @@
+{
+  "schemaVersion": "2.3",
+  "changeName": "archive-v23",
+  "businessGoal": "验证 schema 2.3 归档总结能够形成最近变更线索。",
+  "finalStatus": "WARN",
+  "archiveIntent": "record-only",
+  "archiveIntegrity": {
+    "ok": true
+  },
+  "candidateVerification": {
+    "ok": true,
+    "code": "PRODUCT_CANDIDATE_VERIFIED",
+    "assurance": "local-reproducible",
+    "message": "聚焦验证通过。"
+  },
+  "releaseDecision": {
+    "releaseEligible": false,
+    "code": "RELEASE_NOT_EVALUATED",
+    "checks": {},
+    "issues": []
+  },
+  "releaseEligible": false,
+  "projection": {},
+  "finalCommit": "fedcba9876543210",
+  "finalCommitBranch": "origin/main",
+  "baseCommit": "0123456789abcdef",
+  "diffStat": {
+    "filesChanged": 3,
+    "insertions": 29,
+    "deletions": 4,
+    "range": "0123456..fedcba9"
+  },
+  "stageStatus": {
+    "plan": "OK",
+    "run": "OK",
+    "test": "OK",
+    "review": "ADVISORY",
+    "submit": "OK",
+    "archive": "OK"
+  },
+  "verification": {
+    "unitTests": {
+      "run": 24,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passRate": "24/24",
+      "source": "committed"
+    },
+    "apiTests": {
+      "status": "OK",
+      "total": 4,
+      "passed": 4,
+      "failed": 0,
+      "blocked": 0,
+      "passRate": "4/4"
+    },
+    "browserE2E": {
+      "status": "NOT_RUN",
+      "total": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "retries": 0
+    },
+    "dbCompatibility": "NOT_RUN",
+    "coverageDisplay": "24/24"
+  },
+  "timeline": [
+    {
+      "phase": "run",
+      "attempt": 1,
+      "status": "OK",
+      "executorTool": "codex",
+      "executorAgent": "codex"
+    }
+  ],
+  "changedFiles": [
+    {
+      "path": "apps/server/src/instructions/proposal.ts",
+      "summary": "消费真实归档总结结构。",
+      "insertions": 29,
+      "deletions": 4
+    }
+  ],
+  "artifacts": [],
+  "reviewSummary": {
+    "status": "ADVISORY",
+    "red": 0,
+    "yellow": 0,
+    "redFixed": 0,
+    "redConfirmed": 0,
+    "yellowFixed": 0,
+    "yellowDeferred": 0,
+    "summary": "审查确认归档事实来自冻结事件流。"
+  },
+  "archiveManifest": {
+    "movedFiles": 4,
+    "generatedFiles": 2,
+    "totalArchiveFiles": 6,
+    "checksumStatus": "OK"
+  },
+  "reportPipeline": {
+    "schema_version": 1,
+    "generated_at": "2026-08-08T00:00:00.000Z",
+    "event_count": 8,
+    "sources": [
+      "events.ndjson",
+      "evidence/verification-ledger.json"
+    ],
+    "phases": {},
+    "commands": [],
+    "verificationChecks": [],
+    "artifacts": [],
+    "validationIssues": [],
+    "sourceConsistency": {
+      "ok": true,
+      "issues": []
+    }
+  },
+  "maintenanceNotes": [
+    "冻结事件流是报告事实源；维护时不要从 HTML 反推结论。"
+  ],
+  "knownRisks": [
+    {
+      "phase": "review",
+      "severity": "warning",
+      "message": "历史 2.2 归档仍需兼容读取。"
+    }
+  ],
+  "manualActions": []
+}

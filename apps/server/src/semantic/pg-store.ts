@@ -7,7 +7,12 @@ import type {
 } from "@hunter-harness/contracts";
 import type { Pool } from "pg";
 
-import { INGEST_ARTIFACT_ID, overviewFromDocuments, type SemanticStore } from "./store.js";
+import {
+  INGEST_ARTIFACT_ID,
+  overviewFromDocuments,
+  type SemanticGenerationGuard,
+  type SemanticStore
+} from "./store.js";
 
 function documentFromRow(row: Record<string, unknown>): SemanticDocument {
   return {
@@ -38,10 +43,31 @@ function edgeFromRow(row: Record<string, unknown>): SemanticEdge {
 export class PgSemanticStore implements SemanticStore {
   constructor(private readonly pool: Pool) {}
 
-  async rebuild(build: SemanticIndexBuild): Promise<void> {
+  async rebuild(
+    build: SemanticIndexBuild,
+    guard?: SemanticGenerationGuard
+  ): Promise<boolean> {
+    if (guard !== undefined &&
+        (guard.expectedArtifactId !== build.artifact_id || !await guard.isCurrent())) {
+      return false;
+    }
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      if (guard !== undefined) {
+        const generation = await client.query(
+          `SELECT latest_artifact_id
+           FROM projects
+           WHERE project_id = $1
+           FOR SHARE`,
+          [build.project_id]
+        );
+        const row = generation.rows[0] as { latest_artifact_id?: string | null } | undefined;
+        if (row?.latest_artifact_id !== guard.expectedArtifactId) {
+          await client.query("ROLLBACK");
+          return false;
+        }
+      }
       await client.query("DELETE FROM semantic_edges WHERE project_id = $1", [build.project_id]);
       // Ingest-projected documents are owned by the P3 knowledge API, not the push snapshot.
       await client.query(
@@ -75,7 +101,16 @@ export class PgSemanticStore implements SemanticStore {
           [JSON.stringify(build.edges)]
         );
       }
+      await client.query(
+        `INSERT INTO semantic_generations(project_id, artifact_id, updated_at)
+         VALUES ($1, $2, now())
+         ON CONFLICT (project_id) DO UPDATE SET
+           artifact_id = EXCLUDED.artifact_id,
+           updated_at = EXCLUDED.updated_at`,
+        [build.project_id, build.artifact_id]
+      );
       await client.query("COMMIT");
+      return true;
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -200,6 +235,7 @@ export class PgSemanticStore implements SemanticStore {
       await client.query("BEGIN");
       await client.query("DELETE FROM semantic_edges WHERE project_id = $1", [projectId]);
       await client.query("DELETE FROM semantic_documents WHERE project_id = $1", [projectId]);
+      await client.query("DELETE FROM semantic_generations WHERE project_id = $1", [projectId]);
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -211,7 +247,7 @@ export class PgSemanticStore implements SemanticStore {
 
   async latestArtifactId(projectId: string): Promise<string | null> {
     const result = await this.pool.query(
-      `SELECT artifact_id FROM semantic_documents WHERE project_id = $1 LIMIT 1`,
+      `SELECT artifact_id FROM semantic_generations WHERE project_id = $1`,
       [projectId]
     );
     const row = result.rows[0] as { artifact_id?: string } | undefined;

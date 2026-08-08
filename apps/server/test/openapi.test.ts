@@ -24,6 +24,9 @@ describe("OpenAPI v1 contract", () => {
       "/api/v1/projects",
       "/api/v1/projects/{project_id}",
       "/api/v1/projects/{project_id}/artifacts",
+      "/api/v1/projects/{project_id}/changes/{change_key}/archive-package",
+      "/api/v1/projects/{project_id}/changes/{change_key}/archive-package/download",
+      "/api/v1/projects/{project_id}/instruction-proposals",
       "/api/v1/projects/{project_id}/workflow-binding",
       "/api/v1/projects/{project_id}/semantic/overview",
       "/api/v1/projects/{project_id}/semantic/knowledge",
@@ -138,6 +141,81 @@ describe("OpenAPI v1 contract", () => {
       .toBe("#/components/schemas/FinalizeProposalRequest");
     expect(document.components.schemas.FinalizeProposalRequest?.properties?.sensitive_scan_skip)
       .toMatchObject({ const: true });
+  });
+
+  it("keeps archive upload and instruction proposal schemas aligned with runtime validation", async () => {
+    const document = parseYaml(await readFile(
+      new URL("../openapi/hunter-harness-v1.yaml", import.meta.url),
+      "utf8"
+    )) as {
+      paths: Record<string, Record<string, {
+        requestBody?: { content?: Record<string, unknown> };
+        responses?: Record<string, unknown>;
+      }>>;
+      components: { schemas: Record<string, {
+        required?: string[];
+        properties?: Record<string, {
+          const?: string;
+          default?: string;
+          items?: {
+            required?: string[];
+            properties?: Record<string, unknown>;
+          };
+        }>;
+      }> };
+    };
+    const upload = document.paths[
+      "/api/v1/projects/{project_id}/changes/{change_key}/archive-package"
+    ]?.put;
+    expect(Object.keys(upload?.requestBody?.content ?? {})).toEqual(["application/zip"]);
+    expect(upload?.responses).toHaveProperty("413");
+    expect(upload?.responses).toHaveProperty("415");
+    expect(document.components.schemas.ArchivePackageReceipt?.required)
+      .toContain("request_id");
+
+    const request = document.components.schemas.InstructionProposalRequest;
+    expect(request?.required).not.toContain("language");
+    expect(request?.properties?.language).toMatchObject({ const: "zh-CN", default: "zh-CN" });
+    expect(request?.properties?.documents?.items?.properties?.path).toEqual({
+      type: "string",
+      enum: [
+        "AGENTS.md",
+        "CLAUDE.md",
+        "CODEBUDDY.md",
+        ".harness/rules/project-guidance.md",
+        ".cursor/rules/project-guidance.mdc",
+        "package.json",
+        "pom.xml",
+        "build.gradle",
+        "build.gradle.kts",
+        "pyproject.toml"
+      ]
+    });
+    expect(request?.properties?.recent_changes?.items).toMatchObject({
+      required: ["change_key", "summary", "decisions"],
+      properties: {
+        change_key: { type: "string", minLength: 1, maxLength: 160 },
+        summary: { type: "string", maxLength: 10000 },
+        decisions: {
+          type: "array",
+          maxItems: 50,
+          items: { type: "string", minLength: 1, maxLength: 2000 }
+        }
+      }
+    });
+    const proposal = document.components.schemas.InstructionProposal;
+    expect(proposal?.required).toContain("request_id");
+    expect(proposal?.properties?.proposal_id).toMatchObject({
+      pattern: "^ipr_[A-Za-z0-9][A-Za-z0-9_-]{0,155}$"
+    });
+    expect(proposal?.properties?.files?.items).toMatchObject({
+      additionalProperties: false,
+      required: ["path", "operation", "base_content_sha256", "content_sha256", "content"],
+      properties: {
+        operation: { type: "string", enum: ["add", "modify"] },
+        content_sha256: { type: "string", pattern: "^sha256:[a-f0-9]{64}$" }
+      }
+    });
   });
 
   it("ai-jobs GET 200 response schema includes slug+agent dedup key (Y9)", async () => {

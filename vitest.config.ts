@@ -2,12 +2,27 @@ import { fileURLToPath } from "node:url";
 
 import { defineConfig } from "vitest/config";
 
-const integrationTestFiles = [
-  "packages/core/test/refresh.test.ts",
-  "packages/core/test/initialize.test.ts",
-  "packages/core/test/freshness.test.ts",
-  "packages/core/test/bundle-content-projection.test.ts",
-  "packages/core/test/agent-adapters.test.ts"
+// packages/core and packages/contracts still expose the shared modules consumed
+// by the platform apps, but their copied test trees also contain CLI project
+// lifecycle and offline Harness Bundle coverage. Those tests belong to the
+// Hunter-Harness repository, which owns the required workflow fixtures.
+const platformPackageTestFiles = [
+  "packages/contracts/test/knowledge-ingest.test.ts",
+  "packages/contracts/test/schemas.test.ts",
+  "packages/contracts/test/skill-package.test.ts",
+  "packages/core/test/ai-prompt-parser.test.ts",
+  "packages/core/test/ai.test.ts",
+  "packages/core/test/checker.test.ts",
+  "packages/core/test/diff.test.ts",
+  "packages/core/test/file-policy.test.ts",
+  "packages/core/test/fixer.test.ts",
+  "packages/core/test/frontmatter.test.ts",
+  "packages/core/test/knowledge.test.ts",
+  "packages/core/test/meta.test.ts",
+  "packages/core/test/path-safety.test.ts",
+  "packages/core/test/registry-governance.test.ts",
+  "packages/core/test/security-scanner.test.ts",
+  "packages/core/test/skill-agents.test.ts"
 ];
 
 export default defineConfig({
@@ -44,21 +59,11 @@ export default defineConfig({
           testTimeout: 30000,
           hookTimeout: 30000,
           include: [
-            "packages/**/*.test.ts",
+            ...platformPackageTestFiles,
             "apps/**/*.test.ts",
             "apps/**/*.test.tsx",
             "tests/**/*.test.ts"
-          ],
-          exclude: integrationTestFiles
-        }
-      },
-      {
-        extends: true,
-        test: {
-          name: "integration",
-          testTimeout: 120000,
-          hookTimeout: 120000,
-          include: integrationTestFiles
+          ]
         }
       }
     ]
