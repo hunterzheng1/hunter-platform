@@ -100,12 +100,12 @@ describe("ProjectRegistry list UX", () => {
     expect(within(firstCard).getByRole("heading", { name: "Project 01" })).toBeInTheDocument();
     // Local timezone may shift the hour; seconds must still render.
     expect(within(firstCard).getByText(/:59\b/)).toBeInTheDocument();
-    expect(screen.getAllByText(/第 1\/2 页|Page 1\/2/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/第 1\s*\/\s*2 页|Page 1\s*\/\s*2/i).length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole("button", { name: /下一页|Next/i }));
     const pageTwo = screen.getAllByRole("article").filter((node) => node.classList.contains("project-list-card"));
     expect(pageTwo).toHaveLength(3);
-    expect(screen.getAllByText(/第 2\/2 页|Page 2\/2/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/第 2\s*\/\s*2 页|Page 2\s*\/\s*2/i).length).toBeGreaterThan(0);
   });
 
   it("hides the pager on a single page and shows version badges", async () => {

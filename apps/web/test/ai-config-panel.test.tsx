@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AiProviderConfig, AiQuotaUsage } from "@hunter-harness/contracts";
 
 import { AiConfigPanel } from "../components/ai-config-panel";
+import { ToastProvider } from "../components/ui/Toast";
 
 // mock browserApi：可写 mock（listAiProviders 返回多模型 providers；各 mutation 返回成功）
 const { api } = vi.hoisted(() => {
@@ -79,7 +80,7 @@ function btn(name: RegExp | string): HTMLElement {
 }
 
 async function renderLoaded(): Promise<void> {
-  render(<AiConfigPanel />);
+  render(<ToastProvider><AiConfigPanel /></ToastProvider>);
   await waitFor(() => expect(screen.getByText("DeepSeek")).toBeInTheDocument());
 }
 
@@ -227,9 +228,9 @@ describe("AiConfigPanel 接后端 API (T11, I-01~I-06)", () => {
 
   it("删除供应商确认后调 deleteAiProvider", async () => {
     await renderLoaded();
-    fireEvent.click(btn("✕"));
+    fireEvent.click(btn(/^删除$|^Delete$/));
     expect(screen.getByText(/确认删除供应商 DeepSeek/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /^删除$|^Delete$/ }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /^删除$|^Delete$/ }));
     await waitFor(() => expect(api.deleteAiProvider).toHaveBeenCalledTimes(1));
   });
 

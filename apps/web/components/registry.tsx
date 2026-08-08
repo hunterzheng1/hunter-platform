@@ -211,7 +211,7 @@ export function SkillRegistry({ api: apiValue }: { api?: HunterApi }) {
         <div className="panel panel-themed panel-list registry-list">
           <div className="panel-title"><h2>{t.skills.skillList}</h2><span>{filtered.length}</span></div>
           <div className="registry-list-body">
-          {skills === null ? <div className="skeleton-block" /> : filtered.length === 0 ? <Empty>{t.skills.noMatch}</Empty> : pageItems.map((item) => {
+          {skills === null ? <Skeleton variant="table" lines={6} /> : filtered.length === 0 ? <EmptyState icon="search" title={t.skills.noMatch} /> : pageItems.map((item) => {
             if (item.kind === "external") {
               const skill = item.skill;
               return (

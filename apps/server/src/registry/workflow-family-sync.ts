@@ -121,8 +121,8 @@ export async function syncWorkflowFamilyFromSource(
     );
   }
 
-  let remoteVersion: string | null = null;
-  let files: SourceFile[] = [];
+  let remoteVersion: string | null;
+  let files: SourceFile[];
 
   if (source.type === "npm") {
     const snapshot = await fetchNpmSnapshot(source.ref, deps);

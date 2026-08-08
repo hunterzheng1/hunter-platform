@@ -65,7 +65,7 @@ function api(overrides: Partial<HunterApi> = {}): HunterApi {
 describe("Web Console", () => {
   it("renders dashboard overview in Chinese-friendly copy", async () => {
     render(<DashboardConsole api={api()} />);
-    expect(screen.getByText(/正在加载总览|Loading overview/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/正在加载总览|Loading overview/i)).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: /总览|Overview/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /最近项目|Recent projects/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /技能使用|Skill usage/i })).toBeInTheDocument();

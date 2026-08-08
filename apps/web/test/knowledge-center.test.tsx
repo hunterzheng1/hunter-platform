@@ -34,7 +34,7 @@ describe("KnowledgeCenter (P3)", () => {
         }
       }
     ]);
-    const listProjectSemanticKnowledge = vi.fn().mockResolvedValue([]);
+    const listProjectSemanticKnowledge = vi.fn().mockResolvedValue({ items: [], total: 0, next_cursor: null });
     const api = {
       searchSemanticDocuments,
       listProjects: vi.fn().mockResolvedValue([
@@ -86,7 +86,7 @@ describe("KnowledgeCenter (P3)", () => {
   });
 
   it("does not render manual candidate review controls", async () => {
-    const listProjectSemanticKnowledge = vi.fn().mockResolvedValue([]);
+    const listProjectSemanticKnowledge = vi.fn().mockResolvedValue({ items: [], total: 0, next_cursor: null });
     const api = {
       searchSemanticDocuments: vi.fn(),
       listProjects: vi.fn().mockResolvedValue([

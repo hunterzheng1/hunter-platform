@@ -72,6 +72,10 @@ import {
   buildChangeArchive,
   resolveArchiveContentPath
 } from "./archive/change-archive.js";
+import {
+  archivePackageReceipt,
+  ingestArchivePackage
+} from "./archive/package-ingest.js";
 import { defaultServerConfig, type ServerConfig } from "./config.js";
 import { buildDashboardOverview } from "./dashboard/overview.js";
 import { isNpmPublishConfigured, loadNpmPublishConfig } from "./npm/config.js";
@@ -104,6 +108,12 @@ import { SemanticMemoryStore } from "./semantic/memory-store.js";
 import type { SemanticStore } from "./semantic/store.js";
 import { registerSemanticMcpRoutes } from "./mcp/register.js";
 import { randomUUID } from "node:crypto";
+import {
+  buildInstructionProposal,
+  instructionProposalRequestSchema,
+  loadServerRecentChanges,
+  mergeRecentChanges
+} from "./instructions/proposal.js";
 
 export interface CreateServerOptions {
   repository: ServerRepository;
@@ -469,6 +479,11 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
   app.addContentTypeParser(
     "application/octet-stream",
+    { parseAs: "buffer" },
+    (_request, body, done) => done(null, body)
+  );
+  app.addContentTypeParser(
+    ["application/zip", "application/x-zip-compressed"],
     { parseAs: "buffer" },
     (_request, body, done) => done(null, body)
   );
@@ -2069,6 +2084,128 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
       request_id: requestId
     };
   });
+
+  app.post(
+    "/api/v1/projects/:projectId/instruction-proposals",
+    async (request, reply) => {
+      const { actor, requestId } = await authenticated(request, repository, "push");
+      const { projectId } = request.params as { projectId: string };
+      const project = await repository.getProject(actor.actorId, projectId);
+      const body = instructionProposalRequestSchema.parse(request.body);
+      const serverRecentChanges = await loadServerRecentChanges({
+        actorId: actor.actorId,
+        projectId,
+        repository,
+        storage
+      });
+      const result = await mutation(request, repository, actor, requestId, async () => {
+        const proposal = buildInstructionProposal({
+          projectId,
+          projectName: project.displayName,
+          request: {
+            ...body,
+            recent_changes: mergeRecentChanges(serverRecentChanges, body.recent_changes)
+          }
+        });
+        await writeAudit(repository, {
+          actorId: actor.actorId,
+          projectId,
+          action: "instructions.proposed",
+          targetId: proposal.proposal_id,
+          requestId,
+          details: {
+            finding_count: proposal.findings.length,
+            file_count: proposal.files.length,
+            rule_candidate_count: proposal.rule_candidates.length,
+            language: proposal.language
+          }
+        });
+        return { statusCode: 201, body: { ...proposal } };
+      });
+      return send(reply, requestId, result);
+    }
+  );
+
+  app.put(
+    "/api/v1/projects/:projectId/changes/:changeKey/archive-package",
+    async (request, reply) => {
+      const { actor, requestId } = await authenticated(request, repository, "push");
+      const { projectId, changeKey } = request.params as { projectId: string; changeKey: string };
+      if (!Buffer.isBuffer(request.body)) {
+        throw new ServerDomainError(
+          415,
+          "ARCHIVE_CONTENT_TYPE_REQUIRED",
+          "archive upload must use application/zip"
+        );
+      }
+      const result = await mutation(request, repository, actor, requestId, async () => {
+        const receipt = await ingestArchivePackage({
+          actorId: actor.actorId,
+          projectId,
+          changeKey,
+          bytes: request.body as Buffer,
+          repository,
+          storage,
+          semanticStore,
+          limits: {
+            maxFileBytes: config.maxFileBytes,
+            maxUploadFiles: config.maxUploadFiles,
+            maxPackageBytes: config.maxProposalBytes,
+            maxUncompressedBytes: config.maxProposalBytes
+          },
+          sessionTtlMs: config.sessionTtlMs,
+          maxChunkBytes: config.maxChunkBytes
+        });
+        await writeAudit(repository, {
+          actorId: actor.actorId,
+          projectId,
+          action: "change_archive.uploaded",
+          targetId: receipt.archive_id,
+          requestId,
+          details: {
+            change_key: changeKey,
+            package_sha256: receipt.package_sha256,
+            stored_files: receipt.stored_files,
+            knowledge_status: receipt.knowledge_status
+          }
+        });
+        return { statusCode: 201, body: { ...receipt } };
+      });
+      return send(reply, requestId, result);
+    }
+  );
+
+  app.get(
+    "/api/v1/projects/:projectId/changes/:changeKey/archive-package",
+    async (request, reply) => {
+      const { actor, requestId } = await authenticated(request, repository, "files:read");
+      const { projectId, changeKey } = request.params as { projectId: string; changeKey: string };
+      const record = await repository.getChangeArchivePackage(actor.actorId, projectId, changeKey);
+      reply.header("X-Request-Id", requestId);
+      return { ...archivePackageReceipt(record), request_id: requestId };
+    }
+  );
+
+  app.get(
+    "/api/v1/projects/:projectId/changes/:changeKey/archive-package/download",
+    async (request, reply) => {
+      const { actor, requestId } = await authenticated(request, repository, "files:read");
+      const { projectId, changeKey } = request.params as { projectId: string; changeKey: string };
+      const record = await repository.getChangeArchivePackage(actor.actorId, projectId, changeKey);
+      const bytes = await storage.getBlob(record.packageSha256);
+      if (sha256Bytes(bytes) !== record.packageSha256) {
+        throw new ServerDomainError(500, "ARCHIVE_STORAGE_CORRUPT", "stored archive hash mismatch");
+      }
+      reply.header("X-Request-Id", requestId);
+      reply.header("X-Content-SHA256", record.packageSha256);
+      reply.header("Content-Type", "application/zip");
+      reply.header(
+        "Content-Disposition",
+        `attachment; filename="${encodeURIComponent(changeKey)}.zip"`
+      );
+      return reply.send(Buffer.from(bytes));
+    }
+  );
 
   app.get("/api/v1/projects/:projectId/changes/:changeKey/archive", async (request, reply) => {
     const { actor, requestId } = await authenticated(request, repository, "files:read");

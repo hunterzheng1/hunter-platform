@@ -51,7 +51,7 @@ describe("ProjectSemanticPanels", () => {
         artifact_id: "art_one",
         counts: { documents: 1, knowledge: 1, rules: 0, changes: 0, agent_instructions: 0, edges: 0 }
       })),
-      listProjectSemanticKnowledge: vi.fn(async () => [knowledge]),
+      listProjectSemanticKnowledge: vi.fn(async () => ({ items: [knowledge], total: 1, next_cursor: null })),
       listProjectSemanticRules: vi.fn(async () => []),
       listProjectSemanticChanges: vi.fn(async () => []),
       getProjectSemanticGraph,
@@ -74,7 +74,7 @@ describe("ProjectSemanticPanels", () => {
         artifact_id: "art_one",
         counts: { documents: 52, knowledge: 52, rules: 0, changes: 0, agent_instructions: 0, edges: 0 }
       })),
-      listProjectSemanticKnowledge: vi.fn(async () => knowledge),
+      listProjectSemanticKnowledge: vi.fn(async () => ({ items: knowledge, total: knowledge.length, next_cursor: null })),
       listProjectSemanticRules: vi.fn(async () => []),
       listProjectSemanticChanges: vi.fn(async () => []),
       getProjectSemanticGraph: vi.fn(),
@@ -94,7 +94,8 @@ describe("ProjectSemanticPanels", () => {
     });
     expect(within(listPane).queryByText("Knowledge item 00")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "candidate" }));
+    const statusToolbar = screen.getByRole("toolbar", { name: /按状态筛选|Filter by status/i });
+    fireEvent.click(within(statusToolbar).getByRole("button", { name: /^(候选|candidate)$/i }));
     await waitFor(() => {
       expect(screen.getByText(/第 1\/1 页 · 13 条/)).toBeInTheDocument();
       expect(within(listPane).getAllByRole("button")).toHaveLength(13);
@@ -169,7 +170,7 @@ describe("ProjectSemanticPanels", () => {
         artifact_id: "art_one",
         counts: { documents: 4, knowledge: 4, rules: 0, changes: 0, agent_instructions: 0, edges: 3 }
       })),
-      listProjectSemanticKnowledge: vi.fn(async () => knowledge),
+      listProjectSemanticKnowledge: vi.fn(async () => ({ items: knowledge, total: knowledge.length, next_cursor: null })),
       listProjectSemanticRules: vi.fn(async () => []),
       listProjectSemanticChanges: vi.fn(async () => []),
       getProjectSemanticGraph,
@@ -233,7 +234,7 @@ describe("ProjectSemanticPanels", () => {
         artifact_id: "art_one",
         counts: { documents: 3, knowledge: 3, rules: 0, changes: 0, agent_instructions: 0, edges: 1 }
       })),
-      listProjectSemanticKnowledge: vi.fn(async () => knowledge),
+      listProjectSemanticKnowledge: vi.fn(async () => ({ items: knowledge, total: knowledge.length, next_cursor: null })),
       listProjectSemanticRules: vi.fn(async () => []),
       listProjectSemanticChanges: vi.fn(async () => []),
       getProjectSemanticGraph,

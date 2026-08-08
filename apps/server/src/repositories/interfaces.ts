@@ -60,6 +60,20 @@ export interface KnowledgeIngestRecord {
   projectedAt: string | null;
 }
 
+export interface ChangeArchivePackageRecord {
+  archiveId: string;
+  projectId: string;
+  changeKey: string;
+  packageSha256: string;
+  manifestSha256: string;
+  artifactId: string | null;
+  archiveStatus: "durable";
+  knowledgeStatus: "indexing" | "ready" | "failed";
+  storedFiles: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ProjectApiKeyRecord {
   keyId: string;
   projectId: string;
@@ -236,6 +250,26 @@ export interface ServerRepository extends TransactionRepository {
   isBlobReferenced(contentSha256: string): Promise<boolean>;
   listProjectFiles(actorId: string, projectId: string): Promise<ProjectFileRecord[]>;
   getProjectFile(actorId: string, projectId: string, path: string): Promise<ProjectFileRecord>;
+  putChangeArchivePackage(input: {
+    actorId: string;
+    projectId: string;
+    changeKey: string;
+    packageSha256: string;
+    manifestSha256: string;
+    storedFiles: number;
+  }): Promise<{ record: ChangeArchivePackageRecord; created: boolean }>;
+  getChangeArchivePackage(
+    actorId: string,
+    projectId: string,
+    changeKey: string
+  ): Promise<ChangeArchivePackageRecord>;
+  updateChangeArchivePackage(input: {
+    actorId: string;
+    projectId: string;
+    changeKey: string;
+    artifactId: string | null;
+    knowledgeStatus: ChangeArchivePackageRecord["knowledgeStatus"];
+  }): Promise<ChangeArchivePackageRecord>;
   createProposalSession(input: Omit<ProposalSessionRecord, "sessionId">): Promise<ProposalSessionRecord>;
   getProposalSession(actorId: string, sessionId: string): Promise<ProposalSessionRecord>;
   updateProposalSession(session: ProposalSessionRecord): Promise<void>;

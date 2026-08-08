@@ -46,6 +46,11 @@ function isArchiveSummaryPath(path: string): boolean {
   return /^\.harness\/archive\/[^/]+\/reports\/final\/summary-data\.json$/u.test(path);
 }
 
+function isArchiveKnowledgeMarkdownPath(path: string): boolean {
+  return /^\.harness\/archive\/[^/]+\/(?:spec|plans)\/(?:[^/]+\/)*[^/]+\.md$/u.test(path) ||
+    /^\.harness\/archive\/[^/]+\/archive-meta\.md$/u.test(path);
+}
+
 function isAgentInstructionPath(path: string): boolean {
   return path === "CLAUDE.md" || path === "AGENTS.md" || path === "CODEBUDDY.md";
 }
@@ -53,6 +58,7 @@ function isAgentInstructionPath(path: string): boolean {
 export function isSemanticSourcePath(path: string): boolean {
   return isKnowledgeIngestEntryPath(path) ||
     isKnowledgeMarkdownPath(path) ||
+    isArchiveKnowledgeMarkdownPath(path) ||
     isRulePath(path) ||
     isArchiveSummaryPath(path) ||
     isAgentInstructionPath(path);
@@ -327,6 +333,33 @@ export function buildSemanticIndex(input: BuildSemanticIndexInput): SemanticInde
         title: sourcePath.split("/").pop() ?? sourcePath,
         body: content,
         metadata: {},
+        content_sha256: sha256Bytes(content)
+      };
+      documents.push(doc);
+      bySourcePath.set(sourcePath, doc);
+      continue;
+    }
+
+    if (isArchiveKnowledgeMarkdownPath(sourcePath)) {
+      const segments = sourcePath.split("/");
+      const heading = content.match(/^#\s+(.+)$/mu)?.[1]?.trim();
+      const doc: SemanticDocument = {
+        document_id: documentId(input.projectId, sourcePath),
+        project_id: input.projectId,
+        artifact_id: input.artifactId,
+        kind: "knowledge_markdown",
+        source_path: sourcePath,
+        title: heading ?? segments[segments.length - 1] ?? sourcePath,
+        body: content,
+        metadata: {
+          source_archive: segments[2] ?? null,
+          archive_role: segments[3] === "spec"
+            ? "spec"
+            : segments[3] === "plans"
+              ? "plan"
+              : "archive_meta",
+          status: "active"
+        },
         content_sha256: sha256Bytes(content)
       };
       documents.push(doc);

@@ -8,6 +8,7 @@ import type {
   Actor,
   ArtifactRecord,
   AuditEvent,
+  ChangeArchivePackageRecord,
   IdempotencyRecord,
   KnowledgeIngestRecord,
   ProjectApiKeyRecord,
@@ -105,6 +106,22 @@ function projectFileFrom(row: QueryResultRow): ProjectFileRecord {
     contentSha256: String(row.content_sha256),
     sizeBytes: Number(row.size_bytes),
     projectVersion: String(row.project_version),
+    updatedAt: timestamp(row.updated_at)
+  };
+}
+
+function changeArchivePackageFrom(row: QueryResultRow): ChangeArchivePackageRecord {
+  return {
+    archiveId: String(row.archive_id),
+    projectId: String(row.project_id),
+    changeKey: String(row.change_key),
+    packageSha256: String(row.package_sha256),
+    manifestSha256: String(row.manifest_sha256),
+    artifactId: row.artifact_id === null ? null : String(row.artifact_id),
+    archiveStatus: "durable",
+    knowledgeStatus: String(row.knowledge_status) as ChangeArchivePackageRecord["knowledgeStatus"],
+    storedFiles: Number(row.stored_files),
+    createdAt: timestamp(row.created_at),
     updatedAt: timestamp(row.updated_at)
   };
 }
@@ -721,6 +738,7 @@ export class PostgresRepository implements ServerRepository {
     );
     await client.query(`DELETE FROM semantic_edges WHERE project_id = $1`, [projectId]);
     await client.query(`DELETE FROM semantic_documents WHERE project_id = $1`, [projectId]);
+    await client.query(`DELETE FROM change_archive_packages WHERE project_id = $1`, [projectId]);
     await client.query(`DELETE FROM artifacts WHERE project_id = $1`, [projectId]);
     await client.query(`DELETE FROM proposals WHERE project_id = $1`, [projectId]);
     await client.query(`DELETE FROM proposal_sessions WHERE project_id = $1`, [projectId]);
@@ -781,7 +799,9 @@ export class PostgresRepository implements ServerRepository {
        UNION
        SELECT DISTINCT operation->>'content_sha256' AS content_sha256
        FROM proposal_sessions, LATERAL jsonb_array_elements(operations) operation
-       WHERE project_id = $1 AND operation ? 'content_sha256'`,
+       WHERE project_id = $1 AND operation ? 'content_sha256'
+       UNION
+       SELECT package_sha256 FROM change_archive_packages WHERE project_id = $1`,
       [projectId]
     );
     return result.rows.map((row) => String(row.content_sha256));
@@ -800,6 +820,8 @@ export class PostgresRepository implements ServerRepository {
          UNION ALL
          SELECT 1 FROM proposal_sessions, LATERAL jsonb_array_elements(operations) operation
          WHERE operation->>'content_sha256' = $1
+         UNION ALL
+         SELECT 1 FROM change_archive_packages WHERE package_sha256 = $1
        ) AS referenced`,
       [contentSha256]
     );
@@ -901,6 +923,78 @@ export class PostgresRepository implements ServerRepository {
       throw new ServerDomainError(404, "PROJECT_FILE_NOT_FOUND", "project file not found", { path });
     }
     return file;
+  }
+
+  async putChangeArchivePackage(input: {
+    actorId: string;
+    projectId: string;
+    changeKey: string;
+    packageSha256: string;
+    manifestSha256: string;
+    storedFiles: number;
+  }): Promise<{ record: ChangeArchivePackageRecord; created: boolean }> {
+    await this.ownedProject(input.actorId, input.projectId);
+    const archiveId = id("arc_");
+    const result = await this.pool.query(
+      `INSERT INTO change_archive_packages(
+         archive_id, project_id, change_key, package_sha256, manifest_sha256,
+         archive_status, knowledge_status, stored_files
+       ) VALUES ($1,$2,$3,$4,$5,'durable','indexing',$6)
+       ON CONFLICT (project_id, change_key) DO NOTHING
+       RETURNING *`,
+      [
+        archiveId,
+        input.projectId,
+        input.changeKey,
+        input.packageSha256,
+        input.manifestSha256,
+        input.storedFiles
+      ]
+    );
+    if (result.rowCount !== 0) {
+      return { record: changeArchivePackageFrom(result.rows[0] ?? {}), created: true };
+    }
+    const existing = await this.pool.query(
+      "SELECT * FROM change_archive_packages WHERE project_id = $1 AND change_key = $2",
+      [input.projectId, input.changeKey]
+    );
+    return { record: changeArchivePackageFrom(existing.rows[0] ?? {}), created: false };
+  }
+
+  async getChangeArchivePackage(
+    actorId: string,
+    projectId: string,
+    changeKey: string
+  ): Promise<ChangeArchivePackageRecord> {
+    await this.ownedProject(actorId, projectId);
+    const result = await this.pool.query(
+      "SELECT * FROM change_archive_packages WHERE project_id = $1 AND change_key = $2",
+      [projectId, changeKey]
+    );
+    if (result.rowCount === 0) {
+      throw new ServerDomainError(404, "ARCHIVE_PACKAGE_NOT_FOUND", "archive package not found");
+    }
+    return changeArchivePackageFrom(result.rows[0] ?? {});
+  }
+
+  async updateChangeArchivePackage(input: {
+    actorId: string;
+    projectId: string;
+    changeKey: string;
+    artifactId: string | null;
+    knowledgeStatus: ChangeArchivePackageRecord["knowledgeStatus"];
+  }): Promise<ChangeArchivePackageRecord> {
+    await this.ownedProject(input.actorId, input.projectId);
+    const result = await this.pool.query(
+      `UPDATE change_archive_packages
+       SET artifact_id = $3, knowledge_status = $4, updated_at = now()
+       WHERE project_id = $1 AND change_key = $2 RETURNING *`,
+      [input.projectId, input.changeKey, input.artifactId, input.knowledgeStatus]
+    );
+    if (result.rowCount === 0) {
+      throw new ServerDomainError(404, "ARCHIVE_PACKAGE_NOT_FOUND", "archive package not found");
+    }
+    return changeArchivePackageFrom(result.rows[0] ?? {});
   }
 
   async createProposalSession(

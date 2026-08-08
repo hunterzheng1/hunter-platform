@@ -228,8 +228,11 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
     setError(null);
     try {
       const page = await client.listProjectRuns(id);
-      setRuns(page.items);
-      setSelectedRunId((current) => current ?? page.items[0]?.run_id ?? null);
+      const sorted = [...page.items].sort((left, right) =>
+        runSortKey(right).localeCompare(runSortKey(left))
+      );
+      setRuns(sorted);
+      setSelectedRunId((current) => current ?? sorted[0]?.run_id ?? null);
     } catch (err) {
       setRuns([]);
       setError(err instanceof ApiClientError ? err.message : copy.networkError);
@@ -297,21 +300,25 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
       return;
     }
 
+    const runId = selectedRunId;
+    const listProjectRunEvents = client.listProjectRunEvents.bind(client);
+    const streamProjectRunEvents = client.streamProjectRunEvents?.bind(client);
+    const getProjectRun = client.getProjectRun?.bind(client);
     let cancelled = false;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
     let cursor = 0;
 
     async function loadInitialAndStream(): Promise<void> {
       try {
-        const result = await client.listProjectRunEvents!(projectId, selectedRunId!);
+        const result = await listProjectRunEvents(projectId, runId);
         if (cancelled) return;
         setEvents(result.items);
         cursor = result.next_cursor;
 
-        if (client.streamProjectRunEvents !== undefined) {
-          const handle = await client.streamProjectRunEvents(
+        if (streamProjectRunEvents !== undefined) {
+          const handle = await streamProjectRunEvents(
             projectId,
-            selectedRunId!,
+            runId,
             cursor,
             {
               onEvent: (event) => {
@@ -346,7 +353,7 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
         pollTimer = setInterval(() => {
           void (async () => {
             try {
-              const next = await client.listProjectRunEvents!(projectId, selectedRunId!, cursor);
+              const next = await listProjectRunEvents(projectId, runId, cursor);
               if (cancelled || next.items.length === 0) return;
               setEvents((current) => {
                 const known = new Set(current.map((item) => item.event_id));
@@ -354,8 +361,8 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
                 return appended.length === 0 ? current : [...current, ...appended];
               });
               cursor = next.next_cursor;
-              if (client.getProjectRun !== undefined) {
-                const run = await client.getProjectRun(projectId, selectedRunId!);
+              if (getProjectRun !== undefined) {
+                const run = await getProjectRun(projectId, runId);
                 setRuns((current) => current.map((item) =>
                   item.run_id === run.run_id ? run : item
                 ));
