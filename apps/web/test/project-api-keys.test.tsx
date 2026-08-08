@@ -83,6 +83,9 @@ describe("ProjectApiKeysPanel", () => {
     await waitFor(() => {
       expect(screen.getByText("hh_plain_once")).toBeTruthy();
       expect(screen.getByText("laptop")).toBeTruthy();
+      expect(screen.getByText(
+        "npx hunter-harness connect http://localhost:3000 --key hh_plain_once"
+      )).toBeTruthy();
     });
   });
 });

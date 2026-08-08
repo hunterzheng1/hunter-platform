@@ -28,7 +28,7 @@ const COPY = {
       "勾选权限范围",
       "签发密钥",
       "复制明文密钥",
-      "在本机执行 hunter-harness connect <平台地址> 并粘贴密钥"
+      "在本机执行 npx hunter-harness connect <平台地址> 并粘贴密钥"
     ],
     label: "用途标签",
     labelRequired: "用途标签为必填项。",
@@ -74,7 +74,7 @@ const COPY = {
       "Select scopes",
       "Issue the key",
       "Copy the plaintext key",
-      "Run hunter-harness connect <platform-url> locally and paste the key"
+      "Run npx hunter-harness connect <platform-url> locally and paste the key"
     ],
     label: "Purpose label",
     labelRequired: "A purpose label is required.",
@@ -267,7 +267,7 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
 
   const connectCommand = plaintext === null
     ? null
-    : `hunter-harness connect ${window.location.origin} --key ${plaintext}`;
+    : `npx hunter-harness connect ${window.location.origin} --key ${plaintext}`;
 
   async function copyConnectCommand(): Promise<void> {
     if (connectCommand === null) return;

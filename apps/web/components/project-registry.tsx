@@ -66,7 +66,7 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
     createProject: "新建项目", createTitle: "创建项目", nameLabel: "项目名称", namePlaceholder: "例如：支付网关改造",
     submitCreate: "创建", creating: "创建中…",
     createdTitle: "项目已创建",
-    createdBody: "进入项目后，在「API 密钥」页签发密钥并执行 hunter-harness connect，即可开始首次同步。",
+    createdBody: "进入项目后，在「API 密钥」页签发密钥并执行 npx hunter-harness connect，即可开始首次同步。",
     openProject: "打开项目",
     createUnsupported: "服务端尚未支持 Web 端创建项目（端点落地中）。当前请先用 CLI：npx hunter-harness 首次同步会自动创建项目。"
   } : {
@@ -86,7 +86,7 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
     createProject: "New project", createTitle: "Create project", nameLabel: "Project name", namePlaceholder: "e.g. Payments gateway overhaul",
     submitCreate: "Create", creating: "Creating…",
     createdTitle: "Project created",
-    createdBody: "Open the project, issue an API key under “API keys”, then run hunter-harness connect to start the first sync.",
+    createdBody: "Open the project, issue an API key under “API keys”, then run npx hunter-harness connect to start the first sync.",
     openProject: "Open project",
     createUnsupported: "The server does not support web-side project creation yet (endpoint in progress). For now, run npx hunter-harness — the first sync creates the project automatically."
   };
