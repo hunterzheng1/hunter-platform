@@ -570,17 +570,22 @@ export class MemoryRepository implements ServerRepository {
         )),
       ...[...this.archivePackages.values()]
         .filter((archive) => archive.projectId === projectId)
-        .map((archive) => archive.packageSha256)
+        .flatMap((archive) => [archive.packageSha256, ...archive.coreContentSha256])
     ])];
   }
 
   async isBlobReferenced(contentSha256: string): Promise<boolean> {
     return [...this.artifacts.values()].some((artifact) => artifact.manifest.files.some((operation) =>
       operation.operation !== "delete" && operation.content_sha256 === contentSha256
-    )) || [...this.sessions.values()].some((session) => session.operations.some((operation) =>
-      operation.operation !== "delete" && operation.content_sha256 === contentSha256
-    )) || [...this.archivePackages.values()].some(
-      (archive) => archive.packageSha256 === contentSha256
+    )) || [...this.sessions.values()].some((session) =>
+      session.status === "open" &&
+      Date.parse(session.expiresAt) > Date.now() &&
+      session.operations.some((operation) =>
+        operation.operation !== "delete" && operation.content_sha256 === contentSha256
+      )
+    ) || [...this.archivePackages.values()].some(
+      (archive) => archive.packageSha256 === contentSha256 ||
+        archive.coreContentSha256.includes(contentSha256)
     );
   }
 
@@ -632,6 +637,7 @@ export class MemoryRepository implements ServerRepository {
     changeKey: string;
     packageSha256: string;
     manifestSha256: string;
+    coreContentSha256: string[];
     storedFiles: number;
   }): Promise<{ record: ChangeArchivePackageRecord; created: boolean }> {
     this.requireOwnedProject(input.actorId, input.projectId);
@@ -647,9 +653,13 @@ export class MemoryRepository implements ServerRepository {
       changeKey: input.changeKey,
       packageSha256: input.packageSha256,
       manifestSha256: input.manifestSha256,
+      coreContentSha256: [...new Set(input.coreContentSha256)],
       artifactId: null,
       archiveStatus: "durable",
       knowledgeStatus: "indexing",
+      attemptCount: 1,
+      failureStage: null,
+      lastErrorCode: null,
       storedFiles: input.storedFiles,
       createdAt: now,
       updatedAt: now
@@ -677,6 +687,10 @@ export class MemoryRepository implements ServerRepository {
     changeKey: string;
     artifactId: string | null;
     knowledgeStatus: ChangeArchivePackageRecord["knowledgeStatus"];
+    failureStage: ChangeArchivePackageRecord["failureStage"];
+    lastErrorCode: string | null;
+    coreContentSha256?: string[];
+    incrementAttempt?: boolean;
   }): Promise<ChangeArchivePackageRecord> {
     const record = await this.getChangeArchivePackage(
       input.actorId,
@@ -685,6 +699,12 @@ export class MemoryRepository implements ServerRepository {
     );
     record.artifactId = input.artifactId;
     record.knowledgeStatus = input.knowledgeStatus;
+    record.failureStage = input.failureStage;
+    record.lastErrorCode = input.lastErrorCode;
+    if (input.coreContentSha256 !== undefined) {
+      record.coreContentSha256 = [...new Set(input.coreContentSha256)];
+    }
+    if (input.incrementAttempt === true) record.attemptCount += 1;
     record.updatedAt = new Date().toISOString();
     this.archivePackages.set(input.projectId + "\0" + input.changeKey, record);
     return structuredClone(record);

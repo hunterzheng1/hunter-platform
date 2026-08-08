@@ -45,6 +45,40 @@ describe("instruction proposal API", () => {
 
   afterEach(async () => app.close());
 
+  it("isolates an idempotency key across project resources", async () => {
+    const otherProjectId = await resolveProject("另一个中文规则项目");
+    const idempotencyKey = uuidV7();
+    const payload = {
+      schema_version: 1,
+      language: "zh-CN",
+      project_profile: "general",
+      adapters: [],
+      documents: [],
+      codebase_map: { status: "missing", content: "" },
+      recent_changes: []
+    } as const;
+    const create = async (targetProjectId: string) => app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${targetProjectId}/instruction-proposals`,
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "x-request-id": uuidV7(),
+        "idempotency-key": idempotencyKey
+      },
+      payload
+    });
+
+    const first = await create(projectId);
+    const second = await create(otherProjectId);
+
+    expect(first.statusCode, first.body).toBe(201);
+    expect(second.statusCode, second.body).toBe(201);
+    expect(first.json().project_id).toBe(projectId);
+    expect(second.json().project_id).toBe(otherProjectId);
+    expect(second.json().proposal_id).not.toBe(first.json().proposal_id);
+  });
+
   async function uploadServerOwnedChange(
     changeKey = "archive-v1",
     options: {

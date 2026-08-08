@@ -6,14 +6,26 @@ import type {
   SemanticOverview
 } from "@hunter-harness/contracts";
 
-import { INGEST_ARTIFACT_ID, overviewFromDocuments, type SemanticStore } from "./store.js";
+import {
+  INGEST_ARTIFACT_ID,
+  overviewFromDocuments,
+  type SemanticGenerationGuard,
+  type SemanticStore
+} from "./store.js";
 
 export class SemanticMemoryStore implements SemanticStore {
   private readonly documents = new Map<string, SemanticDocument>();
   private readonly edges = new Map<string, SemanticEdge>();
   private readonly latestArtifactByProject = new Map<string, string>();
 
-  async rebuild(build: SemanticIndexBuild): Promise<void> {
+  async rebuild(
+    build: SemanticIndexBuild,
+    guard?: SemanticGenerationGuard
+  ): Promise<boolean> {
+    if (guard !== undefined &&
+        (guard.expectedArtifactId !== build.artifact_id || !await guard.isCurrent())) {
+      return false;
+    }
     for (const [documentId, document] of [...this.documents.entries()]) {
       if (document.project_id === build.project_id &&
           document.artifact_id !== INGEST_ARTIFACT_ID) {
@@ -32,6 +44,7 @@ export class SemanticMemoryStore implements SemanticStore {
       this.edges.set(edge.edge_id, edge);
     }
     this.latestArtifactByProject.set(build.project_id, build.artifact_id);
+    return true;
   }
 
   async upsertDocuments(documents: readonly SemanticDocument[]): Promise<void> {

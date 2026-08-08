@@ -11,21 +11,27 @@ import { MemoryArtifactStorage } from "../src/storage/memory.js";
 class FailOnceSemanticStore extends SemanticMemoryStore {
   private failed = false;
 
-  override async rebuild(build: Parameters<SemanticMemoryStore["rebuild"]>[0]): Promise<void> {
+  override async rebuild(
+    build: Parameters<SemanticMemoryStore["rebuild"]>[0],
+    guard?: Parameters<SemanticMemoryStore["rebuild"]>[1]
+  ): Promise<boolean> {
     if (!this.failed) {
       this.failed = true;
       throw new Error("simulated indexing outage");
     }
-    await super.rebuild(build);
+    return super.rebuild(build, guard);
   }
 }
 
 class TrackingSemanticStore extends SemanticMemoryStore {
   rebuildCalls = 0;
 
-  override async rebuild(build: Parameters<SemanticMemoryStore["rebuild"]>[0]): Promise<void> {
+  override async rebuild(
+    build: Parameters<SemanticMemoryStore["rebuild"]>[0],
+    guard?: Parameters<SemanticMemoryStore["rebuild"]>[1]
+  ): Promise<boolean> {
     this.rebuildCalls += 1;
-    await super.rebuild(build);
+    return super.rebuild(build, guard);
   }
 }
 
@@ -79,6 +85,20 @@ class FailOnceFinalizeRepository extends MemoryRepository {
   }
 }
 
+class FailOnceArchiveRecordRepository extends MemoryRepository {
+  private failed = false;
+
+  override async putChangeArchivePackage(
+    input: Parameters<MemoryRepository["putChangeArchivePackage"]>[0]
+  ): ReturnType<MemoryRepository["putChangeArchivePackage"]> {
+    if (!this.failed) {
+      this.failed = true;
+      throw new Error("simulated archive record failure");
+    }
+    return super.putChangeArchivePackage(input);
+  }
+}
+
 class FailOnceBlobPutStorage extends MemoryArtifactStorage {
   failHash: string | null = null;
   private failed = false;
@@ -95,6 +115,11 @@ class FailOnceBlobPutStorage extends MemoryArtifactStorage {
 class FaultyBlobReadStorage extends MemoryArtifactStorage {
   failure: { hash: string; mode: "read" | "hash" } | null = null;
 
+  override async putBlob(contentSha256: string, content: Uint8Array): Promise<void> {
+    await super.putBlob(contentSha256, content);
+    if (this.failure?.hash === contentSha256) this.failure = null;
+  }
+
   override async getBlob(contentSha256: string): Promise<Uint8Array> {
     if (this.failure?.hash === contentSha256) {
       if (this.failure.mode === "read") throw new Error("simulated blob read failure");
@@ -109,13 +134,32 @@ class AdvanceGenerationOnRebuildStore extends SemanticMemoryStore {
   readonly rebuiltArtifacts: string[] = [];
   private advanced = false;
 
-  override async rebuild(build: Parameters<SemanticMemoryStore["rebuild"]>[0]): Promise<void> {
+  override async rebuild(
+    build: Parameters<SemanticMemoryStore["rebuild"]>[0],
+    guard?: Parameters<SemanticMemoryStore["rebuild"]>[1]
+  ): Promise<boolean> {
     this.rebuiltArtifacts.push(build.artifact_id);
     if (!this.advanced && this.onFirstRebuild !== null) {
       this.advanced = true;
       await this.onFirstRebuild();
     }
-    await super.rebuild(build);
+    return super.rebuild(build, guard);
+  }
+}
+
+class TrackingLockRepository extends MemoryRepository {
+  readonly acquiredLocks: Array<{
+    actorId: string;
+    method: string;
+    path: string;
+    key: string;
+  }> = [];
+
+  override async acquireIdempotencyLock(
+    input: Parameters<MemoryRepository["acquireIdempotencyLock"]>[0]
+  ): ReturnType<MemoryRepository["acquireIdempotencyLock"]> {
+    this.acquiredLocks.push({ ...input });
+    return super.acquireIdempotencyLock(input);
   }
 }
 
@@ -428,6 +472,58 @@ describe("change archive package API", () => {
     expect(await repository.listProjectFiles("actor_archive_owner", projectId)).toEqual([]);
   });
 
+  it("rejects corrupt archive content and repairs it when the ready package is retransmitted", async () => {
+    await app.close();
+    const faultyStorage = new FaultyBlobReadStorage();
+    storage = faultyStorage;
+    app = await createServer({ repository, storage, semanticStore });
+    const projectId = await resolveProject();
+    const changeKey = "chg-content-repair";
+    const summary = JSON.stringify(cliSummary(changeKey));
+    const zip = archiveZip(changeKey, [{
+      path: "reports/final/summary-data.json",
+      role: "summary",
+      content: summary
+    }]);
+    const first = await app.inject({
+      method: "PUT",
+      url: `/api/v1/projects/${projectId}/changes/${changeKey}/archive-package`,
+      headers: headers(),
+      payload: zip
+    });
+    expect(first.statusCode, first.body).toBe(201);
+    expect(first.json().knowledge_status).toBe("ready");
+    const summaryFile = (await repository.listProjectFiles("actor_archive_owner", projectId))
+      .find((file) => file.path.endsWith("/reports/final/summary-data.json"));
+    expect(summaryFile).toBeDefined();
+    faultyStorage.failure = { hash: summaryFile?.contentSha256 ?? "", mode: "hash" };
+
+    const corrupt = await app.inject({
+      method: "GET",
+      url: `/api/v1/projects/${projectId}/changes/${changeKey}/archive/content?path=${encodeURIComponent("reports/final/summary-data.json")}`,
+      headers: headers("application/json")
+    });
+    expect(corrupt.statusCode, corrupt.body).toBe(500);
+    expect(corrupt.json()).toMatchObject({ error: { code: "ARCHIVE_STORAGE_CORRUPT" } });
+
+    const retried = await app.inject({
+      method: "PUT",
+      url: `/api/v1/projects/${projectId}/changes/${changeKey}/archive-package`,
+      headers: headers(),
+      payload: zip
+    });
+    expect(retried.statusCode, retried.body).toBe(201);
+    expect(retried.json().knowledge_status).toBe("ready");
+
+    const repaired = await app.inject({
+      method: "GET",
+      url: `/api/v1/projects/${projectId}/changes/${changeKey}/archive/content?path=${encodeURIComponent("reports/final/summary-data.json")}`,
+      headers: headers("application/json")
+    });
+    expect(repaired.statusCode, repaired.body).toBe(200);
+    expect(repaired.json().content).toBe(summary);
+  });
+
   it("rejects an AWS access key hidden behind recursive JSON Unicode escapes before CAS", async () => {
     const projectId = await resolveProject();
     const changeKey = "chg-json-unicode-secret";
@@ -544,6 +640,29 @@ describe("change archive package API", () => {
           coverageDisplay: "not_available"
         }
       })
+    }]);
+
+    const response = await app.inject({
+      method: "PUT",
+      url: `/api/v1/projects/${projectId}/changes/${changeKey}/archive-package`,
+      headers: headers(),
+      payload: zip
+    });
+
+    expect(response.statusCode, response.body).toBe(201);
+    expect(response.json().knowledge_status).toBe("ready");
+  });
+
+  it("accepts a real CLI 2.3 summary when browser E2E was not run", async () => {
+    const projectId = await resolveProject();
+    const changeKey = "chg-real-cli-2-3-no-browser";
+    const summary = cliSummary(changeKey, "2.3");
+    const verification = summary.verification as Record<string, unknown>;
+    delete verification.browserE2E;
+    const zip = archiveZip(changeKey, [{
+      path: "reports/final/summary-data.json",
+      role: "summary",
+      content: JSON.stringify(summary)
     }]);
 
     const response = await app.inject({
@@ -854,6 +973,75 @@ describe("change archive package API", () => {
     })).items).toHaveLength(1);
   });
 
+  it("uses one project-scoped lock while preserving request idempotency records", async () => {
+    await app.close();
+    const trackingRepository = new TrackingLockRepository();
+    repository = trackingRepository;
+    await repository.createActorWithToken({ actorId: "actor_archive_owner", token });
+    app = await createServer({ repository, storage, semanticStore });
+    const projectId = await resolveProject();
+    const otherProjectId = await resolveProject();
+    trackingRepository.acquiredLocks.length = 0;
+    const changeKey = "chg-single-project-lock";
+    const zip = archiveZip(changeKey, [{
+      path: "reports/final/summary-data.json",
+      role: "summary",
+      content: JSON.stringify(cliSummary(changeKey))
+    }]);
+    const idempotencyKey = uuidV7();
+    const requestHeaders = { ...headers(), "idempotency-key": idempotencyKey };
+
+    const first = await app.inject({
+      method: "PUT",
+      url: `/api/v1/projects/${projectId}/changes/${changeKey}/archive-package`,
+      headers: requestHeaders,
+      payload: zip
+    });
+    const replay = await app.inject({
+      method: "PUT",
+      url: `/api/v1/projects/${projectId}/changes/${changeKey}/archive-package`,
+      headers: requestHeaders,
+      payload: zip
+    });
+    const otherProject = await app.inject({
+      method: "PUT",
+      url: `/api/v1/projects/${otherProjectId}/changes/${changeKey}/archive-package`,
+      headers: requestHeaders,
+      payload: zip
+    });
+
+    expect(first.statusCode, first.body).toBe(201);
+    expect(replay.statusCode, replay.body).toBe(201);
+    expect(otherProject.statusCode, otherProject.body).toBe(201);
+    expect(replay.json()).toEqual(first.json());
+    expect(otherProject.json().archive_id).not.toBe(first.json().archive_id);
+    expect((await repository.getChangeArchivePackage(
+      "actor_archive_owner",
+      otherProjectId,
+      changeKey
+    )).projectId).toBe(otherProjectId);
+    expect(trackingRepository.acquiredLocks).toEqual([
+      {
+        actorId: "internal:archive-package",
+        method: "ARCHIVE",
+        path: "/internal/archive-package/project",
+        key: projectId
+      },
+      {
+        actorId: "internal:archive-package",
+        method: "ARCHIVE",
+        path: "/internal/archive-package/project",
+        key: projectId
+      },
+      {
+        actorId: "internal:archive-package",
+        method: "ARCHIVE",
+        path: "/internal/archive-package/project",
+        key: otherProjectId
+      }
+    ]);
+  });
+
   it("retries a failed archive against the current stable project artifact", async () => {
     await app.close();
     const failOnceStore = new FailOnceSemanticStore();
@@ -960,10 +1148,11 @@ describe("change archive package API", () => {
     app = await createServer({ repository, storage, semanticStore });
     const projectId = await resolveProject();
     const changeKey = "chg-finalize-failure";
+    const summary = JSON.stringify(cliSummary(changeKey));
     const zip = archiveZip(changeKey, [{
       path: "reports/final/summary-data.json",
       role: "summary",
-      content: JSON.stringify(cliSummary(changeKey))
+      content: summary
     }]);
     const packageHash = sha256Bytes(zip);
 
@@ -990,6 +1179,19 @@ describe("change archive package API", () => {
     });
     expect(status.statusCode, status.body).toBe(200);
     expect(status.json().knowledge_status).toBe("failed");
+    await expect(repository.getChangeArchivePackage(
+      "actor_archive_owner",
+      projectId,
+      changeKey
+    )).resolves.toMatchObject({
+      attemptCount: 1,
+      failureStage: "finalize",
+      lastErrorCode: "ARCHIVE_INGEST_FAILED"
+    });
+    const summaryHash = sha256Bytes(Buffer.from(summary, "utf8"));
+    expect(await repository.isBlobReferenced(summaryHash)).toBe(true);
+    expect(await repository.listProjectBlobHashes("actor_archive_owner", projectId))
+      .toContain(summaryHash);
 
     const retried = await app.inject({
       method: "PUT",
@@ -1001,6 +1203,15 @@ describe("change archive package API", () => {
     expect(retried.json()).toMatchObject({
       package_sha256: packageHash,
       knowledge_status: "ready"
+    });
+    await expect(repository.getChangeArchivePackage(
+      "actor_archive_owner",
+      projectId,
+      changeKey
+    )).resolves.toMatchObject({
+      attemptCount: 2,
+      failureStage: null,
+      lastErrorCode: null
     });
   });
 
@@ -1095,6 +1306,91 @@ describe("change archive package API", () => {
       archive_status: "durable",
       knowledge_status: "ready"
     });
+  });
+
+  it("backfills core CAS references on a migrated archive record before retrying storage", async () => {
+    await app.close();
+    const failingStorage = new FailOnceBlobPutStorage();
+    storage = failingStorage;
+    app = await createServer({ repository, storage, semanticStore });
+    const projectId = await resolveProject();
+    const changeKey = "chg-migrated-core-references";
+    const summary = JSON.stringify(cliSummary(changeKey));
+    const summaryHash = sha256Bytes(Buffer.from(summary, "utf8"));
+    const zip = archiveZip(changeKey, [{
+      path: "reports/final/summary-data.json",
+      role: "summary",
+      content: summary
+    }]);
+    const manifestBytes = new AdmZip(zip).readFile("archive-manifest.json");
+    expect(manifestBytes).not.toBeNull();
+    await repository.putChangeArchivePackage({
+      actorId: "actor_archive_owner",
+      projectId,
+      changeKey,
+      packageSha256: sha256Bytes(zip),
+      manifestSha256: sha256Bytes(manifestBytes ?? Buffer.alloc(0)),
+      coreContentSha256: [],
+      storedFiles: 1
+    });
+    failingStorage.failHash = summaryHash;
+
+    const failed = await app.inject({
+      method: "PUT",
+      url: `/api/v1/projects/${projectId}/changes/${changeKey}/archive-package`,
+      headers: headers(),
+      payload: zip
+    });
+
+    expect(failed.statusCode, failed.body).toBe(201);
+    expect(failed.json().knowledge_status).toBe("failed");
+    await expect(repository.getChangeArchivePackage(
+      "actor_archive_owner",
+      projectId,
+      changeKey
+    )).resolves.toMatchObject({ coreContentSha256: [summaryHash] });
+    expect(await repository.isBlobReferenced(summaryHash)).toBe(true);
+  });
+
+  it("quarantines a newly written raw ZIP when its durable record cannot be created", async () => {
+    await app.close();
+    const failingRepository = new FailOnceArchiveRecordRepository();
+    repository = failingRepository;
+    await repository.createActorWithToken({ actorId: "actor_archive_owner", token });
+    app = await createServer({ repository, storage, semanticStore });
+    const projectId = await resolveProject();
+    const changeKey = "chg-record-write-failure";
+    const zip = archiveZip(changeKey, [{
+      path: "reports/final/summary-data.json",
+      role: "summary",
+      content: JSON.stringify(cliSummary(changeKey))
+    }]);
+    const packageHash = sha256Bytes(zip);
+
+    const failed = await app.inject({
+      method: "PUT",
+      url: `/api/v1/projects/${projectId}/changes/${changeKey}/archive-package`,
+      headers: headers(),
+      payload: zip
+    });
+
+    expect(failed.statusCode, failed.body).toBe(500);
+    expect(await storage.hasBlob(packageHash)).toBe(false);
+    expect(await storage.getBlob(packageHash)).toEqual(zip);
+    expect(await storage.listQuarantinedBlobs()).toEqual([
+      expect.objectContaining({ contentSha256: packageHash })
+    ]);
+
+    const retried = await app.inject({
+      method: "PUT",
+      url: `/api/v1/projects/${projectId}/changes/${changeKey}/archive-package`,
+      headers: headers(),
+      payload: zip
+    });
+    expect(retried.statusCode, retried.body).toBe(201);
+    expect(retried.json().knowledge_status).toBe("ready");
+    expect(await storage.hasBlob(packageHash)).toBe(true);
+    expect(await storage.listQuarantinedBlobs()).toEqual([]);
   });
 
   it("keeps the raw ZIP durable and retries indexing after a transient failure", async () => {

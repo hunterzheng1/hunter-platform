@@ -117,9 +117,17 @@ function changeArchivePackageFrom(row: QueryResultRow): ChangeArchivePackageReco
     changeKey: String(row.change_key),
     packageSha256: String(row.package_sha256),
     manifestSha256: String(row.manifest_sha256),
+    coreContentSha256: Array.isArray(row.core_content_sha256)
+      ? row.core_content_sha256.map(String)
+      : [],
     artifactId: row.artifact_id === null ? null : String(row.artifact_id),
     archiveStatus: "durable",
     knowledgeStatus: String(row.knowledge_status) as ChangeArchivePackageRecord["knowledgeStatus"],
+    attemptCount: Number(row.attempt_count ?? 1),
+    failureStage: row.failure_stage === null
+      ? null
+      : String(row.failure_stage) as ChangeArchivePackageRecord["failureStage"],
+    lastErrorCode: row.last_error_code === null ? null : String(row.last_error_code),
     storedFiles: Number(row.stored_files),
     createdAt: timestamp(row.created_at),
     updatedAt: timestamp(row.updated_at)
@@ -167,7 +175,37 @@ export function idempotencyLockKey(input: {
 }
 
 export class PostgresRepository implements ServerRepository {
-  constructor(readonly pool: Pool) {}
+  private readonly maxLockClients: number;
+  private activeLockClients = 0;
+  private readonly lockClientWaiters: Array<() => void> = [];
+
+  constructor(readonly pool: Pool) {
+    const poolSize = pool.options.max;
+    if (!Number.isInteger(poolSize) || poolSize < 2) {
+      throw new Error("PostgresRepository requires a pool with at least two connections");
+    }
+    // Session advisory locks intentionally hold their client for the mutation.
+    // Reserve at least half the pool for the business queries performed while
+    // those locks are held, so concurrent mutations cannot starve themselves.
+    this.maxLockClients = Math.max(1, Math.floor(poolSize / 2));
+  }
+
+  private async reserveLockClient(): Promise<void> {
+    if (this.activeLockClients < this.maxLockClients) {
+      this.activeLockClients += 1;
+      return;
+    }
+    await new Promise<void>((resolve) => this.lockClientWaiters.push(resolve));
+  }
+
+  private releaseLockClient(): void {
+    const next = this.lockClientWaiters.shift();
+    if (next === undefined) {
+      this.activeLockClients -= 1;
+    } else {
+      next();
+    }
+  }
 
   async acquireIdempotencyLock(input: {
     actorId: string;
@@ -175,20 +213,38 @@ export class PostgresRepository implements ServerRepository {
     path: string;
     key: string;
   }): Promise<{ release(): Promise<void> }> {
-    const client = await this.pool.connect();
+    await this.reserveLockClient();
+    let client: PoolClient;
+    try {
+      client = await this.pool.connect();
+    } catch (error) {
+      this.releaseLockClient();
+      throw error;
+    }
     const lockKey = idempotencyLockKey(input);
     try {
       await client.query(`SELECT pg_advisory_lock(hashtextextended($1, 0))`, [lockKey]);
     } catch (error) {
-      client.release();
+      client.release(error instanceof Error ? error : new Error(String(error)));
+      this.releaseLockClient();
       throw error;
     }
+    let released = false;
     return {
       release: async () => {
+        if (released) return;
+        released = true;
+        let unlockError: Error | undefined;
         try {
           await client.query(`SELECT pg_advisory_unlock(hashtextextended($1, 0))`, [lockKey]);
+        } catch (error) {
+          unlockError = error instanceof Error ? error : new Error(String(error));
+          throw unlockError;
         } finally {
-          client.release();
+          // A failed unlock must destroy the session instead of returning a
+          // potentially still-locked connection to the shared pool.
+          client.release(unlockError);
+          this.releaseLockClient();
         }
       }
     };
@@ -801,7 +857,10 @@ export class PostgresRepository implements ServerRepository {
        FROM proposal_sessions, LATERAL jsonb_array_elements(operations) operation
        WHERE project_id = $1 AND operation ? 'content_sha256'
        UNION
-       SELECT package_sha256 FROM change_archive_packages WHERE project_id = $1`,
+       SELECT package_sha256 FROM change_archive_packages WHERE project_id = $1
+       UNION
+       SELECT jsonb_array_elements_text(core_content_sha256)
+       FROM change_archive_packages WHERE project_id = $1`,
       [projectId]
     );
     return result.rows.map((row) => String(row.content_sha256));
@@ -820,8 +879,11 @@ export class PostgresRepository implements ServerRepository {
          UNION ALL
          SELECT 1 FROM proposal_sessions, LATERAL jsonb_array_elements(operations) operation
          WHERE operation->>'content_sha256' = $1
+           AND status = 'open'
+           AND expires_at > now()
          UNION ALL
-         SELECT 1 FROM change_archive_packages WHERE package_sha256 = $1
+         SELECT 1 FROM change_archive_packages
+         WHERE package_sha256 = $1 OR core_content_sha256 ? $1
        ) AS referenced`,
       [contentSha256]
     );
@@ -931,6 +993,7 @@ export class PostgresRepository implements ServerRepository {
     changeKey: string;
     packageSha256: string;
     manifestSha256: string;
+    coreContentSha256: string[];
     storedFiles: number;
   }): Promise<{ record: ChangeArchivePackageRecord; created: boolean }> {
     await this.ownedProject(input.actorId, input.projectId);
@@ -938,8 +1001,8 @@ export class PostgresRepository implements ServerRepository {
     const result = await this.pool.query(
       `INSERT INTO change_archive_packages(
          archive_id, project_id, change_key, package_sha256, manifest_sha256,
-         archive_status, knowledge_status, stored_files
-       ) VALUES ($1,$2,$3,$4,$5,'durable','indexing',$6)
+         core_content_sha256, archive_status, knowledge_status, stored_files
+       ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,'durable','indexing',$7)
        ON CONFLICT (project_id, change_key) DO NOTHING
        RETURNING *`,
       [
@@ -948,6 +1011,7 @@ export class PostgresRepository implements ServerRepository {
         input.changeKey,
         input.packageSha256,
         input.manifestSha256,
+        JSON.stringify([...new Set(input.coreContentSha256)]),
         input.storedFiles
       ]
     );
@@ -983,13 +1047,34 @@ export class PostgresRepository implements ServerRepository {
     changeKey: string;
     artifactId: string | null;
     knowledgeStatus: ChangeArchivePackageRecord["knowledgeStatus"];
+    failureStage: ChangeArchivePackageRecord["failureStage"];
+    lastErrorCode: string | null;
+    coreContentSha256?: string[];
+    incrementAttempt?: boolean;
   }): Promise<ChangeArchivePackageRecord> {
     await this.ownedProject(input.actorId, input.projectId);
     const result = await this.pool.query(
       `UPDATE change_archive_packages
-       SET artifact_id = $3, knowledge_status = $4, updated_at = now()
+       SET artifact_id = $3,
+           knowledge_status = $4,
+           failure_stage = $5,
+           last_error_code = $6,
+           attempt_count = attempt_count + CASE WHEN $7::boolean THEN 1 ELSE 0 END,
+           core_content_sha256 = COALESCE($8::jsonb, core_content_sha256),
+           updated_at = now()
        WHERE project_id = $1 AND change_key = $2 RETURNING *`,
-      [input.projectId, input.changeKey, input.artifactId, input.knowledgeStatus]
+      [
+        input.projectId,
+        input.changeKey,
+        input.artifactId,
+        input.knowledgeStatus,
+        input.failureStage,
+        input.lastErrorCode,
+        input.incrementAttempt === true,
+        input.coreContentSha256 === undefined
+          ? null
+          : JSON.stringify([...new Set(input.coreContentSha256)])
+      ]
     );
     if (result.rowCount === 0) {
       throw new ServerDomainError(404, "ARCHIVE_PACKAGE_NOT_FOUND", "archive package not found");

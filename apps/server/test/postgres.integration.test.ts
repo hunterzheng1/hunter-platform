@@ -12,13 +12,14 @@ import { runMigrations } from "../src/repositories/migrate.js";
 import { PostgresRepository } from "../src/repositories/postgres.js";
 import { PostgresRegistryPersistence } from "../src/registry/persistence.js";
 import { RegistryStore } from "../src/registry/store.js";
+import { PgSemanticStore } from "../src/semantic/pg-store.js";
 import { MemoryArtifactStorage } from "../src/storage/memory.js";
 
 const databaseUrl = process.env.HUNTER_HARNESS_TEST_DATABASE_URL;
 const postgresDescribe = databaseUrl === undefined ? describe.skip : describe;
 
 postgresDescribe("PostgreSQL repository integration", () => {
-  const pool = new Pool({ connectionString: databaseUrl });
+  const pool = new Pool({ connectionString: databaseUrl, max: 2 });
   const repository = new PostgresRepository(pool);
 
   beforeAll(async () => {
@@ -153,7 +154,8 @@ postgresDescribe("PostgreSQL repository integration", () => {
 
   it("serializes duplicate archive ingestion through the PostgreSQL project lock", async () => {
     const storage = new MemoryArtifactStorage();
-    const app = await createServer({ repository, storage });
+    const semanticStore = new PgSemanticStore(pool);
+    const app = await createServer({ repository, storage, semanticStore });
     try {
       const mutationHeaders = (contentType: string): Record<string, string> => ({
         authorization: "Bearer postgres-test-token",
@@ -175,6 +177,17 @@ postgresDescribe("PostgreSQL repository integration", () => {
       });
       expect(resolved.statusCode, resolved.body).toBe(200);
       const projectId = resolved.json().project_id as string;
+      await semanticStore.upsertDocuments([{
+        document_id: `sem_ingest_${uuidV7()}`,
+        project_id: projectId,
+        artifact_id: "ingest",
+        kind: "knowledge_entry",
+        source_path: ".harness/knowledge/entries/test/ingest.json",
+        title: "ingest projection",
+        body: "must not become the full snapshot generation",
+        metadata: { status: "active" },
+        content_sha256: sha256Bytes("ingest projection")
+      }]);
       const changeKey = "pg-duplicate-archive";
       const summary = JSON.parse(await readFile(
         new URL("./fixtures/instruction-summary-data-v2.3.json", import.meta.url),
@@ -201,12 +214,14 @@ postgresDescribe("PostgreSQL repository integration", () => {
       const packageBytes = zip.toBuffer();
       const url = `/api/v1/projects/${projectId}/changes/${changeKey}/archive-package`;
 
-      const responses = await Promise.all([
-        app.inject({ method: "PUT", url, headers: mutationHeaders("application/zip"), payload: packageBytes }),
-        app.inject({ method: "PUT", url, headers: mutationHeaders("application/zip"), payload: packageBytes })
-      ]);
+      const responses = await Promise.all(Array.from({ length: 6 }, () => app.inject({
+        method: "PUT",
+        url,
+        headers: mutationHeaders("application/zip"),
+        payload: packageBytes
+      })));
 
-      expect(responses.map((response) => response.statusCode)).toEqual([201, 201]);
+      expect(responses.map((response) => response.statusCode)).toEqual(Array(6).fill(201));
       const receipts = responses.map((response) => response.json());
       expect(receipts[0]).toMatchObject({
         project_id: projectId,
@@ -214,12 +229,15 @@ postgresDescribe("PostgreSQL repository integration", () => {
         package_sha256: sha256Bytes(packageBytes),
         knowledge_status: "ready"
       });
-      expect(receipts[1]).toMatchObject({
-        archive_id: receipts[0]?.archive_id,
-        artifact_id: receipts[0]?.artifact_id,
-        package_sha256: receipts[0]?.package_sha256,
-        knowledge_status: "ready"
-      });
+      for (const receipt of receipts.slice(1)) {
+        expect(receipt).toMatchObject({
+          archive_id: receipts[0]?.archive_id,
+          artifact_id: receipts[0]?.artifact_id,
+          package_sha256: receipts[0]?.package_sha256,
+          knowledge_status: "ready"
+        });
+      }
+      expect(await semanticStore.latestArtifactId(projectId)).toBe(receipts[0]?.artifact_id);
       const stored = await pool.query(
         "SELECT count(*)::int AS count FROM change_archive_packages WHERE project_id = $1 AND change_key = $2",
         [projectId, changeKey]

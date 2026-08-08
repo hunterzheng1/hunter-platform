@@ -66,9 +66,13 @@ export interface ChangeArchivePackageRecord {
   changeKey: string;
   packageSha256: string;
   manifestSha256: string;
+  coreContentSha256: string[];
   artifactId: string | null;
   archiveStatus: "durable";
   knowledgeStatus: "indexing" | "ready" | "failed";
+  attemptCount: number;
+  failureStage: "raw_storage" | "core_storage" | "finalize" | "semantic" | null;
+  lastErrorCode: string | null;
   storedFiles: number;
   createdAt: string;
   updatedAt: string;
@@ -119,7 +123,7 @@ export interface ProposalSessionRecord {
   baseManifestHash: string;
   operations: FileOperation[];
   scanOverrides: FindingOverride[];
-  status: "open" | "finalized";
+  status: "open" | "finalized" | "failed";
   expiresAt: string;
   maxChunkBytes: number;
 }
@@ -256,6 +260,7 @@ export interface ServerRepository extends TransactionRepository {
     changeKey: string;
     packageSha256: string;
     manifestSha256: string;
+    coreContentSha256: string[];
     storedFiles: number;
   }): Promise<{ record: ChangeArchivePackageRecord; created: boolean }>;
   getChangeArchivePackage(
@@ -269,6 +274,10 @@ export interface ServerRepository extends TransactionRepository {
     changeKey: string;
     artifactId: string | null;
     knowledgeStatus: ChangeArchivePackageRecord["knowledgeStatus"];
+    failureStage: ChangeArchivePackageRecord["failureStage"];
+    lastErrorCode: string | null;
+    coreContentSha256?: string[];
+    incrementAttempt?: boolean;
   }): Promise<ChangeArchivePackageRecord>;
   createProposalSession(input: Omit<ProposalSessionRecord, "sessionId">): Promise<ProposalSessionRecord>;
   getProposalSession(actorId: string, sessionId: string): Promise<ProposalSessionRecord>;

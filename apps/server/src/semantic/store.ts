@@ -12,8 +12,17 @@ import type {
  */
 export const INGEST_ARTIFACT_ID = "ingest";
 
+export interface SemanticGenerationGuard {
+  expectedArtifactId: string;
+  isCurrent(): Promise<boolean>;
+}
+
 export interface SemanticStore {
-  rebuild(build: SemanticIndexBuild): Promise<void>;
+  /**
+   * Publish a full semantic snapshot. When a guard is supplied, the snapshot is
+   * committed only while its project artifact is still current.
+   */
+  rebuild(build: SemanticIndexBuild, guard?: SemanticGenerationGuard): Promise<boolean>;
   /** Insert or replace individual documents (P3 ingest projection). */
   upsertDocuments(documents: readonly SemanticDocument[]): Promise<void>;
   overview(projectId: string): Promise<SemanticOverview>;

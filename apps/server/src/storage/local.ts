@@ -41,6 +41,7 @@ function mergeRanges(ranges: Array<{ start: number; end: number }>) {
 
 export class LocalArtifactStorage implements ArtifactStorage {
   readonly root: string;
+  private readonly blobLocks = new Map<string, Promise<void>>();
 
   constructor(root: string) {
     this.root = resolve(root);
@@ -54,62 +55,87 @@ export class LocalArtifactStorage implements ArtifactStorage {
     return join(this.root, "quarantine", hashName(hash));
   }
 
+  private async withBlobLock<T>(contentSha256: string, action: () => Promise<T>): Promise<T> {
+    // All mutations and reads for one CAS key share the same in-process queue.
+    // This prevents upload repair from racing quarantine/restore into deleting
+    // the only valid copy. Different hashes remain fully concurrent.
+    const previous = this.blobLocks.get(contentSha256) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queued = previous.then(() => gate);
+    this.blobLocks.set(contentSha256, queued);
+    await previous;
+    try {
+      return await action();
+    } finally {
+      release();
+      if (this.blobLocks.get(contentSha256) === queued) {
+        this.blobLocks.delete(contentSha256);
+      }
+    }
+  }
+
   async hasBlob(contentSha256: string): Promise<boolean> {
-    return exists(this.blobPath(contentSha256));
+    return this.withBlobLock(contentSha256, () => exists(this.blobPath(contentSha256)));
   }
 
   async getBlob(contentSha256: string): Promise<Uint8Array> {
-    try {
-      return await readFile(this.blobPath(contentSha256));
-    } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-        try {
-          return await readFile(this.quarantinePath(contentSha256));
-        } catch (quarantineError) {
-          if (quarantineError instanceof Error && "code" in quarantineError && quarantineError.code === "ENOENT") {
-            throw new ServerDomainError(404, "ARTIFACT_NOT_FOUND", "artifact blob not found");
+    return this.withBlobLock(contentSha256, async () => {
+      try {
+        return await readFile(this.blobPath(contentSha256));
+      } catch (error) {
+        if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+          try {
+            return await readFile(this.quarantinePath(contentSha256));
+          } catch (quarantineError) {
+            if (quarantineError instanceof Error && "code" in quarantineError && quarantineError.code === "ENOENT") {
+              throw new ServerDomainError(404, "ARTIFACT_NOT_FOUND", "artifact blob not found");
+            }
+            throw quarantineError;
           }
-          throw quarantineError;
         }
+        throw error;
       }
-      throw error;
-    }
+    });
   }
 
   async putBlob(contentSha256: string, content: Uint8Array): Promise<void> {
     if (sha256Bytes(content) !== contentSha256) {
       throw new ServerDomainError(422, "ARTIFACT_HASH_MISMATCH", "blob hash mismatch");
     }
-    const path = this.blobPath(contentSha256);
-    if (!await exists(path)) {
-      const quarantinedPath = this.quarantinePath(contentSha256);
-      if (await exists(quarantinedPath)) {
-        await mkdir(dirname(path), { recursive: true });
-        try {
-          await rename(quarantinedPath, path);
-          return;
-        } catch (error) {
-          if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
-        }
+    await this.withBlobLock(contentSha256, async () => {
+      const path = this.blobPath(contentSha256);
+      try {
+        const current = await readFile(path);
+        if (sha256Bytes(current) === contentSha256) return;
+      } catch (error) {
+        if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
       }
+      // CAS 文件可能因磁盘故障或外部修改而损坏。调用方已经提供了经过
+      // hash 校验的原文，因此原子覆盖可以让同 hash 重传真正完成自愈。
       await atomicWriteFile(path, content);
-    }
+      await rm(this.quarantinePath(contentSha256), { force: true });
+    });
   }
 
   async quarantineBlob(contentSha256: string, quarantinedAt: string): Promise<boolean> {
-    const source = this.blobPath(contentSha256);
-    const target = this.quarantinePath(contentSha256);
-    if (!await exists(source) || await exists(target)) return false;
-    await mkdir(dirname(target), { recursive: true });
-    try {
-      await rename(source, target);
-    } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
-      throw error;
-    }
-    const date = new Date(quarantinedAt);
-    await utimes(target, date, date);
-    return true;
+    return this.withBlobLock(contentSha256, async () => {
+      const source = this.blobPath(contentSha256);
+      const target = this.quarantinePath(contentSha256);
+      if (!await exists(source) || await exists(target)) return false;
+      await mkdir(dirname(target), { recursive: true });
+      try {
+        await rename(source, target);
+      } catch (error) {
+        if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+        throw error;
+      }
+      const date = new Date(quarantinedAt);
+      await utimes(target, date, date);
+      return true;
+    });
   }
 
   async listQuarantinedBlobs(): Promise<QuarantinedBlob[]> {
@@ -123,31 +149,45 @@ export class LocalArtifactStorage implements ArtifactStorage {
     }
     const items = await Promise.all(names
       .filter((name) => /^[a-f0-9]{64}$/.test(name))
-      .map(async (name) => ({
-        contentSha256: `sha256:${name}`,
-        quarantinedAt: (await stat(join(root, name))).mtime.toISOString()
-      })));
-    return items;
+      .map(async (name): Promise<QuarantinedBlob | null> => {
+        const contentSha256 = `sha256:${name}`;
+        return this.withBlobLock(contentSha256, async () => {
+          try {
+            return {
+              contentSha256,
+              quarantinedAt: (await stat(join(root, name))).mtime.toISOString()
+            };
+          } catch (error) {
+            if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+            throw error;
+          }
+        });
+      }));
+    return items.filter((item): item is QuarantinedBlob => item !== null);
   }
 
   async restoreQuarantinedBlob(contentSha256: string): Promise<void> {
-    const source = this.quarantinePath(contentSha256);
-    if (!await exists(source)) return;
-    const target = this.blobPath(contentSha256);
-    if (await exists(target)) {
-      await rm(source, { force: true });
-      return;
-    }
-    await mkdir(dirname(target), { recursive: true });
-    try {
-      await rename(source, target);
-    } catch (error) {
-      if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
-    }
+    await this.withBlobLock(contentSha256, async () => {
+      const source = this.quarantinePath(contentSha256);
+      if (!await exists(source)) return;
+      const target = this.blobPath(contentSha256);
+      if (await exists(target)) {
+        await rm(source, { force: true });
+        return;
+      }
+      await mkdir(dirname(target), { recursive: true });
+      try {
+        await rename(source, target);
+      } catch (error) {
+        if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+      }
+    });
   }
 
   async deleteQuarantinedBlob(contentSha256: string): Promise<void> {
-    await rm(this.quarantinePath(contentSha256), { force: true });
+    await this.withBlobLock(contentSha256, async () => {
+      await rm(this.quarantinePath(contentSha256), { force: true });
+    });
   }
 
   async writeSessionChunk(input: {

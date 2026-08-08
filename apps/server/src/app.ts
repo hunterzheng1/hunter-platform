@@ -74,7 +74,8 @@ import {
 } from "./archive/change-archive.js";
 import {
   archivePackageReceipt,
-  ingestArchivePackage
+  ingestArchivePackage,
+  loadSemanticSnapshotFiles
 } from "./archive/package-ingest.js";
 import { defaultServerConfig, type ServerConfig } from "./config.js";
 import { buildDashboardOverview } from "./dashboard/overview.js";
@@ -95,7 +96,7 @@ import type {
 } from "./repositories/interfaces.js";
 import { PROJECT_KEY_SCOPES, ServerDomainError } from "./repositories/interfaces.js";
 import type { ArtifactStorage } from "./storage/interface.js";
-import { buildSemanticIndex, isSemanticSourcePath } from "./semantic/indexer.js";
+import { buildSemanticIndex } from "./semantic/indexer.js";
 import {
   knowledgeContentHash,
   prepareKnowledgeIngestPayload,
@@ -137,6 +138,13 @@ export interface CreateServerOptions {
 interface MutationResult {
   statusCode: number;
   body: Record<string, unknown>;
+}
+
+interface MutationLockInput {
+  actorId: string;
+  method: string;
+  path: string;
+  key: string;
 }
 
 const resolveSchema = z.object({
@@ -258,6 +266,25 @@ function mutationBodyHash(body: unknown): string {
   return sha256Bytes(Buffer.isBuffer(body) ? body : canonicalJson(body));
 }
 
+function mutationResourcePath(request: FastifyRequest): string {
+  const routePath = request.routeOptions.url ?? request.url.split("?")[0] ?? request.url;
+  const rawParams = request.params;
+  const params = rawParams !== null && typeof rawParams === "object" && !Array.isArray(rawParams)
+    ? Object.fromEntries(
+      Object.entries(rawParams as Record<string, unknown>)
+        .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+        .sort(([left], [right]) => left.localeCompare(right))
+    )
+    : {};
+  const query = [...new URL(request.url, "http://localhost").searchParams.entries()]
+    .sort(([leftKey, leftValue], [rightKey, rightValue]) =>
+      leftKey.localeCompare(rightKey) || leftValue.localeCompare(rightValue)
+    );
+  return routePath +
+    (Object.keys(params).length === 0 ? "" : "#params=" + canonicalJson(params)) +
+    (query.length === 0 ? "" : "#query=" + canonicalJson(query));
+}
+
 function operationTarget(operation: FileOperation): string {
   return operation.operation === "rename" ? operation.to_path : operation.path;
 }
@@ -376,7 +403,8 @@ async function mutation(
   actor: Actor,
   requestId: string,
   action: () => Promise<MutationResult>,
-  bodyHashOverride?: string
+  bodyHashOverride?: string,
+  lockInputOverride?: MutationLockInput
 ): Promise<MutationResult> {
   const idempotency = request.headers["idempotency-key"];
   if (typeof idempotency !== "string" || !z.uuid().safeParse(idempotency).success) {
@@ -387,17 +415,21 @@ async function mutation(
     );
   }
   const method = request.method.toUpperCase();
-  const path = request.routeOptions.url ?? request.url.split("?")[0] ?? request.url;
+  // Route templates alone collapse different resources (for example two
+  // project IDs) into one idempotency scope. Include normalized route params
+  // and action-affecting query parameters in the canonical target identity.
+  const path = mutationResourcePath(request);
   const bodyHash = bodyHashOverride ?? mutationBodyHash(request.body);
-  const lockInput = {
+  const idempotencyInput = {
     actorId: actor.actorId,
     method,
     path,
     key: idempotency
   };
+  const lockInput = lockInputOverride ?? idempotencyInput;
   const lock = await repository.acquireIdempotencyLock(lockInput);
   try {
-    const existing = await repository.getIdempotency(lockInput);
+    const existing = await repository.getIdempotency(idempotencyInput);
     if (existing !== null) {
       if (existing.bodyHash !== bodyHash) {
         throw new ServerDomainError(
@@ -414,7 +446,7 @@ async function mutation(
     const result = await action();
     const response = { ...result.body, request_id: requestId };
     const record: IdempotencyRecord = {
-      ...lockInput,
+      ...idempotencyInput,
       bodyHash,
       statusCode: result.statusCode,
       response
@@ -1120,26 +1152,22 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
       });
       if (review.artifactId !== null) {
         try {
-          const currentFiles = await repository.listProjectFiles(actor.actorId, proposal.projectId);
-          const semanticFiles = await Promise.all(
-            currentFiles
-              .filter((file) => isSemanticSourcePath(file.path))
-              .map(async (file): Promise<readonly [string, string] | null> => {
-                if (!await storage.hasBlob(file.contentSha256)) return null;
-                try {
-                  const content = new TextDecoder("utf-8", { fatal: true })
-                    .decode(await storage.getBlob(file.contentSha256));
-                  return [file.path, content] as const;
-                } catch {
-                  return null;
-                }
-              })
-          );
+          const semanticFiles = await loadSemanticSnapshotFiles({
+            actorId: actor.actorId,
+            projectId: proposal.projectId,
+            repository,
+            storage
+          });
           await semanticStore.rebuild(buildSemanticIndex({
             projectId: proposal.projectId,
             artifactId: review.artifactId,
-            files: Object.fromEntries(semanticFiles.filter((item) => item !== null))
-          }));
+            files: semanticFiles
+          }), {
+            expectedArtifactId: review.artifactId,
+            isCurrent: async () =>
+              (await repository.getLatestArtifact(actor.actorId, proposal.projectId))?.artifactId ===
+                review.artifactId
+          });
         } catch (error) {
           request.log.error({ error, projectId: proposal.projectId }, "semantic index rebuild failed");
         }
@@ -2158,7 +2186,8 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
             maxUncompressedBytes: config.maxProposalBytes
           },
           sessionTtlMs: config.sessionTtlMs,
-          maxChunkBytes: config.maxChunkBytes
+          maxChunkBytes: config.maxChunkBytes,
+          projectLockHeld: true
         });
         await writeAudit(repository, {
           actorId: actor.actorId,
@@ -2174,6 +2203,11 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
           }
         });
         return { statusCode: 201, body: { ...receipt } };
+      }, undefined, {
+        actorId: "internal:archive-package",
+        method: "ARCHIVE",
+        path: "/internal/archive-package/project",
+        key: projectId
       });
       return send(reply, requestId, result);
     }
@@ -2246,6 +2280,13 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     }
     const file = await repository.getProjectFile(actor.actorId, projectId, absolutePath);
     const bytes = await storage.getBlob(file.contentSha256);
+    if (bytes.byteLength !== file.sizeBytes || sha256Bytes(bytes) !== file.contentSha256) {
+      throw new ServerDomainError(
+        500,
+        "ARCHIVE_STORAGE_CORRUPT",
+        "stored archive content does not match its repository metadata"
+      );
+    }
     let content: string;
     try {
       content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);

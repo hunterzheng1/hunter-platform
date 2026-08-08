@@ -11,6 +11,7 @@ import { z } from "zod";
 
 import type {
   ChangeArchivePackageRecord,
+  ProposalSessionRecord,
   ServerRepository
 } from "../repositories/interfaces.js";
 import { ServerDomainError } from "../repositories/interfaces.js";
@@ -83,7 +84,7 @@ const archiveSummary23Schema = z.object({
   verification: z.object({
     unitTests: z.record(z.string(), z.unknown()),
     apiTests: z.record(z.string(), z.unknown()),
-    browserE2E: z.record(z.string(), z.unknown()),
+    browserE2E: z.record(z.string(), z.unknown()).optional(),
     dbCompatibility: z.string(),
     coverageDisplay: z.string()
   }).passthrough(),
@@ -166,6 +167,15 @@ const ALLOWED_PATHS: ReadonlyArray<{
 
 function invalid(message: string, details: Record<string, unknown> = {}): never {
   throw new ServerDomainError(422, "ARCHIVE_PACKAGE_INVALID", message, details);
+}
+
+function failureCode(error: unknown): string {
+  if (error instanceof ServerDomainError) return error.code;
+  if (error !== null && typeof error === "object" && "code" in error &&
+      typeof error.code === "string" && /^[A-Z0-9_]{1,100}$/u.test(error.code)) {
+    return error.code;
+  }
+  return "ARCHIVE_INGEST_FAILED";
 }
 
 function normalizeEntryPath(rawPath: string): string {
@@ -622,7 +632,7 @@ function receipt(record: ChangeArchivePackageRecord): ArchivePackageReceipt {
   };
 }
 
-async function semanticFiles(input: {
+export async function loadSemanticSnapshotFiles(input: {
   actorId: string;
   projectId: string;
   repository: ServerRepository;
@@ -704,15 +714,21 @@ async function rebuildStableSemanticSnapshot(input: {
         "project has no artifact for the semantic snapshot"
       );
     }
-    const files = await semanticFiles(input);
+    const files = await loadSemanticSnapshotFiles(input);
     const afterRead = await input.repository.getLatestArtifact(input.actorId, input.projectId);
     if (afterRead?.artifactId !== before.artifactId) continue;
 
-    await input.semanticStore.rebuild(buildSemanticIndex({
+    const published = await input.semanticStore.rebuild(buildSemanticIndex({
       projectId: input.projectId,
       artifactId: before.artifactId,
       files
-    }));
+    }), {
+      expectedArtifactId: before.artifactId,
+      isCurrent: async () =>
+        (await input.repository.getLatestArtifact(input.actorId, input.projectId))?.artifactId ===
+          before.artifactId
+    });
+    if (!published) continue;
     const afterRebuild = await input.repository.getLatestArtifact(input.actorId, input.projectId);
     if (afterRebuild?.artifactId !== before.artifactId) continue;
     if (await input.semanticStore.latestArtifactId(input.projectId) !== before.artifactId) {
@@ -742,15 +758,18 @@ export async function ingestArchivePackage(input: {
   limits: ArchivePackageLimits;
   sessionTtlMs: number;
   maxChunkBytes: number;
+  projectLockHeld?: boolean;
 }): Promise<ArchivePackageReceipt> {
   await input.repository.getProject(input.actorId, input.projectId);
   const archive = validateArchivePackage(input.changeKey, input.bytes, input.limits);
-  const projectLock = await input.repository.acquireIdempotencyLock({
-    actorId: "internal:archive-package",
-    method: "ARCHIVE",
-    path: "/internal/archive-package/project",
-    key: input.projectId
-  });
+  const projectLock = input.projectLockHeld === true
+    ? null
+    : await input.repository.acquireIdempotencyLock({
+      actorId: "internal:archive-package",
+      method: "ARCHIVE",
+      path: "/internal/archive-package/project",
+      key: input.projectId
+    });
 
   try {
     let existingPackage: ChangeArchivePackageRecord | null;
@@ -775,6 +794,7 @@ export async function ingestArchivePackage(input: {
         { package_sha256: existingPackage.packageSha256 }
       );
     }
+    const rawPackageAlreadyStored = await input.storage.hasBlob(archive.packageSha256);
     try {
       await input.storage.putBlob(archive.packageSha256, input.bytes);
     } catch (error) {
@@ -784,20 +804,43 @@ export async function ingestArchivePackage(input: {
         projectId: input.projectId,
         changeKey: input.changeKey,
         artifactId: existingPackage.artifactId,
-        knowledgeStatus: "failed"
+        knowledgeStatus: "failed",
+        failureStage: "raw_storage",
+        lastErrorCode: failureCode(error),
+        incrementAttempt: true
       });
       return receipt(failed);
     }
-    const persisted = existingPackage === null
-      ? await input.repository.putChangeArchivePackage({
-        actorId: input.actorId,
-        projectId: input.projectId,
-        changeKey: input.changeKey,
-        packageSha256: archive.packageSha256,
-        manifestSha256: archive.manifestSha256,
-        storedFiles: archive.files.length
-      })
-      : { record: existingPackage, created: false };
+    let persisted: { record: ChangeArchivePackageRecord; created: boolean };
+    if (existingPackage === null) {
+      try {
+        persisted = await input.repository.putChangeArchivePackage({
+          actorId: input.actorId,
+          projectId: input.projectId,
+          changeKey: input.changeKey,
+          packageSha256: archive.packageSha256,
+          manifestSha256: archive.manifestSha256,
+          coreContentSha256: archive.files.map((file) => file.contentSha256),
+          storedFiles: archive.files.length
+        });
+      } catch (error) {
+        if (!rawPackageAlreadyStored) {
+          try {
+            if (!await input.repository.isBlobReferenced(archive.packageSha256)) {
+              await input.storage.quarantineBlob(
+                archive.packageSha256,
+                new Date().toISOString()
+              );
+            }
+          } catch {
+            // Preserve the database error. A later GC pass may recover the unreferenced CAS blob.
+          }
+        }
+        throw error;
+      }
+    } else {
+      persisted = { record: existingPackage, created: false };
+    }
     if (!persisted.created && persisted.record.packageSha256 !== archive.packageSha256) {
       throw new ServerDomainError(
         409,
@@ -806,20 +849,66 @@ export async function ingestArchivePackage(input: {
         { package_sha256: persisted.record.packageSha256 }
       );
     }
+    const coreContentSha256 = [...new Set(archive.files.map((file) => file.contentSha256))];
+    if (!persisted.created &&
+        (persisted.record.coreContentSha256.length !== coreContentSha256.length ||
+          coreContentSha256.some((hash) => !persisted.record.coreContentSha256.includes(hash)))) {
+      // Migration 015 initializes historic rows with an empty list. Backfill
+      // from the freshly revalidated ZIP before writing any core blob so a
+      // failed retry cannot recreate an unreferenced CAS object.
+      persisted.record = await input.repository.updateChangeArchivePackage({
+        actorId: input.actorId,
+        projectId: input.projectId,
+        changeKey: input.changeKey,
+        artifactId: persisted.record.artifactId,
+        knowledgeStatus: persisted.record.knowledgeStatus,
+        failureStage: persisted.record.failureStage,
+        lastErrorCode: persisted.record.lastErrorCode,
+        coreContentSha256
+      });
+    }
     let archiveArtifactId = persisted.record.artifactId;
+    let activeSession: ProposalSessionRecord | null = null;
+    let failureStage: ChangeArchivePackageRecord["failureStage"] = "core_storage";
     try {
-      if (!persisted.created && persisted.record.knowledgeStatus === "ready") {
-        const latest = await input.repository.getLatestArtifact(input.actorId, input.projectId);
-        if (latest !== null &&
-            await input.semanticStore.latestArtifactId(input.projectId) === latest.artifactId) {
-          return receipt(persisted.record);
-        }
+      const wasReady = !persisted.created && persisted.record.knowledgeStatus === "ready";
+      if (!persisted.created && !wasReady) {
+        persisted.record = await input.repository.updateChangeArchivePackage({
+          actorId: input.actorId,
+          projectId: input.projectId,
+          changeKey: input.changeKey,
+          artifactId: archiveArtifactId,
+          knowledgeStatus: "indexing",
+          failureStage: null,
+          lastErrorCode: null,
+          incrementAttempt: true
+        });
       }
 
       for (const file of archive.files) {
         await input.storage.putBlob(file.contentSha256, file.content);
       }
+      // Even a ready archive rewrites its declared core blobs through CAS so a
+      // same-package re-upload can repair disk corruption before the fast path.
+      if (wasReady) {
+        const latest = await input.repository.getLatestArtifact(input.actorId, input.projectId);
+        if (latest !== null &&
+            await input.semanticStore.latestArtifactId(input.projectId) === latest.artifactId) {
+          return receipt(persisted.record);
+        }
+        persisted.record = await input.repository.updateChangeArchivePackage({
+          actorId: input.actorId,
+          projectId: input.projectId,
+          changeKey: input.changeKey,
+          artifactId: archiveArtifactId,
+          knowledgeStatus: "indexing",
+          failureStage: null,
+          lastErrorCode: null,
+          incrementAttempt: true
+        });
+      }
 
+      failureStage = "finalize";
       const project = await input.repository.getProject(input.actorId, input.projectId);
       const existingFiles = await input.repository.listProjectFiles(input.actorId, input.projectId);
       const byPath = new Map(existingFiles.map((file) => [file.path, file]));
@@ -844,7 +933,7 @@ export async function ingestArchivePackage(input: {
       });
 
       if (operations.length > 0) {
-        const session = await input.repository.createProposalSession({
+        activeSession = await input.repository.createProposalSession({
           projectId: input.projectId,
           actorId: input.actorId,
           baseProjectVersion: project.latestProjectVersion,
@@ -858,7 +947,8 @@ export async function ingestArchivePackage(input: {
           expiresAt: new Date(Date.now() + input.sessionTtlMs).toISOString(),
           maxChunkBytes: input.maxChunkBytes
         });
-        const finalized = await input.repository.finalizeSessionAutoApprove(session);
+        const finalized = await input.repository.finalizeSessionAutoApprove(activeSession);
+        activeSession = null;
         archiveArtifactId = finalized.review.artifactId;
       } else if (archiveArtifactId === null) {
         archiveArtifactId = project.latestArtifactId;
@@ -871,6 +961,7 @@ export async function ingestArchivePackage(input: {
         );
       }
 
+      failureStage = "semantic";
       const semanticGeneration = await rebuildStableSemanticSnapshot(input);
       const latest = await input.repository.getLatestArtifact(input.actorId, input.projectId);
       const semanticLatest = await input.semanticStore.latestArtifactId(input.projectId);
@@ -886,21 +977,37 @@ export async function ingestArchivePackage(input: {
         projectId: input.projectId,
         changeKey: input.changeKey,
         artifactId: archiveArtifactId,
-        knowledgeStatus: "ready"
+        knowledgeStatus: "ready",
+        failureStage: null,
+        lastErrorCode: null
       });
       return receipt(updated);
-    } catch {
+    } catch (error) {
+      if (activeSession !== null) {
+        try {
+          await input.repository.updateProposalSession({
+            ...activeSession,
+            status: "failed",
+            expiresAt: new Date().toISOString()
+          });
+          await input.storage.deleteSession(activeSession.sessionId);
+        } catch {
+          // The archive record below remains retryable even if session cleanup fails.
+        }
+      }
       const failed = await input.repository.updateChangeArchivePackage({
         actorId: input.actorId,
         projectId: input.projectId,
         changeKey: input.changeKey,
         artifactId: archiveArtifactId,
-        knowledgeStatus: "failed"
+        knowledgeStatus: "failed",
+        failureStage,
+        lastErrorCode: failureCode(error)
       });
       return receipt(failed);
     }
   } finally {
-    await projectLock.release();
+    await projectLock?.release();
   }
 }
 

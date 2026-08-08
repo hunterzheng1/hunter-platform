@@ -170,6 +170,8 @@ describe("OpenAPI v1 contract", () => {
     expect(Object.keys(upload?.requestBody?.content ?? {})).toEqual(["application/zip"]);
     expect(upload?.responses).toHaveProperty("413");
     expect(upload?.responses).toHaveProperty("415");
+    expect(document.components.schemas.ArchivePackageReceipt?.required)
+      .toContain("request_id");
 
     const request = document.components.schemas.InstructionProposalRequest;
     expect(request?.required).not.toContain("language");
@@ -199,6 +201,19 @@ describe("OpenAPI v1 contract", () => {
           maxItems: 50,
           items: { type: "string", minLength: 1, maxLength: 2000 }
         }
+      }
+    });
+    const proposal = document.components.schemas.InstructionProposal;
+    expect(proposal?.required).toContain("request_id");
+    expect(proposal?.properties?.proposal_id).toMatchObject({
+      pattern: "^ipr_[A-Za-z0-9][A-Za-z0-9_-]{0,155}$"
+    });
+    expect(proposal?.properties?.files?.items).toMatchObject({
+      additionalProperties: false,
+      required: ["path", "operation", "base_content_sha256", "content_sha256", "content"],
+      properties: {
+        operation: { type: "string", enum: ["add", "modify"] },
+        content_sha256: { type: "string", pattern: "^sha256:[a-f0-9]{64}$" }
       }
     });
   });
