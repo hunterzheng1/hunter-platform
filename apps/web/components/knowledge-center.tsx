@@ -82,7 +82,7 @@ function GlobalKnowledgeSearch({
   }, [api]);
 
   const browse = useCallback(async (selectedProjectId: string) => {
-    const listKnowledge = api.listProjectSemanticKnowledge;
+    const listKnowledge = api.listProjectSemanticKnowledge?.bind(api);
     if (listKnowledge === undefined) return;
     setBusy(true);
     setError(null);

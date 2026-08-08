@@ -63,6 +63,27 @@ describe("KnowledgeCenter (P3)", () => {
     });
   });
 
+  it("preserves the API method receiver while browsing", async () => {
+    const api = {
+      browseCalls: 0,
+      searchSemanticDocuments: vi.fn(),
+      listProjects: vi.fn().mockResolvedValue([
+        { project_id: "prj_demo", display_name: "Demo", role: "owner", created_at: "2026-01-01T00:00:00Z" }
+      ]),
+      async listProjectSemanticKnowledge(this: { browseCalls: number }) {
+        this.browseCalls += 1;
+        return { items: [], total: 0, next_cursor: null };
+      }
+    } as unknown as HunterApi & { browseCalls: number };
+
+    wrap(<KnowledgeCenter api={api} />);
+
+    await waitFor(() => {
+      expect(api.browseCalls).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText("无法连接到服务器。")).toBeNull();
+  });
+
   it("does not render manual candidate review controls", async () => {
     const listProjectSemanticKnowledge = vi.fn().mockResolvedValue([]);
     const api = {
