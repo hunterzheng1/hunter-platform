@@ -63,47 +63,22 @@ describe("KnowledgeCenter (P3)", () => {
     });
   });
 
-  it("lists candidates and approves them", async () => {
-    const updateKnowledgeEntryStatus = vi.fn().mockResolvedValue({
-      entry_id: "kn-c1",
-      status: "active",
-      updated_at: "2026-08-06T00:00:00Z"
-    });
-    const listKnowledgeEntries = vi.fn()
-      .mockResolvedValueOnce([
-        {
-          entry_id: "kn-c1",
-          status: "candidate",
-          content_sha256: "sha256:1",
-          payload: { title: "Candidate decision", summary: "Needs review" },
-          updated_at: "2026-08-06T00:00:00Z",
-          projected_at: null
-        }
-      ])
-      .mockResolvedValue([]);
+  it("does not render manual candidate review controls", async () => {
+    const listProjectSemanticKnowledge = vi.fn().mockResolvedValue([]);
     const api = {
       searchSemanticDocuments: vi.fn(),
       listProjects: vi.fn().mockResolvedValue([
         { project_id: "prj_demo", display_name: "Demo", role: "owner", created_at: "2026-01-01T00:00:00Z" }
       ]),
-      listProjectSemanticKnowledge: vi.fn().mockResolvedValue([]),
-      listKnowledgeEntries,
-      getKnowledgeProjectionStatus: vi.fn().mockResolvedValue({ pending_count: 2, pending_capped: false }),
-      updateKnowledgeEntryStatus
+      listProjectSemanticKnowledge
     } as unknown as HunterApi;
 
     wrap(<KnowledgeCenter api={api} />);
-    fireEvent.click(screen.getByRole("tab", { name: /Candidate|候选审核/i }));
 
     await waitFor(() => {
-      expect(screen.getByText("Candidate decision")).toBeTruthy();
-      expect(screen.getByText(/待投影 2|2 knowledge entries pending/i)).toBeTruthy();
+      expect(listProjectSemanticKnowledge).toHaveBeenCalled();
     });
-
-    fireEvent.click(screen.getByRole("button", { name: /批准|Approve/i }));
-
-    await waitFor(() => {
-      expect(updateKnowledgeEntryStatus).toHaveBeenCalledWith("prj_demo", "kn-c1", "active");
-    });
+    expect(screen.queryByRole("tab", { name: /Candidate|候选审核/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /批准|Approve/i })).toBeNull();
   });
 });
