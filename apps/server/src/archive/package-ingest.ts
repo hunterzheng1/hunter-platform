@@ -48,6 +48,72 @@ const archiveManifestSchema = z.object({
   }).strict()).min(1)
 }).strict();
 
+const archiveSummary22Schema = z.object({
+  schemaVersion: z.literal("2.2"),
+  changeName: z.string().trim().min(1),
+  finalStatus: z.string().trim().min(1),
+  finalCommit: z.string(),
+  stageStatus: z.record(z.string(), z.string())
+    .refine((value) => Object.keys(value).length > 0),
+  verification: z.object({
+    unitTests: z.record(z.string(), z.unknown())
+      .refine((value) => Object.keys(value).length > 0),
+    apiTests: z.record(z.string(), z.unknown())
+      .refine((value) => Object.keys(value).length > 0),
+    browserE2E: z.record(z.string(), z.unknown()).optional(),
+    dbCompatibility: z.string(),
+    coverageDisplay: z.string().optional()
+  }).passthrough()
+}).passthrough();
+
+const archiveSummary23Schema = z.object({
+  schemaVersion: z.literal("2.3"),
+  changeName: z.string().trim().min(1),
+  businessGoal: z.string(),
+  finalStatus: z.string().trim().min(1),
+  finalCommit: z.string(),
+  stageStatus: z.object({
+    plan: z.string(),
+    run: z.string(),
+    test: z.string(),
+    review: z.string(),
+    submit: z.string(),
+    archive: z.string()
+  }).passthrough(),
+  verification: z.object({
+    unitTests: z.record(z.string(), z.unknown()),
+    apiTests: z.record(z.string(), z.unknown()),
+    browserE2E: z.record(z.string(), z.unknown()),
+    dbCompatibility: z.string(),
+    coverageDisplay: z.string()
+  }).passthrough(),
+  changedFiles: z.array(z.unknown()),
+  artifacts: z.array(z.unknown()),
+  archiveManifest: z.object({
+    movedFiles: z.number().int().nonnegative(),
+    generatedFiles: z.number().int().nonnegative(),
+    totalArchiveFiles: z.number().int().nonnegative(),
+    checksumStatus: z.string().trim().min(1)
+  }).passthrough(),
+  reportPipeline: z.object({
+    schema_version: z.literal(1),
+    generated_at: z.string().trim().min(1),
+    event_count: z.number().int().nonnegative(),
+    sources: z.array(z.string()),
+    phases: z.record(z.string(), z.unknown()),
+    commands: z.array(z.unknown()),
+    verificationChecks: z.array(z.unknown()),
+    artifacts: z.array(z.unknown()),
+    validationIssues: z.array(z.unknown()),
+    sourceConsistency: z.object({
+      ok: z.boolean(),
+      issues: z.array(z.unknown())
+    }).passthrough()
+  }).passthrough()
+}).passthrough();
+
+const archiveSummarySchema = z.union([archiveSummary22Schema, archiveSummary23Schema]);
+
 type ArchiveManifest = z.infer<typeof archiveManifestSchema>;
 
 export interface ArchivePackageLimits {
@@ -137,6 +203,235 @@ function validateZipEntryType(entry: AdmZip.IZipEntry): void {
   }
 }
 
+interface RawZipEntry {
+  path: string;
+  flags: number;
+  method: number;
+  crc32: number;
+  compressedSize: number;
+  uncompressedSize: number;
+  externalAttributes: number;
+  localHeaderOffset: number;
+}
+
+const ZIP_LOCAL_HEADER_SIGNATURE = 0x04034b50;
+const ZIP_CENTRAL_HEADER_SIGNATURE = 0x02014b50;
+const ZIP_END_SIGNATURE = 0x06054b50;
+
+function requireZipRange(bytes: Buffer, offset: number, length: number, section: string): void {
+  if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) ||
+      offset < 0 || length < 0 || offset > bytes.byteLength - length) {
+    invalid("archive ZIP structure is out of bounds", { section });
+  }
+}
+
+function zipUInt16(bytes: Buffer, offset: number, section: string): number {
+  requireZipRange(bytes, offset, 2, section);
+  return bytes.readUInt16LE(offset);
+}
+
+function zipUInt32(bytes: Buffer, offset: number, section: string): number {
+  requireZipRange(bytes, offset, 4, section);
+  return bytes.readUInt32LE(offset);
+}
+
+function decodeZipFilename(raw: Buffer, flags: number): string {
+  if (raw.byteLength === 0 || raw.byteLength > 1024) {
+    invalid("archive ZIP filename length is invalid");
+  }
+  if (raw.some((value) => value > 0x7f) && (flags & 0x0800) === 0) {
+    invalid("archive non-ASCII filenames must use UTF-8");
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(raw);
+  } catch {
+    invalid("archive ZIP filename is not valid UTF-8");
+  }
+}
+
+function validateRawZipStructure(bytes: Buffer, maxEntries: number): RawZipEntry[] {
+  const endOffset = bytes.byteLength - 22;
+  requireZipRange(bytes, endOffset, 22, "end of central directory");
+  if (zipUInt32(bytes, endOffset, "end of central directory") !== ZIP_END_SIGNATURE) {
+    invalid("archive ZIP end record is missing or has trailing data");
+  }
+  const diskNumber = zipUInt16(bytes, endOffset + 4, "end of central directory");
+  const centralDisk = zipUInt16(bytes, endOffset + 6, "end of central directory");
+  const diskEntries = zipUInt16(bytes, endOffset + 8, "end of central directory");
+  const totalEntries = zipUInt16(bytes, endOffset + 10, "end of central directory");
+  const centralSize = zipUInt32(bytes, endOffset + 12, "end of central directory");
+  const centralOffset = zipUInt32(bytes, endOffset + 16, "end of central directory");
+  const archiveCommentLength = zipUInt16(bytes, endOffset + 20, "end of central directory");
+  if (diskNumber !== 0 || centralDisk !== 0 || diskEntries !== totalEntries) {
+    invalid("multi-disk ZIP archives are forbidden");
+  }
+  if (totalEntries === 0xffff || centralSize === 0xffffffff || centralOffset === 0xffffffff) {
+    invalid("ZIP64 archives are forbidden");
+  }
+  if (totalEntries === 0 || totalEntries > maxEntries) {
+    invalid("archive package file count is outside the allowed range", {
+      file_count: totalEntries,
+      max_files: maxEntries
+    });
+  }
+  if (archiveCommentLength !== 0) {
+    invalid("archive ZIP comments are forbidden");
+  }
+  requireZipRange(bytes, centralOffset, centralSize, "central directory");
+  if (centralOffset + centralSize !== endOffset) {
+    invalid("archive ZIP central directory boundaries are invalid");
+  }
+
+  const entries: RawZipEntry[] = [];
+  const localRanges: Array<{ start: number; end: number }> = [];
+  let cursor = centralOffset;
+  for (let index = 0; index < totalEntries; index += 1) {
+    const section = `central directory entry ${index}`;
+    requireZipRange(bytes, cursor, 46, section);
+    if (zipUInt32(bytes, cursor, section) !== ZIP_CENTRAL_HEADER_SIGNATURE) {
+      invalid("archive ZIP central directory entry is invalid", { entry_index: index });
+    }
+    const versionNeeded = zipUInt16(bytes, cursor + 6, section);
+    const flags = zipUInt16(bytes, cursor + 8, section);
+    const method = zipUInt16(bytes, cursor + 10, section);
+    const crc32 = zipUInt32(bytes, cursor + 16, section);
+    const compressedSize = zipUInt32(bytes, cursor + 20, section);
+    const uncompressedSize = zipUInt32(bytes, cursor + 24, section);
+    const filenameLength = zipUInt16(bytes, cursor + 28, section);
+    const extraLength = zipUInt16(bytes, cursor + 30, section);
+    const commentLength = zipUInt16(bytes, cursor + 32, section);
+    const startDisk = zipUInt16(bytes, cursor + 34, section);
+    const externalAttributes = zipUInt32(bytes, cursor + 38, section);
+    const localHeaderOffset = zipUInt32(bytes, cursor + 42, section);
+    if (versionNeeded >= 45 || compressedSize === 0xffffffff ||
+        uncompressedSize === 0xffffffff || localHeaderOffset === 0xffffffff) {
+      invalid("ZIP64 archive entries are forbidden", { entry_index: index });
+    }
+    if ((flags & 0x0001) !== 0) {
+      invalid("encrypted archive entries are forbidden", { entry_index: index });
+    }
+    if ((flags & 0x0008) !== 0) {
+      invalid("ZIP data descriptors are forbidden", { entry_index: index });
+    }
+    if ((flags & ~0x0800) !== 0) {
+      invalid("archive ZIP flags are unsupported", { entry_index: index, flags });
+    }
+    if (method !== 0 && method !== 8) {
+      invalid("archive compression method is unsupported", { entry_index: index, method });
+    }
+    if (extraLength !== 0 || commentLength !== 0) {
+      invalid("archive entry extra fields and comments are forbidden", { entry_index: index });
+    }
+    if (startDisk !== 0) {
+      invalid("multi-disk ZIP entries are forbidden", { entry_index: index });
+    }
+    const centralEntryLength = 46 + filenameLength + extraLength + commentLength;
+    requireZipRange(bytes, cursor, centralEntryLength, section);
+    const centralRawName = bytes.subarray(cursor + 46, cursor + 46 + filenameLength);
+    const path = normalizeEntryPath(decodeZipFilename(centralRawName, flags));
+    const unixType = (externalAttributes >>> 16) & 0xf000;
+    if (path.endsWith("/") || (externalAttributes & 0x10) !== 0 || unixType === 0x4000) {
+      invalid("archive directory entries are forbidden", { path });
+    }
+    if (unixType === 0xa000) {
+      invalid("archive symbolic links are forbidden", { path });
+    }
+    if (unixType !== 0 && unixType !== 0x8000) {
+      invalid("archive non-regular entries are forbidden", { path });
+    }
+
+    const localSection = `local header for ${path}`;
+    requireZipRange(bytes, localHeaderOffset, 30, localSection);
+    if (localHeaderOffset >= centralOffset ||
+        zipUInt32(bytes, localHeaderOffset, localSection) !== ZIP_LOCAL_HEADER_SIGNATURE) {
+      invalid("archive ZIP local header is invalid", { path });
+    }
+    const localVersionNeeded = zipUInt16(bytes, localHeaderOffset + 4, localSection);
+    const localFlags = zipUInt16(bytes, localHeaderOffset + 6, localSection);
+    const localMethod = zipUInt16(bytes, localHeaderOffset + 8, localSection);
+    const localCrc32 = zipUInt32(bytes, localHeaderOffset + 14, localSection);
+    const localCompressedSize = zipUInt32(bytes, localHeaderOffset + 18, localSection);
+    const localUncompressedSize = zipUInt32(bytes, localHeaderOffset + 22, localSection);
+    const localFilenameLength = zipUInt16(bytes, localHeaderOffset + 26, localSection);
+    const localExtraLength = zipUInt16(bytes, localHeaderOffset + 28, localSection);
+    if (localVersionNeeded >= 45 || localExtraLength !== 0) {
+      invalid("archive ZIP local header uses unsupported extensions", { path });
+    }
+    const localHeaderLength = 30 + localFilenameLength + localExtraLength;
+    requireZipRange(bytes, localHeaderOffset, localHeaderLength, localSection);
+    const localRawName = bytes.subarray(
+      localHeaderOffset + 30,
+      localHeaderOffset + 30 + localFilenameLength
+    );
+    if (!centralRawName.equals(localRawName) || flags !== localFlags || method !== localMethod ||
+        crc32 !== localCrc32 || compressedSize !== localCompressedSize ||
+        uncompressedSize !== localUncompressedSize) {
+      invalid("archive ZIP central and local headers disagree", { path });
+    }
+    const dataOffset = localHeaderOffset + localHeaderLength;
+    requireZipRange(bytes, dataOffset, compressedSize, `compressed data for ${path}`);
+    const localEnd = dataOffset + compressedSize;
+    if (localEnd > centralOffset) {
+      invalid("archive ZIP entry overlaps the central directory", { path });
+    }
+    localRanges.push({ start: localHeaderOffset, end: localEnd });
+    entries.push({
+      path,
+      flags,
+      method,
+      crc32,
+      compressedSize,
+      uncompressedSize,
+      externalAttributes,
+      localHeaderOffset
+    });
+    cursor += centralEntryLength;
+  }
+  if (cursor !== centralOffset + centralSize) {
+    invalid("archive ZIP central directory entry count is inconsistent");
+  }
+  localRanges.sort((left, right) => left.start - right.start);
+  let expectedOffset = 0;
+  for (const range of localRanges) {
+    if (range.start !== expectedOffset) {
+      invalid("archive ZIP local entries overlap or contain unrecognized data");
+    }
+    expectedOffset = range.end;
+  }
+  if (expectedOffset !== centralOffset) {
+    invalid("archive ZIP contains unrecognized data before the central directory");
+  }
+  return entries;
+}
+
+function normalizedJsonScanText(value: unknown, path: string): string {
+  let visited = 0;
+  const serialize = (current: unknown, depth: number): string => {
+    visited += 1;
+    if (depth > 64 || visited > 100_000) {
+      invalid("archive JSON is too deeply nested", { path });
+    }
+    if (typeof current === "string") {
+      return JSON.stringify(current.normalize("NFKC"));
+    }
+    if (Array.isArray(current)) {
+      return `[${current.map((item) => serialize(item, depth + 1)).join(",")}]`;
+    }
+    if (current !== null && typeof current === "object") {
+      return `{${Object.entries(current).map(([key, item]) =>
+        `${JSON.stringify(key.normalize("NFKC"))}:${serialize(item, depth + 1)}`
+      ).join(",")}}`;
+    }
+    return JSON.stringify(current) ?? "null";
+  };
+  return serialize(value, 0);
+}
+
+function isNonEmptyJsonObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value) &&
+    Object.keys(value).length > 0;
+}
+
 export function validateArchivePackage(
   changeKey: string,
   bytes: Uint8Array,
@@ -152,15 +447,21 @@ export function validateArchivePackage(
     });
   }
 
+  const packageBytes = Buffer.from(bytes);
+  const rawEntries = validateRawZipStructure(packageBytes, limits.maxUploadFiles + 1);
   let zip: AdmZip;
   try {
-    zip = new AdmZip(Buffer.from(bytes));
+    zip = new AdmZip(packageBytes);
   } catch {
     invalid("archive package is not a readable ZIP");
   }
 
-  const entries = zip.getEntries();
-  const files = entries.filter((entry) => !entry.isDirectory);
+  const files = zip.getEntries();
+  if (files.length !== rawEntries.length || files.some((entry, index) =>
+    entry.entryName !== rawEntries[index]?.path
+  )) {
+    invalid("archive ZIP parser views are inconsistent");
+  }
   if (files.length === 0 || files.length > limits.maxUploadFiles + 1) {
     invalid("archive package file count is outside the allowed range", {
       file_count: files.length,
@@ -199,13 +500,15 @@ export function validateArchivePackage(
   const manifestEntry = byPath.get("archive-manifest.json");
   if (manifestEntry === undefined) invalid("archive-manifest.json is required");
   let manifestBytes: Buffer;
+  let manifestText: string;
+  let manifestJson: unknown;
   let manifest: ArchiveManifest;
   try {
     manifestBytes = manifestEntry.getData();
     if (manifestBytes.byteLength > 256 * 1024) invalid("archive manifest is too large");
-    manifest = archiveManifestSchema.parse(JSON.parse(
-      new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes)
-    ));
+    manifestText = new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes);
+    manifestJson = JSON.parse(manifestText) as unknown;
+    manifest = archiveManifestSchema.parse(manifestJson);
   } catch (error) {
     if (error instanceof ServerDomainError) throw error;
     invalid("archive manifest is invalid");
@@ -219,6 +522,7 @@ export function validateArchivePackage(
 
   const declaredPaths = new Set<string>();
   const validatedFiles: ValidatedArchiveFile[] = [];
+  const normalizedJsonFiles: Record<string, string> = {};
   for (const declared of manifest.files) {
     const path = normalizeEntryPath(declared.path);
     validateDeclaredPath({ ...declared, path });
@@ -240,8 +544,19 @@ export function validateArchivePackage(
     }
     if (declared.media_type === "application/json") {
       try {
-        JSON.parse(text);
-      } catch {
+        const parsed = JSON.parse(text) as unknown;
+        if (declared.role === "summary" && !isNonEmptyJsonObject(parsed)) {
+          invalid("archive summary must be a non-empty JSON object", { path });
+        }
+        if (declared.role === "summary" && !archiveSummarySchema.safeParse(parsed).success) {
+          invalid("archive summary does not match CLI schema 2.2 or 2.3", { path });
+        }
+        if (declared.role === "change_context" && !isNonEmptyJsonObject(parsed)) {
+          invalid("archive change-context must be a non-empty JSON object", { path });
+        }
+        normalizedJsonFiles[path] = normalizedJsonScanText(parsed, path);
+      } catch (error) {
+        if (error instanceof ServerDomainError) throw error;
         invalid("archive JSON file is invalid", { path });
       }
     }
@@ -263,12 +578,19 @@ export function validateArchivePackage(
     invalid("archive must contain the final structured summary");
   }
 
-  const scan = scanSensitiveFiles(Object.fromEntries(
-    validatedFiles.map((file) => [file.path, file.text])
-  ));
-  if (scan.blocked) {
+  const rawScan = scanSensitiveFiles({
+    "archive-manifest.json": manifestText,
+    ...Object.fromEntries(validatedFiles.map((file) => [file.path, file.text]))
+  });
+  const normalizedScan = scanSensitiveFiles({
+    "archive-manifest.json": normalizedJsonScanText(manifestJson, "archive-manifest.json"),
+    ...normalizedJsonFiles
+  });
+  if (rawScan.blocked || normalizedScan.blocked) {
+    const blockedFindings = [...rawScan.findings, ...normalizedScan.findings]
+      .filter((finding) => finding.disposition === "blocked");
     invalid("archive contains sensitive content", {
-      findings: scan.findings.filter((finding) => finding.disposition === "blocked").map((finding) => ({
+      findings: blockedFindings.map((finding) => ({
         path: finding.path,
         rule_id: finding.rule_id,
         severity: finding.severity
@@ -309,20 +631,104 @@ async function semanticFiles(input: {
   const currentFiles = await input.repository.listProjectFiles(input.actorId, input.projectId);
   const values = await Promise.all(currentFiles
     .filter((file) => isSemanticSourcePath(file.path))
-    .map(async (file): Promise<readonly [string, string] | null> => {
-      if (!await input.storage.hasBlob(file.contentSha256)) return null;
+    .map(async (file): Promise<readonly [string, string]> => {
+      let exists: boolean;
+      try {
+        exists = await input.storage.hasBlob(file.contentSha256);
+      } catch {
+        throw new ServerDomainError(
+          500,
+          "SEMANTIC_SNAPSHOT_INCOMPLETE",
+          "semantic source blob availability could not be verified",
+          { path: file.path }
+        );
+      }
+      if (!exists) {
+        throw new ServerDomainError(
+          500,
+          "SEMANTIC_SNAPSHOT_INCOMPLETE",
+          "semantic source blob is missing",
+          { path: file.path }
+        );
+      }
+      let content: Uint8Array;
+      try {
+        content = await input.storage.getBlob(file.contentSha256);
+      } catch {
+        throw new ServerDomainError(
+          500,
+          "SEMANTIC_SNAPSHOT_INCOMPLETE",
+          "semantic source blob could not be read",
+          { path: file.path }
+        );
+      }
+      if (sha256Bytes(content) !== file.contentSha256) {
+        throw new ServerDomainError(
+          500,
+          "SEMANTIC_SNAPSHOT_INCOMPLETE",
+          "semantic source blob hash does not match the repository snapshot",
+          { path: file.path }
+        );
+      }
       try {
         return [
           file.path,
-          new TextDecoder("utf-8", { fatal: true }).decode(
-            await input.storage.getBlob(file.contentSha256)
-          )
+          new TextDecoder("utf-8", { fatal: true }).decode(content)
         ] as const;
       } catch {
-        return null;
+        throw new ServerDomainError(
+          500,
+          "SEMANTIC_SNAPSHOT_INCOMPLETE",
+          "semantic source blob is not valid UTF-8",
+          { path: file.path }
+        );
       }
     }));
-  return Object.fromEntries(values.filter((value) => value !== null));
+  return Object.fromEntries(values);
+}
+
+async function rebuildStableSemanticSnapshot(input: {
+  actorId: string;
+  projectId: string;
+  repository: ServerRepository;
+  storage: ArtifactStorage;
+  semanticStore: SemanticStore;
+}): Promise<string> {
+  const maxAttempts = 4;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const before = await input.repository.getLatestArtifact(input.actorId, input.projectId);
+    if (before === null) {
+      throw new ServerDomainError(
+        500,
+        "SEMANTIC_SNAPSHOT_INCOMPLETE",
+        "project has no artifact for the semantic snapshot"
+      );
+    }
+    const files = await semanticFiles(input);
+    const afterRead = await input.repository.getLatestArtifact(input.actorId, input.projectId);
+    if (afterRead?.artifactId !== before.artifactId) continue;
+
+    await input.semanticStore.rebuild(buildSemanticIndex({
+      projectId: input.projectId,
+      artifactId: before.artifactId,
+      files
+    }));
+    const afterRebuild = await input.repository.getLatestArtifact(input.actorId, input.projectId);
+    if (afterRebuild?.artifactId !== before.artifactId) continue;
+    if (await input.semanticStore.latestArtifactId(input.projectId) !== before.artifactId) {
+      throw new ServerDomainError(
+        500,
+        "SEMANTIC_REBUILD_INCONSISTENT",
+        "semantic store did not publish the requested project generation"
+      );
+    }
+    return before.artifactId;
+  }
+  throw new ServerDomainError(
+    409,
+    "SEMANTIC_SNAPSHOT_UNSTABLE",
+    "project changed repeatedly while rebuilding the semantic snapshot"
+  );
 }
 
 export async function ingestArchivePackage(input: {
@@ -339,103 +745,163 @@ export async function ingestArchivePackage(input: {
 }): Promise<ArchivePackageReceipt> {
   await input.repository.getProject(input.actorId, input.projectId);
   const archive = validateArchivePackage(input.changeKey, input.bytes, input.limits);
-
-  await input.storage.putBlob(archive.packageSha256, input.bytes);
-  const persisted = await input.repository.putChangeArchivePackage({
-    actorId: input.actorId,
-    projectId: input.projectId,
-    changeKey: input.changeKey,
-    packageSha256: archive.packageSha256,
-    manifestSha256: archive.manifestSha256,
-    storedFiles: archive.files.length
-  });
-  if (!persisted.created && persisted.record.packageSha256 !== archive.packageSha256) {
-    throw new ServerDomainError(
-      409,
-      "ARCHIVE_ALREADY_EXISTS",
-      "a different package is already stored for this change",
-      { package_sha256: persisted.record.packageSha256 }
-    );
-  }
-  if (!persisted.created && persisted.record.knowledgeStatus === "ready") {
-    return receipt(persisted.record);
-  }
-
-  for (const file of archive.files) {
-    await input.storage.putBlob(file.contentSha256, file.content);
-  }
-
-  const project = await input.repository.getProject(input.actorId, input.projectId);
-  const existingFiles = await input.repository.listProjectFiles(input.actorId, input.projectId);
-  const byPath = new Map(existingFiles.map((file) => [file.path, file]));
-  const operations: FileOperation[] = archive.files.flatMap((file) => {
-    const path = archiveRootPrefix(input.changeKey) + file.path;
-    const existing = byPath.get(path);
-    if (existing?.contentSha256 === file.contentSha256) return [];
-    return [fileOperationSchema.parse(existing === undefined ? {
-      operation: "add",
-      path,
-      file_kind: "internal_state",
-      content_sha256: file.contentSha256,
-      size_bytes: file.sizeBytes
-    } : {
-      operation: "modify",
-      path,
-      file_kind: "internal_state",
-      base_content_sha256: existing.contentSha256,
-      content_sha256: file.contentSha256,
-      size_bytes: file.sizeBytes
-    })];
+  const projectLock = await input.repository.acquireIdempotencyLock({
+    actorId: "internal:archive-package",
+    method: "ARCHIVE",
+    path: "/internal/archive-package/project",
+    key: input.projectId
   });
 
-  let artifactId = persisted.record.artifactId ?? project.latestArtifactId;
-  if (operations.length > 0) {
-    const session = await input.repository.createProposalSession({
-      projectId: input.projectId,
-      actorId: input.actorId,
-      baseProjectVersion: project.latestProjectVersion,
-      baseManifestHash: sha256Bytes(canonicalJson(existingFiles.map((file) => ({
-        path: file.path,
-        content_sha256: file.contentSha256
-      })))),
-      operations,
-      scanOverrides: [],
-      status: "open",
-      expiresAt: new Date(Date.now() + input.sessionTtlMs).toISOString(),
-      maxChunkBytes: input.maxChunkBytes
-    });
-    const finalized = await input.repository.finalizeSessionAutoApprove(session);
-    artifactId = finalized.review.artifactId;
-  }
-  if (artifactId === null) {
-    const failed = await input.repository.updateChangeArchivePackage({
-      actorId: input.actorId,
-      projectId: input.projectId,
-      changeKey: input.changeKey,
-      artifactId: null,
-      knowledgeStatus: "failed"
-    });
-    return receipt(failed);
-  }
-
-  let knowledgeStatus: ChangeArchivePackageRecord["knowledgeStatus"] = "ready";
   try {
-    await input.semanticStore.rebuild(buildSemanticIndex({
-      projectId: input.projectId,
-      artifactId,
-      files: await semanticFiles(input)
-    }));
-  } catch {
-    knowledgeStatus = "failed";
+    let existingPackage: ChangeArchivePackageRecord | null;
+    try {
+      existingPackage = await input.repository.getChangeArchivePackage(
+        input.actorId,
+        input.projectId,
+        input.changeKey
+      );
+    } catch (error) {
+      if (error instanceof ServerDomainError && error.code === "ARCHIVE_PACKAGE_NOT_FOUND") {
+        existingPackage = null;
+      } else {
+        throw error;
+      }
+    }
+    if (existingPackage !== null && existingPackage.packageSha256 !== archive.packageSha256) {
+      throw new ServerDomainError(
+        409,
+        "ARCHIVE_ALREADY_EXISTS",
+        "a different package is already stored for this change",
+        { package_sha256: existingPackage.packageSha256 }
+      );
+    }
+    try {
+      await input.storage.putBlob(archive.packageSha256, input.bytes);
+    } catch (error) {
+      if (existingPackage === null) throw error;
+      const failed = await input.repository.updateChangeArchivePackage({
+        actorId: input.actorId,
+        projectId: input.projectId,
+        changeKey: input.changeKey,
+        artifactId: existingPackage.artifactId,
+        knowledgeStatus: "failed"
+      });
+      return receipt(failed);
+    }
+    const persisted = existingPackage === null
+      ? await input.repository.putChangeArchivePackage({
+        actorId: input.actorId,
+        projectId: input.projectId,
+        changeKey: input.changeKey,
+        packageSha256: archive.packageSha256,
+        manifestSha256: archive.manifestSha256,
+        storedFiles: archive.files.length
+      })
+      : { record: existingPackage, created: false };
+    if (!persisted.created && persisted.record.packageSha256 !== archive.packageSha256) {
+      throw new ServerDomainError(
+        409,
+        "ARCHIVE_ALREADY_EXISTS",
+        "a different package is already stored for this change",
+        { package_sha256: persisted.record.packageSha256 }
+      );
+    }
+    let archiveArtifactId = persisted.record.artifactId;
+    try {
+      if (!persisted.created && persisted.record.knowledgeStatus === "ready") {
+        const latest = await input.repository.getLatestArtifact(input.actorId, input.projectId);
+        if (latest !== null &&
+            await input.semanticStore.latestArtifactId(input.projectId) === latest.artifactId) {
+          return receipt(persisted.record);
+        }
+      }
+
+      for (const file of archive.files) {
+        await input.storage.putBlob(file.contentSha256, file.content);
+      }
+
+      const project = await input.repository.getProject(input.actorId, input.projectId);
+      const existingFiles = await input.repository.listProjectFiles(input.actorId, input.projectId);
+      const byPath = new Map(existingFiles.map((file) => [file.path, file]));
+      const operations: FileOperation[] = archive.files.flatMap((file) => {
+        const path = archiveRootPrefix(input.changeKey) + file.path;
+        const existing = byPath.get(path);
+        if (existing?.contentSha256 === file.contentSha256) return [];
+        return [fileOperationSchema.parse(existing === undefined ? {
+          operation: "add",
+          path,
+          file_kind: "internal_state",
+          content_sha256: file.contentSha256,
+          size_bytes: file.sizeBytes
+        } : {
+          operation: "modify",
+          path,
+          file_kind: "internal_state",
+          base_content_sha256: existing.contentSha256,
+          content_sha256: file.contentSha256,
+          size_bytes: file.sizeBytes
+        })];
+      });
+
+      if (operations.length > 0) {
+        const session = await input.repository.createProposalSession({
+          projectId: input.projectId,
+          actorId: input.actorId,
+          baseProjectVersion: project.latestProjectVersion,
+          baseManifestHash: sha256Bytes(canonicalJson(existingFiles.map((file) => ({
+            path: file.path,
+            content_sha256: file.contentSha256
+          })))),
+          operations,
+          scanOverrides: [],
+          status: "open",
+          expiresAt: new Date(Date.now() + input.sessionTtlMs).toISOString(),
+          maxChunkBytes: input.maxChunkBytes
+        });
+        const finalized = await input.repository.finalizeSessionAutoApprove(session);
+        archiveArtifactId = finalized.review.artifactId;
+      } else if (archiveArtifactId === null) {
+        archiveArtifactId = project.latestArtifactId;
+      }
+      if (archiveArtifactId === null) {
+        throw new ServerDomainError(
+          500,
+          "ARCHIVE_FINALIZE_INCOMPLETE",
+          "archive files were not bound to a project artifact"
+        );
+      }
+
+      const semanticGeneration = await rebuildStableSemanticSnapshot(input);
+      const latest = await input.repository.getLatestArtifact(input.actorId, input.projectId);
+      const semanticLatest = await input.semanticStore.latestArtifactId(input.projectId);
+      if (latest?.artifactId !== semanticGeneration || semanticLatest !== semanticGeneration) {
+        throw new ServerDomainError(
+          500,
+          "SEMANTIC_REBUILD_INCONSISTENT",
+          "ready archive does not match the latest project semantic generation"
+        );
+      }
+      const updated = await input.repository.updateChangeArchivePackage({
+        actorId: input.actorId,
+        projectId: input.projectId,
+        changeKey: input.changeKey,
+        artifactId: archiveArtifactId,
+        knowledgeStatus: "ready"
+      });
+      return receipt(updated);
+    } catch {
+      const failed = await input.repository.updateChangeArchivePackage({
+        actorId: input.actorId,
+        projectId: input.projectId,
+        changeKey: input.changeKey,
+        artifactId: archiveArtifactId,
+        knowledgeStatus: "failed"
+      });
+      return receipt(failed);
+    }
+  } finally {
+    await projectLock.release();
   }
-  const updated = await input.repository.updateChangeArchivePackage({
-    actorId: input.actorId,
-    projectId: input.projectId,
-    changeKey: input.changeKey,
-    artifactId,
-    knowledgeStatus
-  });
-  return receipt(updated);
 }
 
 export function archivePackageReceipt(record: ChangeArchivePackageRecord): ArchivePackageReceipt {

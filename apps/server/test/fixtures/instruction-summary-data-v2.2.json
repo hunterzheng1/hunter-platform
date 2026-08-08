@@ -1,0 +1,119 @@
+{
+  "schemaVersion": "2.2",
+  "changeName": "archive-v22",
+  "businessGoal": "验证 schema 2.2 归档总结能够形成最近变更线索。",
+  "finalStatus": "CONDITIONAL_OK",
+  "finalCommit": "0123456789abcdef",
+  "finalCommitBranch": "origin/main",
+  "baseCommit": "abcdef0123456789",
+  "diffStat": {
+    "filesChanged": 2,
+    "insertions": 18,
+    "deletions": 3,
+    "range": "abcdef0..0123456"
+  },
+  "stageStatus": {
+    "plan": "OK",
+    "run": "OK",
+    "test": "PARTIAL",
+    "review": "ADVISORY",
+    "submit": "OK",
+    "archive": "OK"
+  },
+  "verification": {
+    "unitTests": {
+      "run": 12,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "passRate": "12/12",
+      "source": "committed"
+    },
+    "apiTests": {
+      "status": "PARTIAL",
+      "total": 2,
+      "passed": 1,
+      "failed": 0,
+      "blocked": 1,
+      "passRate": "1/2"
+    },
+    "browserE2E": {
+      "status": "NOT_RUN",
+      "total": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "retries": 0
+    },
+    "dbCompatibility": "NOT_RUN",
+    "coverageDisplay": "12/12"
+  },
+  "timeline": [
+    {
+      "phase": "run",
+      "attempt": 1,
+      "status": "OK",
+      "executorTool": "codex"
+    }
+  ],
+  "changedFiles": [
+    {
+      "path": "apps/server/src/archive/change-archive.ts",
+      "summary": "保留归档结构兼容。",
+      "insertions": 18,
+      "deletions": 3
+    }
+  ],
+  "artifacts": [],
+  "reviewSummary": {
+    "status": "ADVISORY",
+    "red": 0,
+    "yellow": 1,
+    "redFixed": 0,
+    "redConfirmed": 0,
+    "yellowFixed": 0,
+    "yellowDeferred": 1,
+    "summary": "审查保留一个兼容性观察项。"
+  },
+  "archiveManifest": {
+    "movedFiles": 3,
+    "generatedFiles": 2,
+    "totalArchiveFiles": 5,
+    "checksumStatus": "OK"
+  },
+  "reportPipeline": {
+    "schema_version": 1,
+    "generated_at": "2026-08-08T00:00:00.000Z",
+    "event_count": 6,
+    "sources": [
+      "events.ndjson",
+      "evidence/verification-ledger.json"
+    ],
+    "phases": {},
+    "commands": [],
+    "verificationChecks": [],
+    "artifacts": [],
+    "validationIssues": [],
+    "sourceConsistency": {
+      "ok": true,
+      "issues": []
+    }
+  },
+  "maintenanceNotes": [
+    "旧客户端读取路径仍需保留，服务端归档为权威事实源。"
+  ],
+  "knownRisks": [
+    {
+      "phase": "test",
+      "severity": "warning",
+      "message": "API 环境未启动，兼容路径尚待联调。"
+    }
+  ],
+  "manualActions": [
+    {
+      "stage": "test",
+      "status": "PARTIAL",
+      "action": "在完整 API 环境补跑兼容测试。"
+    }
+  ]
+}

@@ -143,6 +143,66 @@ describe("OpenAPI v1 contract", () => {
       .toMatchObject({ const: true });
   });
 
+  it("keeps archive upload and instruction proposal schemas aligned with runtime validation", async () => {
+    const document = parseYaml(await readFile(
+      new URL("../openapi/hunter-harness-v1.yaml", import.meta.url),
+      "utf8"
+    )) as {
+      paths: Record<string, Record<string, {
+        requestBody?: { content?: Record<string, unknown> };
+        responses?: Record<string, unknown>;
+      }>>;
+      components: { schemas: Record<string, {
+        required?: string[];
+        properties?: Record<string, {
+          const?: string;
+          default?: string;
+          items?: {
+            required?: string[];
+            properties?: Record<string, unknown>;
+          };
+        }>;
+      }> };
+    };
+    const upload = document.paths[
+      "/api/v1/projects/{project_id}/changes/{change_key}/archive-package"
+    ]?.put;
+    expect(Object.keys(upload?.requestBody?.content ?? {})).toEqual(["application/zip"]);
+    expect(upload?.responses).toHaveProperty("413");
+    expect(upload?.responses).toHaveProperty("415");
+
+    const request = document.components.schemas.InstructionProposalRequest;
+    expect(request?.required).not.toContain("language");
+    expect(request?.properties?.language).toMatchObject({ const: "zh-CN", default: "zh-CN" });
+    expect(request?.properties?.documents?.items?.properties?.path).toEqual({
+      type: "string",
+      enum: [
+        "AGENTS.md",
+        "CLAUDE.md",
+        "CODEBUDDY.md",
+        ".harness/rules/project-guidance.md",
+        ".cursor/rules/project-guidance.mdc",
+        "package.json",
+        "pom.xml",
+        "build.gradle",
+        "build.gradle.kts",
+        "pyproject.toml"
+      ]
+    });
+    expect(request?.properties?.recent_changes?.items).toMatchObject({
+      required: ["change_key", "summary", "decisions"],
+      properties: {
+        change_key: { type: "string", minLength: 1, maxLength: 160 },
+        summary: { type: "string", maxLength: 10000 },
+        decisions: {
+          type: "array",
+          maxItems: 50,
+          items: { type: "string", minLength: 1, maxLength: 2000 }
+        }
+      }
+    });
+  });
+
   it("ai-jobs GET 200 response schema includes slug+agent dedup key (Y9)", async () => {
     const document = parseYaml(await readFile(
       new URL("../openapi/hunter-harness-v1.yaml", import.meta.url),

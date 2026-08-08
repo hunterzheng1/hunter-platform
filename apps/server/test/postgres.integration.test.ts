@@ -1,10 +1,13 @@
 import { fileURLToPath } from "node:url";
+import { readFile } from "node:fs/promises";
 
 import { sha256Bytes, uuidV7 } from "@hunter-harness/core";
 import type { SourceFile } from "@hunter-harness/contracts";
+import AdmZip from "adm-zip";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { createServer } from "../src/app.js";
 import { runMigrations } from "../src/repositories/migrate.js";
 import { PostgresRepository } from "../src/repositories/postgres.js";
 import { PostgresRegistryPersistence } from "../src/registry/persistence.js";
@@ -146,6 +149,85 @@ postgresDescribe("PostgreSQL repository integration", () => {
       requestedProjectId: null
     });
     expect(replacement.project.projectId).not.toBe(original.project.projectId);
+  });
+
+  it("serializes duplicate archive ingestion through the PostgreSQL project lock", async () => {
+    const storage = new MemoryArtifactStorage();
+    const app = await createServer({ repository, storage });
+    try {
+      const mutationHeaders = (contentType: string): Record<string, string> => ({
+        authorization: "Bearer postgres-test-token",
+        "content-type": contentType,
+        "x-request-id": uuidV7(),
+        "idempotency-key": uuidV7()
+      });
+      const resolved = await app.inject({
+        method: "POST",
+        url: "/api/v1/projects:resolve",
+        headers: mutationHeaders("application/json"),
+        payload: {
+          schema_version: 1,
+          local_project_key: uuidV7(),
+          display_name: "postgres archive concurrency",
+          requested_project_id: null,
+          client_id: "pg_integration"
+        }
+      });
+      expect(resolved.statusCode, resolved.body).toBe(200);
+      const projectId = resolved.json().project_id as string;
+      const changeKey = "pg-duplicate-archive";
+      const summary = JSON.parse(await readFile(
+        new URL("./fixtures/instruction-summary-data-v2.3.json", import.meta.url),
+        "utf8"
+      )) as Record<string, unknown>;
+      summary.changeName = changeKey;
+      const summaryBytes = Buffer.from(JSON.stringify(summary), "utf8");
+      const zip = new AdmZip();
+      zip.addFile("reports/final/summary-data.json", summaryBytes);
+      zip.addFile("archive-manifest.json", Buffer.from(JSON.stringify({
+        schema_version: 1,
+        profile: "core-v1",
+        change_key: changeKey,
+        created_at: "2026-08-08T00:00:00.000Z",
+        source: { commit: "0123456789abcdef", tree: null },
+        files: [{
+          path: "reports/final/summary-data.json",
+          role: "summary",
+          media_type: "application/json",
+          content_sha256: sha256Bytes(summaryBytes),
+          size_bytes: summaryBytes.byteLength
+        }]
+      }), "utf8"));
+      const packageBytes = zip.toBuffer();
+      const url = `/api/v1/projects/${projectId}/changes/${changeKey}/archive-package`;
+
+      const responses = await Promise.all([
+        app.inject({ method: "PUT", url, headers: mutationHeaders("application/zip"), payload: packageBytes }),
+        app.inject({ method: "PUT", url, headers: mutationHeaders("application/zip"), payload: packageBytes })
+      ]);
+
+      expect(responses.map((response) => response.statusCode)).toEqual([201, 201]);
+      const receipts = responses.map((response) => response.json());
+      expect(receipts[0]).toMatchObject({
+        project_id: projectId,
+        change_key: changeKey,
+        package_sha256: sha256Bytes(packageBytes),
+        knowledge_status: "ready"
+      });
+      expect(receipts[1]).toMatchObject({
+        archive_id: receipts[0]?.archive_id,
+        artifact_id: receipts[0]?.artifact_id,
+        package_sha256: receipts[0]?.package_sha256,
+        knowledge_status: "ready"
+      });
+      const stored = await pool.query(
+        "SELECT count(*)::int AS count FROM change_archive_packages WHERE project_id = $1 AND change_key = $2",
+        [projectId, changeKey]
+      );
+      expect(Number(stored.rows[0]?.count)).toBe(1);
+    } finally {
+      await app.close();
+    }
   });
 
   it("persists the canonical registry snapshot across process instances", async () => {

@@ -510,9 +510,12 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     } else if (typeof error === "object" && error !== null &&
         "statusCode" in error && error.statusCode === 413) {
       status = 413;
-      code = request.routeOptions.url === "/api/v1/skills/draft"
+      const route = request.routeOptions.url;
+      code = route === "/api/v1/skills/draft"
         ? "SKILL_UPLOAD_TOO_LARGE"
-        : "PROPOSAL_TOO_LARGE";
+        : route === "/api/v1/projects/:projectId/changes/:changeKey/archive-package"
+          ? "ARCHIVE_PACKAGE_TOO_LARGE"
+          : "PROPOSAL_TOO_LARGE";
       message = "Request body exceeds the configured limit.";
     }
     let requestId: string;
@@ -2131,10 +2134,11 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     async (request, reply) => {
       const { actor, requestId } = await authenticated(request, repository, "push");
       const { projectId, changeKey } = request.params as { projectId: string; changeKey: string };
-      if (!Buffer.isBuffer(request.body)) {
+      const contentType = request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase();
+      if (contentType !== "application/zip" || !Buffer.isBuffer(request.body)) {
         throw new ServerDomainError(
           415,
-          "ARCHIVE_CONTENT_TYPE_REQUIRED",
+          "ARCHIVE_MEDIA_TYPE_UNSUPPORTED",
           "archive upload must use application/zip"
         );
       }

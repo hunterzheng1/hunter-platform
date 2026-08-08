@@ -44,9 +44,19 @@ export type InstructionProposalRequest = z.infer<typeof instructionProposalReque
 export type InstructionRecentChange = InstructionProposalRequest["recent_changes"][number];
 
 const LEGACY_MANAGED_BLOCK = /<!--[ \t]*hunter-harness:start\b[^>]*-->[\s\S]*?<!--[ \t]*hunter-harness:end\b[^>]*-->/giu;
+const LEGACY_MANAGED_MARKER = /<!--[ \t]*hunter-harness:(?:start|end)\b[^>]*-->/giu;
+const LEGACY_MARKER_TOKEN = /hunter-harness:(?:start|end)\b/giu;
+const LEGACY_MARKER_CHECK = /hunter-harness:(?:start|end)\b/iu;
+
+function removeLegacyManagedContent(content: string): string {
+  return content
+    .replace(LEGACY_MANAGED_BLOCK, "")
+    .replace(LEGACY_MANAGED_MARKER, "")
+    .replace(LEGACY_MARKER_TOKEN, "");
+}
 
 function trimDocument(content: string): string {
-  return content.replace(LEGACY_MANAGED_BLOCK, "").replace(/\n{3,}/gu, "\n\n").trim();
+  return removeLegacyManagedContent(content).replace(/\n{3,}/gu, "\n\n").trim();
 }
 
 function demoteHeadings(content: string): string {
@@ -80,6 +90,16 @@ function preserveProjectContent(content: string, currentHeading: string, legacyH
   if (legacyHeading !== undefined) {
     const legacy = sectionContent(trimmed, legacyHeading);
     if (legacy !== null) return demoteHeadings(legacy);
+  }
+  return demoteHeadings(trimmed);
+}
+
+function preserveAdapterContent(content: string, generatedHeading: string): string {
+  const trimmed = trimDocument(content);
+  if (trimmed === "") return "- 暂无适配器专属约定。";
+  if (trimmed.includes(generatedHeading)) {
+    const current = sectionContent(trimmed, "项目特定约定");
+    if (current !== null) return current;
   }
   return demoteHeadings(trimmed);
 }
@@ -118,17 +138,26 @@ function proposedFile(
   current: Map<string, { content: string; hash: string }>
 ) {
   const existing = current.get(path);
+  const markerFreeContent = removeLegacyManagedContent(content);
+  if (LEGACY_MARKER_CHECK.test(markerFreeContent)) {
+    throw new ServerDomainError(
+      422,
+      "INSTRUCTION_MARKER_SANITIZATION_FAILED",
+      "proposed instruction still contains a legacy managed marker",
+      { path }
+    );
+  }
   return {
     path,
     operation: existing === undefined ? "add" as const : "modify" as const,
     base_content_sha256: existing?.hash ?? null,
-    content_sha256: sha256Bytes(content),
-    content
+    content_sha256: sha256Bytes(markerFreeContent),
+    content: markerFreeContent
   };
 }
 
 function mapLines(content: string): string[] {
-  return content.split(/\r?\n/gu)
+  return removeLegacyManagedContent(content).split(/\r?\n/gu)
     .map((line) => line.trim().replace(/^[-*][ \t]+/u, ""))
     .filter((line) => line.length > 0 && line.length <= 240)
     .filter((line) => /(?:^|[`\s(])(?:\.?[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.*-]+/u.test(line))
@@ -136,7 +165,7 @@ function mapLines(content: string): string[] {
 }
 
 function oneLine(value: string, maxLength: number): string {
-  return value.replace(/\s+/gu, " ").trim().slice(0, maxLength);
+  return removeLegacyManagedContent(value).replace(/\s+/gu, " ").trim().slice(0, maxLength);
 }
 
 function projectTypeGuidance(profile: string): string[] {
@@ -170,30 +199,84 @@ function projectTypeGuidance(profile: string): string[] {
   ];
 }
 
-function summaryText(record: Record<string, unknown>, changeKey: string): string {
-  for (const value of [
-    record.summary,
-    record.finalSummary,
-    record.final_summary,
-    record.title,
-    record.changeName
-  ]) {
-    if (typeof value === "string" && value.trim() !== "") return value.trim().slice(0, 10_000);
+function evidenceText(value: unknown): string | null {
+  if (typeof value === "string") {
+    const text = oneLine(value, 2_000);
+    return text === "" ? null : text;
   }
-  return `已归档变更 ${changeKey}`;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  for (const field of ["summary", "message", "note", "decision", "action", "title", "code"]) {
+    const text = record[field];
+    if (typeof text === "string") {
+      const normalized = oneLine(text, 2_000);
+      if (normalized !== "") return normalized;
+    }
+  }
+  return null;
+}
+
+function evidenceList(value: unknown, limit: number): string[] {
+  if (!Array.isArray(value)) return [];
+  const output: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    const text = evidenceText(item);
+    if (text === null) continue;
+    const key = text.toLocaleLowerCase("zh-CN");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(text);
+    if (output.length >= limit) break;
+  }
+  return output;
 }
 
 function summaryDecisions(record: Record<string, unknown>): string[] {
-  if (!Array.isArray(record.decisions)) return [];
-  return record.decisions.flatMap((value) => {
-    if (typeof value === "string" && value.trim() !== "") return [value.trim().slice(0, 2_000)];
-    if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-      const decision = value as Record<string, unknown>;
-      const text = decision.decision ?? decision.summary ?? decision.note;
-      if (typeof text === "string" && text.trim() !== "") return [text.trim().slice(0, 2_000)];
-    }
-    return [];
-  }).slice(0, 50);
+  if (!Array.isArray(record.timeline)) return [];
+  const decisions: string[] = [];
+  const seen = new Set<string>();
+  for (const item of record.timeline) {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) continue;
+    const event = item as Record<string, unknown>;
+    if (typeof event.type !== "string" || event.type.toLowerCase() !== "decision") continue;
+    const text = evidenceText(event);
+    if (text === null) continue;
+    const key = text.toLocaleLowerCase("zh-CN");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    decisions.push(text);
+    if (decisions.length >= 50) break;
+  }
+  return decisions;
+}
+
+function summaryText(record: Record<string, unknown>, changeKey: string): string {
+  const sections: string[] = [];
+  const seen = new Set<string>();
+  const add = (label: string | null, value: unknown): void => {
+    const text = evidenceText(value);
+    if (text === null) return;
+    const key = text.toLocaleLowerCase("zh-CN");
+    if (seen.has(key)) return;
+    seen.add(key);
+    sections.push(label === null ? text : `${label}：${text}`);
+  };
+
+  add(null, record.businessGoal);
+  for (const note of evidenceList(record.maintenanceNotes, 2)) add("维护结论", note);
+  if (record.reviewSummary !== null && typeof record.reviewSummary === "object" &&
+      !Array.isArray(record.reviewSummary)) {
+    add("审查", (record.reviewSummary as Record<string, unknown>).summary);
+  }
+  for (const risk of evidenceList(record.knownRisks, 2)) add("已知风险", risk);
+  for (const decision of summaryDecisions(record).slice(0, 2)) add("决策", decision);
+
+  if (sections.length === 0) {
+    add(null, record.changeName);
+  }
+  if (sections.length === 0) return `已归档变更 ${oneLine(changeKey, 160)}`;
+  return sections.join("；").slice(0, 10_000);
 }
 
 /**
@@ -290,16 +373,21 @@ export function buildInstructionProposal(input: {
     path: string;
     message: string;
   }> = [];
-  for (const path of ["AGENTS.md", "CLAUDE.md", "CODEBUDDY.md"]) {
+  for (const path of [
+    "AGENTS.md",
+    "CLAUDE.md",
+    "CODEBUDDY.md",
+    ".harness/rules/project-guidance.md",
+    ".cursor/rules/project-guidance.mdc"
+  ]) {
     const content = current.get(path)?.content;
-    if (content !== undefined && LEGACY_MANAGED_BLOCK.test(content)) {
+    if (content !== undefined && LEGACY_MARKER_CHECK.test(content)) {
       findings.push({
         code: "LEGACY_MANAGED_BLOCK",
         severity: "warning",
         path,
         message: "发现旧式 hunter-harness 托管标记，提案将迁移为普通 Markdown。"
       });
-      LEGACY_MANAGED_BLOCK.lastIndex = 0;
     }
   }
   const existingAgents = trimDocument(current.get("AGENTS.md")?.content ?? "");
@@ -330,7 +418,7 @@ export function buildInstructionProposal(input: {
       ? ["- Codebase Map 已存在；需要模块信息时读取 `.harness/codebase/map`，不要复制整份地图。"]
       : extractedNavigation.map((line) => `- ${line}`);
   const recent = request.recent_changes.slice(0, 5).map((change) =>
-    `- \`${change.change_key}\`：${oneLine(change.summary, 500)}`
+    `- \`${oneLine(change.change_key, 160)}\`：${oneLine(change.summary, 500)}`
   );
   const projectGuidance = projectTypeGuidance(request.project_profile);
   const preservedAgents = preserveProjectContent(
@@ -343,8 +431,8 @@ export function buildInstructionProposal(input: {
     "",
     "## 项目概览",
     "",
-    `- 项目：${input.projectName}`,
-    `- 类型：${request.project_profile}`,
+    `- 项目：${oneLine(input.projectName, 500)}`,
+    `- 类型：${oneLine(request.project_profile, 100)}`,
     "- 默认使用中文编写项目知识、规则、归档总结和 Agent 文档。",
     "",
     "## 仓库导航",
@@ -429,13 +517,35 @@ export function buildInstructionProposal(input: {
     )
   ];
   if (request.adapters.includes("claude-code")) {
+    const preservedClaude = preserveAdapterContent(
+      current.get("CLAUDE.md")?.content ?? "",
+      "# Claude Code 项目指南"
+    );
     files.push(proposedFile(
       "CLAUDE.md",
-      "@AGENTS.md\n@.harness/rules/project-guidance.md\n",
+      [
+        "@AGENTS.md",
+        "@.harness/rules/project-guidance.md",
+        "",
+        "# Claude Code 项目指南",
+        "",
+        "以上文件提供共享项目约束；本文件只保留 Claude Code 专属补充。",
+        "",
+        "## 项目特定约定",
+        "",
+        "以下内容从现有 CLAUDE.md 保留；应用提案前应确认仍然有效。",
+        "",
+        preservedClaude,
+        ""
+      ].join("\n"),
       current
     ));
   }
   if (request.adapters.includes("cursor")) {
+    const preservedCursor = preserveAdapterContent(
+      current.get(".cursor/rules/project-guidance.mdc")?.content ?? "",
+      "# Cursor 项目指南"
+    );
     files.push(proposedFile(
       ".cursor/rules/project-guidance.mdc",
       [
@@ -445,16 +555,39 @@ export function buildInstructionProposal(input: {
         "alwaysApply: true",
         "---",
         "",
+        "# Cursor 项目指南",
+        "",
         "遵循 @AGENTS.md 与 @.harness/rules/project-guidance.md。",
+        "",
+        "## 项目特定约定",
+        "",
+        "以下内容从现有 Cursor 规则保留；应用提案前应确认仍然有效。",
+        "",
+        preservedCursor,
         ""
       ].join("\n"),
       current
     ));
   }
   if (request.adapters.includes("codebuddy")) {
+    const preservedCodeBuddy = preserveAdapterContent(
+      current.get("CODEBUDDY.md")?.content ?? "",
+      "# CodeBuddy 项目指南"
+    );
     files.push(proposedFile(
       "CODEBUDDY.md",
-      "请遵循 AGENTS.md 与 .harness/rules/project-guidance.md 中的项目约定。\n",
+      [
+        "# CodeBuddy 项目指南",
+        "",
+        "请遵循 AGENTS.md 与 .harness/rules/project-guidance.md 中的共享项目约定。",
+        "",
+        "## 项目特定约定",
+        "",
+        "以下内容从现有 CODEBUDDY.md 保留；应用提案前应确认仍然有效。",
+        "",
+        preservedCodeBuddy,
+        ""
+      ].join("\n"),
       current
     ));
   }
@@ -469,9 +602,10 @@ export function buildInstructionProposal(input: {
       if (content === "") continue;
       const key = content.toLocaleLowerCase("zh-CN");
       const candidate = groupedCandidates.get(key) ?? { content, evidence: [] };
-      if (!candidate.evidence.some((item) => item.change_key === change.change_key)) {
+      const changeKey = oneLine(change.change_key, 160);
+      if (!candidate.evidence.some((item) => item.change_key === changeKey)) {
         candidate.evidence.push({
-          change_key: change.change_key,
+          change_key: changeKey,
           summary: oneLine(change.summary, 10_000)
         });
       }
