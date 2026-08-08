@@ -72,15 +72,6 @@ function GlobalKnowledgeSearch({
     total
   } = usePagination(hits ?? [], 20, [hits?.length, mode, projectId]);
 
-  const loadProjects = useCallback(async () => {
-    try {
-      const list = await api.listProjects("active");
-      setProjects(list);
-    } catch {
-      // project filter is optional
-    }
-  }, [api]);
-
   const browse = useCallback(async (selectedProjectId: string) => {
     const listKnowledge = api.listProjectSemanticKnowledge?.bind(api);
     if (listKnowledge === undefined) return;
@@ -110,10 +101,6 @@ function GlobalKnowledgeSearch({
       setBusy(false);
     }
   }, [api, copy.networkError, projects]);
-
-  useEffect(() => {
-    void loadProjects();
-  }, [loadProjects]);
 
   useEffect(() => {
     void browse(projectId);

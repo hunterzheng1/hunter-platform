@@ -81,6 +81,7 @@ describe("KnowledgeCenter (P3)", () => {
     await waitFor(() => {
       expect(api.browseCalls).toBeGreaterThan(0);
     });
+    expect(api.listProjects).toHaveBeenCalledTimes(1);
     expect(screen.queryByText("无法连接到服务器。")).toBeNull();
   });
 
