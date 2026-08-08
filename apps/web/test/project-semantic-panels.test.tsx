@@ -61,7 +61,7 @@ describe("ProjectSemanticPanels", () => {
     render(<ProjectSemanticPanels api={api} projectId="prj_one" />);
     expect(await screen.findByRole("heading", { name: "Architecture boundary" })).toBeInTheDocument();
     expect(getProjectSemanticGraph).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("tab", { name: "关系探索" }));
+    fireEvent.click(screen.getByRole("tab", { name: "知识关系" }));
     await waitFor(() => expect(getProjectSemanticGraph).toHaveBeenCalledWith("prj_one", "sem_one"));
     expect(await screen.findByText("暂未发现可展示的知识关系")).toBeInTheDocument();
   });
@@ -179,7 +179,7 @@ describe("ProjectSemanticPanels", () => {
 
     render(<ProjectSemanticPanels api={api} projectId="prj_one" />);
     await screen.findByRole("heading", { name: "Reuse LlmClient" });
-    fireEvent.click(screen.getByRole("tab", { name: "关系探索" }));
+    fireEvent.click(screen.getByRole("tab", { name: "知识关系" }));
 
     expect(await screen.findByRole("heading", { name: "直接关系" })).toBeInTheDocument();
     const neighbourhood = document.querySelector(".relation-neighbourhood") as HTMLElement;
@@ -243,7 +243,7 @@ describe("ProjectSemanticPanels", () => {
 
     render(<ProjectSemanticPanels api={api} projectId="prj_one" />);
     await screen.findByRole("heading", { name: "Center A" });
-    fireEvent.click(screen.getByRole("tab", { name: "关系探索" }));
+    fireEvent.click(screen.getByRole("tab", { name: "知识关系" }));
     expect(await screen.findByRole("heading", { name: "直接关系" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "设为中心" }));
@@ -254,5 +254,26 @@ describe("ProjectSemanticPanels", () => {
     release(undefined);
     await waitFor(() => expect(getProjectSemanticGraph).toHaveBeenCalledWith("prj_one", other.document_id));
     await waitFor(() => expect(screen.queryByText("正在更新关系…")).not.toBeInTheDocument());
+  });
+
+  it("uses plain Chinese guidance for an empty project knowledge library", async () => {
+    const api = {
+      getProjectSemanticOverview: vi.fn(async () => ({
+        project_id: "prj_one",
+        artifact_id: null,
+        counts: { documents: 0, knowledge: 0, rules: 0, changes: 0, agent_instructions: 0, edges: 0 }
+      })),
+      listProjectSemanticKnowledge: vi.fn(async () => ({ items: [], total: 0, next_cursor: null })),
+      listProjectSemanticRules: vi.fn(async () => []),
+      listProjectSemanticChanges: vi.fn(async () => []),
+      getProjectSemanticGraph: vi.fn(async () => ({ nodes: [], edges: [], focus_document_id: null, relation_status: "no_relations", indexed_documents: 0 })),
+      searchSemanticDocuments: vi.fn(async () => [])
+    } as unknown as HunterApi;
+
+    render(<ProjectSemanticPanels api={api} projectId="prj_one" />);
+
+    expect(await screen.findByText("还没有项目知识")).toBeInTheDocument();
+    expect(screen.getByText(/通过 Hunter Harness 上传项目内容后，平台会自动整理知识/)).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/\bingest\b|\bpush\b|purge|投影|语义库/i);
   });
 });

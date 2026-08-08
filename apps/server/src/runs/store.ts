@@ -41,6 +41,8 @@ export interface RunEventRecord {
 /** Whitelisted fields accepted from local events.ndjson (desensitized). */
 export const RUN_EVENT_WHITELIST = [
   "id",
+  "timestamp",
+  "schema_version",
   "ts",
   "type",
   "phase",
@@ -183,13 +185,23 @@ export function publicRun(
   run: RunRecord,
   phases?: readonly RunPhaseSummary[]
 ): Record<string, unknown> {
+  let connectionStatus = run.connectionStatus;
+  const serverObservedAt = run.lastHeartbeatAt ??
+    (run.lastEventAt === null ? null : run.updatedAt);
+  if (serverObservedAt !== null) {
+    const observedAt = Date.parse(serverObservedAt);
+    if (Number.isFinite(observedAt)) {
+      const age = Math.max(0, Date.now() - observedAt);
+      connectionStatus = age > 60_000 ? "offline" : age > 15_000 ? "delayed" : "online";
+    }
+  }
   return {
     run_id: run.runId,
     project_id: run.projectId,
     change_key: run.changeKey,
     title: run.title,
     run_status: run.runStatus,
-    connection_status: run.connectionStatus,
+    connection_status: connectionStatus,
     sync_completeness: run.syncCompleteness,
     current_phase: run.currentPhase,
     started_at: run.startedAt,

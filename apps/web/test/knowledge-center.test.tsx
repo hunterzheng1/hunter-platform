@@ -103,4 +103,17 @@ describe("KnowledgeCenter (P3)", () => {
     expect(screen.queryByRole("tab", { name: /Candidate|候选审核/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /批准|Approve/i })).toBeNull();
   });
+
+  it("explains the empty state in user-facing Chinese", async () => {
+    const api = {
+      searchSemanticDocuments: vi.fn(),
+      listProjects: vi.fn().mockResolvedValue([]),
+      listProjectSemanticKnowledge: vi.fn().mockResolvedValue({ items: [], total: 0, next_cursor: null })
+    } as unknown as HunterApi;
+
+    wrap(<KnowledgeCenter api={api} />);
+
+    expect(await screen.findByText("还没有可搜索的知识")).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/\bingest\b|\bpush\b|purge|投影|语义库/i);
+  });
 });

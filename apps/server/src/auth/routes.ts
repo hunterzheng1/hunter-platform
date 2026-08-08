@@ -172,10 +172,12 @@ export function registerAuthRoutes(app: FastifyInstance, options: AuthRoutesOpti
     const actor = await authenticateRequest(request, repository);
     const key = requestProjectKey(request);
     if (key !== undefined) {
+      const project = await repository.getProject(actor.actorId, key.projectId);
       return {
         kind: "project-key",
         actor_id: actor.actorId,
         project_id: key.projectId,
+        project_display_name: project.displayName,
         scopes: key.scopes,
         label: key.label
       };

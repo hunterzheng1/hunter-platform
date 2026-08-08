@@ -54,12 +54,13 @@ function documentStatus(document: SemanticDocument, lang: "zh" | "en", statusLab
 }
 
 function DocumentBrowser({
-  items, selectedId, onSelect, empty, lang, enableStatusFilter = false, statusLabels
+  items, selectedId, onSelect, empty, emptyHint, lang, enableStatusFilter = false, statusLabels
 }: {
   items: SemanticDocument[];
   selectedId: string | null;
   onSelect: (id: string) => void;
   empty: string;
+  emptyHint?: string;
   lang: "zh" | "en";
   enableStatusFilter?: boolean;
   statusLabels: Record<string, string>;
@@ -118,7 +119,7 @@ function DocumentBrowser({
     setPage((current) => (current === nextPage ? current : nextPage));
   }, [selectedId, filtered]);
 
-  if (items.length === 0) return <div className="knowledge-empty"><span>◇</span><p>{empty}</p></div>;
+  if (items.length === 0) return <div className="knowledge-empty"><span>◇</span><p>{empty}</p>{emptyHint === undefined ? null : <small>{emptyHint}</small>}</div>;
 
   const copy = lang === "zh" ? {
     all: "全部状态",
@@ -508,10 +509,10 @@ export function ProjectSemanticPanels({ api, projectId }: { api: HunterApi; proj
   const [pendingCount, setPendingCount] = useState(0);
 
   const copy = lang === "zh" ? {
-    title: "项目知识", subtitle: "从项目文件与 ingest 投影建立的可检索知识与关系。", library: "知识库", rules: "项目规则", changes: "变更总结", relations: "关系探索",
-    search: "搜索标题、正文或路径", export: "导出上下文", noKnowledge: "暂无项目知识。来源包括：push 文件索引，以及 knowledge ingest 投影。", noRules: "暂无项目规则。", noChanges: "暂无变更总结。",
-    loading: "正在加载项目知识…", loadingGraph: "正在更新关系…", failed: "项目知识暂不可用。", documents: "索引文档", knowledge: "知识", edges: "关系",
-    pending: "待投影 {n} 条 ingest 条目，语义库可能暂时不完整。", emptyPushHint: "若库为空：请先 CLI push，或等待 ingest 投影；若曾 purge/换库需重新 push。"
+    title: "项目知识", subtitle: "浏览从项目内容中整理出的知识、规则、变更总结和关联信息。", library: "知识库", rules: "项目规则", changes: "变更总结", relations: "知识关系",
+    search: "搜索标题、正文或路径", export: "导出上下文", noKnowledge: "还没有项目知识", noRules: "还没有项目规则。", noChanges: "还没有变更总结。",
+    loading: "正在加载项目知识…", loadingGraph: "正在更新关系…", failed: "项目知识暂不可用。", documents: "已整理文档", knowledge: "知识", edges: "关系",
+    pending: "还有 {n} 条知识正在整理，内容可能暂时不完整。", emptyPushHint: "通过 Hunter Harness 上传项目内容后，平台会自动整理知识。"
   } : {
     title: "Project knowledge", subtitle: "Searchable knowledge from push-indexed files and ingest projection.", library: "Knowledge library", rules: "Project rules", changes: "Change summaries", relations: "Relationship explorer",
     search: "Search titles, content, or paths", export: "Export context", noKnowledge: "No project knowledge yet. Sources: push file index and knowledge ingest projection.", noRules: "No project rules yet.", noChanges: "No change summaries yet.",
@@ -591,9 +592,7 @@ export function ProjectSemanticPanels({ api, projectId }: { api: HunterApi; proj
     ? copy.noRules
     : tab === "changes"
       ? copy.noChanges
-      : (data.knowledge.length === 0
-        ? `${copy.noKnowledge} ${copy.emptyPushHint}`
-        : copy.noKnowledge);
+      : copy.noKnowledge;
 
   return <section className="project-knowledge-v2">
     <header className="knowledge-header"><div><p className="eyebrow">{copy.title}</p><h2>{copy.subtitle}</h2></div><button type="button" className="secondary" onClick={() => exportContextPack(projectId, data)}>⇩ {copy.export}</button></header>
@@ -612,7 +611,7 @@ export function ProjectSemanticPanels({ api, projectId }: { api: HunterApi; proj
         onSelect={selectDocument}
         lang={lang}
       />
-    </div> : <DocumentBrowser items={items} selectedId={selectedId} onSelect={selectDocument} empty={emptyCopy} lang={lang} enableStatusFilter={tab === "library"} statusLabels={statusLabels} />}
+    </div> : <DocumentBrowser items={items} selectedId={selectedId} onSelect={selectDocument} empty={emptyCopy} {...(tab === "library" && data.knowledge.length === 0 ? { emptyHint: copy.emptyPushHint } : {})} lang={lang} enableStatusFilter={tab === "library"} statusLabels={statusLabels} />}
     {error === null || data === null ? null : <div className="notice danger">{error}</div>}
   </section>;
 }

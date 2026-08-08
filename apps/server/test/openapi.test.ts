@@ -31,6 +31,7 @@ describe("OpenAPI v1 contract", () => {
       "/api/v1/projects/{project_id}/semantic/overview",
       "/api/v1/projects/{project_id}/semantic/knowledge",
       "/api/v1/projects/{project_id}/semantic/rules",
+      "/api/v1/projects/{project_id}/semantic/search",
       "/api/v1/projects/{project_id}/semantic/changes",
       "/api/v1/projects/{project_id}/semantic/graph",
       "/api/v1/projects/{project_id}/proposal-sessions",

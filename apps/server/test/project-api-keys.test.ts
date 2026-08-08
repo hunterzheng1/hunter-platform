@@ -98,8 +98,35 @@ describe("project-scoped API keys (P2)", () => {
     expect(info.json()).toMatchObject({
       kind: "project-key",
       project_id: projectId,
+      project_display_name: "demo",
       scopes: ["files:read"]
     });
+  });
+
+  it("allows knowledge:read only for the key's bound project", async () => {
+    const { apiKey } = await issueKey(["knowledge:read"]);
+
+    const ownProject = await app.inject({
+      method: "GET",
+      url: `/api/v1/projects/${projectId}/semantic/search?q=architecture`,
+      headers: { authorization: "Bearer " + apiKey }
+    });
+    expect(ownProject.statusCode).toBe(200);
+
+    const globalSearch = await app.inject({
+      method: "GET",
+      url: `/api/v1/semantic/search?q=architecture&project_id=${projectId}`,
+      headers: { authorization: "Bearer " + apiKey }
+    });
+    expect(globalSearch.statusCode).toBe(403);
+
+    const otherProject = await app.inject({
+      method: "GET",
+      url: "/api/v1/projects/prj_other/semantic/search?q=architecture",
+      headers: { authorization: "Bearer " + apiKey }
+    });
+    expect(otherProject.statusCode).toBe(403);
+    expect(otherProject.json().error.code).toBe("PROJECT_KEY_MISMATCH");
   });
 
   it("rejects out-of-scope and unscoped routes", async () => {

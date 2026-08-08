@@ -25,7 +25,7 @@ type Tone = "success" | "danger" | "warning" | "info" | "neutral";
 function statusTone(value: string): Tone {
   if (["succeeded", "complete", "online", "completed"].includes(value)) return "success";
   if (["failed", "error"].includes(value)) return "danger";
-  if (["partial", "queued", "pending", "offline"].includes(value)) return "warning";
+  if (["partial", "queued", "pending", "offline", "delayed"].includes(value)) return "warning";
   if (value === "running") return "info";
   return "neutral";
 }
@@ -222,22 +222,30 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
     }
   }, [client, copy.networkError, chosenProjectId]);
 
-  const refreshRuns = useCallback(async (id: string) => {
+  const refreshRuns = useCallback(async (id: string, silent = false) => {
     if (id === "" || client.listProjectRuns === undefined) return;
-    setBusy(true);
-    setError(null);
+    if (!silent) {
+      setBusy(true);
+      setError(null);
+    }
     try {
       const page = await client.listProjectRuns(id);
       const sorted = [...page.items].sort((left, right) =>
         runSortKey(right).localeCompare(runSortKey(left))
       );
       setRuns(sorted);
-      setSelectedRunId((current) => current ?? sorted[0]?.run_id ?? null);
+      setSelectedRunId((current) =>
+        current !== null && sorted.some((run) => run.run_id === current)
+          ? current
+          : sorted[0]?.run_id ?? null
+      );
     } catch (err) {
-      setRuns([]);
-      setError(err instanceof ApiClientError ? err.message : copy.networkError);
+      if (!silent) {
+        setRuns([]);
+        setError(err instanceof ApiClientError ? err.message : copy.networkError);
+      }
     } finally {
-      setBusy(false);
+      if (!silent) setBusy(false);
     }
   }, [client, copy.networkError]);
 
@@ -288,6 +296,11 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
 
   useEffect(() => {
     void refreshRuns(projectId);
+    if (projectId === "") return;
+    const timer = setInterval(() => {
+      void refreshRuns(projectId, true);
+    }, 3000);
+    return () => clearInterval(timer);
   }, [projectId, refreshRuns]);
 
   useEffect(() => {
@@ -307,6 +320,37 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
     let cancelled = false;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
     let cursor = 0;
+
+    async function pollOnce(): Promise<void> {
+      try {
+        const next = await listProjectRunEvents(projectId, runId, cursor);
+        if (cancelled) return;
+        if (next.items.length > 0) {
+          setEvents((current) => {
+            const known = new Set(current.map((item) => item.event_id));
+            const appended = next.items.filter((item) => !known.has(item.event_id));
+            return appended.length === 0 ? current : [...current, ...appended];
+          });
+          cursor = next.next_cursor;
+        }
+        if (getProjectRun !== undefined) {
+          const run = await getProjectRun(projectId, runId);
+          if (!cancelled) {
+            setRuns((current) => current.map((item) =>
+              item.run_id === run.run_id ? run : item
+            ));
+          }
+        }
+      } catch {
+        // A later polling cycle can recover from a transient failure.
+      }
+    }
+
+    function startPolling(): void {
+      if (cancelled || pollTimer !== null) return;
+      setLiveMode("poll");
+      pollTimer = setInterval(() => { void pollOnce(); }, 3000);
+    }
 
     async function loadInitialAndStream(): Promise<void> {
       try {
@@ -334,7 +378,9 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
                 ));
               },
               onError: () => {
-                // Fall through to REST poll below when stream errors.
+                streamAbortRef.current?.();
+                streamAbortRef.current = null;
+                startPolling();
               }
             }
           );
@@ -343,35 +389,17 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
             return;
           }
           if (handle !== null) {
+            if (pollTimer !== null) {
+              handle.abort();
+              return;
+            }
             streamAbortRef.current = handle.abort;
             setLiveMode("sse");
             return;
           }
         }
 
-        setLiveMode("poll");
-        pollTimer = setInterval(() => {
-          void (async () => {
-            try {
-              const next = await listProjectRunEvents(projectId, runId, cursor);
-              if (cancelled || next.items.length === 0) return;
-              setEvents((current) => {
-                const known = new Set(current.map((item) => item.event_id));
-                const appended = next.items.filter((item) => !known.has(item.event_id));
-                return appended.length === 0 ? current : [...current, ...appended];
-              });
-              cursor = next.next_cursor;
-              if (getProjectRun !== undefined) {
-                const run = await getProjectRun(projectId, runId);
-                setRuns((current) => current.map((item) =>
-                  item.run_id === run.run_id ? run : item
-                ));
-              }
-            } catch {
-              // keep polling
-            }
-          })();
-        }, 3000);
+        startPolling();
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof ApiClientError ? err.message : copy.networkError);
@@ -699,7 +727,7 @@ const COPY = {
     timeline: "事件时间线",
     noEvents: "尚无事件。",
     liveSse: "实时（SSE）",
-    livePoll: "轮询中",
+    livePoll: "轮询更新",
     liveSseHint: "事件通过 SSE 实时推送。",
     livePollHint: "实时连接不可用，已降级为每 3 秒轮询。点击重试实时连接。",
     networkError: "无法连接到服务器。",

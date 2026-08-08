@@ -160,8 +160,8 @@ export function ProjectVersionsPanel({
 
   const copy = lang === "zh" ? {
     title: "版本记录",
-    subtitle: "每次保存或 push 产生一个版本；展开可查看相对上一版的文件变更。",
-    empty: "保存第一个文件后，这里会出现版本记录。",
+    subtitle: "每次保存或同步文件后，平台都会保留一个版本。展开版本可查看具体改动。",
+    empty: "还没有版本记录。保存或同步第一个文件后，版本会显示在这里。",
     current: "当前",
     versionNumber: (index: number) => `版本 ${index}`,
     changedFiles: (count: number) => `${count} 个文件变更`,
@@ -246,7 +246,7 @@ export function ProjectVersionsPanel({
 
   if (artifacts.length === 0) {
     return <section className="project-versions-card">
-      <header><div><p className="eyebrow">{copy.title}</p><h2>{copy.subtitle}</h2></div></header>
+      <header><div><p className="eyebrow">{copy.title}</p><h2>{copy.title}</h2><p className="project-versions-subtitle">{copy.subtitle}</p></div></header>
       <p className="project-empty-copy">{copy.empty}</p>
     </section>;
   }
@@ -255,7 +255,7 @@ export function ProjectVersionsPanel({
     <header>
       <div>
         <p className="eyebrow">{copy.title}</p>
-        <h2>{artifacts.length}</h2>
+        <h2>{copy.title} <span className="project-version-count">{artifacts.length}</span></h2>
         <p className="project-versions-subtitle">{copy.subtitle}</p>
       </div>
     </header>

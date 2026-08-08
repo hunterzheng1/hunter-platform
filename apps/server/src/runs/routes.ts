@@ -102,7 +102,9 @@ export function registerRunRoutes(app: FastifyInstance, options: RunRoutesOption
     const run = await runStore.heartbeat({
       projectId,
       runId: body.run_id,
-      clientTime: body.client_time
+      // Connection freshness is a server observation. A skewed or malicious
+      // client clock must not keep a disconnected run online indefinitely.
+      clientTime: new Date(Date.now()).toISOString()
     });
     if (run === null) {
       throw new ServerDomainError(404, "RUN_NOT_FOUND", "run not found");

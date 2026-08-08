@@ -2364,6 +2364,23 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     };
   });
 
+  app.get("/api/v1/projects/:projectId/semantic/search", async (request, reply) => {
+    const { actor, requestId } = await authenticated(request, repository, "knowledge:read");
+    const { projectId } = request.params as { projectId: string };
+    await repository.getProject(actor.actorId, projectId);
+    const query = request.query as Record<string, string | undefined>;
+    const q = query.q?.trim() ?? "";
+    if (q.length === 0) {
+      throw new ServerDomainError(400, "VALIDATION_FAILED", "q is required");
+    }
+    const items = await semanticStore.search(q, projectId);
+    reply.header("X-Request-Id", requestId);
+    return {
+      items: items.map((document) => ({ document, project_id: document.project_id })),
+      request_id: requestId
+    };
+  });
+
   app.put("/api/v1/projects/:projectId/workflow-binding", async (request, reply) => {
     const { actor, requestId } = await authenticated(request, repository);
     const { projectId } = request.params as { projectId: string };

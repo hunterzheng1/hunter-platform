@@ -4991,7 +4991,8 @@ button.danger:disabled,
 
 .project-versions-card { overflow: hidden; }
 .project-versions-card > header { padding: 22px 24px; border-bottom: 1px solid var(--line); }
-.project-versions-card > header h2 { margin: 5px 0 0; font-size: 1.8rem; }
+.project-versions-card > header h2 { margin: 5px 0 0; font-size: 1.15rem; }
+.project-version-count { display: inline-flex; align-items: center; justify-content: center; min-width: 25px; margin-left: 7px; padding: 2px 7px; border-radius: var(--radius-full); background: var(--line); color: var(--muted); font-size: .72rem; font-weight: 700; vertical-align: middle; }
 .project-versions-subtitle { margin: 8px 0 0; color: var(--muted); font-size: .86rem; line-height: 1.5; max-width: 52rem; }
 .project-version-list article { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 14px 17px; padding: 18px 24px; border-bottom: 1px solid var(--line-dim); }
 .project-version-list article:last-child { border-bottom: 0; }
@@ -5035,7 +5036,7 @@ button.danger:disabled,
 .knowledge-metrics strong { color: var(--text-heading); font-size: 1.05rem; }
 .knowledge-controls { display: flex; align-items: center; justify-content: space-between; gap: 15px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
 .knowledge-search { display: flex; align-items: center; gap: 8px; width: min(480px, 46%); padding-left: 11px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); }
-.knowledge-search button { border-radius: 0 8px 8px 0; }
+.knowledge-search button { flex: 0 0 auto; min-width: 64px; border-radius: 0 8px 8px 0; white-space: nowrap; }
 .knowledge-browser { display: grid; grid-template-columns: minmax(280px, 38%) minmax(0, 1fr); min-height: 570px; }
 .knowledge-list-pane { display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--line); background: var(--panel); }
 .knowledge-status-filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: var(--bg-raised); }
@@ -5427,6 +5428,8 @@ button.danger:disabled,
   gap: 10px;
   flex-wrap: wrap;
 }
+
+.knowledge-search-form button { flex: 0 0 auto; white-space: nowrap; }
 
 .knowledge-search-form input {
   flex: 1 1 280px;

@@ -239,4 +239,16 @@ describe("ProjectWorkspace", () => {
     expect(screen.getByText(".harness/knowledge/entries/active/item-20.json")).toBeInTheDocument();
     expect(getArtifactManifest).toHaveBeenCalledWith("art_two");
   });
+
+  it("renders an empty version history with normal heading hierarchy", async () => {
+    render(<ProjectWorkspace api={api({
+      listProjectArtifacts: vi.fn(async () => [])
+    })} projectId="prj_one" />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "版本记录" }));
+
+    expect(await screen.findByRole("heading", { name: "版本记录", level: 2 })).toBeInTheDocument();
+    expect(screen.getByText("每次保存或同步文件后，平台都会保留一个版本。展开版本可查看具体改动。")).toBeInTheDocument();
+    expect(screen.getByText("还没有版本记录。保存或同步第一个文件后，版本会显示在这里。")).toBeInTheDocument();
+  });
 });

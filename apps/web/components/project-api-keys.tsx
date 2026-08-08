@@ -8,7 +8,7 @@ import { useI18n } from "../lib/i18n";
 import { Icon } from "./ui/icons";
 import { Modal } from "./ui/Modal";
 
-const SCOPES = ["push", "knowledge:write", "progress:write", "files:read"] as const;
+const SCOPES = ["push", "knowledge:read", "knowledge:write", "progress:write", "files:read"] as const;
 
 interface KeyItem {
   key_id: string;
@@ -61,7 +61,8 @@ const COPY = {
     refresh: "刷新",
     scopeHints: {
       push: "上传归档/提案文件到平台",
-      "knowledge:write": "写入知识条目（ingest）",
+      "knowledge:read": "查询该项目的远端知识",
+      "knowledge:write": "向项目知识库写入内容",
       "progress:write": "上报运行事件 / 心跳（运行监控）",
       "files:read": "读取项目文件快照"
     } as Record<(typeof SCOPES)[number], string>
@@ -107,6 +108,7 @@ const COPY = {
     refresh: "Refresh",
     scopeHints: {
       push: "Upload archive / proposal files to the platform",
+      "knowledge:read": "Search this project's remote knowledge",
       "knowledge:write": "Write knowledge entries (ingest)",
       "progress:write": "Report run events / heartbeats (run monitor)",
       "files:read": "Read project file snapshots"
@@ -119,7 +121,12 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
   const copy = COPY[lang];
   const [items, setItems] = useState<KeyItem[] | null>(null);
   const [label, setLabel] = useState("");
-  const [scopes, setScopes] = useState<string[]>(["push"]);
+  const [scopes, setScopes] = useState<string[]>([
+    "push",
+    "knowledge:read",
+    "progress:write",
+    "files:read"
+  ]);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [plaintext, setPlaintext] = useState<string | null>(null);

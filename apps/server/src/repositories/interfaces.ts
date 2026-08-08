@@ -42,6 +42,7 @@ export interface UserSessionRecord {
 
 export const PROJECT_KEY_SCOPES = [
   "push",
+  "knowledge:read",
   "knowledge:write",
   "progress:write",
   "files:read"

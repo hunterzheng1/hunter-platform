@@ -1,5 +1,5 @@
 import { uuidV7 } from "@hunter-harness/core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createServer } from "../src/app.js";
 import { MemoryRepository } from "../src/repositories/memory.js";
@@ -31,6 +31,7 @@ describe("run monitoring (P4)", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     await app.close();
   });
 
@@ -50,7 +51,12 @@ describe("run monitoring (P4)", () => {
             event_type: "phase.start",
             phase: "plan",
             occurred_at: "2026-08-06T10:00:00Z",
-            payload: { type: "phase.start", phase: "plan" }
+            payload: {
+              schema_version: 3,
+              timestamp: "2026-08-06T10:00:00Z",
+              type: "phase.start",
+              phase: "plan"
+            }
           },
           {
             event_id: "evt_2",
@@ -115,10 +121,53 @@ describe("run monitoring (P4)", () => {
       url: `/api/v1/projects/${projectId}/runs/run_demo/events`,
       headers: { authorization: "Bearer api-token" }
     });
-    expect((events.json() as { items: unknown[] }).items).toHaveLength(2);
+    const eventItems = (events.json() as {
+      items: Array<{ payload: Record<string, unknown> }>;
+    }).items;
+    expect(eventItems).toHaveLength(2);
+    expect(eventItems[0]?.payload).toMatchObject({
+      schema_version: 3,
+      timestamp: "2026-08-06T10:00:00Z"
+    });
+  });
+
+  it("marks an event-only client offline from the server-observed update time", async () => {
+    const batch = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectId}/runs/events:batch`,
+      headers: { authorization: "Bearer api-token" },
+      payload: {
+        protocol_version: "hunter-progress-sync/v1",
+        run_id: "run_event_only",
+        change_key: "event-only",
+        events: [{
+          event_id: "evt_only",
+          producer_seq: 1,
+          event_type: "decision",
+          occurred_at: "2020-01-01T00:00:00Z",
+          payload: { type: "decision" }
+        }]
+      }
+    });
+    expect(batch.statusCode).toBe(200);
+    const run = (batch.json() as {
+      run: { connection_status: string; updated_at: string; last_heartbeat_at: null };
+    }).run;
+    expect(run.connection_status).toBe("online");
+    expect(run.last_heartbeat_at).toBeNull();
+
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse(run.updated_at) + 61_000);
+    const list = await app.inject({
+      method: "GET",
+      url: `/api/v1/projects/${projectId}/runs`,
+      headers: { authorization: "Bearer api-token" }
+    });
+    expect(list.json().items[0].connection_status).toBe("offline");
   });
 
   it("records heartbeats for connection status", async () => {
+    const heartbeatAt = "2026-08-06T11:00:00Z";
+    const now = vi.spyOn(Date, "now").mockReturnValue(Date.parse(heartbeatAt));
     const response = await app.inject({
       method: "POST",
       url: `/api/v1/projects/${projectId}/runs/heartbeats`,
@@ -127,12 +176,28 @@ describe("run monitoring (P4)", () => {
         protocol_version: "hunter-progress-sync/v1",
         run_id: "run_hb",
         change_key: "hb-change",
-        client_time: "2026-08-06T11:00:00Z"
+        client_time: "2099-01-01T00:00:00Z"
       }
     });
     expect(response.statusCode).toBe(200);
     const run = (response.json() as { run: { connection_status: string; last_heartbeat_at: string } }).run;
     expect(run.connection_status).toBe("online");
-    expect(run.last_heartbeat_at).toBe("2026-08-06T11:00:00Z");
+    expect(run.last_heartbeat_at).toBe(new Date(heartbeatAt).toISOString());
+
+    now.mockReturnValue(Date.parse(heartbeatAt) + 20_000);
+    const delayed = await app.inject({
+      method: "GET",
+      url: `/api/v1/projects/${projectId}/runs`,
+      headers: { authorization: "Bearer api-token" }
+    });
+    expect(delayed.json().items[0].connection_status).toBe("delayed");
+
+    now.mockReturnValue(Date.parse(heartbeatAt) + 61_000);
+    const offline = await app.inject({
+      method: "GET",
+      url: `/api/v1/projects/${projectId}/runs`,
+      headers: { authorization: "Bearer api-token" }
+    });
+    expect(offline.json().items[0].connection_status).toBe("offline");
   });
 });
