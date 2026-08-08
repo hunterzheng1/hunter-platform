@@ -22,12 +22,15 @@ services:
       context: .
       dockerfile: apps/server/Dockerfile
     restart: unless-stopped
+    ports:
+      - "${SERVER_PORT:-3002}:3001"
     user: "0:0"
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-hunter_harness}
       POSTGRES_USER: ${POSTGRES_USER:-hunter_harness}
       ARTIFACT_ROOT: /var/lib/hunter-harness/artifacts
       HUNTER_HARNESS_AI_SECRET_FILE: /var/lib/hunter-harness/secrets/ai-providers.json
+      HUNTER_HARNESS_BOOTSTRAP_TOKEN_FILE: /run/secrets/bootstrap_token
       HUNTER_HARNESS_BOOTSTRAP_ACTOR: ${HUNTER_HARNESS_BOOTSTRAP_ACTOR:-actor_owner}
       HUNTER_HARNESS_BOOTSTRAP_NAME: ${HUNTER_HARNESS_BOOTSTRAP_NAME:-Owner}
       HUNTER_HARNESS_NPM_SCOPE: ${HUNTER_HARNESS_NPM_SCOPE:-@hunter-harness}
@@ -43,6 +46,7 @@ services:
         exec setpriv --reuid=1000 --regid=1000 --clear-groups node apps/server/dist/main.js
     secrets:
       - postgres_password
+      - bootstrap_token
     volumes:
       - artifact-data:/var/lib/hunter-harness/artifacts
       - ai-secrets:/var/lib/hunter-harness/secrets
@@ -84,3 +88,5 @@ volumes:
 secrets:
   postgres_password:
     file: ${POSTGRES_PASSWORD_FILE:-./secrets/postgres_password.txt}
+  bootstrap_token:
+    file: ${BOOTSTRAP_TOKEN_FILE:-./secrets/bootstrap_token.txt}
