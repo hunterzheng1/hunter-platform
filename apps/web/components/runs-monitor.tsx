@@ -84,7 +84,7 @@ interface PhaseStep {
  * 当前阶段优先取 run.current_phase，缺失时回退到事件流中最近上报的 phase。
  * 若 run.phases[] 有服务端聚合耗时则叠加显示。
  */
-function derivePhaseSteps(events: RunEventSummary[], run: RunSummary): PhaseStep[] {
+function derivePhaseSteps(events: RunEventSummary[], run: RunSummary, now: number): PhaseStep[] {
   const failed = run.run_status === "failed" || run.run_status === "error";
   const finished = ["succeeded", "completed", "complete"].includes(run.run_status);
   const phaseByName = new Map((run.phases ?? []).map((phase) => [phase.id, phase]));
@@ -111,9 +111,17 @@ function derivePhaseSteps(events: RunEventSummary[], run: RunSummary): PhaseStep
 
   return template.map((name, index) => {
     const phase = phaseByName.get(name);
-    const durationMs = phase?.total_duration_ms ?? phase?.duration_ms ?? null;
+    let durationMs = phase?.total_duration_ms ?? phase?.duration_ms ?? null;
     const attemptCount = phase?.attempt_count ?? phase?.attempts?.length ?? (phase === undefined ? 0 : 1);
     const activeAttempt = phase?.active_attempt ?? null;
+    if (phase !== undefined && activeAttempt !== null) {
+      const attempt = phase.attempts?.find((item) => item.attempt === activeAttempt);
+      const startedAt = attempt?.started_at ?? phase.started_at;
+      const started = startedAt === null ? Number.NaN : Date.parse(startedAt);
+      if (!Number.isNaN(started)) {
+        durationMs = Math.max(0, durationMs ?? 0) + Math.max(0, now - started);
+      }
+    }
     if (phase !== undefined) {
       const latestStatus = phase.latest_status?.toUpperCase() ?? null;
       let state: PhaseState;
@@ -171,10 +179,15 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
   const [viewingFile, setViewingFile] = useState<ArchiveFileEntry | null>(null);
   const [selectedArchive, setSelectedArchive] = useState<ChangeArchive | null>(null);
   const [archiveIsSample, setArchiveIsSample] = useState(false);
+  const [clockNow, setClockNow] = useState(() => Date.now());
   const streamAbortRef = useRef<(() => void) | null>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
 
   const selected = runs.find((run) => run.run_id === selectedRunId) ?? null;
+  const clockRunning = selected !== null && (
+    selected.active_phase !== null && selected.active_phase !== undefined ||
+    selected.phases?.some((phase) => phase.active_attempt !== null) === true
+  );
 
   const stats = useMemo(() => {
     let running = 0;
@@ -193,8 +206,8 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
   }, [runs]);
 
   const phaseSteps = useMemo(
-    () => (selected === null ? [] : derivePhaseSteps(events, selected)),
-    [events, selected]
+    () => (selected === null ? [] : derivePhaseSteps(events, selected, clockNow)),
+    [clockNow, events, selected]
   );
   const timelineEvents = useMemo(
     () => [...events].sort((left, right) =>
@@ -271,7 +284,7 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
   }
 
   function formatDuration(run: RunSummary): string | null {
-    const ms = durationMs(run, Date.now());
+    const ms = durationMs(run, clockNow);
     if (ms === null) return null;
     const seconds = Math.round(ms / 1000);
     if (seconds < 60) return copy.durationSeconds.replace("{n}", String(seconds));
@@ -289,7 +302,18 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
   function eventDescription(event: RunEventSummary): string {
     const text = (key: string): string => {
       const value = event.payload[key];
-      return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, 500) : "";
+      if (typeof value !== "string") return "";
+      const normalized = value.replace(/\s+/g, " ").trim().slice(0, 500);
+      return normalized
+        .replace(
+          /(?:\s*[；;,，]?\s*)(?:artifactsHash|artifactHash|receiptHash|content_sha256|contentSha256)\s*[:=]\s*(?:sha256:)?[0-9a-f]{32,64}/gi,
+          ""
+        )
+        .replace(/\bfinalize\s+ok\b/gi, copy.planArtifactsPublished)
+        .replace(/\s*([；;，,])\s*([；;，,])/g, "$1")
+        .trim()
+        .replace(/^[；;，,]+|[；;，,]+$/g, "")
+        .trim();
     };
     const summary = text("summary");
     if (summary !== "") return summary;
@@ -319,6 +343,17 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
     if (detail !== "") return detail;
     const fallback = (copy.eventFallbacks as Record<string, string>)[event.event_type] ?? copy.eventFallback;
     return fallback.replace("{phase}", phaseName);
+  }
+
+  function eventTechnicalDetails(event: RunEventSummary): string[] {
+    const details = new Set<string>();
+    for (const value of Object.values(event.payload)) {
+      if (typeof value !== "string") continue;
+      for (const match of value.matchAll(/sha256:[0-9a-f]{64}/gi)) {
+        details.add(match[0]);
+      }
+    }
+    return [...details];
   }
 
   function eventExecutionLabel(event: RunEventSummary): string | null {
@@ -380,6 +415,21 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
       if (!silent) setBusy(false);
     }
   }, [client, copy.networkError]);
+
+  useEffect(() => {
+    const tick = () => setClockNow(Date.now());
+    tick();
+    if (!clockRunning) return;
+    const timer = setInterval(tick, 1000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") tick();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [clockRunning, selectedRunId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -810,6 +860,14 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
                           {eventExecutionLabel(event) === null ? null : (
                             <p className="timeline-detail">{eventExecutionLabel(event)}</p>
                           )}
+                          {eventTechnicalDetails(event).length === 0 ? null : (
+                            <details className="timeline-technical">
+                              <summary>{copy.technicalDetails}</summary>
+                              {eventTechnicalDetails(event).map((detail) => (
+                                <code key={detail}>{detail}</code>
+                              ))}
+                            </details>
+                          )}
                         </li>
                       ))}
                     </ol>
@@ -936,6 +994,8 @@ const COPY = {
     decisionReason: "{decision}；原因：{reason}",
     phaseStartedDetail: "开始执行{phase}阶段：{detail}",
     phaseEndedDetail: "{phase}阶段已结束：{detail}",
+    planArtifactsPublished: "规划产物已校验并发布",
+    technicalDetails: "技术详情",
     delegatedTo: "隔离审查 · {agent}",
     inlineReview: "主会话审查",
     inlineReviewReason: "主会话审查 · {reason}",
@@ -1069,6 +1129,8 @@ const COPY = {
     decisionReason: "{decision}; reason: {reason}",
     phaseStartedDetail: "Started the {phase} phase: {detail}",
     phaseEndedDetail: "The {phase} phase finished: {detail}",
+    planArtifactsPublished: "planning artifacts verified and published",
+    technicalDetails: "Technical details",
     delegatedTo: "Delegated review · {agent}",
     inlineReview: "Inline review",
     inlineReviewReason: "Inline review · {reason}",

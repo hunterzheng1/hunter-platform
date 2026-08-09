@@ -126,6 +126,82 @@ describe("RunsMonitor", () => {
     expect(items[1]).toHaveTextContent("开始执行计划阶段。");
   });
 
+  it("keeps machine hashes out of the readable timeline and behind technical details", async () => {
+    const active = run("run_hash", "哈希展示测试", "2026-08-08T02:00:00.000Z");
+    const digest = `sha256:${"a".repeat(64)}`;
+    const events: RunEventSummary[] = [{
+      server_cursor: 1,
+      run_id: active.run_id,
+      event_id: "evt_hash",
+      producer_seq: 1,
+      event_type: "decision",
+      phase: "plan",
+      occurred_at: "2026-08-08T02:01:00.000Z",
+      payload: {
+        summary: `原生规划协议自检通过；finalize ok artifactsHash=${digest}`,
+        decision: `原生规划协议自检通过；finalize ok artifactsHash=${digest}`
+      }
+    }];
+    const api = {
+      listProjectRuns: vi.fn(async () => ({ items: [active], total: 1, next_cursor: null })),
+      listProjectRunEvents: vi.fn(async () => ({ items: events, next_cursor: 1 })),
+      streamProjectRunEvents: vi.fn(async () => ({ abort: vi.fn() }))
+    } as unknown as HunterApi;
+
+    render(<RunsMonitor api={api} projectId="prj_one" />);
+
+    await waitFor(() => expect(document.querySelector(".timeline-summary")).not.toBeNull());
+    const summary = document.querySelector(".timeline-summary");
+    expect(summary).not.toHaveTextContent("artifactsHash");
+    expect(summary).not.toHaveTextContent(digest);
+    expect(screen.getByText("技术详情")).toBeInTheDocument();
+    expect(document.querySelector(".timeline-technical code")).toHaveTextContent(digest);
+  });
+
+  it("updates the active phase duration every second instead of staying at zero", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-08T02:00:05.000Z"));
+    const active: RunSummary = {
+      ...run("run_clock", "阶段计时测试", "2026-08-08T02:00:00.000Z"),
+      current_phase: "run",
+      active_phase: "run",
+      workflow_status: "running",
+      phases: [{
+        id: "run",
+        started_at: "2026-08-08T02:00:00.000Z",
+        ended_at: null,
+        duration_ms: null,
+        total_duration_ms: 0,
+        attempt_count: 1,
+        active_attempt: 1,
+        latest_status: null,
+        validity: "current",
+        attempts: [{
+          attempt: 1,
+          run_id: "run_clock",
+          trigger: null,
+          from_phase: null,
+          started_at: "2026-08-08T02:00:00.000Z",
+          ended_at: null,
+          status: null,
+          duration_ms: null
+        }]
+      }]
+    };
+    const api = {
+      listProjectRuns: vi.fn(async () => ({ items: [active], total: 1, next_cursor: null })),
+      listProjectRunEvents: vi.fn(async () => ({ items: [], next_cursor: 0 })),
+      streamProjectRunEvents: vi.fn(async () => ({ abort: vi.fn() }))
+    } as unknown as HunterApi;
+
+    render(<RunsMonitor api={api} projectId="prj_one" />);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(screen.getByText("5s")).toBeInTheDocument();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(screen.getByText("7s")).toBeInTheDocument();
+  });
+
   it("discovers the first run without a manual refresh", async () => {
     vi.useFakeTimers();
     const first = run("run_first", "First live run", "2026-08-08T02:00:00.000Z");

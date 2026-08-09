@@ -614,6 +614,26 @@ nav a.active .icon {
   white-space: nowrap;
 }
 
+.timeline-technical {
+  width: fit-content;
+  max-width: 100%;
+  color: var(--muted-dim);
+  font-size: 11px;
+}
+
+.timeline-technical summary {
+  cursor: pointer;
+  user-select: none;
+}
+
+.timeline-technical code {
+  display: block;
+  margin-top: 4px;
+  max-width: min(100%, 620px);
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .run-title-stack {
   display: flex;
   min-width: 0;
