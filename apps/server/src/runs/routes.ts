@@ -50,7 +50,7 @@ async function publicRunWithPhases(
   run: RunRecord
 ): Promise<Record<string, unknown>> {
   const events = await runStore.listEvents(run.runId, { afterCursor: 0, limit: 2000 });
-  return publicRun(run, aggregateRunPhases(events));
+  return publicRun(run, aggregateRunPhases(events), events);
 }
 
 export function registerRunRoutes(app: FastifyInstance, options: RunRoutesOptions): void {

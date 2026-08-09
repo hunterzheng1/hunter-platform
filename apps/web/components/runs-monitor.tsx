@@ -52,6 +52,12 @@ function hasDistinctChangeKey(run: RunSummary): boolean {
   return runDisplayTitle(run) !== run.change_key;
 }
 
+function phaseClass(value: string | null): string {
+  return value !== null && HARNESS_PHASE_ORDER.includes(value as typeof HARNESS_PHASE_ORDER[number])
+    ? value
+    : "unknown";
+}
+
 function durationMs(run: RunSummary, now: number): number | null {
   if (run.started_at === null) return null;
   const start = Date.parse(run.started_at);
@@ -101,10 +107,13 @@ function derivePhaseSteps(events: RunEventSummary[], run: RunSummary, now: numbe
   const currentName = run.current_phase ?? lastSeen;
   if (currentName !== null) observed.add(currentName);
 
-  // 条件阶段只在实际出现时纳入模板
-  const template = HARNESS_PHASE_ORDER.filter((name) =>
-    CONDITIONAL_PHASES.has(name) ? observed.has(name) : true
-  );
+  // 新流程直接消费 Harness 上报的实际计划；旧流程才使用兼容模板。
+  const reportedPlan = run.planned_phases?.filter((name) => name.trim() !== "") ?? [];
+  const template = reportedPlan.length > 0
+    ? [...new Set(reportedPlan)]
+    : HARNESS_PHASE_ORDER.filter((name) =>
+        CONDITIONAL_PHASES.has(name) ? observed.has(name) : true
+      );
   const currentIndex = currentName === null
     ? -1
     : (template as readonly string[]).indexOf(currentName);
@@ -158,6 +167,19 @@ function formatPhaseDuration(ms: number | null): string | null {
   return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`;
 }
 
+function formatMetricDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "0 秒";
+  if (ms < 10_000) {
+    const seconds = Math.round(ms / 100) / 10;
+    return `${seconds.toLocaleString("zh-CN", { maximumFractionDigits: 1 })} 秒`;
+  }
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest === 0 ? `${minutes} 分钟` : `${minutes} 分 ${rest} 秒`;
+}
+
 export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterApi; projectId?: string }) {
   const { lang, t } = useI18n();
   const client = useMemo<HunterApi>(() => api ?? (
@@ -192,17 +214,20 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
   const stats = useMemo(() => {
     let running = 0;
     let succeeded = 0;
+    let endedEarly = 0;
     let failed = 0;
     for (const run of runs) {
       if (run.workflow_status === "failed" || run.result_status === "failure" || ["failed", "error"].includes(run.run_status)) {
         failed += 1;
+      } else if (run.workflow_status === "abandoned" || run.workflow_status === "superseded") {
+        endedEarly += 1;
       } else if (run.workflow_status === "completed" || ["succeeded", "completed", "complete", "partial"].includes(run.run_status)) {
         succeeded += 1;
       } else {
         running += 1;
       }
     }
-    return { total: runs.length, running, succeeded, failed };
+    return { total: runs.length, running, succeeded, endedEarly, failed };
   }, [runs]);
 
   const phaseSteps = useMemo(
@@ -230,11 +255,14 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
   }
 
   function runStateLabel(run: RunSummary): string {
+    if (run.workflow_status === "abandoned") return copy.abandoned;
+    if (run.workflow_status === "superseded") return copy.superseded;
     if (run.workflow_status === "waiting") {
       const completed = run.current_phase === null ? copy.phase : mapPhase(run.current_phase);
-      const waiting = run.waiting_for_phase === null || run.waiting_for_phase === undefined
-        ? copy.nextPhase
-        : mapPhase(run.waiting_for_phase);
+      if (run.waiting_for_phase === null || run.waiting_for_phase === undefined) {
+        return copy.phaseEnded.replace("{completed}", completed);
+      }
+      const waiting = mapPhase(run.waiting_for_phase);
       return copy.phaseWaiting.replace("{completed}", completed).replace("{next}", waiting);
     }
     if (run.workflow_status === "completed" && run.current_phase === "archive") {
@@ -252,9 +280,11 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
   }
 
   function runListStateLabel(run: RunSummary): string {
+    if (run.workflow_status === "abandoned") return copy.abandoned;
+    if (run.workflow_status === "superseded") return copy.superseded;
     if (run.workflow_status === "waiting") {
       return run.waiting_for_phase === null || run.waiting_for_phase === undefined
-        ? copy.waitingShort
+        ? copy.phaseEndedShort
         : copy.waitingPhaseShort.replace("{phase}", mapPhase(run.waiting_for_phase));
     }
     if (run.workflow_status === "completed" && run.current_phase === "archive") {
@@ -315,8 +345,30 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
         .replace(/^[；;，,]+|[；;，,]+$/g, "")
         .trim();
     };
+    const structuredReasonCode = typeof event.payload.fallback_reason_code === "string"
+      ? event.payload.fallback_reason_code.trim()
+      : typeof event.payload.decision_reason_code === "string"
+        ? event.payload.decision_reason_code.trim()
+        : "";
+    const structuredReason = copy.reviewReasonSummaries[structuredReasonCode];
     const summary = text("summary");
-    if (summary !== "") return summary;
+    if (structuredReason !== undefined && (
+      summary === ""
+      || summary === structuredReasonCode
+      || /REVIEW_[A-Z0-9_]+|INLINE_BY_ADAPTER/.test(summary)
+    )) return structuredReason;
+    if (summary !== "") {
+      const yellow = summary.match(/YELLOW\s*[×x]\s*(\d+)/i)?.[1];
+      if (/review\s+OK\s+advisory/i.test(summary)) {
+        return copy.reviewAdvisorySummary.replace("{count}", yellow ?? "0");
+      }
+      if (/strict-review-gate\s*=\s*false/i.test(summary)) {
+        return copy.advisoryReviewPolicy;
+      }
+      if (!/\b[A-Z][A-Z0-9_]{3,}\b|\b[a-z][\w.-]+\s*=\s*(?:true|false)\b/.test(summary)) {
+        return summary;
+      }
+    }
 
     const phaseName = event.phase === null ? copy.currentPhase : mapPhase(event.phase);
     const note = text("note");
@@ -353,6 +405,21 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
         details.add(match[0]);
       }
     }
+    for (const key of [
+      "decision_reason_code",
+      "fallback_reason_code",
+      "execution_mode",
+      "executor_agent",
+      "executor_tool",
+      "command",
+      "path",
+      "code"
+    ]) {
+      const value = event.payload[key];
+      if (typeof value === "string" && value.trim() !== "") {
+        details.add(`${key}=${value.trim()}`);
+      }
+    }
     return [...details];
   }
 
@@ -370,9 +437,10 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
         : "";
     if (agent !== "") return copy.delegatedTo.replace("{agent}", agent);
     if (mode === "inline") {
+      const readableReason = copy.reviewReasonLabels[reasonCode] ?? copy.reviewReasonUnknown;
       return reasonCode === ""
         ? copy.inlineReview
-        : copy.inlineReviewReason.replace("{reason}", reasonCode);
+        : copy.inlineReviewReason.replace("{reason}", readableReason);
     }
     return null;
   }
@@ -663,6 +731,7 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
           <div className="runs-stat"><strong>{stats.total}</strong><span>{copy.statTotal}</span></div>
           <div className="runs-stat tone-info"><strong>{stats.running}</strong><span>{copy.statRunning}</span></div>
           <div className="runs-stat tone-success"><strong>{stats.succeeded}</strong><span>{copy.statSucceeded}</span></div>
+          <div className="runs-stat tone-warning"><strong>{stats.endedEarly}</strong><span>{copy.statEndedEarly}</span></div>
           <div className="runs-stat tone-danger"><strong>{stats.failed}</strong><span>{copy.statFailed}</span></div>
         </div>
       </div>
@@ -754,7 +823,9 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
                   value={selected.active_phase !== null && selected.active_phase !== undefined
                     ? mapPhase(selected.active_phase)
                     : selected.workflow_status === "waiting"
-                      ? copy.waitingForNext
+                      ? selected.waiting_for_phase === null || selected.waiting_for_phase === undefined
+                        ? copy.phaseEndedShort
+                        : copy.nextPhaseValue.replace("{phase}", mapPhase(selected.waiting_for_phase))
                       : selected.current_phase === null ? "—" : mapPhase(selected.current_phase)}
                   tone={selected.workflow_status === "waiting" ? "info" : "neutral"}
                 />
@@ -766,6 +837,23 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
                 <span>{copy.lastEvent} <strong>{formatTime(selected.last_event_at)}</strong></span>
                 <span>{copy.lastHeartbeat} <strong>{formatTime(selected.last_heartbeat_at)}</strong></span>
               </div>
+              {selected.closure_reason === null || selected.closure_reason === undefined ? null : (
+                <p className="runs-closure-reason">{selected.closure_reason}</p>
+              )}
+              {selected.timing_breakdown === undefined ? null : (
+                <div className="runs-breakdown" aria-label={copy.timingBreakdown}>
+                  {selected.timing_breakdown.product_verification_ms > 0 ? <span>{copy.productVerification} {formatMetricDuration(selected.timing_breakdown.product_verification_ms)}</span> : null}
+                  {selected.timing_breakdown.process_evidence_ms > 0 ? <span>{copy.processEvidence} {formatMetricDuration(selected.timing_breakdown.process_evidence_ms)}</span> : null}
+                  {selected.timing_breakdown.user_wait_ms > 0 ? <span>{copy.userWait} {formatMetricDuration(selected.timing_breakdown.user_wait_ms)}</span> : null}
+                </div>
+              )}
+              {selected.file_breakdown === undefined || (selected.file_breakdown.product_files === 0 && selected.file_breakdown.process_evidence_files === 0) ? null : (
+                <p className="runs-file-breakdown">
+                  {copy.productFiles.replace("{n}", String(selected.file_breakdown.product_files))}
+                  {" · "}
+                  {copy.processEvidenceFiles.replace("{n}", String(selected.file_breakdown.process_evidence_files))}
+                </p>
+              )}
               <div className="runs-phases">
                 <h3>{copy.phasesTitle}</h3>
                 <ol className="phase-steps">
@@ -779,7 +867,7 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
                           ? copy.staleAttempts.replace("{n}", String(step.attemptCount))
                           : copy.completedAttempts.replace("{n}", String(step.attemptCount));
                     return (
-                      <li className="phase-step" data-state={step.state} key={step.name}>
+                      <li className={`phase-step phase-${step.name}`} data-phase={step.name} data-state={step.state} key={step.name}>
                         <span className="phase-step-dot" aria-hidden="true" />
                         <span className="phase-step-label">
                           {mapPhase(step.name)}{step.attemptCount > 1 ? ` ×${step.attemptCount}` : ""}
@@ -849,14 +937,25 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
                   </div>
                   <div className="log-panel-body runs-timeline-scroll" ref={timelineRef}>
                     <ol className="timeline">
-                      {timelineEvents.map((event) => (
-                        <li className={`timeline-item timeline-${eventTone(event)}`} key={event.event_id}>
+                      {timelineEvents.map((event, index) => (
+                        <li
+                          className={`timeline-item timeline-${eventTone(event)} phase-${phaseClass(event.phase)} ${index === 0 || timelineEvents[index - 1]?.phase !== event.phase ? "timeline-phase-break" : ""}`}
+                          data-phase={event.phase ?? "unknown"}
+                          key={event.event_id}
+                        >
                           <div className="timeline-meta">
                             <time dateTime={event.occurred_at}>{formatTime(event.occurred_at)}</time>
                             <span className="timeline-title">{copy.eventTypes[event.event_type] ?? event.event_type}</span>
+                            {event.phase === null ? null : (
+                              <span
+                                className={`timeline-phase-badge phase-${phaseClass(event.phase)}`}
+                                aria-label={`${copy.phaseLabel}：${mapPhase(event.phase)}`}
+                              >
+                                {mapPhase(event.phase)}
+                              </span>
+                            )}
                           </div>
                           <p className="timeline-summary">{eventDescription(event)}</p>
-                          {event.phase === null ? null : <p className="timeline-detail">{copy.phaseLabel} · {mapPhase(event.phase)}</p>}
                           {eventExecutionLabel(event) === null ? null : (
                             <p className="timeline-detail">{eventExecutionLabel(event)}</p>
                           )}
@@ -930,17 +1029,23 @@ const COPY = {
     statTotal: "全部",
     statRunning: "进行中",
     statSucceeded: "已成功",
+    statEndedEarly: "提前结束",
     statFailed: "失败",
     runStatus: "运行状态",
     connection: "连接状态",
     sync: "同步完整性",
     phase: "当前阶段",
     nextPhase: "下一阶段",
+    nextPhaseValue: "下一步：{phase}",
     phaseWaiting: "{completed}已结束 · 等待{next}",
+    phaseEnded: "{completed}已结束",
     archived: "已归档",
     archivedWarning: "已归档（有警告）",
     archivedWarningShort: "归档有警告",
+    abandoned: "已主动结束",
+    superseded: "已被其他方案替代",
     waitingShort: "等待继续",
+    phaseEndedShort: "阶段已结束",
     waitingPhaseShort: "等待{phase}",
     phaseCompletedShort: "上一阶段已完成",
     workflowEndedShort: "流程已结束",
@@ -960,6 +1065,12 @@ const COPY = {
     startedAt: "开始",
     endedAt: "结束",
     durationLabel: "时长",
+    timingBreakdown: "耗时分类",
+    productVerification: "产品验证",
+    processEvidence: "流程证据",
+    userWait: "等待确认",
+    productFiles: "产品文件 {n} 个",
+    processEvidenceFiles: "流程证据文件 {n} 个",
     phasesTitle: "阶段进度",
     archiveTitle: "归档文件",
     sampleData: "示例数据",
@@ -997,8 +1108,25 @@ const COPY = {
     planArtifactsPublished: "规划产物已校验并发布",
     technicalDetails: "技术详情",
     delegatedTo: "隔离审查 · {agent}",
-    inlineReview: "主会话审查",
-    inlineReviewReason: "主会话审查 · {reason}",
+    inlineReview: "主会话评审",
+    inlineReviewReason: "主会话评审 · {reason}",
+    reviewReasonLabels: {
+      REVIEW_DELEGATED: "已使用独立评审",
+      REVIEW_INLINE_UNAVAILABLE: "当前环境不支持隔离评审",
+      REVIEW_INLINE_SPAWN_FAILED: "独立评审启动失败",
+      REVIEW_INLINE_INVALID_RESULT: "独立评审结果无效",
+      INLINE_BY_ADAPTER: "当前适配器使用主会话评审"
+    } as Record<string, string>,
+    reviewReasonSummaries: {
+      REVIEW_DELEGATED: "已使用独立评审，主会话负责核验结果。",
+      REVIEW_INLINE_UNAVAILABLE: "当前环境没有可用的隔离评审能力，已由主会话完成评审。",
+      REVIEW_INLINE_SPAWN_FAILED: "独立评审启动失败，已由主会话完成评审。",
+      REVIEW_INLINE_INVALID_RESULT: "独立评审未返回有效结果，已由主会话重新完成评审。",
+      INLINE_BY_ADAPTER: "当前适配器未提供隔离评审，已由主会话完成评审。"
+    } as Record<string, string>,
+    reviewReasonUnknown: "已记录评审执行原因",
+    reviewAdvisorySummary: "评审已完成：发现 {count} 项改进建议，不影响后续流程；已生成修复清单。",
+    advisoryReviewPolicy: "当前项目采用建议性评审，本次改进建议不阻止进入下一阶段。",
     eventFallback: "记录了一项运行事件。",
     eventFallbacks: {
       "phase.start": "开始执行{phase}阶段。",
@@ -1065,17 +1193,23 @@ const COPY = {
     statTotal: "Total",
     statRunning: "Running",
     statSucceeded: "Succeeded",
+    statEndedEarly: "Ended early",
     statFailed: "Failed",
     runStatus: "Run status",
     connection: "Connection",
     sync: "Sync completeness",
     phase: "Current phase",
     nextPhase: "the next phase",
+    nextPhaseValue: "Next: {phase}",
     phaseWaiting: "{completed} finished · waiting for {next}",
+    phaseEnded: "{completed} finished",
     archived: "Archived",
     archivedWarning: "Archived with warnings",
     archivedWarningShort: "Archive warning",
+    abandoned: "Ended by choice",
+    superseded: "Superseded",
     waitingShort: "Waiting",
+    phaseEndedShort: "Phase finished",
     waitingPhaseShort: "Waiting for {phase}",
     phaseCompletedShort: "Previous phase complete",
     workflowEndedShort: "Workflow ended",
@@ -1095,6 +1229,12 @@ const COPY = {
     startedAt: "Started",
     endedAt: "Ended",
     durationLabel: "Duration",
+    timingBreakdown: "Timing breakdown",
+    productVerification: "Product verification",
+    processEvidence: "Process evidence",
+    userWait: "Waiting for confirmation",
+    productFiles: "{n} product files",
+    processEvidenceFiles: "{n} process evidence files",
     phasesTitle: "Phase progress",
     archiveTitle: "Archived files",
     sampleData: "Sample data",
@@ -1134,6 +1274,23 @@ const COPY = {
     delegatedTo: "Delegated review · {agent}",
     inlineReview: "Inline review",
     inlineReviewReason: "Inline review · {reason}",
+    reviewReasonLabels: {
+      REVIEW_DELEGATED: "independent review used",
+      REVIEW_INLINE_UNAVAILABLE: "isolated review is unavailable",
+      REVIEW_INLINE_SPAWN_FAILED: "independent review failed to start",
+      REVIEW_INLINE_INVALID_RESULT: "independent review returned an invalid result",
+      INLINE_BY_ADAPTER: "the adapter uses inline review"
+    } as Record<string, string>,
+    reviewReasonSummaries: {
+      REVIEW_DELEGATED: "An independent reviewer completed the review; the main session verified the result.",
+      REVIEW_INLINE_UNAVAILABLE: "No isolated review capability is available, so the main session completed the review.",
+      REVIEW_INLINE_SPAWN_FAILED: "The independent reviewer failed to start, so the main session completed the review.",
+      REVIEW_INLINE_INVALID_RESULT: "The independent review was invalid, so the main session repeated the review.",
+      INLINE_BY_ADAPTER: "This adapter does not provide isolated review, so the main session completed it."
+    } as Record<string, string>,
+    reviewReasonUnknown: "review execution reason recorded",
+    reviewAdvisorySummary: "Review completed with {count} improvement suggestions; they do not block the next step, and a fix list was created.",
+    advisoryReviewPolicy: "This project uses advisory review, so these suggestions do not block the next phase.",
     eventFallback: "A run event was recorded.",
     eventFallbacks: {
       "phase.start": "Started the {phase} phase.",

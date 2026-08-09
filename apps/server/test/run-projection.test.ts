@@ -113,8 +113,32 @@ describe("run monitoring projection", () => {
     ]);
     expect(publicRun(run({ currentPhase: "plan" }), waitingPhases)).toMatchObject({
       active_phase: null,
-      waiting_for_phase: "run",
+      waiting_for_phase: null,
       connection_status: "idle"
+    });
+
+    const plannedEvents = [
+      event(1, "phase.start", "review", "2026-08-09T00:00:00.000Z", {
+        attempt: 1,
+        planned_phases: ["plan", "run", "review", "archive"]
+      }),
+      event(2, "phase.end", "review", "2026-08-09T00:01:00.000Z", {
+        attempt: 1,
+        status: "OK",
+        planned_phases: ["plan", "run", "review", "archive"],
+        next_phase: "archive"
+      })
+    ];
+    expect(
+      publicRun(
+        run({ currentPhase: "review" }),
+        aggregateRunPhases(plannedEvents),
+        plannedEvents
+      )
+    ).toMatchObject({
+      waiting_for_phase: "archive",
+      planned_phases: ["plan", "run", "review", "archive"],
+      phase_plan_source: "reported"
     });
 
     const archivePhases = aggregateRunPhases([
@@ -148,6 +172,42 @@ describe("run monitoring projection", () => {
       decision_reason_code: "DELEGATE_FIRST",
       fallback_reason_code: null,
       summary: "已委派独立评审。"
+    });
+  });
+
+  it("projects closure outcome, real timing buckets, and product/process file counts", () => {
+    const events = [
+      event(1, "verification", "test", "2026-08-09T00:01:00.000Z", {
+        runner_ms: 1_300,
+        orchestration_active_ms: 240,
+        wall_clock_ms: 1_740,
+        user_wait_ms: 200,
+        changed_files: ["src/timer.ts", ".harness/state/changes/demo/evidence/verification-ledger.json"]
+      }),
+      event(2, "workflow.end", "archive", "2026-08-09T00:02:00.000Z", {
+        closure_disposition: "abandoned",
+        closure_reason: "方向调整，停止当前实现。",
+        orchestration_active_ms: 90,
+        path: ".harness/archive/demo/summary.md"
+      })
+    ];
+
+    expect(publicRun(run({ runStatus: "partial", currentPhase: "archive" }), [], events)).toMatchObject({
+      workflow_status: "abandoned",
+      result_status: "warning",
+      connection_status: "closed",
+      closure_disposition: "abandoned",
+      closure_reason: "方向调整，停止当前实现。",
+      timing_breakdown: {
+        product_verification_ms: 1_300,
+        process_evidence_ms: 330,
+        user_wait_ms: 200,
+        wall_clock_reported_ms: 1_740
+      },
+      file_breakdown: {
+        product_files: 1,
+        process_evidence_files: 2
+      }
     });
   });
 });

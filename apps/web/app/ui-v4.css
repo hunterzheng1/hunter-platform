@@ -523,6 +523,16 @@ nav a.active .icon {
 }
 
 /* ── Timeline v2 (runs events) ── */
+.phase-plan { --phase-color: #a78bfa; }
+.phase-run { --phase-color: #60a5fa; }
+.phase-test { --phase-color: #22d3ee; }
+.phase-review { --phase-color: #fbbf24; }
+.phase-package { --phase-color: #fb923c; }
+.phase-apidoc { --phase-color: #f472b6; }
+.phase-submit { --phase-color: #4ade80; }
+.phase-archive { --phase-color: #fb7185; }
+.phase-unknown { --phase-color: var(--muted-dim); }
+
 .timeline {
   position: relative;
   margin: 0;
@@ -544,9 +554,18 @@ nav a.active .icon {
 
 .timeline-item {
   position: relative;
-  padding: 6px 0 6px 4px;
+  padding: 7px 8px 7px 10px;
   display: grid;
   gap: 2px;
+  border-inline-start: 3px solid var(--phase-color, var(--muted-dim));
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  min-width: 0;
+}
+
+.timeline-item.timeline-phase-break:not(:first-child) {
+  margin-top: 7px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-dim);
 }
 
 .timeline-item::before {
@@ -569,6 +588,7 @@ nav a.active .icon {
 .timeline-item .timeline-meta {
   display: flex;
   align-items: baseline;
+  flex-wrap: wrap;
   gap: 8px;
   font-size: 12px;
 }
@@ -584,6 +604,21 @@ nav a.active .icon {
   color: var(--text-secondary);
   font-weight: 600;
   font-size: 12.5px;
+}
+
+.timeline-phase-badge {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  padding: 1px 7px;
+  border: 1px solid color-mix(in srgb, var(--phase-color) 55%, var(--line));
+  border-radius: 999px;
+  color: var(--phase-color);
+  background: color-mix(in srgb, var(--phase-color) 11%, transparent);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.5;
+  white-space: nowrap;
 }
 
 .timeline-item .timeline-summary {
@@ -713,7 +748,7 @@ button.runs-live-badge:hover {
 
 .runs-stats {
   display: grid;
-  grid-template-columns: repeat(4, minmax(84px, 1fr));
+  grid-template-columns: repeat(5, minmax(84px, 1fr));
   gap: 8px;
   flex: 1;
   max-width: 520px;
@@ -762,6 +797,11 @@ button.runs-live-badge:hover {
 }
 
 @media (max-width: 720px) {
+  .runs-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-width: none;
+  }
+
   .runs-list-panel {
     position: static;
   }
@@ -926,6 +966,30 @@ button.runs-live-badge:hover {
   color: var(--muted);
   text-align: center;
   word-break: keep-all;
+  border-bottom: 2px solid var(--phase-color, var(--muted-dim));
+  padding-bottom: 2px;
+}
+
+.runs-closure-reason,
+.runs-file-breakdown {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.runs-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.runs-breakdown span {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 
 .phase-step[data-state="done"] .phase-step-dot {

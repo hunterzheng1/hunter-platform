@@ -96,8 +96,20 @@ export interface RunSummary {
   server_cursor: number;
   active_phase?: string | null;
   waiting_for_phase?: string | null;
-  workflow_status?: "running" | "waiting" | "completed" | "failed";
+  workflow_status?: "running" | "waiting" | "completed" | "failed" | "abandoned" | "superseded";
   result_status?: "pending" | "warning" | "success" | "failure";
+  planned_phases?: string[] | null;
+  skipped_phases?: unknown[];
+  phase_plan_source?: string;
+  closure_disposition?: "completed" | "abandoned" | "superseded" | null;
+  closure_reason?: string | null;
+  timing_breakdown?: {
+    product_verification_ms: number;
+    process_evidence_ms: number;
+    user_wait_ms: number;
+    wall_clock_reported_ms: number;
+  };
+  file_breakdown?: { product_files: number; process_evidence_files: number };
   phases?: RunPhaseSummary[];
 }
 

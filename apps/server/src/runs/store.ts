@@ -73,7 +73,24 @@ export const RUN_EVENT_WHITELIST = [
   "fallback_reason_code",
   "trigger",
   "from_phase",
-  "result_status"
+  "result_status",
+  "planned_phases",
+  "skipped_phases",
+  "next_phase",
+  "phase_plan_source",
+  "closure_disposition",
+  "closure_reason",
+  "command",
+  "path",
+  "kind",
+  "terminal",
+  "recovery_status",
+  "reasonCode",
+  "runner_ms",
+  "orchestration_active_ms",
+  "wall_clock_ms",
+  "user_wait_ms",
+  "changed_files"
 ] as const;
 
 export interface IngestEventInput {
@@ -324,23 +341,114 @@ export function aggregateRunPhases(events: readonly RunEventRecord[]): RunPhaseS
   });
 }
 
-function nextWorkflowPhase(phase: string | null): string | null {
-  if (phase === null) return WORKFLOW_PHASE_ORDER[0];
-  const index = WORKFLOW_PHASE_ORDER.indexOf(phase as typeof WORKFLOW_PHASE_ORDER[number]);
-  return index >= 0 && index < WORKFLOW_PHASE_ORDER.length - 1
-    ? WORKFLOW_PHASE_ORDER[index + 1] ?? null
-    : null;
+function reportedWorkflowPlan(events: readonly RunEventRecord[]): {
+  plannedPhases: string[] | null;
+  skippedPhases: unknown[];
+  nextPhase: string | null;
+  source: string;
+} {
+  let plannedPhases: string[] | null = null;
+  let skippedPhases: unknown[] = [];
+  let nextPhase: string | null = null;
+  let source = "legacy-unknown";
+  for (const event of [...events].sort((left, right) => left.serverCursor - right.serverCursor)) {
+    const planned = event.payload.planned_phases;
+    if (Array.isArray(planned)) {
+      const normalized = planned
+        .filter((item): item is string => typeof item === "string" && item.trim() !== "")
+        .map((item) => item.trim());
+      if (normalized.length > 0) {
+        plannedPhases = [...new Set(normalized)];
+        source = typeof event.payload.phase_plan_source === "string"
+          ? event.payload.phase_plan_source
+          : "reported";
+      }
+    }
+    if (Array.isArray(event.payload.skipped_phases)) {
+      skippedPhases = event.payload.skipped_phases;
+    }
+    if ("next_phase" in event.payload) {
+      nextPhase = typeof event.payload.next_phase === "string" && event.payload.next_phase.trim() !== ""
+        ? event.payload.next_phase.trim()
+        : null;
+    }
+  }
+  return { plannedPhases, skippedPhases, nextPhase, source };
+}
+
+function reportedRunOutcome(events: readonly RunEventRecord[]): {
+  closureDisposition: "completed" | "abandoned" | "superseded" | null;
+  closureReason: string | null;
+  timingBreakdown: Record<string, number>;
+  fileBreakdown: Record<string, number>;
+} {
+  let closureDisposition: "completed" | "abandoned" | "superseded" | null = null;
+  let closureReason: string | null = null;
+  const timingBreakdown = {
+    product_verification_ms: 0,
+    process_evidence_ms: 0,
+    user_wait_ms: 0,
+    wall_clock_reported_ms: 0
+  };
+  const productFiles = new Set<string>();
+  const processEvidenceFiles = new Set<string>();
+  const addPath = (candidate: unknown): void => {
+    if (typeof candidate !== "string" || candidate.trim() === "") return;
+    const path = candidate.trim().replaceAll("\\", "/").replace(/^\.\//, "");
+    (path === ".harness" || path.startsWith(".harness/")
+      ? processEvidenceFiles
+      : productFiles).add(path);
+  };
+  const addDuration = (target: keyof typeof timingBreakdown, candidate: unknown): void => {
+    if (typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0) {
+      timingBreakdown[target] += candidate;
+    }
+  };
+
+  for (const event of [...events].sort((left, right) => left.serverCursor - right.serverCursor)) {
+    const disposition = event.payload.closure_disposition;
+    if (disposition === "completed" || disposition === "abandoned" || disposition === "superseded") {
+      closureDisposition = disposition;
+      closureReason = typeof event.payload.closure_reason === "string" && event.payload.closure_reason.trim() !== ""
+        ? event.payload.closure_reason.trim()
+        : null;
+    }
+    addDuration("product_verification_ms", event.payload.runner_ms);
+    addDuration("process_evidence_ms", event.payload.orchestration_active_ms);
+    addDuration("user_wait_ms", event.payload.user_wait_ms);
+    addDuration("wall_clock_reported_ms", event.payload.wall_clock_ms);
+    addPath(event.payload.path);
+    if (Array.isArray(event.payload.changed_files)) {
+      event.payload.changed_files.forEach(addPath);
+    }
+  }
+
+  return {
+    closureDisposition,
+    closureReason,
+    timingBreakdown,
+    fileBreakdown: {
+      product_files: productFiles.size,
+      process_evidence_files: processEvidenceFiles.size
+    }
+  };
 }
 
 export function publicRun(
   run: RunRecord,
-  phases?: readonly RunPhaseSummary[]
+  phases?: readonly RunPhaseSummary[],
+  events: readonly RunEventRecord[] = []
 ): Record<string, unknown> {
   const phaseItems = phases === undefined ? [] : phases.map((phase) => ({ ...phase }));
+  const reportedPlan = reportedWorkflowPlan(events);
+  const reportedOutcome = reportedRunOutcome(events);
   const activePhase = [...phaseItems].reverse().find((phase) => phase.active_attempt !== null)?.id ?? null;
-  const workflowStatus = run.runStatus === "running"
+  let workflowStatus = run.runStatus === "running"
     ? activePhase === null && phaseItems.length > 0 ? "waiting" : "running"
     : run.runStatus === "failed" ? "failed" : "completed";
+  if (reportedOutcome.closureDisposition === "abandoned" || reportedOutcome.closureDisposition === "superseded") {
+    workflowStatus = reportedOutcome.closureDisposition;
+  }
   const resultStatus = run.runStatus === "partial"
     ? "warning"
     : run.runStatus === "succeeded"
@@ -348,7 +456,7 @@ export function publicRun(
       : run.runStatus === "failed" ? "failure" : "pending";
   let connectionStatus = run.connectionStatus;
   const serverObservedAt = run.lastHeartbeatAt ?? (run.lastEventAt === null ? null : run.updatedAt);
-  if (workflowStatus === "completed" || workflowStatus === "failed") {
+  if (["completed", "failed", "abandoned", "superseded"].includes(workflowStatus)) {
     connectionStatus = "closed";
   } else if (activePhase === null && phaseItems.length > 0) {
     connectionStatus = "idle";
@@ -358,6 +466,13 @@ export function publicRun(
       const age = Math.max(0, Date.now() - observedAt);
       connectionStatus = age > 120_000 ? "offline" : age > 45_000 ? "delayed" : "online";
     }
+  }
+  let waitingForPhase = reportedPlan.nextPhase;
+  if (waitingForPhase === null && reportedPlan.plannedPhases !== null && run.currentPhase !== null) {
+    const currentIndex = reportedPlan.plannedPhases.indexOf(run.currentPhase);
+    waitingForPhase = currentIndex >= 0
+      ? reportedPlan.plannedPhases[currentIndex + 1] ?? null
+      : null;
   }
   return {
     run_id: run.runId,
@@ -369,7 +484,14 @@ export function publicRun(
     sync_completeness: run.syncCompleteness,
     current_phase: run.currentPhase,
     active_phase: activePhase,
-    waiting_for_phase: workflowStatus === "waiting" ? nextWorkflowPhase(run.currentPhase) : null,
+    waiting_for_phase: workflowStatus === "waiting" ? waitingForPhase : null,
+    planned_phases: reportedPlan.plannedPhases,
+    skipped_phases: reportedPlan.skippedPhases,
+    phase_plan_source: reportedPlan.source,
+    closure_disposition: reportedOutcome.closureDisposition,
+    closure_reason: reportedOutcome.closureReason,
+    timing_breakdown: reportedOutcome.timingBreakdown,
+    file_breakdown: reportedOutcome.fileBreakdown,
     workflow_status: workflowStatus,
     result_status: resultStatus,
     started_at: run.startedAt,

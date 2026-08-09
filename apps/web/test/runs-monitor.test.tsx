@@ -120,10 +120,44 @@ describe("RunsMonitor", () => {
     const timeline = document.querySelector(".timeline");
     expect(timeline).not.toBeNull();
     const items = within(timeline as HTMLElement).getAllByRole("listitem");
-    expect(items[0]).toHaveTextContent("记录决策");
-    expect(items[0]).toHaveTextContent("采用本地缓存，减少重复请求。");
+    const firstItem = items[0];
+    expect(firstItem).toBeDefined();
+    if (firstItem === undefined) throw new Error("timeline first item is missing");
+    expect(firstItem).toHaveTextContent("记录决策");
+    expect(firstItem).toHaveTextContent("采用本地缓存，减少重复请求。");
+    expect(firstItem.querySelector(".timeline-phase-badge.phase-plan")).toHaveTextContent("计划");
     expect(items[1]).toHaveTextContent("阶段开始");
     expect(items[1]).toHaveTextContent("开始执行计划阶段。");
+  });
+
+  it("translates review execution reason codes and keeps the raw code in technical details", async () => {
+    const active = run("run_review_mode", "评审方式", "2026-08-08T02:00:00.000Z");
+    const events: RunEventSummary[] = [{
+      server_cursor: 1,
+      run_id: active.run_id,
+      event_id: "evt_review_mode",
+      producer_seq: 1,
+      event_type: "decision",
+      phase: "review",
+      occurred_at: "2026-08-08T02:01:00.000Z",
+      payload: {
+        summary: "REVIEW_INLINE_UNAVAILABLE",
+        execution_mode: "inline",
+        fallback_reason_code: "REVIEW_INLINE_UNAVAILABLE"
+      }
+    }];
+    const api = {
+      listProjectRuns: vi.fn(async () => ({ items: [active], total: 1, next_cursor: null })),
+      listProjectRunEvents: vi.fn(async () => ({ items: events, next_cursor: 1 })),
+      streamProjectRunEvents: vi.fn(async () => ({ abort: vi.fn() }))
+    } as unknown as HunterApi;
+
+    render(<RunsMonitor api={api} projectId="prj_one" />);
+
+    expect(await screen.findByText("当前环境没有可用的隔离评审能力，已由主会话完成评审。")).toBeInTheDocument();
+    expect(screen.getByText("主会话评审 · 当前环境不支持隔离评审")).toBeInTheDocument();
+    expect(document.querySelector(".timeline-summary")).not.toHaveTextContent("REVIEW_INLINE_UNAVAILABLE");
+    expect(document.querySelector(".timeline-technical code")).toHaveTextContent("REVIEW_INLINE_UNAVAILABLE");
   });
 
   it("keeps machine hashes out of the readable timeline and behind technical details", async () => {
@@ -293,6 +327,42 @@ describe("RunsMonitor", () => {
     expect(screen.getByText("归档 ×3")).toBeInTheDocument();
     expect(screen.getByText("已完成 3 次")).toBeInTheDocument();
     expect(document.querySelector('.phase-step[data-state="active"]')).toBeNull();
+  });
+
+  it("separates ended-early runs and shows real timing and file categories", async () => {
+    const abandoned: RunSummary = {
+      ...run("run_abandoned", "已停止的尝试", "2026-08-08T02:00:00.000Z"),
+      run_status: "partial",
+      connection_status: "closed",
+      current_phase: "archive",
+      workflow_status: "abandoned",
+      result_status: "warning",
+      closure_disposition: "abandoned",
+      closure_reason: "方向调整，停止当前实现。",
+      timing_breakdown: {
+        product_verification_ms: 1_300,
+        process_evidence_ms: 2_400,
+        user_wait_ms: 93_000,
+        wall_clock_reported_ms: 96_700
+      },
+      file_breakdown: { product_files: 3, process_evidence_files: 7 }
+    };
+    const api = {
+      listProjectRuns: vi.fn(async () => ({ items: [abandoned], total: 1, next_cursor: null })),
+      listProjectRunEvents: vi.fn(async () => ({ items: [], next_cursor: 0 })),
+      streamProjectRunEvents: vi.fn(async () => ({ abort: vi.fn() }))
+    } as unknown as HunterApi;
+
+    render(<RunsMonitor api={api} projectId="prj_one" />);
+
+    expect((await screen.findAllByText("已主动结束")).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("提前结束")).toBeInTheDocument();
+    expect(screen.getByText("方向调整，停止当前实现。")).toBeInTheDocument();
+    expect(screen.getByText("产品验证 1.3 秒")).toBeInTheDocument();
+    expect(screen.getByText("流程证据 2.4 秒")).toBeInTheDocument();
+    expect(screen.getByText("等待确认 1 分 33 秒")).toBeInTheDocument();
+    expect(screen.getByText("产品文件 3 个 · 流程证据文件 7 个")).toBeInTheDocument();
+    expect(screen.getByText("0", { selector: ".runs-stat.tone-success strong" })).toBeInTheDocument();
   });
 
   it("shows a closed plan as waiting and refreshes the selected timeline on demand", async () => {
