@@ -997,8 +997,8 @@ button.runs-live-badge:hover {
   border-color: var(--success);
 }
 
-.phase-step[data-state="done"]::before {
-  background: color-mix(in srgb, var(--success) 55%, var(--line));
+.phase-step[data-state="done"] + .phase-step::before {
+  background: color-mix(in srgb, var(--success) 65%, var(--line));
 }
 
 .phase-step[data-state="done"] .phase-step-label {
@@ -1027,17 +1027,9 @@ button.runs-live-badge:hover {
   font-weight: 600;
 }
 
-.phase-step[data-state="failed"]::before {
-  background: color-mix(in srgb, var(--danger) 55%, var(--line));
-}
-
 .phase-step[data-state="warning"] .phase-step-dot {
   background: var(--warn);
   border-color: var(--warn);
-}
-
-.phase-step[data-state="warning"]::before {
-  background: color-mix(in srgb, var(--warn) 55%, var(--line));
 }
 
 .phase-step[data-state="warning"] .phase-step-label {
@@ -1050,10 +1042,6 @@ button.runs-live-badge:hover {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-glow);
   animation: run-pulse 1.6s var(--ease-out) infinite;
-}
-
-.phase-step[data-state="preparing"]::before {
-  background: color-mix(in srgb, var(--accent) 40%, var(--line));
 }
 
 .phase-step[data-state="preparing"] .phase-step-label {
@@ -1081,6 +1069,17 @@ button.runs-live-badge:hover {
 
 .phase-step-attempt {
   max-width: 96px;
+}
+
+.phase-step-attention {
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line));
+  border-radius: 999px;
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+  font-size: 9px;
+  line-height: 1.3;
+  white-space: nowrap;
 }
 
 .phase-preparation {

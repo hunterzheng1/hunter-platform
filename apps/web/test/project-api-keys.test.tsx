@@ -18,6 +18,23 @@ describe("ProjectApiKeysPanel", () => {
     sessionStorage.clear();
   });
 
+  it("selects every permission scope by default", async () => {
+    sessionStorage.setItem("hunter-harness-token", "hh_test");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [] })
+    }));
+
+    wrap(<ProjectApiKeysPanel projectId="prj_demo" />);
+
+    await waitFor(() => expect(screen.getByText(/尚未签发|No keys issued/i)).toBeTruthy());
+    const checkboxes = screen.getAllByRole("checkbox");
+    expect(checkboxes).toHaveLength(5);
+    for (const checkbox of checkboxes) {
+      expect(checkbox).toBeChecked();
+    }
+  });
+
   it("shows inline errors when label or scopes are missing", async () => {
     sessionStorage.setItem("hunter-harness-token", "hh_test");
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({

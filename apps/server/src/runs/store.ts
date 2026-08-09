@@ -268,6 +268,8 @@ export function aggregateRunPhases(events: readonly RunEventRecord[]): RunPhaseS
   const sorted = [...events].sort((left, right) =>
     left.serverCursor - right.serverCursor || left.eventId.localeCompare(right.eventId)
   );
+  let legacyArchivePreparationStart: RunEventRecord | null = null;
+  let legacyArchivePreparationEnd: RunEventRecord | null = null;
   for (const event of sorted) {
     const phase = event.phase ??
       (typeof event.payload.phase === "string" ? event.payload.phase : null);
@@ -281,6 +283,22 @@ export function aggregateRunPhases(events: readonly RunEventRecord[]): RunPhaseS
     }
     const preparations = preparationsByPhase.get(phase) ?? [];
     const declaredAttempt = positiveAttempt(event.payload.attempt);
+    const note = payloadText(event.payload, "note") ?? "";
+    const isLegacyArchivePreparationStart = phase === "archive" &&
+      event.eventType === "phase.start" &&
+      /^finalize operation a-[0-9a-f]+ failed before publish$/i.test(note);
+    if (isLegacyArchivePreparationStart) {
+      legacyArchivePreparationStart ??= event;
+      continue;
+    }
+    const isLegacyArchivePreparationEnd = phase === "archive" &&
+      event.eventType === "phase.end" &&
+      payloadText(event.payload, "status")?.toUpperCase() === "FAIL" &&
+      /^finalize operation a-[0-9a-f]+ discarded:/i.test(note);
+    if (isLegacyArchivePreparationEnd && legacyArchivePreparationStart !== null) {
+      legacyArchivePreparationEnd = event;
+      continue;
+    }
     if (event.eventType === "phase.prepare.start") {
       const nextAttempt = declaredAttempt ?? Math.max(
         attempts.at(-1)?.attempt ?? 0,
@@ -371,13 +389,19 @@ export function aggregateRunPhases(events: readonly RunEventRecord[]): RunPhaseS
         run_id: payloadText(event.payload, "run_id") ?? event.runId,
         trigger: payloadText(event.payload, "trigger"),
         from_phase: payloadText(event.payload, "from_phase"),
-        started_at: event.occurredAt,
+        started_at: phase === "archive" && legacyArchivePreparationStart !== null
+          ? legacyArchivePreparationStart.occurredAt
+          : event.occurredAt,
         ended_at: null,
         status: null,
         duration_ms: null,
         startCursor: event.serverCursor,
         endCursor: null
       });
+      if (phase === "archive") {
+        legacyArchivePreparationStart = null;
+        legacyArchivePreparationEnd = null;
+      }
       continue;
     }
     let attempt = declaredAttempt === null
@@ -407,6 +431,27 @@ export function aggregateRunPhases(events: readonly RunEventRecord[]): RunPhaseS
       attempt.duration_ms = durationBetween(attempt.started_at, attempt.ended_at);
       attempt.endCursor = event.serverCursor;
     }
+  }
+
+  if (legacyArchivePreparationStart !== null) {
+    const preparations = preparationsByPhase.get("archive") ?? [];
+    const endedAt = legacyArchivePreparationEnd?.occurredAt ?? null;
+    preparations.push({
+      attempt: preparations.length + 1,
+      run_id: legacyArchivePreparationStart.runId,
+      trigger: "legacy-finalize-validation",
+      from_phase: null,
+      started_at: legacyArchivePreparationStart.occurredAt,
+      ended_at: endedAt,
+      status: endedAt === null ? null : "BLOCKED",
+      duration_ms: durationBetween(legacyArchivePreparationStart.occurredAt, endedAt),
+      code: endedAt === null ? null : "ARCHIVE_PREPARE_BLOCKED",
+      message: legacyArchivePreparationEnd === null
+        ? null
+        : payloadText(legacyArchivePreparationEnd.payload, "note"),
+      startCursor: legacyArchivePreparationStart.serverCursor,
+      endCursor: legacyArchivePreparationEnd?.serverCursor ?? null
+    });
   }
 
   return order.map((id) => {

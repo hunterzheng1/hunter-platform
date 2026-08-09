@@ -121,12 +121,7 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
   const copy = COPY[lang];
   const [items, setItems] = useState<KeyItem[] | null>(null);
   const [label, setLabel] = useState("");
-  const [scopes, setScopes] = useState<string[]>([
-    "push",
-    "knowledge:read",
-    "progress:write",
-    "files:read"
-  ]);
+  const [scopes, setScopes] = useState<string[]>([...SCOPES]);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [plaintext, setPlaintext] = useState<string | null>(null);

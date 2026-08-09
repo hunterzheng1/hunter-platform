@@ -169,6 +169,40 @@ describe("run monitoring projection", () => {
     })).toBe("failed");
   });
 
+  it("collapses legacy pre-publish archive validation into the successful archive", () => {
+    const phases = aggregateRunPhases([
+      event(1, "phase.start", "archive", "2026-08-09T22:53:55.179Z", {
+        attempt: 1,
+        note: "finalize operation a-8280e633866e failed before publish"
+      }),
+      event(2, "phase.end", "archive", "2026-08-09T22:53:55.202Z", {
+        attempt: 1,
+        status: "FAIL",
+        note: "finalize operation a-8280e633866e discarded: report adequacy failed"
+      }),
+      event(3, "phase.start", "archive", "2026-08-09T22:58:17.805Z", {
+        attempt: 2,
+        note: "finalize start"
+      }),
+      event(4, "phase.end", "archive", "2026-08-09T22:58:17.951Z", {
+        attempt: 2,
+        status: "WARN",
+        note: "finalize facts complete"
+      })
+    ]);
+
+    expect(phases).toHaveLength(1);
+    expect(phases[0]).toMatchObject({
+      id: "archive",
+      attempt_count: 1,
+      latest_status: "WARN",
+      started_at: "2026-08-09T22:53:55.179Z",
+      ended_at: "2026-08-09T22:58:17.951Z",
+      duration_ms: 262_772,
+      total_duration_ms: 262_772
+    });
+  });
+
   it("projects a closed phase as waiting and a warning archive as completed", () => {
     const waitingPhases = aggregateRunPhases([
       event(1, "phase.start", "plan", "2026-08-09T00:00:00.000Z", { attempt: 1 }),

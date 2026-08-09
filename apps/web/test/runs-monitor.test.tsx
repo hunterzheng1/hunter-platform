@@ -33,10 +33,67 @@ function run(runId: string, title: string, startedAt: string): RunSummary {
 }
 
 describe("RunsMonitor", () => {
-  it("colors reached warning and failed connectors", () => {
+  it("shows an ended warning phase as completed with a separate attention marker", async () => {
+    const completedWithWarning: RunSummary = {
+      ...run("run_warning_handoff", "正常阶段移交", "2026-08-09T14:00:00.000Z"),
+      current_phase: "run",
+      waiting_for_phase: "test",
+      planned_phases: ["plan", "run", "test"],
+      phases: [{
+        id: "run",
+        started_at: "2026-08-09T14:00:00.000Z",
+        ended_at: "2026-08-09T14:04:30.000Z",
+        duration_ms: 270_000,
+        total_duration_ms: 270_000,
+        attempt_count: 1,
+        active_attempt: null,
+        latest_status: "WARN",
+        validity: "current",
+        attempts: [{
+          attempt: 1,
+          run_id: "run_warning_handoff",
+          trigger: null,
+          from_phase: "plan",
+          started_at: "2026-08-09T14:00:00.000Z",
+          ended_at: "2026-08-09T14:04:30.000Z",
+          status: "WARN",
+          duration_ms: 270_000
+        }],
+        preparation_attempt_count: 0,
+        active_preparation: null,
+        blocked_preparation_count: 0,
+        latest_preparation: null,
+        preparations: []
+      }]
+    };
+    const api = {
+      listProjectRuns: vi.fn(async () => ({
+        items: [completedWithWarning], total: 1, next_cursor: null
+      })),
+      listProjectRunEvents: vi.fn(async () => ({ items: [], next_cursor: 0 })),
+      streamProjectRunEvents: vi.fn(async () => ({ abort: vi.fn() }))
+    } as unknown as HunterApi;
+
+    render(<RunsMonitor api={api} projectId="prj_one" />);
+
+    const phase = await waitFor(() => {
+      const node = document.querySelector('.phase-step[data-phase="run"]');
+      expect(node).not.toBeNull();
+      return node as HTMLElement;
+    });
+    expect(phase).toHaveAttribute("data-state", "done");
+    expect(phase).toHaveAttribute("data-attention", "warning");
+    expect(within(phase).getByText("需要注意")).toBeInTheDocument();
+  });
+
+  it("colors a connector green only when its preceding phase is complete", () => {
     const css = readFileSync(resolve(process.cwd(), "apps/web/app/ui-v4.css"), "utf8");
-    expect(css).toMatch(/\.phase-step\[data-state="warning"\]::before[\s\S]*var\(--warn\)/);
-    expect(css).toMatch(/\.phase-step\[data-state="failed"\]::before[\s\S]*var\(--danger\)/);
+    expect(css).toMatch(
+      /\.phase-step\[data-state="done"\]\s*\+\s*\.phase-step::before[\s\S]*var\(--success\)/
+    );
+    for (const state of ["done", "active", "stale", "warning", "failed", "preparing"]) {
+      expect(css).not.toMatch(new RegExp(`\\.phase-step\\[data-state="${state}"\\]::before`));
+    }
   });
 
   it("shows a blocked fixback preparation without changing completed coding time", async () => {

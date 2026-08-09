@@ -81,6 +81,7 @@ type PhaseState = "done" | "active" | "preparing" | "failed" | "warning" | "stal
 interface PhaseStep {
   name: string;
   state: PhaseState;
+  attention?: "warning" | undefined;
   durationMs: number | null;
   attemptCount: number;
   activeAttempt: number | null;
@@ -155,18 +156,20 @@ function derivePhaseSteps(events: RunEventSummary[], run: RunSummary, now: numbe
     }
     if (phase !== undefined) {
       const latestStatus = phase.latest_status?.toUpperCase() ?? null;
+      const hasWarning = latestStatus === "WARN" || latestStatus === "WARNING" ||
+        latestPreparation?.status?.toUpperCase() === "BLOCKED";
       let state: PhaseState;
       if (activeAttempt !== null) state = "active";
       else if (activePreparation !== null) state = "preparing";
       else if (phase.validity === "stale") state = "stale";
       else if (latestStatus === "FAIL" || latestStatus === "ERROR") state = "failed";
-      else if (latestStatus === "WARN" || latestStatus === "WARNING") state = "warning";
-      else if (latestPreparation?.status?.toUpperCase() === "BLOCKED") state = "warning";
       else if (phase.ended_at !== null) state = "done";
+      else if (hasWarning) state = "warning";
       else state = "pending";
       return {
         name,
         state,
+        attention: state === "done" && hasWarning ? "warning" : undefined,
         durationMs,
         attemptCount,
         activeAttempt,
@@ -214,6 +217,7 @@ function derivePhaseSteps(events: RunEventSummary[], run: RunSummary, now: numbe
 
 function formatPhaseDuration(ms: number | null): string | null {
   if (ms === null || !Number.isFinite(ms) || ms < 0) return null;
+  if (ms > 0 && ms < 1000) return "<1s";
   const seconds = Math.round(ms / 1000);
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
@@ -986,10 +990,14 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
                           ? copy.staleAttempts.replace("{n}", String(step.attemptCount))
                           : copy.completedAttempts.replace("{n}", String(step.attemptCount));
                     const stateLabel = copy.phaseStateLabels[step.state] ?? step.state;
+                    const attentionLabel = step.attention === "warning"
+                      ? copy.phaseStateLabels.warning
+                      : null;
                     return (
                       <li
-                        aria-label={`${mapPhase(step.name)}：${stateLabel}${attemptText === null ? "" : `，${attemptText}`}`}
+                        aria-label={`${mapPhase(step.name)}：${stateLabel}${attentionLabel === null ? "" : `，${attentionLabel}`}${attemptText === null ? "" : `，${attemptText}`}`}
                         className={`phase-step phase-${step.name}`}
+                        data-attention={step.attention}
                         data-phase={step.name}
                         data-state={step.state}
                         key={step.name}
@@ -1000,6 +1008,9 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
                         </span>
                         {duration === null ? null : <span className="phase-step-duration">{duration}</span>}
                         {attemptText === null ? null : <span className="phase-step-attempt">{attemptText}</span>}
+                        {attentionLabel === null ? null : (
+                          <span className="phase-step-attention">{attentionLabel}</span>
+                        )}
                       </li>
                     );
                   })}
