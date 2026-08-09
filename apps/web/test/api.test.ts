@@ -227,4 +227,31 @@ describe("Web governance API", () => {
       ".harness/knowledge/project-local/to.md"
     ]);
   });
+
+  it("notifies the caller when an established SSE stream reaches EOF", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.close();
+      }
+    });
+    const api = new HttpHunterApi({
+      baseUrl: "https://console.test",
+      tokenProvider: () => "session-token",
+      fetch: vi.fn(async () => new Response(stream, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" }
+      })) as unknown as typeof globalThis.fetch
+    });
+    const onError = vi.fn();
+
+    const handle = await api.streamProjectRunEvents(
+      "prj_one",
+      "run_one",
+      12,
+      { onEvent: vi.fn(), onError }
+    );
+
+    expect(handle).not.toBeNull();
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+  });
 });

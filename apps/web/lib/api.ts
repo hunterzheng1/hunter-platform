@@ -63,6 +63,21 @@ export interface RunPhaseSummary {
   started_at: string;
   ended_at: string | null;
   duration_ms: number | null;
+  total_duration_ms?: number | null;
+  attempt_count?: number;
+  active_attempt?: number | null;
+  latest_status?: string | null;
+  validity?: "current" | "stale";
+  attempts?: Array<{
+    attempt: number;
+    run_id?: string | null;
+    trigger?: string | null;
+    from_phase?: string | null;
+    started_at: string;
+    ended_at: string | null;
+    status: string | null;
+    duration_ms: number | null;
+  }>;
 }
 
 export interface RunSummary {
@@ -79,6 +94,10 @@ export interface RunSummary {
   last_event_at: string | null;
   last_heartbeat_at: string | null;
   server_cursor: number;
+  active_phase?: string | null;
+  waiting_for_phase?: string | null;
+  workflow_status?: "running" | "waiting" | "completed" | "failed";
+  result_status?: "pending" | "warning" | "success" | "failure";
   phases?: RunPhaseSummary[];
 }
 
@@ -1129,7 +1148,12 @@ export class HttpHunterApi implements HunterApi {
         try {
           while (true) {
             const { done, value } = await reader.read();
-            if (done) break;
+            if (done) {
+              if (!controller.signal.aborted) {
+                handlers.onError?.(new Error("SSE_STREAM_CLOSED"));
+              }
+              break;
+            }
             buffer += decoder.decode(value, { stream: true });
             const chunks = buffer.split("\n\n");
             buffer = chunks.pop() ?? "";

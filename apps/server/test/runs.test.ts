@@ -55,7 +55,9 @@ describe("run monitoring (P4)", () => {
               schema_version: 3,
               timestamp: "2026-08-06T10:00:00Z",
               type: "phase.start",
-              phase: "plan"
+              phase: "plan",
+              summary: "开始梳理登录流程。",
+              raw_output: "must not be stored"
             }
           },
           {
@@ -127,8 +129,10 @@ describe("run monitoring (P4)", () => {
     expect(eventItems).toHaveLength(2);
     expect(eventItems[0]?.payload).toMatchObject({
       schema_version: 3,
-      timestamp: "2026-08-06T10:00:00Z"
+      timestamp: "2026-08-06T10:00:00Z",
+      summary: "开始梳理登录流程。"
     });
+    expect(eventItems[0]?.payload).not.toHaveProperty("raw_output");
   });
 
   it("marks an event-only client offline from the server-observed update time", async () => {
@@ -156,7 +160,7 @@ describe("run monitoring (P4)", () => {
     expect(run.connection_status).toBe("online");
     expect(run.last_heartbeat_at).toBeNull();
 
-    vi.spyOn(Date, "now").mockReturnValue(Date.parse(run.updated_at) + 61_000);
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse(run.updated_at) + 121_000);
     const list = await app.inject({
       method: "GET",
       url: `/api/v1/projects/${projectId}/runs`,
@@ -184,7 +188,7 @@ describe("run monitoring (P4)", () => {
     expect(run.connection_status).toBe("online");
     expect(run.last_heartbeat_at).toBe(new Date(heartbeatAt).toISOString());
 
-    now.mockReturnValue(Date.parse(heartbeatAt) + 20_000);
+    now.mockReturnValue(Date.parse(heartbeatAt) + 50_000);
     const delayed = await app.inject({
       method: "GET",
       url: `/api/v1/projects/${projectId}/runs`,
@@ -192,12 +196,31 @@ describe("run monitoring (P4)", () => {
     });
     expect(delayed.json().items[0].connection_status).toBe("delayed");
 
-    now.mockReturnValue(Date.parse(heartbeatAt) + 61_000);
+    now.mockReturnValue(Date.parse(heartbeatAt) + 121_000);
     const offline = await app.inject({
       method: "GET",
       url: `/api/v1/projects/${projectId}/runs`,
       headers: { authorization: "Bearer api-token" }
     });
     expect(offline.json().items[0].connection_status).toBe("offline");
+  });
+
+  it("promotes a fallback change key to a display title without later downgrade", async () => {
+    const heartbeat = (title: string) => app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectId}/runs/heartbeats`,
+      headers: { authorization: "Bearer api-token" },
+      payload: {
+        protocol_version: "hunter-progress-sync/v1",
+        run_id: "run_title",
+        change_key: "pomodoro-timer",
+        client_time: "2026-08-09T00:00:00Z",
+        title
+      }
+    });
+
+    expect((await heartbeat("pomodoro-timer")).json().run.title).toBe("pomodoro-timer");
+    expect((await heartbeat("番茄钟计时器")).json().run.title).toBe("番茄钟计时器");
+    expect((await heartbeat("pomodoro-timer")).json().run.title).toBe("番茄钟计时器");
   });
 });

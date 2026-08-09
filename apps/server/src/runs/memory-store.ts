@@ -19,7 +19,21 @@ export class MemoryRunStore implements RunStore {
     title?: string;
   }): Promise<RunRecord> {
     const existing = this.runs.get(input.runId);
-    if (existing !== undefined) return existing;
+    if (existing !== undefined) {
+      const candidate = input.title?.trim();
+      if (
+        existing.projectId === input.projectId &&
+        existing.changeKey === input.changeKey &&
+        (existing.title === null || existing.title === existing.changeKey) &&
+        candidate !== undefined &&
+        candidate !== "" &&
+        candidate !== input.changeKey
+      ) {
+        existing.title = candidate;
+        existing.updatedAt = new Date().toISOString();
+      }
+      return existing;
+    }
     const now = new Date().toISOString();
     const record: RunRecord = {
       runId: input.runId,
@@ -111,7 +125,9 @@ export class MemoryRunStore implements RunStore {
         ...event.payload,
         phase: event.phase
       });
-      if (run.runStatus !== "running" && run.endedAt === null) {
+      if (run.runStatus === "running") {
+        run.endedAt = null;
+      } else if (run.endedAt === null) {
         run.endedAt = event.occurredAt;
       }
       run.connectionStatus = "online";

@@ -586,6 +586,14 @@ nav a.active .icon {
   font-size: 12.5px;
 }
 
+.timeline-item .timeline-summary {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
 .timeline-item .timeline-detail {
   margin: 0;
   color: var(--muted);
@@ -602,6 +610,27 @@ nav a.active .icon {
 
 .run-row strong {
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-title-stack {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.run-subtitle {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--muted-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.3;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -707,6 +736,15 @@ button.runs-live-badge:hover {
   display: grid;
   gap: 8px;
   align-content: start;
+  align-self: start;
+  position: sticky;
+  top: 12px;
+}
+
+@media (max-width: 720px) {
+  .runs-list-panel {
+    position: static;
+  }
 }
 
 .runs-list-head {
@@ -903,6 +941,38 @@ button.runs-live-badge:hover {
 .phase-step[data-state="failed"] .phase-step-label {
   color: var(--danger);
   font-weight: 600;
+}
+
+.phase-step[data-state="warning"] .phase-step-dot {
+  background: var(--warn);
+  border-color: var(--warn);
+}
+
+.phase-step[data-state="warning"] .phase-step-label {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+.phase-step[data-state="stale"] .phase-step-dot {
+  background: var(--bg-raised);
+  border-color: var(--warn);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn) 20%, transparent);
+}
+
+.phase-step[data-state="stale"] .phase-step-label {
+  color: var(--warn);
+}
+
+.phase-step-duration,
+.phase-step-attempt {
+  color: var(--muted-dim);
+  font-size: 10px;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.phase-step-attempt {
+  max-width: 96px;
 }
 
 /* ── Workflow catalog (read-only) ── */

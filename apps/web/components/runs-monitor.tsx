@@ -44,6 +44,14 @@ function runSortKey(run: RunSummary): string {
   return run.started_at ?? run.last_event_at ?? "";
 }
 
+function runDisplayTitle(run: RunSummary): string {
+  return run.title?.trim() || run.change_key;
+}
+
+function hasDistinctChangeKey(run: RunSummary): boolean {
+  return runDisplayTitle(run) !== run.change_key;
+}
+
 function durationMs(run: RunSummary, now: number): number | null {
   if (run.started_at === null) return null;
   const start = Date.parse(run.started_at);
@@ -61,12 +69,14 @@ function durationMs(run: RunSummary, now: number): number | null {
 const HARNESS_PHASE_ORDER = ["plan", "run", "test", "review", "package", "apidoc", "submit", "archive"] as const;
 const CONDITIONAL_PHASES = new Set(["package", "apidoc"]);
 
-type PhaseState = "done" | "active" | "failed" | "pending";
+type PhaseState = "done" | "active" | "failed" | "warning" | "stale" | "pending";
 
 interface PhaseStep {
   name: string;
   state: PhaseState;
   durationMs: number | null;
+  attemptCount: number;
+  activeAttempt: number | null;
 }
 
 /**
@@ -77,9 +87,7 @@ interface PhaseStep {
 function derivePhaseSteps(events: RunEventSummary[], run: RunSummary): PhaseStep[] {
   const failed = run.run_status === "failed" || run.run_status === "error";
   const finished = ["succeeded", "completed", "complete"].includes(run.run_status);
-  const durationByPhase = new Map(
-    (run.phases ?? []).map((phase) => [phase.id, phase.duration_ms])
-  );
+  const phaseByName = new Map((run.phases ?? []).map((phase) => [phase.id, phase]));
 
   const observed = new Set<string>();
   let lastSeen: string | null = null;
@@ -102,8 +110,22 @@ function derivePhaseSteps(events: RunEventSummary[], run: RunSummary): PhaseStep
     : (template as readonly string[]).indexOf(currentName);
 
   return template.map((name, index) => {
-    const durationMs = durationByPhase.get(name) ?? null;
-    if (finished) return { name, state: "done" as const, durationMs };
+    const phase = phaseByName.get(name);
+    const durationMs = phase?.total_duration_ms ?? phase?.duration_ms ?? null;
+    const attemptCount = phase?.attempt_count ?? phase?.attempts?.length ?? (phase === undefined ? 0 : 1);
+    const activeAttempt = phase?.active_attempt ?? null;
+    if (phase !== undefined) {
+      const latestStatus = phase.latest_status?.toUpperCase() ?? null;
+      let state: PhaseState;
+      if (activeAttempt !== null) state = "active";
+      else if (phase.validity === "stale") state = "stale";
+      else if (latestStatus === "FAIL" || latestStatus === "ERROR") state = "failed";
+      else if (latestStatus === "WARN" || latestStatus === "WARNING") state = "warning";
+      else if (phase.ended_at !== null) state = "done";
+      else state = "pending";
+      return { name, state, durationMs, attemptCount, activeAttempt };
+    }
+    if (finished) return { name, state: "done" as const, durationMs, attemptCount, activeAttempt };
     let state: PhaseState;
     if (currentIndex === -1) {
       // 还没有任何阶段上报：运行中则第一个阶段视为进行中，否则全部未开始
@@ -115,7 +137,7 @@ function derivePhaseSteps(events: RunEventSummary[], run: RunSummary): PhaseStep
     } else {
       state = "pending";
     }
-    return { name, state, durationMs };
+    return { name, state, durationMs, attemptCount, activeAttempt };
   });
 }
 
@@ -159,10 +181,13 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
     let succeeded = 0;
     let failed = 0;
     for (const run of runs) {
-      const tone = statusTone(run.run_status);
-      if (tone === "info" || tone === "warning") running += 1;
-      else if (tone === "success") succeeded += 1;
-      else if (tone === "danger") failed += 1;
+      if (run.workflow_status === "failed" || run.result_status === "failure" || ["failed", "error"].includes(run.run_status)) {
+        failed += 1;
+      } else if (run.workflow_status === "completed" || ["succeeded", "completed", "complete", "partial"].includes(run.run_status)) {
+        succeeded += 1;
+      } else {
+        running += 1;
+      }
     }
     return { total: runs.length, running, succeeded, failed };
   }, [runs]);
@@ -170,6 +195,12 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
   const phaseSteps = useMemo(
     () => (selected === null ? [] : derivePhaseSteps(events, selected)),
     [events, selected]
+  );
+  const timelineEvents = useMemo(
+    () => [...events].sort((left, right) =>
+      right.server_cursor - left.server_cursor || right.event_id.localeCompare(left.event_id)
+    ),
+    [events]
   );
 
   function mapStatus(value: string): string {
@@ -179,6 +210,51 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
 
   function mapPhase(value: string): string {
     return copy.phaseNames[value] ?? mapStatus(value);
+  }
+
+  function connectionLabel(value: string): string {
+    return copy.connectionLabels[value] ?? mapStatus(value);
+  }
+
+  function runStateLabel(run: RunSummary): string {
+    if (run.workflow_status === "waiting") {
+      const completed = run.current_phase === null ? copy.phase : mapPhase(run.current_phase);
+      const waiting = run.waiting_for_phase === null || run.waiting_for_phase === undefined
+        ? copy.nextPhase
+        : mapPhase(run.waiting_for_phase);
+      return copy.phaseWaiting.replace("{completed}", completed).replace("{next}", waiting);
+    }
+    if (run.workflow_status === "completed" && run.current_phase === "archive") {
+      return run.result_status === "warning" ? copy.archivedWarning : copy.archived;
+    }
+    const activePhase = run.active_phase ?? run.current_phase;
+    if (run.workflow_status === "running" && activePhase !== null) {
+      const phase = run.phases?.find((item) => item.id === activePhase);
+      const suffix = (phase?.active_attempt ?? phase?.attempt_count ?? 1) > 1
+        ? copy.attemptNumber.replace("{n}", String(phase?.active_attempt ?? phase?.attempt_count ?? 1))
+        : "";
+      return `${mapPhase(activePhase)}${copy.inProgress}${suffix}`;
+    }
+    return mapStatus(run.run_status);
+  }
+
+  function runListStateLabel(run: RunSummary): string {
+    if (run.workflow_status === "waiting") {
+      return run.waiting_for_phase === null || run.waiting_for_phase === undefined
+        ? copy.waitingShort
+        : copy.waitingPhaseShort.replace("{phase}", mapPhase(run.waiting_for_phase));
+    }
+    if (run.workflow_status === "completed" && run.current_phase === "archive") {
+      return run.result_status === "warning" ? copy.archivedWarningShort : copy.archived;
+    }
+    if (run.workflow_status === "running") return runStateLabel(run);
+    return mapStatus(run.run_status);
+  }
+
+  function runListDetailLabel(run: RunSummary): string {
+    if (run.workflow_status === "waiting") return copy.phaseCompletedShort;
+    if (run.connection_status === "closed") return copy.workflowEndedShort;
+    return connectionLabel(run.connection_status);
   }
 
   function formatTime(value: string | null): string {
@@ -208,6 +284,62 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
     }
     const hours = Math.floor(minutes / 60);
     return copy.durationHours.replace("{h}", String(hours)).replace("{m}", String(minutes % 60));
+  }
+
+  function eventDescription(event: RunEventSummary): string {
+    const text = (key: string): string => {
+      const value = event.payload[key];
+      return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, 500) : "";
+    };
+    const summary = text("summary");
+    if (summary !== "") return summary;
+
+    const phaseName = event.phase === null ? copy.currentPhase : mapPhase(event.phase);
+    const note = text("note");
+    const message = text("message");
+    const decision = text("decision");
+    const reason = text("reason");
+    const name = text("name");
+    const code = text("code");
+    const status = text("status");
+    if (event.event_type === "decision" && decision !== "") {
+      return reason === "" ? decision : copy.decisionReason.replace("{decision}", decision).replace("{reason}", reason);
+    }
+    if (event.event_type === "issue" || event.event_type === "issue.resolve") {
+      const issue = message || note || code;
+      if (issue !== "") return issue;
+    }
+    if (event.event_type === "phase.start" && note !== "") {
+      return copy.phaseStartedDetail.replace("{phase}", phaseName).replace("{detail}", note);
+    }
+    if ((event.event_type === "phase.end" || event.event_type === "phase.auto_sealed") && (note || status)) {
+      return copy.phaseEndedDetail.replace("{phase}", phaseName).replace("{detail}", note || status);
+    }
+    const detail = note || message || name || reason || code;
+    if (detail !== "") return detail;
+    const fallback = (copy.eventFallbacks as Record<string, string>)[event.event_type] ?? copy.eventFallback;
+    return fallback.replace("{phase}", phaseName);
+  }
+
+  function eventExecutionLabel(event: RunEventSummary): string | null {
+    const agent = typeof event.payload.executor_agent === "string"
+      ? event.payload.executor_agent.trim()
+      : "";
+    const mode = typeof event.payload.execution_mode === "string"
+      ? event.payload.execution_mode.trim()
+      : "";
+    const reasonCode = typeof event.payload.decision_reason_code === "string"
+      ? event.payload.decision_reason_code.trim()
+      : typeof event.payload.fallback_reason_code === "string"
+        ? event.payload.fallback_reason_code.trim()
+        : "";
+    if (agent !== "") return copy.delegatedTo.replace("{agent}", agent);
+    if (mode === "inline") {
+      return reasonCode === ""
+        ? copy.inlineReview
+        : copy.inlineReviewReason.replace("{reason}", reasonCode);
+    }
+    return null;
   }
 
   const refreshProjects = useCallback(async () => {
@@ -318,7 +450,8 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
     const streamProjectRunEvents = client.streamProjectRunEvents?.bind(client);
     const getProjectRun = client.getProjectRun?.bind(client);
     let cancelled = false;
-    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let reconcileTimer: ReturnType<typeof setInterval> | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
     let cursor = 0;
 
     async function pollOnce(): Promise<void> {
@@ -346,10 +479,11 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
       }
     }
 
-    function startPolling(): void {
-      if (cancelled || pollTimer !== null) return;
-      setLiveMode("poll");
-      pollTimer = setInterval(() => { void pollOnce(); }, 3000);
+    function scheduleReconnect(): void {
+      if (cancelled || retryTimer !== null) return;
+      retryTimer = setTimeout(() => {
+        if (!cancelled) setStreamNonce((nonce) => nonce + 1);
+      }, 6000);
     }
 
     async function loadInitialAndStream(): Promise<void> {
@@ -358,6 +492,8 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
         if (cancelled) return;
         setEvents(result.items);
         cursor = result.next_cursor;
+        // SSE 负责低延迟推送；轻量轮询负责游标对账，能补回静默断流期间遗漏的事件。
+        reconcileTimer = setInterval(() => { void pollOnce(); }, 3000);
 
         if (streamProjectRunEvents !== undefined) {
           const handle = await streamProjectRunEvents(
@@ -378,9 +514,11 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
                 ));
               },
               onError: () => {
+                if (cancelled) return;
                 streamAbortRef.current?.();
                 streamAbortRef.current = null;
-                startPolling();
+                setLiveMode("poll");
+                scheduleReconnect();
               }
             }
           );
@@ -389,20 +527,20 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
             return;
           }
           if (handle !== null) {
-            if (pollTimer !== null) {
-              handle.abort();
-              return;
-            }
             streamAbortRef.current = handle.abort;
             setLiveMode("sse");
             return;
           }
         }
 
-        startPolling();
+        setLiveMode("poll");
+        scheduleReconnect();
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof ApiClientError ? err.message : copy.networkError);
+          setLiveMode("poll");
+          reconcileTimer ??= setInterval(() => { void pollOnce(); }, 3000);
+          scheduleReconnect();
         }
       }
     }
@@ -413,15 +551,16 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
       cancelled = true;
       streamAbortRef.current?.();
       streamAbortRef.current = null;
-      if (pollTimer !== null) clearInterval(pollTimer);
+      if (reconcileTimer !== null) clearInterval(reconcileTimer);
+      if (retryTimer !== null) clearTimeout(retryTimer);
     };
   }, [client, copy.networkError, projectId, selectedRunId, streamNonce]);
 
-  // 新事件到达时滚动到底部
+  // 最新事件置顶；切换运行或收到新事件时回到顶部。
   useEffect(() => {
     const node = timelineRef.current;
-    if (node !== null) node.scrollTop = node.scrollHeight;
-  }, [events.length]);
+    if (node !== null) node.scrollTop = 0;
+  }, [events.length, selectedRunId]);
 
   const liveBadge = liveMode === "idle" ? null : liveMode === "sse" ? (
     <span className="runs-live-badge sse" title={copy.liveSseHint}>
@@ -488,9 +627,12 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
               type="button"
               className="icon-button"
               disabled={busy || projectId === ""}
-              title={copy.refresh}
-              aria-label={copy.refresh}
-              onClick={() => void refreshRuns(projectId)}
+              title={copy.refreshAll}
+              aria-label={copy.refreshAll}
+              onClick={() => {
+                void refreshRuns(projectId);
+                setStreamNonce((nonce) => nonce + 1);
+              }}
             >
               {busy ? <Spinner size={13} label={copy.loading} /> : <Icon name="refresh" size={13} />}
             </button>
@@ -502,6 +644,7 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
               {runs.map((run) => {
                 const tone = statusTone(run.run_status);
                 const duration = formatDuration(run);
+                const title = runDisplayTitle(run);
                 return (
                   <li key={run.run_id}>
                     <button
@@ -511,11 +654,18 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
                     >
                       <span className="run-row">
                         <i className={`run-dot run-dot-${tone}`} aria-hidden="true" />
-                        <strong>{run.title ?? run.change_key}</strong>
+                        <span className="run-title-stack">
+                          <strong title={title}>{title}</strong>
+                          {hasDistinctChangeKey(run) ? (
+                            <span className="run-subtitle" title={run.change_key}>
+                              {run.change_key}
+                            </span>
+                          ) : null}
+                        </span>
                       </span>
                       <span className="run-meta">
-                        <span className={`run-chip run-chip-${tone}`}>{mapStatus(run.run_status)}</span>
-                        <span>{mapStatus(run.sync_completeness)}</span>
+                        <span className={`run-chip run-chip-${tone}`}>{runListStateLabel(run)}</span>
+                        <span>{runListDetailLabel(run)}</span>
                       </span>
                       <span className="run-meta run-time">
                         <time dateTime={run.started_at ?? undefined}>{formatDateTime(run.started_at ?? run.last_event_at)}</time>
@@ -536,16 +686,28 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
             <>
               <div className="runs-detail-head">
                 <div>
-                  <h2>{selected.title ?? selected.change_key}</h2>
-                  <p className="runs-mono">{selected.run_id}</p>
+                  <h2>{runDisplayTitle(selected)}</h2>
+                  <p className="runs-mono">
+                    {hasDistinctChangeKey(selected)
+                      ? `${selected.change_key} · ${selected.run_id}`
+                      : selected.run_id}
+                  </p>
                 </div>
                 {liveBadge}
               </div>
               <div className="runs-status-grid">
-                <StatusChip label={copy.runStatus} value={mapStatus(selected.run_status)} tone={statusTone(selected.run_status)} />
-                <StatusChip label={copy.connection} value={mapStatus(selected.connection_status)} tone={statusTone(selected.connection_status)} />
+                <StatusChip label={copy.runStatus} value={runStateLabel(selected)} tone={statusTone(selected.run_status)} />
+                <StatusChip label={copy.connection} value={connectionLabel(selected.connection_status)} tone={statusTone(selected.connection_status)} />
                 <StatusChip label={copy.sync} value={mapStatus(selected.sync_completeness)} tone={statusTone(selected.sync_completeness)} />
-                <StatusChip label={copy.phase} value={selected.current_phase === null ? "—" : mapPhase(selected.current_phase)} tone="neutral" />
+                <StatusChip
+                  label={copy.phase}
+                  value={selected.active_phase !== null && selected.active_phase !== undefined
+                    ? mapPhase(selected.active_phase)
+                    : selected.workflow_status === "waiting"
+                      ? copy.waitingForNext
+                      : selected.current_phase === null ? "—" : mapPhase(selected.current_phase)}
+                  tone={selected.workflow_status === "waiting" ? "info" : "neutral"}
+                />
               </div>
               <div className="runs-meta">
                 <span>{copy.startedAt} <strong>{formatDateTime(selected.started_at)}</strong></span>
@@ -559,11 +721,21 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
                 <ol className="phase-steps">
                   {phaseSteps.map((step) => {
                     const duration = formatPhaseDuration(step.durationMs);
+                    const attemptText = step.attemptCount === 0
+                      ? null
+                      : step.state === "active"
+                        ? copy.runningAttempt.replace("{n}", String(step.activeAttempt ?? step.attemptCount))
+                        : step.state === "stale"
+                          ? copy.staleAttempts.replace("{n}", String(step.attemptCount))
+                          : copy.completedAttempts.replace("{n}", String(step.attemptCount));
                     return (
                       <li className="phase-step" data-state={step.state} key={step.name}>
                         <span className="phase-step-dot" aria-hidden="true" />
-                        <span className="phase-step-label">{mapPhase(step.name)}</span>
+                        <span className="phase-step-label">
+                          {mapPhase(step.name)}{step.attemptCount > 1 ? ` ×${step.attemptCount}` : ""}
+                        </span>
                         {duration === null ? null : <span className="phase-step-duration">{duration}</span>}
+                        {attemptText === null ? null : <span className="phase-step-attempt">{attemptText}</span>}
                       </li>
                     );
                   })}
@@ -627,13 +799,17 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
                   </div>
                   <div className="log-panel-body runs-timeline-scroll" ref={timelineRef}>
                     <ol className="timeline">
-                      {events.map((event) => (
+                      {timelineEvents.map((event) => (
                         <li className={`timeline-item timeline-${eventTone(event)}`} key={event.event_id}>
                           <div className="timeline-meta">
                             <time dateTime={event.occurred_at}>{formatTime(event.occurred_at)}</time>
                             <span className="timeline-title">{copy.eventTypes[event.event_type] ?? event.event_type}</span>
                           </div>
+                          <p className="timeline-summary">{eventDescription(event)}</p>
                           {event.phase === null ? null : <p className="timeline-detail">{copy.phaseLabel} · {mapPhase(event.phase)}</p>}
+                          {eventExecutionLabel(event) === null ? null : (
+                            <p className="timeline-detail">{eventExecutionLabel(event)}</p>
+                          )}
                         </li>
                       ))}
                     </ol>
@@ -687,6 +863,7 @@ const COPY = {
     project: "项目",
     noProjects: "暂无项目",
     refresh: "刷新",
+    refreshAll: "刷新运行与事件",
     loading: "加载中…",
     empty: "尚无上报的运行记录。",
     selectHint: "选择左侧运行记录查看时间线。",
@@ -700,6 +877,28 @@ const COPY = {
     connection: "连接状态",
     sync: "同步完整性",
     phase: "当前阶段",
+    nextPhase: "下一阶段",
+    phaseWaiting: "{completed}已结束 · 等待{next}",
+    archived: "已归档",
+    archivedWarning: "已归档（有警告）",
+    archivedWarningShort: "归档有警告",
+    waitingShort: "等待继续",
+    waitingPhaseShort: "等待{phase}",
+    phaseCompletedShort: "上一阶段已完成",
+    workflowEndedShort: "流程已结束",
+    inProgress: "中",
+    attemptNumber: " · 第 {n} 次",
+    waitingForNext: "等待下一阶段",
+    runningAttempt: "正在执行第 {n} 次",
+    completedAttempts: "已完成 {n} 次",
+    staleAttempts: "已执行 {n} 次 · 待重新验证",
+    connectionLabels: {
+      online: "上报正常",
+      delayed: "上报延迟",
+      offline: "上报中断",
+      idle: "等待新阶段",
+      closed: "已结束"
+    } as Record<string, string>,
     startedAt: "开始",
     endedAt: "结束",
     durationLabel: "时长",
@@ -733,6 +932,31 @@ const COPY = {
     networkError: "无法连接到服务器。",
     eventsCount: "{count} 条事件",
     phaseLabel: "阶段",
+    currentPhase: "当前阶段",
+    decisionReason: "{decision}；原因：{reason}",
+    phaseStartedDetail: "开始执行{phase}阶段：{detail}",
+    phaseEndedDetail: "{phase}阶段已结束：{detail}",
+    delegatedTo: "隔离审查 · {agent}",
+    inlineReview: "主会话审查",
+    inlineReviewReason: "主会话审查 · {reason}",
+    eventFallback: "记录了一项运行事件。",
+    eventFallbacks: {
+      "phase.start": "开始执行{phase}阶段。",
+      "phase.end": "{phase}阶段已结束。",
+      "phase.auto_sealed": "{phase}阶段已自动封存。",
+      "command": "执行了一项工作步骤。",
+      "verification": "完成了一项结果验证。",
+      "artifact": "生成或更新了一项交付内容。",
+      "issue": "发现一项需要处理的问题。",
+      "issue.resolve": "解决了此前记录的问题。",
+      "decision": "记录了一项执行决策。",
+      "correction": "根据当前结果调整了执行方式。",
+      "change.rename": "更新了变更名称。",
+      "recovery": "恢复了中断的运行状态。",
+      "phase.recovery": "恢复了中断的阶段状态。",
+      "attempt.recovery": "恢复了中断的执行尝试。",
+      "heartbeat": "客户端保持在线，并同步了最新运行状态。"
+    } as Record<string, string>,
     durationSeconds: "{n} 秒",
     durationMinutes: "{n} 分钟",
     durationMinutesSeconds: "{m} 分 {s} 秒",
@@ -772,6 +996,7 @@ const COPY = {
     project: "Project",
     noProjects: "No projects",
     refresh: "Refresh",
+    refreshAll: "Refresh runs and events",
     loading: "Loading…",
     empty: "No runs have been reported yet.",
     selectHint: "Select a run to inspect its timeline.",
@@ -785,6 +1010,28 @@ const COPY = {
     connection: "Connection",
     sync: "Sync completeness",
     phase: "Current phase",
+    nextPhase: "the next phase",
+    phaseWaiting: "{completed} finished · waiting for {next}",
+    archived: "Archived",
+    archivedWarning: "Archived with warnings",
+    archivedWarningShort: "Archive warning",
+    waitingShort: "Waiting",
+    waitingPhaseShort: "Waiting for {phase}",
+    phaseCompletedShort: "Previous phase complete",
+    workflowEndedShort: "Workflow ended",
+    inProgress: " in progress",
+    attemptNumber: " · attempt {n}",
+    waitingForNext: "Waiting for next phase",
+    runningAttempt: "Running attempt {n}",
+    completedAttempts: "Completed {n} times",
+    staleAttempts: "Ran {n} times · revalidation required",
+    connectionLabels: {
+      online: "Reporting normally",
+      delayed: "Reporting delayed",
+      offline: "Reporting interrupted",
+      idle: "Waiting for next phase",
+      closed: "Ended"
+    } as Record<string, string>,
     startedAt: "Started",
     endedAt: "Ended",
     durationLabel: "Duration",
@@ -818,6 +1065,31 @@ const COPY = {
     networkError: "Unable to reach the server.",
     eventsCount: "{count} events",
     phaseLabel: "phase",
+    currentPhase: "the current",
+    decisionReason: "{decision}; reason: {reason}",
+    phaseStartedDetail: "Started the {phase} phase: {detail}",
+    phaseEndedDetail: "The {phase} phase finished: {detail}",
+    delegatedTo: "Delegated review · {agent}",
+    inlineReview: "Inline review",
+    inlineReviewReason: "Inline review · {reason}",
+    eventFallback: "A run event was recorded.",
+    eventFallbacks: {
+      "phase.start": "Started the {phase} phase.",
+      "phase.end": "The {phase} phase finished.",
+      "phase.auto_sealed": "The {phase} phase was auto-sealed.",
+      "command": "A work step was executed.",
+      "verification": "A result was verified.",
+      "artifact": "A deliverable was created or updated.",
+      "issue": "An issue requiring attention was found.",
+      "issue.resolve": "A previously recorded issue was resolved.",
+      "decision": "An execution decision was recorded.",
+      "correction": "The execution approach was adjusted.",
+      "change.rename": "The change name was updated.",
+      "recovery": "The interrupted run state was restored.",
+      "phase.recovery": "The interrupted phase state was restored.",
+      "attempt.recovery": "The interrupted attempt was restored.",
+      "heartbeat": "The client stayed online and synced its latest state."
+    } as Record<string, string>,
     durationSeconds: "{n}s",
     durationMinutes: "{n}m",
     durationMinutesSeconds: "{m}m {s}s",

@@ -61,7 +61,25 @@ export class PgRunStore implements RunStore {
     const result = await this.pool.query(
       `INSERT INTO runs(run_id, project_id, change_key, title, started_at)
        VALUES ($1, $2, $3, $4, now())
-       ON CONFLICT (run_id) DO UPDATE SET updated_at = runs.updated_at
+       ON CONFLICT (run_id) DO UPDATE SET
+         title = CASE
+           WHEN runs.project_id = EXCLUDED.project_id
+             AND runs.change_key = EXCLUDED.change_key
+             AND (runs.title IS NULL OR runs.title = runs.change_key)
+             AND EXCLUDED.title IS NOT NULL
+             AND EXCLUDED.title <> EXCLUDED.change_key
+           THEN EXCLUDED.title
+           ELSE runs.title
+         END,
+         updated_at = CASE
+           WHEN runs.project_id = EXCLUDED.project_id
+             AND runs.change_key = EXCLUDED.change_key
+             AND (runs.title IS NULL OR runs.title = runs.change_key)
+             AND EXCLUDED.title IS NOT NULL
+             AND EXCLUDED.title <> EXCLUDED.change_key
+           THEN now()
+           ELSE runs.updated_at
+         END
        RETURNING *`,
       [input.runId, input.projectId, input.changeKey, input.title ?? input.changeKey]
     );
@@ -150,6 +168,7 @@ export class PgRunStore implements RunStore {
              current_phase = COALESCE($4, current_phase),
              run_status = $5,
              ended_at = CASE
+               WHEN $5 = 'running' THEN NULL
                WHEN $5 <> 'running' AND ended_at IS NULL THEN $3::timestamptz
                ELSE ended_at
              END,
