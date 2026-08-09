@@ -1027,13 +1027,37 @@ button.runs-live-badge:hover {
   font-weight: 600;
 }
 
+.phase-step[data-state="failed"]::before {
+  background: color-mix(in srgb, var(--danger) 55%, var(--line));
+}
+
 .phase-step[data-state="warning"] .phase-step-dot {
   background: var(--warn);
   border-color: var(--warn);
 }
 
+.phase-step[data-state="warning"]::before {
+  background: color-mix(in srgb, var(--warn) 55%, var(--line));
+}
+
 .phase-step[data-state="warning"] .phase-step-label {
   color: var(--warn);
+  font-weight: 600;
+}
+
+.phase-step[data-state="preparing"] .phase-step-dot {
+  background: var(--bg-raised);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+  animation: run-pulse 1.6s var(--ease-out) infinite;
+}
+
+.phase-step[data-state="preparing"]::before {
+  background: color-mix(in srgb, var(--accent) 40%, var(--line));
+}
+
+.phase-step[data-state="preparing"] .phase-step-label {
+  color: var(--accent);
   font-weight: 600;
 }
 
@@ -1057,6 +1081,35 @@ button.runs-live-badge:hover {
 
 .phase-step-attempt {
   max-width: 96px;
+}
+
+.phase-preparation {
+  display: grid;
+  gap: 4px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.phase-preparation strong {
+  color: var(--accent);
+}
+
+.phase-preparation small {
+  color: var(--muted-dim);
+}
+
+.phase-preparation.is-blocked {
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--line));
+  background: color-mix(in srgb, var(--warn) 7%, var(--panel));
+}
+
+.phase-preparation.is-blocked strong {
+  color: var(--warn);
 }
 
 /* ── Workflow catalog (read-only) ── */

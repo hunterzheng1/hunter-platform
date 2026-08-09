@@ -67,7 +67,12 @@ export interface RunPhaseSummary {
   attempt_count?: number;
   active_attempt?: number | null;
   latest_status?: string | null;
-  validity?: "current" | "stale";
+  preparation_attempt_count?: number;
+  active_preparation?: number | null;
+  blocked_preparation_count?: number;
+  latest_preparation?: RunPhasePreparationSummary | null;
+  preparations?: RunPhasePreparationSummary[];
+  validity?: "current" | "stale" | "pending" | "unknown";
   attempts?: Array<{
     attempt: number;
     run_id?: string | null;
@@ -78,6 +83,19 @@ export interface RunPhaseSummary {
     status: string | null;
     duration_ms: number | null;
   }>;
+}
+
+export interface RunPhasePreparationSummary {
+  attempt: number;
+  run_id?: string | null;
+  trigger?: string | null;
+  from_phase?: string | null;
+  started_at: string;
+  ended_at: string | null;
+  status: string | null;
+  duration_ms: number | null;
+  code: string | null;
+  message: string | null;
 }
 
 export interface RunSummary {
@@ -95,8 +113,9 @@ export interface RunSummary {
   last_heartbeat_at: string | null;
   server_cursor: number;
   active_phase?: string | null;
+  preparing_phase?: string | null;
   waiting_for_phase?: string | null;
-  workflow_status?: "running" | "waiting" | "completed" | "failed" | "abandoned" | "superseded";
+  workflow_status?: "running" | "preparing" | "waiting" | "completed" | "failed" | "abandoned" | "superseded";
   result_status?: "pending" | "warning" | "success" | "failure";
   planned_phases?: string[] | null;
   skipped_phases?: unknown[];

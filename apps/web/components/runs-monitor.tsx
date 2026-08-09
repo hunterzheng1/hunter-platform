@@ -8,6 +8,7 @@ import {
   type HunterApi,
   type ProjectSummary,
   type RunEventSummary,
+  type RunPhasePreparationSummary,
   type RunSummary
 } from "../lib/api";
 import { useI18n } from "../lib/i18n";
@@ -26,7 +27,7 @@ function statusTone(value: string): Tone {
   if (["succeeded", "complete", "online", "completed"].includes(value)) return "success";
   if (["failed", "error"].includes(value)) return "danger";
   if (["partial", "queued", "pending", "offline", "delayed"].includes(value)) return "warning";
-  if (value === "running") return "info";
+  if (value === "running" || value === "preparing") return "info";
   return "neutral";
 }
 
@@ -75,7 +76,7 @@ function durationMs(run: RunSummary, now: number): number | null {
 const HARNESS_PHASE_ORDER = ["plan", "run", "test", "review", "package", "apidoc", "submit", "archive"] as const;
 const CONDITIONAL_PHASES = new Set(["package", "apidoc"]);
 
-type PhaseState = "done" | "active" | "failed" | "warning" | "stale" | "pending";
+type PhaseState = "done" | "active" | "preparing" | "failed" | "warning" | "stale" | "pending";
 
 interface PhaseStep {
   name: string;
@@ -83,6 +84,23 @@ interface PhaseStep {
   durationMs: number | null;
   attemptCount: number;
   activeAttempt: number | null;
+  preparationAttemptCount: number;
+  activePreparation: number | null;
+  blockedPreparationCount: number;
+  latestPreparation: RunPhasePreparationSummary | null;
+}
+
+function latestRunPreparation(run: RunSummary): {
+  phase: string;
+  preparation: RunPhasePreparationSummary;
+} | null {
+  const candidates = (run.phases ?? []).flatMap((phase) => {
+    const preparation = phase.latest_preparation;
+    return preparation === null || preparation === undefined ? [] : [{ phase: phase.id, preparation }];
+  });
+  return candidates.sort((left, right) =>
+    right.preparation.started_at.localeCompare(left.preparation.started_at)
+  )[0] ?? null;
 }
 
 /**
@@ -123,6 +141,10 @@ function derivePhaseSteps(events: RunEventSummary[], run: RunSummary, now: numbe
     let durationMs = phase?.total_duration_ms ?? phase?.duration_ms ?? null;
     const attemptCount = phase?.attempt_count ?? phase?.attempts?.length ?? (phase === undefined ? 0 : 1);
     const activeAttempt = phase?.active_attempt ?? null;
+    const preparationAttemptCount = phase?.preparation_attempt_count ?? phase?.preparations?.length ?? 0;
+    const activePreparation = phase?.active_preparation ?? null;
+    const blockedPreparationCount = phase?.blocked_preparation_count ?? 0;
+    const latestPreparation = phase?.latest_preparation ?? null;
     if (phase !== undefined && activeAttempt !== null) {
       const attempt = phase.attempts?.find((item) => item.attempt === activeAttempt);
       const startedAt = attempt?.started_at ?? phase.started_at;
@@ -135,14 +157,36 @@ function derivePhaseSteps(events: RunEventSummary[], run: RunSummary, now: numbe
       const latestStatus = phase.latest_status?.toUpperCase() ?? null;
       let state: PhaseState;
       if (activeAttempt !== null) state = "active";
+      else if (activePreparation !== null) state = "preparing";
       else if (phase.validity === "stale") state = "stale";
       else if (latestStatus === "FAIL" || latestStatus === "ERROR") state = "failed";
       else if (latestStatus === "WARN" || latestStatus === "WARNING") state = "warning";
+      else if (latestPreparation?.status?.toUpperCase() === "BLOCKED") state = "warning";
       else if (phase.ended_at !== null) state = "done";
       else state = "pending";
-      return { name, state, durationMs, attemptCount, activeAttempt };
+      return {
+        name,
+        state,
+        durationMs,
+        attemptCount,
+        activeAttempt,
+        preparationAttemptCount,
+        activePreparation,
+        blockedPreparationCount,
+        latestPreparation
+      };
     }
-    if (finished) return { name, state: "done" as const, durationMs, attemptCount, activeAttempt };
+    if (finished) return {
+      name,
+      state: "done" as const,
+      durationMs,
+      attemptCount,
+      activeAttempt,
+      preparationAttemptCount,
+      activePreparation,
+      blockedPreparationCount,
+      latestPreparation
+    };
     let state: PhaseState;
     if (currentIndex === -1) {
       // 还没有任何阶段上报：运行中则第一个阶段视为进行中，否则全部未开始
@@ -154,7 +198,17 @@ function derivePhaseSteps(events: RunEventSummary[], run: RunSummary, now: numbe
     } else {
       state = "pending";
     }
-    return { name, state, durationMs, attemptCount, activeAttempt };
+    return {
+      name,
+      state,
+      durationMs,
+      attemptCount,
+      activeAttempt,
+      preparationAttemptCount,
+      activePreparation,
+      blockedPreparationCount,
+      latestPreparation
+    };
   });
 }
 
@@ -206,9 +260,13 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
   const timelineRef = useRef<HTMLDivElement>(null);
 
   const selected = runs.find((run) => run.run_id === selectedRunId) ?? null;
+  const selectedPreparation = selected === null ? null : latestRunPreparation(selected);
   const clockRunning = selected !== null && (
     selected.active_phase !== null && selected.active_phase !== undefined ||
-    selected.phases?.some((phase) => phase.active_attempt !== null) === true
+    selected.preparing_phase !== null && selected.preparing_phase !== undefined ||
+    selected.phases?.some((phase) =>
+      phase.active_attempt !== null || phase.active_preparation !== null
+    ) === true
   );
 
   const stats = useMemo(() => {
@@ -257,6 +315,13 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
   function runStateLabel(run: RunSummary): string {
     if (run.workflow_status === "abandoned") return copy.abandoned;
     if (run.workflow_status === "superseded") return copy.superseded;
+    const preparation = latestRunPreparation(run);
+    if (run.workflow_status === "preparing" || preparation?.preparation.ended_at === null) {
+      return copy.preparingFix.replace("{n}", String(preparation?.preparation.attempt ?? 1));
+    }
+    if (preparation?.preparation.status?.toUpperCase() === "BLOCKED") {
+      return copy.fixbackNotStarted;
+    }
     if (run.workflow_status === "waiting") {
       const completed = run.current_phase === null ? copy.phase : mapPhase(run.current_phase);
       if (run.waiting_for_phase === null || run.waiting_for_phase === undefined) {
@@ -282,6 +347,13 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
   function runListStateLabel(run: RunSummary): string {
     if (run.workflow_status === "abandoned") return copy.abandoned;
     if (run.workflow_status === "superseded") return copy.superseded;
+    const preparation = latestRunPreparation(run);
+    if (run.workflow_status === "preparing" || preparation?.preparation.ended_at === null) {
+      return copy.preparingFixShort;
+    }
+    if (preparation?.preparation.status?.toUpperCase() === "BLOCKED") {
+      return copy.fixbackNotStarted;
+    }
     if (run.workflow_status === "waiting") {
       return run.waiting_for_phase === null || run.waiting_for_phase === undefined
         ? copy.phaseEndedShort
@@ -295,6 +367,13 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
   }
 
   function runListDetailLabel(run: RunSummary): string {
+    const preparation = latestRunPreparation(run);
+    if (run.workflow_status === "preparing" || preparation?.preparation.ended_at === null) {
+      return copy.preparingAttempt.replace("{n}", String(preparation?.preparation.attempt ?? 1));
+    }
+    if (preparation?.preparation.status?.toUpperCase() === "BLOCKED") {
+      return copy.preparationBlockedShort;
+    }
     if (run.workflow_status === "waiting") return copy.phaseCompletedShort;
     if (run.connection_status === "closed") return copy.workflowEndedShort;
     return connectionLabel(run.connection_status);
@@ -345,6 +424,12 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
         .replace(/^[；;，,]+|[；;，,]+$/g, "")
         .trim();
     };
+    const rawReviewText = ["summary", "note", "decision", "reason", "message"]
+      .map((key) => typeof event.payload[key] === "string" ? String(event.payload[key]) : "")
+      .join(" ");
+    if (/\bREVIEW_INLINE_NO_DELEGATE\b/.test(rawReviewText)) {
+      return copy.legacyInlineReview;
+    }
     const structuredReasonCode = typeof event.payload.fallback_reason_code === "string"
       ? event.payload.fallback_reason_code.trim()
       : typeof event.payload.decision_reason_code === "string"
@@ -390,6 +475,16 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
     }
     if ((event.event_type === "phase.end" || event.event_type === "phase.auto_sealed") && (note || status)) {
       return copy.phaseEndedDetail.replace("{phase}", phaseName).replace("{detail}", note || status);
+    }
+    if (event.event_type === "phase.prepare.start") {
+      return note || copy.preparationStarted.replace("{phase}", phaseName);
+    }
+    if (event.event_type === "phase.prepare.end") {
+      if (status.toUpperCase() === "BLOCKED") return message || note || copy.preparationBlocked;
+      return message || note || copy.preparationEnded.replace("{phase}", phaseName);
+    }
+    if (event.event_type === "gate.blocked") {
+      return message || note || copy.preparationBlocked;
     }
     const detail = note || message || name || reason || code;
     if (detail !== "") return detail;
@@ -815,19 +910,35 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
                 {liveBadge}
               </div>
               <div className="runs-status-grid">
-                <StatusChip label={copy.runStatus} value={runStateLabel(selected)} tone={statusTone(selected.run_status)} />
+                <StatusChip
+                  label={copy.runStatus}
+                  value={runStateLabel(selected)}
+                  tone={selectedPreparation?.preparation.status?.toUpperCase() === "BLOCKED"
+                    ? "warning"
+                    : statusTone(selected.workflow_status ?? selected.run_status)}
+                />
                 <StatusChip label={copy.connection} value={connectionLabel(selected.connection_status)} tone={statusTone(selected.connection_status)} />
                 <StatusChip label={copy.sync} value={mapStatus(selected.sync_completeness)} tone={statusTone(selected.sync_completeness)} />
                 <StatusChip
                   label={copy.phase}
-                  value={selected.active_phase !== null && selected.active_phase !== undefined
+                  value={selectedPreparation?.preparation.ended_at === null
+                    ? copy.preparingPhase
+                      .replace("{phase}", mapPhase(selectedPreparation.phase))
+                      .replace("{n}", String(selectedPreparation.preparation.attempt))
+                    : selectedPreparation?.preparation.status?.toUpperCase() === "BLOCKED"
+                      ? copy.fixbackNotStarted
+                      : selected.active_phase !== null && selected.active_phase !== undefined
                     ? mapPhase(selected.active_phase)
                     : selected.workflow_status === "waiting"
                       ? selected.waiting_for_phase === null || selected.waiting_for_phase === undefined
                         ? copy.phaseEndedShort
                         : copy.nextPhaseValue.replace("{phase}", mapPhase(selected.waiting_for_phase))
                       : selected.current_phase === null ? "—" : mapPhase(selected.current_phase)}
-                  tone={selected.workflow_status === "waiting" ? "info" : "neutral"}
+                  tone={selectedPreparation?.preparation.status?.toUpperCase() === "BLOCKED"
+                    ? "warning"
+                    : selected.workflow_status === "waiting" || selected.workflow_status === "preparing"
+                      ? "info"
+                      : "neutral"}
                 />
               </div>
               <div className="runs-meta">
@@ -859,15 +970,30 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
                 <ol className="phase-steps">
                   {phaseSteps.map((step) => {
                     const duration = formatPhaseDuration(step.durationMs);
-                    const attemptText = step.attemptCount === 0
-                      ? null
-                      : step.state === "active"
+                    const attemptText = step.activePreparation !== null
+                      ? copy.preparingAttempt.replace("{n}", String(step.activePreparation))
+                      : step.blockedPreparationCount > 0
+                        ? step.attemptCount > 0
+                          ? copy.completedBlockedAttempts
+                            .replace("{completed}", String(step.attemptCount))
+                            .replace("{blocked}", String(step.blockedPreparationCount))
+                          : copy.blockedAttempts.replace("{n}", String(step.blockedPreparationCount))
+                        : step.attemptCount === 0
+                          ? null
+                          : step.state === "active"
                         ? copy.runningAttempt.replace("{n}", String(step.activeAttempt ?? step.attemptCount))
                         : step.state === "stale"
                           ? copy.staleAttempts.replace("{n}", String(step.attemptCount))
                           : copy.completedAttempts.replace("{n}", String(step.attemptCount));
+                    const stateLabel = copy.phaseStateLabels[step.state] ?? step.state;
                     return (
-                      <li className={`phase-step phase-${step.name}`} data-phase={step.name} data-state={step.state} key={step.name}>
+                      <li
+                        aria-label={`${mapPhase(step.name)}：${stateLabel}${attemptText === null ? "" : `，${attemptText}`}`}
+                        className={`phase-step phase-${step.name}`}
+                        data-phase={step.name}
+                        data-state={step.state}
+                        key={step.name}
+                      >
                         <span className="phase-step-dot" aria-hidden="true" />
                         <span className="phase-step-label">
                           {mapPhase(step.name)}{step.attemptCount > 1 ? ` ×${step.attemptCount}` : ""}
@@ -878,6 +1004,32 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
                     );
                   })}
                 </ol>
+                {selectedPreparation === null || (
+                  selectedPreparation.preparation.ended_at !== null &&
+                  selectedPreparation.preparation.status?.toUpperCase() !== "BLOCKED"
+                ) ? null : (
+                  <div
+                    className={`phase-preparation ${selectedPreparation.preparation.status?.toUpperCase() === "BLOCKED" ? "is-blocked" : "is-active"}`}
+                    role="status"
+                  >
+                    <strong>
+                      {selectedPreparation.preparation.status?.toUpperCase() === "BLOCKED"
+                        ? copy.fixbackNotStarted
+                        : copy.preparingFix.replace("{n}", String(selectedPreparation.preparation.attempt))}
+                    </strong>
+                    <span>
+                      {selectedPreparation.preparation.message
+                        ?? (selectedPreparation.preparation.status?.toUpperCase() === "BLOCKED"
+                          ? copy.preparationBlocked
+                          : copy.preparationStarted.replace("{phase}", mapPhase(selectedPreparation.phase)))}
+                    </span>
+                    <small>
+                      {copy.preparationTiming
+                        .replace("{start}", formatTime(selectedPreparation.preparation.started_at))
+                        .replace("{end}", formatTime(selectedPreparation.preparation.ended_at))}
+                    </small>
+                  </div>
+                )}
               </div>
               {selectedArchive === null ? null : (
                 <details className="run-archive">
@@ -1051,10 +1203,31 @@ const COPY = {
     workflowEndedShort: "流程已结束",
     inProgress: "中",
     attemptNumber: " · 第 {n} 次",
+    preparingFix: "正在准备修复 · 第 {n} 次",
+    preparingFixShort: "正在准备修复",
+    fixbackNotStarted: "修复未启动",
+    preparingPhase: "正在准备第 {n} 次{phase}",
     waitingForNext: "等待下一阶段",
     runningAttempt: "正在执行第 {n} 次",
+    preparingAttempt: "正在准备第 {n} 次",
     completedAttempts: "已完成 {n} 次",
+    completedBlockedAttempts: "已完成 {completed} 次 · 启动受阻 {blocked} 次",
+    blockedAttempts: "启动受阻 {n} 次",
     staleAttempts: "已执行 {n} 次 · 待重新验证",
+    preparationBlockedShort: "启动受阻",
+    preparationStarted: "开始准备再次执行{phase}阶段。",
+    preparationEnded: "{phase}阶段的再次执行准备已结束。",
+    preparationBlocked: "前置条件未满足，本次修复尚未启动。",
+    preparationTiming: "准备开始 {start} · 结束 {end}",
+    phaseStateLabels: {
+      done: "已完成",
+      active: "执行中",
+      preparing: "准备再次执行",
+      failed: "失败",
+      warning: "需要注意",
+      stale: "待重新验证",
+      pending: "未开始"
+    } as Record<string, string>,
     connectionLabels: {
       online: "上报正常",
       delayed: "上报延迟",
@@ -1110,6 +1283,7 @@ const COPY = {
     delegatedTo: "隔离审查 · {agent}",
     inlineReview: "主会话评审",
     inlineReviewReason: "主会话评审 · {reason}",
+    legacyInlineReview: "旧版记录未说明为何未委派，已由主会话完成评审。",
     reviewReasonLabels: {
       REVIEW_DELEGATED: "已使用独立评审",
       REVIEW_INLINE_UNAVAILABLE: "当前环境不支持隔离评审",
@@ -1132,6 +1306,9 @@ const COPY = {
       "phase.start": "开始执行{phase}阶段。",
       "phase.end": "{phase}阶段已结束。",
       "phase.auto_sealed": "{phase}阶段已自动封存。",
+      "phase.prepare.start": "开始准备再次执行{phase}阶段。",
+      "phase.prepare.end": "再次执行{phase}阶段的准备已结束。",
+      "gate.blocked": "前置条件未满足，本次阶段尚未启动。",
       "command": "执行了一项工作步骤。",
       "verification": "完成了一项结果验证。",
       "artifact": "生成或更新了一项交付内容。",
@@ -1153,6 +1330,9 @@ const COPY = {
       "phase.start": "阶段开始",
       "phase.end": "阶段结束",
       "phase.auto_sealed": "阶段自动封存",
+      "phase.prepare.start": "阶段准备开始",
+      "phase.prepare.end": "阶段准备结束",
+      "gate.blocked": "阶段启动受阻",
       "command": "执行命令",
       "verification": "验证",
       "artifact": "产物",
@@ -1215,10 +1395,31 @@ const COPY = {
     workflowEndedShort: "Workflow ended",
     inProgress: " in progress",
     attemptNumber: " · attempt {n}",
+    preparingFix: "Preparing fix · attempt {n}",
+    preparingFixShort: "Preparing fix",
+    fixbackNotStarted: "Fix not started",
+    preparingPhase: "Preparing {phase} attempt {n}",
     waitingForNext: "Waiting for next phase",
     runningAttempt: "Running attempt {n}",
+    preparingAttempt: "Preparing attempt {n}",
     completedAttempts: "Completed {n} times",
+    completedBlockedAttempts: "Completed {completed} times · {blocked} blocked starts",
+    blockedAttempts: "{n} blocked starts",
     staleAttempts: "Ran {n} times · revalidation required",
+    preparationBlockedShort: "Start blocked",
+    preparationStarted: "Preparing to run the {phase} phase again.",
+    preparationEnded: "Preparation to rerun the {phase} phase finished.",
+    preparationBlocked: "Prerequisites were not met, so this fix did not start.",
+    preparationTiming: "Preparation started {start} · ended {end}",
+    phaseStateLabels: {
+      done: "completed",
+      active: "running",
+      preparing: "preparing rerun",
+      failed: "failed",
+      warning: "attention needed",
+      stale: "revalidation required",
+      pending: "not started"
+    } as Record<string, string>,
     connectionLabels: {
       online: "Reporting normally",
       delayed: "Reporting delayed",
@@ -1274,6 +1475,7 @@ const COPY = {
     delegatedTo: "Delegated review · {agent}",
     inlineReview: "Inline review",
     inlineReviewReason: "Inline review · {reason}",
+    legacyInlineReview: "This legacy record did not explain why review was not delegated; the main session completed it.",
     reviewReasonLabels: {
       REVIEW_DELEGATED: "independent review used",
       REVIEW_INLINE_UNAVAILABLE: "isolated review is unavailable",
@@ -1296,6 +1498,9 @@ const COPY = {
       "phase.start": "Started the {phase} phase.",
       "phase.end": "The {phase} phase finished.",
       "phase.auto_sealed": "The {phase} phase was auto-sealed.",
+      "phase.prepare.start": "Preparing to run the {phase} phase again.",
+      "phase.prepare.end": "Preparation to rerun the {phase} phase finished.",
+      "gate.blocked": "Prerequisites were not met, so the phase did not start.",
       "command": "A work step was executed.",
       "verification": "A result was verified.",
       "artifact": "A deliverable was created or updated.",
@@ -1317,6 +1522,9 @@ const COPY = {
       "phase.start": "Phase started",
       "phase.end": "Phase finished",
       "phase.auto_sealed": "Phase auto-sealed",
+      "phase.prepare.start": "Phase preparation started",
+      "phase.prepare.end": "Phase preparation finished",
+      "gate.blocked": "Phase start blocked",
       "command": "Command",
       "verification": "Verification",
       "artifact": "Artifact",

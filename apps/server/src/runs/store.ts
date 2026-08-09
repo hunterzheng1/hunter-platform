@@ -188,8 +188,26 @@ export interface RunPhaseSummary {
   attempt_count: number;
   active_attempt: number | null;
   latest_status: string | null;
+  preparation_attempt_count: number;
+  active_preparation: number | null;
+  blocked_preparation_count: number;
+  latest_preparation: RunPhasePreparationSummary | null;
+  preparations: RunPhasePreparationSummary[];
   validity: "current" | "stale" | "pending" | "unknown";
   attempts: RunPhaseAttemptSummary[];
+}
+
+export interface RunPhasePreparationSummary {
+  attempt: number;
+  run_id: string | null;
+  trigger: string | null;
+  from_phase: string | null;
+  started_at: string;
+  ended_at: string | null;
+  status: string | null;
+  duration_ms: number | null;
+  code: string | null;
+  message: string | null;
 }
 
 export interface RunPhaseAttemptSummary {
@@ -204,6 +222,11 @@ export interface RunPhaseAttemptSummary {
 }
 
 interface MutableAttempt extends RunPhaseAttemptSummary {
+  startCursor: number;
+  endCursor: number | null;
+}
+
+interface MutablePreparation extends RunPhasePreparationSummary {
   startCursor: number;
   endCursor: number | null;
 }
@@ -241,6 +264,7 @@ function durationBetween(startedAt: string, endedAt: string | null): number | nu
 export function aggregateRunPhases(events: readonly RunEventRecord[]): RunPhaseSummary[] {
   const order: string[] = [];
   const attemptsByPhase = new Map<string, MutableAttempt[]>();
+  const preparationsByPhase = new Map<string, MutablePreparation[]>();
   const sorted = [...events].sort((left, right) =>
     left.serverCursor - right.serverCursor || left.eventId.localeCompare(right.eventId)
   );
@@ -252,10 +276,95 @@ export function aggregateRunPhases(events: readonly RunEventRecord[]): RunPhaseS
     if (attempts === undefined) {
       attempts = [];
       attemptsByPhase.set(phase, attempts);
+      preparationsByPhase.set(phase, []);
       order.push(phase);
     }
+    const preparations = preparationsByPhase.get(phase) ?? [];
     const declaredAttempt = positiveAttempt(event.payload.attempt);
+    if (event.eventType === "phase.prepare.start") {
+      const nextAttempt = declaredAttempt ?? Math.max(
+        attempts.at(-1)?.attempt ?? 0,
+        preparations.at(-1)?.attempt ?? 0
+      ) + 1;
+      preparations.push({
+        attempt: nextAttempt,
+        run_id: payloadText(event.payload, "run_id") ?? event.runId,
+        trigger: payloadText(event.payload, "trigger"),
+        from_phase: payloadText(event.payload, "from_phase"),
+        started_at: event.occurredAt,
+        ended_at: null,
+        status: null,
+        duration_ms: null,
+        code: null,
+        message: null,
+        startCursor: event.serverCursor,
+        endCursor: null
+      });
+      continue;
+    }
+    const isPreparationEnd = event.eventType === "phase.prepare.end" || (
+      event.eventType === "gate.blocked" &&
+      payloadText(event.payload, "trigger") === "review-fixback"
+    );
+    if (isPreparationEnd) {
+      let preparation = declaredAttempt === null
+        ? preparations.findLast((item) => item.ended_at === null)
+        : preparations.findLast((item) => item.attempt === declaredAttempt);
+      const explicitDuration = typeof event.payload.orchestration_active_ms === "number"
+        ? event.payload.orchestration_active_ms
+        : typeof event.payload.wall_clock_ms === "number"
+          ? event.payload.wall_clock_ms
+          : null;
+      if (preparation === undefined) {
+        const attempt = declaredAttempt ?? Math.max(
+          attempts.at(-1)?.attempt ?? 0,
+          preparations.at(-1)?.attempt ?? 0
+        ) + 1;
+        const started = explicitDuration === null
+          ? event.occurredAt
+          : new Date(Date.parse(event.occurredAt) - explicitDuration).toISOString();
+        preparation = {
+          attempt,
+          run_id: payloadText(event.payload, "run_id") ?? event.runId,
+          trigger: payloadText(event.payload, "trigger"),
+          from_phase: payloadText(event.payload, "from_phase"),
+          started_at: started,
+          ended_at: null,
+          status: null,
+          duration_ms: null,
+          code: null,
+          message: null,
+          startCursor: event.serverCursor,
+          endCursor: null
+        };
+        preparations.push(preparation);
+      }
+      preparation.ended_at = event.occurredAt;
+      preparation.status = payloadText(event.payload, "status") ?? "BLOCKED";
+      preparation.duration_ms = explicitDuration ?? durationBetween(
+        preparation.started_at,
+        preparation.ended_at
+      );
+      preparation.code = payloadText(event.payload, "code");
+      preparation.message = payloadText(event.payload, "message") ??
+        payloadText(event.payload, "note");
+      preparation.endCursor = event.serverCursor;
+      continue;
+    }
     if (event.eventType === "phase.start") {
+      const matchingPreparation = preparations.findLast((item) =>
+        item.ended_at === null &&
+        (declaredAttempt === null || item.attempt === declaredAttempt)
+      );
+      if (matchingPreparation !== undefined) {
+        matchingPreparation.ended_at = event.occurredAt;
+        matchingPreparation.status = "STARTED";
+        matchingPreparation.duration_ms = durationBetween(
+          matchingPreparation.started_at,
+          matchingPreparation.ended_at
+        );
+        matchingPreparation.endCursor = event.serverCursor;
+      }
       const nextAttempt = declaredAttempt ?? ((attempts.at(-1)?.attempt ?? 0) + 1);
       attempts.push({
         attempt: nextAttempt,
@@ -302,6 +411,7 @@ export function aggregateRunPhases(events: readonly RunEventRecord[]): RunPhaseS
 
   return order.map((id) => {
     const attempts = attemptsByPhase.get(id) ?? [];
+    const preparations = preparationsByPhase.get(id) ?? [];
     const latest = attempts.at(-1);
     const phaseIndex = WORKFLOW_PHASE_ORDER.indexOf(id as typeof WORKFLOW_PHASE_ORDER[number]);
     const latestTerminalCursor = latest?.endCursor ?? latest?.startCursor ?? 0;
@@ -326,6 +436,21 @@ export function aggregateRunPhases(events: readonly RunEventRecord[]): RunPhaseS
       (sum, attempt) => sum + (attempt.duration_ms ?? 0),
       0
     );
+    const publicPreparations: RunPhasePreparationSummary[] = preparations.map(
+      (preparation) => ({
+        attempt: preparation.attempt,
+        run_id: preparation.run_id,
+        trigger: preparation.trigger,
+        from_phase: preparation.from_phase,
+        started_at: preparation.started_at,
+        ended_at: preparation.ended_at,
+        status: preparation.status,
+        duration_ms: preparation.duration_ms,
+        code: preparation.code,
+        message: preparation.message
+      })
+    );
+    const latestPreparation = publicPreparations.at(-1) ?? null;
     return {
       id,
       started_at: attempts[0]?.started_at ?? new Date(0).toISOString(),
@@ -335,6 +460,15 @@ export function aggregateRunPhases(events: readonly RunEventRecord[]): RunPhaseS
       attempt_count: attempts.length,
       active_attempt: latest?.ended_at === null ? latest?.attempt ?? null : null,
       latest_status: latest?.ended_at === null ? "RUNNING" : latest?.status ?? null,
+      preparation_attempt_count: publicPreparations.length,
+      active_preparation: latestPreparation?.ended_at === null
+        ? latestPreparation.attempt
+        : null,
+      blocked_preparation_count: publicPreparations.filter((item) =>
+        item.status === "BLOCKED"
+      ).length,
+      latest_preparation: latestPreparation,
+      preparations: publicPreparations,
       validity: invalidatedByUpstream ? "stale" : attempts.length === 0 ? "pending" : "current",
       attempts: publicAttempts
     };
@@ -443,8 +577,15 @@ export function publicRun(
   const reportedPlan = reportedWorkflowPlan(events);
   const reportedOutcome = reportedRunOutcome(events);
   const activePhase = [...phaseItems].reverse().find((phase) => phase.active_attempt !== null)?.id ?? null;
+  const preparingPhase = [...phaseItems].reverse().find(
+    (phase) => phase.active_preparation !== null
+  )?.id ?? null;
   let workflowStatus = run.runStatus === "running"
-    ? activePhase === null && phaseItems.length > 0 ? "waiting" : "running"
+    ? activePhase !== null
+      ? "running"
+      : preparingPhase !== null
+        ? "preparing"
+        : phaseItems.length > 0 ? "waiting" : "running"
     : run.runStatus === "failed" ? "failed" : "completed";
   if (reportedOutcome.closureDisposition === "abandoned" || reportedOutcome.closureDisposition === "superseded") {
     workflowStatus = reportedOutcome.closureDisposition;
@@ -458,7 +599,7 @@ export function publicRun(
   const serverObservedAt = run.lastHeartbeatAt ?? (run.lastEventAt === null ? null : run.updatedAt);
   if (["completed", "failed", "abandoned", "superseded"].includes(workflowStatus)) {
     connectionStatus = "closed";
-  } else if (activePhase === null && phaseItems.length > 0) {
+  } else if (activePhase === null && preparingPhase === null && phaseItems.length > 0) {
     connectionStatus = "idle";
   } else if (serverObservedAt !== null) {
     const observedAt = Date.parse(serverObservedAt);
@@ -484,6 +625,7 @@ export function publicRun(
     sync_completeness: run.syncCompleteness,
     current_phase: run.currentPhase,
     active_phase: activePhase,
+    preparing_phase: preparingPhase,
     waiting_for_phase: workflowStatus === "waiting" ? waitingForPhase : null,
     planned_phases: reportedPlan.plannedPhases,
     skipped_phases: reportedPlan.skippedPhases,

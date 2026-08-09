@@ -3,6 +3,8 @@ import "@testing-library/jest-dom/vitest";
 
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import { RunsMonitor } from "../components/runs-monitor";
 import type { HunterApi, RunEventSummary, RunSummary } from "../lib/api";
@@ -31,6 +33,70 @@ function run(runId: string, title: string, startedAt: string): RunSummary {
 }
 
 describe("RunsMonitor", () => {
+  it("colors reached warning and failed connectors", () => {
+    const css = readFileSync(resolve(process.cwd(), "apps/web/app/ui-v4.css"), "utf8");
+    expect(css).toMatch(/\.phase-step\[data-state="warning"\]::before[\s\S]*var\(--warn\)/);
+    expect(css).toMatch(/\.phase-step\[data-state="failed"\]::before[\s\S]*var\(--danger\)/);
+  });
+
+  it("shows a blocked fixback preparation without changing completed coding time", async () => {
+    const blocked: RunSummary = {
+      ...run("run_fixback_blocked", "修复回流测试", "2026-08-08T02:00:00.000Z"),
+      current_phase: "run",
+      active_phase: null,
+      waiting_for_phase: "submit",
+      workflow_status: "waiting",
+      phases: [{
+        id: "run",
+        started_at: "2026-08-08T02:00:00.000Z",
+        ended_at: "2026-08-08T02:02:00.000Z",
+        duration_ms: 120_000,
+        total_duration_ms: 120_000,
+        attempt_count: 1,
+        active_attempt: null,
+        latest_status: "OK",
+        validity: "current",
+        attempts: [{
+          attempt: 1,
+          run_id: "run_fixback_blocked",
+          trigger: null,
+          from_phase: null,
+          started_at: "2026-08-08T02:00:00.000Z",
+          ended_at: "2026-08-08T02:02:00.000Z",
+          status: "OK",
+          duration_ms: 120_000
+        }],
+        preparation_attempt_count: 1,
+        active_preparation: null,
+        blocked_preparation_count: 1,
+        latest_preparation: {
+          attempt: 2,
+          run_id: "run_fixback_blocked",
+          trigger: "review-fixback",
+          from_phase: "review",
+          started_at: "2026-08-08T02:05:00.000Z",
+          ended_at: "2026-08-08T02:08:01.000Z",
+          status: "BLOCKED",
+          duration_ms: 181_000,
+          code: "CONTEXT_HANDOFF_REQUIRED",
+          message: "阶段交接尚未完成，修复未启动。"
+        },
+        preparations: []
+      }]
+    };
+    const api = {
+      listProjectRuns: vi.fn(async () => ({ items: [blocked], total: 1, next_cursor: null })),
+      listProjectRunEvents: vi.fn(async () => ({ items: [], next_cursor: 0 })),
+      streamProjectRunEvents: vi.fn(async () => ({ abort: vi.fn() }))
+    } as unknown as HunterApi;
+
+    render(<RunsMonitor api={api} projectId="prj_one" />);
+
+    expect((await screen.findAllByText("修复未启动")).length).toBeGreaterThan(0);
+    expect(screen.getByText("已完成 1 次 · 启动受阻 1 次")).toBeInTheDocument();
+    expect(screen.getByText("阶段交接尚未完成，修复未启动。")).toBeInTheDocument();
+    expect(screen.getByText("2m")).toBeInTheDocument();
+  });
   it("shows the Chinese title with the stable change key as a subtitle", async () => {
     const localized = {
       ...run("run_pomodoro", "番茄钟计时器", "2026-08-08T02:00:00.000Z"),
@@ -158,6 +224,32 @@ describe("RunsMonitor", () => {
     expect(screen.getByText("主会话评审 · 当前环境不支持隔离评审")).toBeInTheDocument();
     expect(document.querySelector(".timeline-summary")).not.toHaveTextContent("REVIEW_INLINE_UNAVAILABLE");
     expect(document.querySelector(".timeline-technical code")).toHaveTextContent("REVIEW_INLINE_UNAVAILABLE");
+  });
+
+  it("translates the legacy inline-review code embedded in free text", async () => {
+    const active = run("run_legacy_review", "旧版评审记录", "2026-08-08T02:00:00.000Z");
+    const events: RunEventSummary[] = [{
+      server_cursor: 1,
+      run_id: active.run_id,
+      event_id: "evt_legacy_review",
+      producer_seq: 1,
+      event_type: "decision",
+      phase: "review",
+      occurred_at: "2026-08-08T02:01:00.000Z",
+      payload: {
+        summary: "REVIEW_INLINE_NO_DELEGATE: 主会话只读审查；项目范围较小。"
+      }
+    }];
+    const api = {
+      listProjectRuns: vi.fn(async () => ({ items: [active], total: 1, next_cursor: null })),
+      listProjectRunEvents: vi.fn(async () => ({ items: events, next_cursor: 1 })),
+      streamProjectRunEvents: vi.fn(async () => ({ abort: vi.fn() }))
+    } as unknown as HunterApi;
+
+    render(<RunsMonitor api={api} projectId="prj_one" />);
+
+    expect(await screen.findByText("旧版记录未说明为何未委派，已由主会话完成评审。")).toBeInTheDocument();
+    expect(document.querySelector(".timeline-summary")).not.toHaveTextContent("REVIEW_INLINE_NO_DELEGATE");
   });
 
   it("keeps machine hashes out of the readable timeline and behind technical details", async () => {

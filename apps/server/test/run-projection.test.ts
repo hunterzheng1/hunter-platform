@@ -92,6 +92,69 @@ describe("run monitoring projection", () => {
     expect(phases.find((phase) => phase.id === "review")?.validity).toBe("stale");
   });
 
+  it("keeps a blocked fixback preparation separate from completed coding time", () => {
+    const phases = aggregateRunPhases([
+      event(1, "phase.start", "run", "2026-08-09T00:00:00.000Z", { attempt: 1 }),
+      event(2, "phase.end", "run", "2026-08-09T00:02:00.000Z", {
+        attempt: 1,
+        status: "OK"
+      }),
+      event(3, "phase.prepare.start", "run", "2026-08-09T00:05:00.000Z", {
+        attempt: 2,
+        trigger: "review-fixback",
+        from_phase: "review"
+      }),
+      event(4, "phase.prepare.end", "run", "2026-08-09T00:08:01.000Z", {
+        attempt: 2,
+        trigger: "review-fixback",
+        from_phase: "review",
+        status: "BLOCKED",
+        code: "CONTEXT_HANDOFF_REQUIRED",
+        message: "阶段交接尚未完成，修复未启动。",
+        orchestration_active_ms: 181_000
+      })
+    ]);
+
+    const coding = phases.find((phase) => phase.id === "run");
+    expect(coding).toMatchObject({
+      attempt_count: 1,
+      total_duration_ms: 120_000,
+      active_attempt: null,
+      preparation_attempt_count: 1,
+      active_preparation: null,
+      blocked_preparation_count: 1
+    });
+    expect(coding?.latest_preparation).toMatchObject({
+      attempt: 2,
+      status: "BLOCKED",
+      duration_ms: 181_000,
+      code: "CONTEXT_HANDOFF_REQUIRED",
+      message: "阶段交接尚未完成，修复未启动。"
+    });
+  });
+
+  it("projects an active fixback preparation without claiming coding is running", () => {
+    const events = [
+      event(1, "phase.start", "run", "2026-08-09T00:00:00.000Z", { attempt: 1 }),
+      event(2, "phase.end", "run", "2026-08-09T00:02:00.000Z", {
+        attempt: 1,
+        status: "OK"
+      }),
+      event(3, "phase.prepare.start", "run", "2026-08-09T00:05:00.000Z", {
+        attempt: 2,
+        trigger: "review-fixback",
+        from_phase: "review"
+      })
+    ];
+
+    expect(publicRun(run({ lastHeartbeatAt: new Date().toISOString() }), aggregateRunPhases(events), events)).toMatchObject({
+      workflow_status: "preparing",
+      active_phase: null,
+      preparing_phase: "run",
+      connection_status: "online"
+    });
+  });
+
   it("does not turn a retryable archive attempt into a terminal run failure", () => {
     expect(deriveRunStatus("running", "phase.end", {
       phase: "archive",
