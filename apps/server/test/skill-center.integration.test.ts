@@ -132,6 +132,19 @@ describe("skill-center end-to-end (tasks 14-17)", () => {
   it("upload → check → diff → publish → download end-to-end", async () => {
     await uploadDraft(filesX);
 
+    const draftCatalog = await app.inject({ method: "GET", url: "/api/v1/skills", headers: headers() });
+    expect(draftCatalog.statusCode).toBe(200);
+    expect(draftCatalog.json().items).toMatchObject([
+      { slug: "harness-x", status: "draft", latest_version: null }
+    ]);
+    const draftDetail = await app.inject({ method: "GET", url: "/api/v1/skills/harness-x", headers: headers() });
+    expect(draftDetail.statusCode).toBe(200);
+    expect(draftDetail.json()).toMatchObject({
+      slug: "harness-x",
+      status: "draft",
+      sourceFiles: [{ path: "SKILL.md" }]
+    });
+
     const checksRes = await app.inject({ method: "POST", url: "/api/v1/skills/harness-x/draft/claude-code/checks", payload: {}, headers: headers() });
     expect(checksRes.statusCode).toBe(200);
     expect(checksRes.json().items.length).toBeGreaterThan(0);

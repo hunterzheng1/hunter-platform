@@ -30,6 +30,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-hunter_harness}
       ARTIFACT_ROOT: /var/lib/hunter-harness/artifacts
       HUNTER_HARNESS_AI_SECRET_FILE: /var/lib/hunter-harness/secrets/ai-providers.json
+      HUNTER_PLATFORM_CODEX_HOME: /var/lib/hunter-harness/codex
       HUNTER_HARNESS_BOOTSTRAP_TOKEN_FILE: /run/secrets/bootstrap_token
       HUNTER_HARNESS_BOOTSTRAP_ACTOR: ${HUNTER_HARNESS_BOOTSTRAP_ACTOR:-actor_owner}
       HUNTER_HARNESS_BOOTSTRAP_NAME: ${HUNTER_HARNESS_BOOTSTRAP_NAME:-Owner}
@@ -40,9 +41,9 @@ services:
       - |
         POSTGRES_PASSWORD_ENCODED="$$(node -e "process.stdout.write(encodeURIComponent(require('fs').readFileSync('/run/secrets/postgres_password','utf8').trim()))")"
         export DATABASE_URL="postgresql://$${POSTGRES_USER}:$${POSTGRES_PASSWORD_ENCODED}@postgres:5432/$${POSTGRES_DB}"
-        mkdir -p /var/lib/hunter-harness/artifacts /var/lib/hunter-harness/secrets
-        chown -R node:node /var/lib/hunter-harness/artifacts /var/lib/hunter-harness/secrets
-        chmod 700 /var/lib/hunter-harness/secrets
+        mkdir -p /var/lib/hunter-harness/artifacts /var/lib/hunter-harness/secrets /var/lib/hunter-harness/codex
+        chown -R node:node /var/lib/hunter-harness/artifacts /var/lib/hunter-harness/secrets /var/lib/hunter-harness/codex
+        chmod 700 /var/lib/hunter-harness/secrets /var/lib/hunter-harness/codex
         exec setpriv --reuid=1000 --regid=1000 --clear-groups node apps/server/dist/main.js
     secrets:
       - postgres_password
@@ -50,6 +51,7 @@ services:
     volumes:
       - artifact-data:/var/lib/hunter-harness/artifacts
       - ai-secrets:/var/lib/hunter-harness/secrets
+      - codex-data:/var/lib/hunter-harness/codex
     depends_on:
       postgres:
         condition: service_healthy
@@ -84,6 +86,7 @@ volumes:
   postgres-data:
   artifact-data:
   ai-secrets:
+  codex-data:
 
 secrets:
   postgres_password:

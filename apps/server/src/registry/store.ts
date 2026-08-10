@@ -11,6 +11,7 @@ import {
   registrySkillDetailSchema,
   registrySkillVersionSchema,
   registryProjectWorkflowBindingSchema,
+  skillCatalogOrderSchema,
   registryTagSchema,
   skillUsageExampleSchema,
   workflowFamilyDraftStateSchema,
@@ -24,6 +25,7 @@ import {
   type ProviderModel,
   type AgentSkillConfig,
   type DraftState,
+  type ExternalSkillAiSummary,
   type ExternalSkill,
   type ExternalSkillSource,
   type FixPlan,
@@ -36,6 +38,7 @@ import {
   type RegistrySkillProposal,
   type RegistrySkillVersion,
   type RegistryTag,
+  type SkillCatalogOrder,
   type SensitiveReviewEvidence,
   type SensitiveReviewSubmission,
   type SkillCheckResult,
@@ -58,6 +61,7 @@ import {
   compareSemver,
   computeDiff,
   deriveSlug,
+  externalSkillSummarySourceHash,
   findEntryFile,
   parseFrontmatter,
   scanSensitiveFiles,
@@ -338,9 +342,10 @@ export class RegistryStore {
   private readonly workflowFamilyDrafts = new Map<string, WorkflowFamilyDraftState>();
   private readonly workflowFamilyStore: WorkflowFamilyStore;
   private readonly externalSkills = new Map<string, ExternalSkill>();
+  private skillCatalogOrder: SkillCatalogOrder = { items: [], revision: 0, updated_at: null };
   private compilerVersion = "1.0.0";
   private tagUsageCache: Map<string, number> | null = null;
-  private aiConfig: AiConfigState = { defaultProvider: null, providers: [], usage: [] };
+  private aiConfig: AiConfigState = { defaultProvider: null, providers: [], usage: [], codex: { selected_model: null, enabled: false } };
   private externalFetcherDeps: ExternalFetcherDeps = {};
 
   constructor(
@@ -378,6 +383,66 @@ export class RegistryStore {
     if (inner.size === 0) this.drafts.delete(slug);
   }
 
+  private createDraftCatalogState(
+    slug: string,
+    draft: DraftState,
+    meta: SkillFrontmatter
+  ): SkillState {
+    const defaultAgent = defaultAgentOf(undefined, []);
+    const detail = registrySkillDetailSchema.parse({
+      skill_id: id("skl_"),
+      slug,
+      name: meta.name,
+      description: meta.description,
+      kind: meta.kind ?? null,
+      tags: [],
+      status: "draft",
+      latest_version: null,
+      defaultAgent,
+      agents: agentsFor(slug, defaultAgent, [], this.drafts.get(slug)),
+      revision: 1,
+      created_at: draft.created_at,
+      updated_at: draft.updated_at,
+      npmReleases: [],
+      sourceFiles: draft.sourceFiles,
+      examples: draft.examples
+    });
+    return { detail, versions: [], npmReleases: [] };
+  }
+
+  private syncDraftCatalogEntry(
+    slug: string,
+    agent: RegistryAgent,
+    draft: DraftState,
+    meta: SkillFrontmatter
+  ): void {
+    const existing = this.skills.get(slug);
+    if (existing === undefined) {
+      this.skills.set(slug, this.createDraftCatalogState(slug, draft, meta));
+      this.invalidateTagUsageCache();
+      return;
+    }
+
+    const isUnpublished = existing.versions.length === 0;
+    const defaultAgent = existing.detail.defaultAgent ?? agent;
+    existing.detail = registrySkillDetailSchema.parse({
+      ...existing.detail,
+      ...(isUnpublished ? {
+        name: meta.name,
+        description: meta.description,
+        kind: meta.kind ?? null,
+        status: "draft",
+        latest_version: null,
+        sourceFiles: draft.sourceFiles,
+        examples: draft.examples
+      } : {}),
+      defaultAgent,
+      agents: agentsFor(slug, defaultAgent, existing.versions, this.drafts.get(slug)),
+      revision: existing.detail.revision + 1,
+      updated_at: draft.updated_at
+    });
+  }
+
   private reviewMatches(slug: string, agent: RegistryAgent, fingerprints: readonly string[]): boolean {
     const accepted = this.sensitiveReviews.get(`${slug}\0${agent}`)
       ?.flatMap((review) => review.finding_fingerprints)
@@ -388,6 +453,7 @@ export class RegistryStore {
   async initialize(bundle?: BootstrapBundle): Promise<void> {
     const snapshot = await this.persistence?.load();
     if (snapshot !== null && snapshot !== undefined) {
+      let repairedDraftCatalog = false;
       const value = snapshot as {
         schemaVersion?: number;
         compilerVersion: string;
@@ -399,6 +465,7 @@ export class RegistryStore {
         workflowFamilies?: Array<[string, unknown]>;
         workflowFamilyDrafts?: Array<[string, unknown]>;
         externalSkills?: Array<[string, unknown]>;
+        skillCatalogOrder?: unknown;
         aiConfig?: unknown;
         aiUsage?: unknown;
         sensitiveReviews?: Array<[string, SensitiveReviewEvidence[]]>;
@@ -444,6 +511,21 @@ export class RegistryStore {
       for (const [key, attempt] of value.successfulPublishAttempts ?? []) {
         this.successfulPublishAttempts.set(key, structuredClone(attempt));
       }
+      // 旧版本首次上传只保存 drafts，没有建立 skills 目录项，导致页面提示成功却无法看到草稿。
+      // 初始化时从有效 entry 恢复目录项并在本轮末尾持久化，已有数据无需重新上传。
+      for (const [slug, draftsForSlug] of this.drafts) {
+        if (this.skills.has(slug)) continue;
+        for (const [agent, draft] of draftsForSlug) {
+          try {
+            const meta = parseFrontmatter(findEntryFile(draft.sourceFiles, agent).content);
+            this.skills.set(slug, this.createDraftCatalogState(slug, draft, meta));
+            repairedDraftCatalog = true;
+            break;
+          } catch (error) {
+            console.warn("[registry] unable to restore draft catalog entry:", slug, agent, error);
+          }
+        }
+      }
       // 草稿加载完成后重算各 skill 的 agents：draftVersion 字段需反映已加载草稿（migrateSkillState 迁移时 drafts 尚未加载，传 undefined）
       for (const [slug, state] of this.skills) {
         const defaultAgent = state.detail.defaultAgent ?? defaultAgentOf(state.detail, state.versions);
@@ -472,14 +554,24 @@ export class RegistryStore {
         const parsed = externalSkillSchema.safeParse(raw);
         if (parsed.success) this.externalSkills.set(key, parsed.data);
       }
+      const catalogOrder = skillCatalogOrderSchema.safeParse(value.skillCatalogOrder);
+      if (catalogOrder.success) this.skillCatalogOrder = catalogOrder.data;
       // AI config 反序列化：schemaVersion < 4 时 migrate 每个 provider（旧单 model → models[] + selected_model_id）
-      const aiCfgRaw = value.aiConfig as { providers?: unknown[]; defaultProvider?: string | null; usage?: unknown[] } | undefined;
+      const aiCfgRaw = value.aiConfig as { providers?: unknown[]; defaultProvider?: string | null; usage?: unknown[]; bindings?: unknown; codex?: unknown } | undefined;
       if (aiCfgRaw !== undefined && (value.schemaVersion ?? 0) < 4) {
         const providersRaw = Array.isArray(aiCfgRaw.providers) ? aiCfgRaw.providers : [];
         aiCfgRaw.providers = providersRaw.map((p, idx) => this.migrateProvider(p, idx));
       }
-      const aiCfg = aiConfigStateSchema.safeParse(aiCfgRaw);
-      this.aiConfig = aiCfg.success ? aiCfg.data : { defaultProvider: null, providers: [], usage: [] };
+      // v4 曾把 Codex 错误建模为 provider binding。Codex 现改为独立 ChatGPT
+      // 账号授权；迁移时丢弃旧 binding，只保留独立的模型偏好。
+      const normalizedAiCfg = aiCfgRaw === undefined ? undefined : {
+        defaultProvider: aiCfgRaw.defaultProvider ?? null,
+        providers: Array.isArray(aiCfgRaw.providers) ? aiCfgRaw.providers : [],
+        usage: Array.isArray(aiCfgRaw.usage) ? aiCfgRaw.usage : [],
+        codex: aiCfgRaw.codex ?? { selected_model: null, enabled: false }
+      };
+      const aiCfg = aiConfigStateSchema.safeParse(normalizedAiCfg);
+      this.aiConfig = aiCfg.success ? aiCfg.data : { defaultProvider: null, providers: [], usage: [], codex: { selected_model: null, enabled: false } };
       // COM-001：旧全局 aiUsage {requests,tokens} 迁移到默认 provider 当日条目（仅当 usage 为空且 defaultProvider 存在；已有 usage 不重复迁移）
       const usageRaw = value.aiUsage as { requests?: number; tokens?: number } | undefined;
       const legacyRequests = typeof usageRaw?.requests === "number" ? usageRaw.requests : 0;
@@ -498,6 +590,8 @@ export class RegistryStore {
           cost: 0
         });
       }
+      this.normalizeActiveModelSource();
+      if (repairedDraftCatalog) await this.persist();
       return;
     }
     if (bundle === undefined) return;
@@ -524,6 +618,7 @@ export class RegistryStore {
       workflowFamilies: [...this.workflowFamilies.entries()].map(([slug, state]) => [slug, { detail: state.detail, versions: state.versions }]),
       workflowFamilyDrafts: [...this.workflowFamilyDrafts.entries()],
       externalSkills: [...this.externalSkills.entries()],
+      skillCatalogOrder: this.skillCatalogOrder,
       aiConfig: this.aiConfig
       ,sensitiveReviews: [...this.sensitiveReviews.entries()]
       ,successfulPublishAttempts: [...this.successfulPublishAttempts.entries()]
@@ -615,6 +710,7 @@ export class RegistryStore {
     agent: RegistryAgent;
     sourceFiles: SourceFile[];
     draftVersion: string | null;
+    catalogMeta?: SkillFrontmatter;
   }): Promise<DraftState> {
     const now = new Date().toISOString();
     const existing = this.getDraftState(input.slug, input.agent);
@@ -631,6 +727,9 @@ export class RegistryStore {
       updated_at: now
     }) as DraftState;
     this.setDraftState(input.slug, input.agent, draft);
+    if (input.catalogMeta !== undefined) {
+      this.syncDraftCatalogEntry(input.slug, input.agent, draft, input.catalogMeta);
+    }
     await this.persist();
     return structuredClone(draft);
   }
@@ -646,6 +745,23 @@ export class RegistryStore {
       });
     }
     this.deleteDraftState(slug, agent);
+    const skill = this.skills.get(slug);
+    if (skill !== undefined) {
+      const remainingDrafts = this.drafts.get(slug);
+      if (skill.versions.length === 0 && remainingDrafts === undefined) {
+        this.skills.delete(slug);
+        this.invalidateTagUsageCache();
+      } else {
+        const defaultAgent = skill.detail.defaultAgent ?? defaultAgentOf(skill.detail, skill.versions);
+        skill.detail = registrySkillDetailSchema.parse({
+          ...skill.detail,
+          defaultAgent,
+          agents: agentsFor(slug, defaultAgent, skill.versions, remainingDrafts),
+          revision: skill.detail.revision + 1,
+          updated_at: new Date().toISOString()
+        });
+      }
+    }
     await this.persist();
   }
 
@@ -669,8 +785,10 @@ export class RegistryStore {
       throw new ServerDomainError(422, "SKILL_BUNDLE_INVALID", "unsafe file path: " + unsafe.path);
     }
     let slug: string;
+    let meta: SkillFrontmatter;
     try {
       slug = deriveSlug(input.files, input.agent);
+      meta = parseFrontmatter(findEntryFile(input.files, input.agent).content);
     } catch (error) {
       if (error instanceof SkillEntryError) {
         if (error.code === SKILL_ERROR_CODE.ENTRY_NOT_FOUND) {
@@ -726,7 +844,7 @@ export class RegistryStore {
     const skillState = this.skills.get(slug);
     const latest = skillState?.detail.latest_version ?? maxVersionOf(skillState?.versions ?? []);
     const draftVersion = latest === null ? "0.1.0" : bumpPatch(latest);
-    return this.upsertDraft({ slug, agent: input.agent, sourceFiles: input.files, draftVersion });
+    return this.upsertDraft({ slug, agent: input.agent, sourceFiles: input.files, draftVersion, catalogMeta: meta });
   }
 
   async runChecks(input: { slug: string; agent: RegistryAgent; checkedAt: string }): Promise<SkillCheckResult> {
@@ -1213,7 +1331,12 @@ export class RegistryStore {
       ? remainingDrafts
       : undefined;
     const versions = [...(existing?.versions ?? []), ...builtArtifacts.map((built) => built.version)];
-    const defaultAgent = existing?.detail.defaultAgent ?? sourceAgent;
+    // A draft-only catalog placeholder is not a user-selected default. Preserve
+    // the original unified-publish behavior: the first published source becomes
+    // the default agent; later releases keep the explicit existing choice.
+    const defaultAgent = existing === undefined || existing.versions.length === 0
+      ? sourceAgent
+      : (existing.detail.defaultAgent ?? sourceAgent);
     const detail = registrySkillDetailSchema.parse({
       ...(existing?.detail ?? {
         skill_id: id("skl_"),
@@ -1394,6 +1517,33 @@ export class RegistryStore {
     return this.getProvider(this.aiConfig.defaultProvider) ?? null;
   }
 
+  getCodexSelectedModel(): string | null {
+    return this.aiConfig.codex.selected_model;
+  }
+
+  isCodexEnabled(): boolean {
+    return this.aiConfig.codex.enabled;
+  }
+
+  async setCodexSelectedModel(model: string | null): Promise<void> {
+    await this.updateCodexConfig({ selected_model: model });
+  }
+
+  async updateCodexConfig(patch: { selected_model?: string | null; enabled?: boolean }): Promise<void> {
+    if (patch.selected_model !== undefined) {
+      this.aiConfig.codex.selected_model = patch.selected_model;
+    }
+    if (patch.enabled !== undefined) {
+      this.applyCodexEnabled(patch.enabled);
+    }
+    await this.persist();
+  }
+
+  async setCodexEnabledExclusive(enabled: boolean): Promise<void> {
+    this.applyCodexEnabled(enabled);
+    await this.persist();
+  }
+
   async upsertProvider(input: {
     provider_id: string;
     label: string;
@@ -1456,8 +1606,11 @@ export class RegistryStore {
       const idx = this.aiConfig.providers.findIndex((item) => item.provider_id === input.provider_id);
       if (idx !== -1) this.aiConfig.providers[idx] = provider;
     }
-    if (input.is_default === true) {
-      this.applyDefault(input.provider_id);
+    if (input.enabled) {
+      this.applyEnabledProvider(input.provider_id);
+    } else if (this.aiConfig.defaultProvider === input.provider_id) {
+      this.aiConfig.defaultProvider = null;
+      provider.is_default = false;
     }
     await this.persist();
     return structuredClone(provider);
@@ -1488,6 +1641,12 @@ export class RegistryStore {
       updated_at: new Date().toISOString()
     });
     this.aiConfig.providers[idx] = updated;
+    if (patch.enabled === true) {
+      this.applyEnabledProvider(providerId);
+    } else if (patch.enabled === false && this.aiConfig.defaultProvider === providerId) {
+      this.aiConfig.defaultProvider = null;
+      updated.is_default = false;
+    }
     await this.persist();
     return structuredClone(updated);
   }
@@ -1505,7 +1664,7 @@ export class RegistryStore {
   }
 
   async setDefault(providerId: string): Promise<void> {
-    this.applyDefault(providerId);
+    this.applyEnabledProvider(providerId);
     await this.persist();
   }
 
@@ -1626,14 +1785,46 @@ export class RegistryStore {
 
   // enabled 单选互斥：该 provider enabled=true，其他 enabled=false（一次 persist 保证原子；API-04 单选语义）。
   async setEnabledExclusive(providerId: string): Promise<void> {
+    this.applyEnabledProvider(providerId);
+    await this.persist();
+  }
+
+  private applyEnabledProvider(providerId: string): void {
     const exists = this.aiConfig.providers.some((p) => p.provider_id === providerId);
     if (!exists) {
       throw new ServerDomainError(404, "PROVIDER_NOT_FOUND", "ai provider not found", { provider_id: providerId });
     }
+    this.aiConfig.codex.enabled = false;
     for (const p of this.aiConfig.providers) {
       p.enabled = p.provider_id === providerId;
     }
-    await this.persist();
+    this.applyDefault(providerId);
+  }
+
+  private applyCodexEnabled(enabled: boolean): void {
+    this.aiConfig.codex.enabled = enabled;
+    if (!enabled) return;
+    this.aiConfig.defaultProvider = null;
+    for (const provider of this.aiConfig.providers) {
+      provider.enabled = false;
+      provider.is_default = false;
+    }
+  }
+
+  private normalizeActiveModelSource(): void {
+    if (this.aiConfig.codex.enabled) {
+      this.applyCodexEnabled(true);
+      return;
+    }
+    const enabledProviders = this.aiConfig.providers.filter((provider) => provider.enabled);
+    if (enabledProviders.length === 0) {
+      this.aiConfig.defaultProvider = null;
+      for (const provider of this.aiConfig.providers) provider.is_default = false;
+      return;
+    }
+    const preferred = enabledProviders.find((provider) => provider.provider_id === this.aiConfig.defaultProvider)
+      ?? enabledProviders[0];
+    if (preferred !== undefined) this.applyEnabledProvider(preferred.provider_id);
   }
 
   // 旧 snapshot（schemaVersion < 4）单 model provider 迁移到 models[]：从 model 生成 models[0] + selected_model_id。
@@ -2099,6 +2290,44 @@ export class RegistryStore {
       .sort((left, right) => left.snapshot.name.localeCompare(right.snapshot.name));
   }
 
+  getSkillCatalogOrder(): SkillCatalogOrder {
+    const existing = this.skillCatalogItemKeys();
+    return skillCatalogOrderSchema.parse({
+      ...this.skillCatalogOrder,
+      items: this.skillCatalogOrder.items.filter((item) => existing.has(item))
+    });
+  }
+
+  async updateSkillCatalogOrder(input: { items: string[]; revision: number }): Promise<SkillCatalogOrder> {
+    if (input.revision !== this.skillCatalogOrder.revision) {
+      throw new ServerDomainError(409, "SKILL_CATALOG_ORDER_CONFLICT", "skill catalog order revision is stale", {
+        expected: this.skillCatalogOrder.revision,
+        provided: input.revision
+      });
+    }
+    const existing = this.skillCatalogItemKeys();
+    const unknown = input.items.filter((item) => !existing.has(item));
+    if (unknown.length > 0) {
+      throw new ServerDomainError(422, "SKILL_CATALOG_ITEM_NOT_FOUND", "skill catalog order contains an unknown item", {
+        items: unknown
+      });
+    }
+    this.skillCatalogOrder = skillCatalogOrderSchema.parse({
+      items: input.items,
+      revision: this.skillCatalogOrder.revision + 1,
+      updated_at: new Date().toISOString()
+    });
+    await this.persist();
+    return structuredClone(this.skillCatalogOrder);
+  }
+
+  private skillCatalogItemKeys(): Set<string> {
+    return new Set([
+      ...[...this.skills.keys()].map((slug) => `registry:${slug}`),
+      ...[...this.externalSkills.keys()].map((id) => `external:${id}`)
+    ]);
+  }
+
   getExternalSkill(id: string): ExternalSkill {
     const item = this.externalSkills.get(id);
     if (item === undefined) {
@@ -2132,6 +2361,7 @@ export class RegistryStore {
       id: id("ext_"),
       source: fetched.source,
       snapshot: fetched.snapshot,
+      aiSummary: null,
       curationNote: input.curationNote ?? "",
       tags: [...(input.tags ?? [])].sort(),
       updateAvailable: false,
@@ -2177,6 +2407,40 @@ export class RegistryStore {
     return structuredClone(next);
   }
 
+  async setExternalSkillAiSummary(input: {
+    id: string;
+    revision: number;
+    summary: ExternalSkillAiSummary;
+  }): Promise<ExternalSkill> {
+    const existing = this.externalSkills.get(input.id);
+    if (existing === undefined) {
+      throw new ServerDomainError(404, "EXTERNAL_SKILL_NOT_FOUND", "external skill not found", { id: input.id });
+    }
+    if (existing.revision !== input.revision) {
+      throw new ServerDomainError(409, "REVISION_CONFLICT", "external skill revision conflict", {
+        expected: existing.revision,
+        provided: input.revision
+      });
+    }
+    const sourceHash = externalSkillSummarySourceHash(existing.snapshot);
+    if (input.summary.source_sha256 !== sourceHash) {
+      throw new ServerDomainError(409, "EXTERNAL_SKILL_SOURCE_CHANGED", "external skill source changed while summary was generated", {
+        expected: sourceHash,
+        provided: input.summary.source_sha256
+      });
+    }
+    const now = new Date().toISOString();
+    const next = externalSkillSchema.parse({
+      ...existing,
+      aiSummary: input.summary,
+      revision: existing.revision + 1,
+      updated_at: now
+    });
+    this.externalSkills.set(next.id, next);
+    await this.persist();
+    return structuredClone(next);
+  }
+
   async deleteExternalSkill(id: string): Promise<{ id: string; deleted: boolean }> {
     if (!this.externalSkills.has(id)) {
       throw new ServerDomainError(404, "EXTERNAL_SKILL_NOT_FOUND", "external skill not found", { id });
@@ -2200,9 +2464,11 @@ export class RegistryStore {
     }
     const versionChanged = fetched.snapshot.version !== existing.snapshot.version;
     const now = fetched.snapshot.fetchedAt;
+    const sourceHash = externalSkillSummarySourceHash(fetched.snapshot);
     const next = externalSkillSchema.parse({
       ...existing,
       snapshot: fetched.snapshot,
+      aiSummary: existing.aiSummary?.source_sha256 === sourceHash ? existing.aiSummary : null,
       curationNote: previousNote,
       updateAvailable: versionChanged ? true : existing.updateAvailable,
       lastCheckedAt: now,

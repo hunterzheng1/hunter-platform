@@ -17,6 +17,12 @@ export function apiError(error: unknown, t: ReturnType<typeof useI18n>["t"]): st
     return t.error.authRequiredSettings;
   }
   if (error instanceof ApiClientError) {
+    const friendly = ({
+      AI_NOT_CONFIGURED: t.error.aiNotConfigured,
+      AI_GENERATION_FAILED: t.error.aiGenerationFailed,
+      AI_PARSE_FAILED: t.error.aiParseFailed
+    } as Record<string, string>)[error.code];
+    if (friendly !== undefined) return friendly;
     const base = t.error.apiFailed.replace("{code}", error.code);
     const detail = error.message && error.code !== "HTTP_ERROR" ? error.message : "";
     return detail ? `${base} ${detail}` : base;
@@ -95,15 +101,105 @@ function isMarkdownFile(path: string): boolean {
   return /\.md(?:own)?$/i.test(path);
 }
 
-function renderInlineMarkdown(value: string, keyPrefix: string): React.ReactNode {
-  const tokens = value.split(/(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^\s)]+\)|\*[^*]+\*)/g);
+interface MarkdownRenderOptions {
+  imageBaseUrl?: string | undefined;
+  linkBaseUrl?: string | undefined;
+}
+
+interface MarkdownHeading {
+  id: string;
+  label: string;
+  level: number;
+}
+
+function safeMarkdownUrl(value: string, baseUrl: string | undefined, image: boolean): string | null {
+  const raw = value.trim();
+  if (!image && raw.startsWith("#")) return raw;
+  try {
+    const parsed = baseUrl === undefined ? new URL(raw) : new URL(raw, baseUrl);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") return parsed.toString();
+    if (!image && parsed.protocol === "mailto:") return parsed.toString();
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function htmlAttribute(tag: string, name: string): string | undefined {
+  const quoted = tag.match(new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`, "i"))?.[1];
+  if (quoted !== undefined) return quoted;
+  return tag.match(new RegExp(`\\b${name}\\s*=\\s*([^\\s>]+)`, "i"))?.[1];
+}
+
+function normalizeMarkdownContent(content: string): string {
+  return content
+    .replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)/, "")
+    .replace(/<!--([\s\S]*?)-->/g, "")
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, "")
+    .replace(/\[!\[([^\]]*)\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g, "![$1]($2)")
+    .replace(/<img\b[^>]*>/gi, (tag) => {
+      const src = htmlAttribute(tag, "src");
+      if (src === undefined || src.trim() === "") return "";
+      const alt = (htmlAttribute(tag, "alt") ?? "").replaceAll("[", "").replaceAll("]", "");
+      return `\n![${alt}](${src})\n`;
+    })
+    .replace(/<br\s*\/?\s*>/gi, "\n")
+    .replace(/<\/?(?:div|center|picture|source|details|summary|p|table|thead|tbody|tr|td|th|kbd|sub|sup)\b[^>]*>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function markdownHeadingLabel(value: string): string {
+  return value
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/[`*_~]/g, "")
+    .trim() || "Section";
+}
+
+function markdownHeadings(content: string): MarkdownHeading[] {
+  const seen = new Map<string, number>();
+  const headings: MarkdownHeading[] = [];
+  for (const line of normalizeMarkdownContent(content).split(/\r?\n/)) {
+    const match = line.match(/^(#{1,6})\s+(.+)$/);
+    if (match === null) continue;
+    const label = markdownHeadingLabel(match[2] ?? "");
+    const base = label.toLowerCase().normalize("NFKD")
+      .replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "") || "section";
+    const count = seen.get(base) ?? 0;
+    seen.set(base, count + 1);
+    headings.push({ id: count === 0 ? base : `${base}-${count + 1}`, label, level: (match[1] ?? "#").length });
+  }
+  return headings;
+}
+
+function renderInlineMarkdown(value: string, keyPrefix: string, options: MarkdownRenderOptions = {}): React.ReactNode {
+  const tokens = value.split(/(!\[[^\]]*\]\([^)]+\)|`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\([^)]+\)|\*[^*]+\*)/g);
   return tokens.map((token, index) => {
     const key = `${keyPrefix}-${index}`;
+    const image = token.match(/^!\[([^\]]*)\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)$/);
+    if (image !== null) {
+      const src = safeMarkdownUrl(image[2] ?? "", options.imageBaseUrl, true);
+      return src === null
+        ? <span className="markdown-image-alt" key={key}>{image[1] ?? ""}</span>
+        : <img className="markdown-image" key={key} src={src} alt={image[1] ?? ""} loading="lazy" />;
+    }
     if (token.startsWith("`") && token.endsWith("`")) return <code key={key}>{token.slice(1, -1)}</code>;
     if (token.startsWith("**") && token.endsWith("**")) return <strong key={key}>{token.slice(2, -2)}</strong>;
     if (token.startsWith("*") && token.endsWith("*")) return <em key={key}>{token.slice(1, -1)}</em>;
-    const link = token.match(/^\[([^\]]+)\]\(([^\s)]+)\)$/);
-    if (link !== null) return <a key={key} href={link[2] ?? "#"} target="_blank" rel="noreferrer">{link[1] ?? ""}</a>;
+    const link = token.match(/^\[([^\]]+)\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)$/);
+    if (link !== null) {
+      const href = safeMarkdownUrl(link[2] ?? "", options.linkBaseUrl, false);
+      return href === null ? <span key={key}>{link[1] ?? ""}</span>
+        : <a key={key} href={href} target={href.startsWith("#") ? undefined : "_blank"} rel={href.startsWith("#") ? undefined : "noreferrer"}>{link[1] ?? ""}</a>;
+    }
     return <span key={key}>{token}</span>;
   });
 }
@@ -112,10 +208,33 @@ function tableCells(line: string): string[] {
   return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
 }
 
-function MarkdownDocument({ content }: { content: string }) {
-  const lines = content.replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)/, "").split(/\r?\n/);
+function markdownMediaClass(value: string): "markdown-badge-row" | "markdown-figure" | "markdown-media-inline" | undefined {
+  const images = value.match(/!\[[^\]]*\]\([^)]+\)/g) ?? [];
+  if (images.length === 0) return undefined;
+  const text = value.replace(/!\[[^\]]*\]\([^)]+\)/g, "").trim();
+  if (text !== "") return "markdown-media-inline";
+  return images.length > 1 ? "markdown-badge-row" : "markdown-figure";
+}
+
+function MarkdownDocument({
+  content,
+  className,
+  dataSlot,
+  imageBaseUrl,
+  linkBaseUrl
+}: {
+  content: string;
+  className?: string;
+  dataSlot?: string;
+  imageBaseUrl?: string | undefined;
+  linkBaseUrl?: string | undefined;
+}) {
+  const lines = normalizeMarkdownContent(content).split(/\r?\n/);
+  const headings = markdownHeadings(content);
+  const options = { imageBaseUrl, linkBaseUrl };
   const blocks: React.ReactNode[] = [];
   let index = 0;
+  let headingIndex = 0;
 
   while (index < lines.length) {
     const line = lines[index] ?? "";
@@ -133,11 +252,14 @@ function MarkdownDocument({ content }: { content: string }) {
     if (heading !== null) {
       const key = `heading-${blocks.length}`;
       const headingLevel = heading[1] ?? "";
-      const headingContent = renderInlineMarkdown(heading[2] ?? "", key);
-      blocks.push(headingLevel.length === 1 ? <h1 key={key}>{headingContent}</h1>
-        : headingLevel.length === 2 ? <h2 key={key}>{headingContent}</h2>
-          : headingLevel.length === 3 ? <h3 key={key}>{headingContent}</h3>
-            : <h4 key={key}>{headingContent}</h4>);
+      const headingContent = renderInlineMarkdown(heading[2] ?? "", key, options);
+      const id = headings[headingIndex++]?.id;
+      blocks.push(headingLevel.length === 1 ? <h1 id={id} key={key}>{headingContent}</h1>
+        : headingLevel.length === 2 ? <h2 id={id} key={key}>{headingContent}</h2>
+          : headingLevel.length === 3 ? <h3 id={id} key={key}>{headingContent}</h3>
+            : headingLevel.length === 4 ? <h4 id={id} key={key}>{headingContent}</h4>
+              : headingLevel.length === 5 ? <h5 id={id} key={key}>{headingContent}</h5>
+                : <h6 id={id} key={key}>{headingContent}</h6>);
       index += 1;
       continue;
     }
@@ -145,14 +267,14 @@ function MarkdownDocument({ content }: { content: string }) {
     if (line.startsWith("> ")) {
       const quote: string[] = [];
       while (index < lines.length && (lines[index] ?? "").startsWith("> ")) quote.push((lines[index++] ?? "").slice(2));
-      blocks.push(<blockquote key={`quote-${blocks.length}`}>{renderInlineMarkdown(quote.join(" "), `quote-${blocks.length}`)}</blockquote>);
+      blocks.push(<blockquote key={`quote-${blocks.length}`}>{renderInlineMarkdown(quote.join(" "), `quote-${blocks.length}`, options)}</blockquote>);
       continue;
     }
     if (line.includes("|") && index + 1 < lines.length && /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[index + 1] ?? "")) {
       const header = tableCells(line); index += 2;
       const rows: string[][] = [];
       while (index < lines.length && (lines[index] ?? "").includes("|") && (lines[index] ?? "").trim() !== "") rows.push(tableCells(lines[index++] ?? ""));
-      blocks.push(<div className="markdown-table-wrap" key={`table-${blocks.length}`}><table><thead><tr>{header.map((cell, cellIndex) => <th key={cellIndex}>{renderInlineMarkdown(cell, `head-${cellIndex}`)}</th>)}</tr></thead><tbody>{rows.map((row, rowIndex) => <tr key={rowIndex}>{header.map((_, cellIndex) => <td key={cellIndex}>{renderInlineMarkdown(row[cellIndex] ?? "", `cell-${rowIndex}-${cellIndex}`)}</td>)}</tr>)}</tbody></table></div>);
+      blocks.push(<div className="markdown-table-wrap" key={`table-${blocks.length}`}><table><thead><tr>{header.map((cell, cellIndex) => <th key={cellIndex}>{renderInlineMarkdown(cell, `head-${cellIndex}`, options)}</th>)}</tr></thead><tbody>{rows.map((row, rowIndex) => <tr key={rowIndex}>{header.map((_, cellIndex) => <td key={cellIndex}>{renderInlineMarkdown(row[cellIndex] ?? "", `cell-${rowIndex}-${cellIndex}`, options)}</td>)}</tr>)}</tbody></table></div>);
       continue;
     }
     const list = line.match(/^\s*([-+*]|\d+\.)\s+(.+)$/);
@@ -164,14 +286,20 @@ function MarkdownDocument({ content }: { content: string }) {
         items.push(item[2] ?? ""); index += 1;
       }
       const List = ordered ? "ol" : "ul";
-      blocks.push(<List key={`list-${blocks.length}`}>{items.map((item, itemIndex) => <li key={itemIndex}>{renderInlineMarkdown(item, `list-${itemIndex}`)}</li>)}</List>);
+      blocks.push(<List key={`list-${blocks.length}`}>{items.map((item, itemIndex) => <li key={itemIndex}>{renderInlineMarkdown(item, `list-${itemIndex}`, options)}</li>)}</List>);
       continue;
     }
     const paragraph: string[] = [];
     while (index < lines.length && (lines[index] ?? "").trim() !== "" && !/^(#{1,6})\s+|^```|^> |^\s*([-+*]|\d+\.)\s+/.test(lines[index] ?? "")) paragraph.push(lines[index++] ?? "");
-    blocks.push(<p key={`paragraph-${blocks.length}`}>{renderInlineMarkdown(paragraph.join(" "), `paragraph-${blocks.length}`)}</p>);
+    const paragraphValue = paragraph.join(" ");
+    const mediaClass = markdownMediaClass(paragraphValue);
+    blocks.push(<p
+      className={mediaClass}
+      data-slot={mediaClass === "markdown-badge-row" ? "markdown-badge-row" : undefined}
+      key={`paragraph-${blocks.length}`}
+    >{renderInlineMarkdown(paragraphValue, `paragraph-${blocks.length}`, options)}</p>);
   }
-  return <div className="markdown-document">{blocks}</div>;
+  return <div className={`markdown-document${className === undefined ? "" : ` ${className}`}`} data-slot={dataSlot}>{blocks}</div>;
 }
 
 function FilePreview({ path, content, showRaw, showRendered }: { path: string; content: string; showRaw: string; showRendered: string }) {
@@ -353,6 +481,7 @@ export {
   EnabledTargets,
   isMarkdownFile,
   renderInlineMarkdown,
+  markdownHeadings,
   tableCells,
   MarkdownDocument,
   FilePreview,

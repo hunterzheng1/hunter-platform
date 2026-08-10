@@ -1,7 +1,7 @@
 "use client";
 
 import type { SemanticDocument, SemanticEdge, SemanticOverview } from "@hunter-harness/contracts";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { HunterApi, ProjectSemanticGraph } from "../lib/api";
 import { useI18n } from "../lib/i18n";
@@ -13,18 +13,20 @@ type SemanticTab = "library" | "rules" | "changes" | "relations";
 interface SemanticData {
   overview: SemanticOverview;
   knowledge: SemanticDocument[];
-  rules: SemanticDocument[];
-  changes: SemanticDocument[];
+  rules: SemanticDocument[] | null;
+  changes: SemanticDocument[] | null;
 }
 
 const PAGE_SIZE = 25;
 
 function exportContextPack(projectId: string, data: SemanticData): void {
+  const rules = data.rules ?? [];
+  const changes = data.changes ?? [];
   const lines = [
     `# Context pack — ${projectId}`, "", `Documents: ${data.overview.counts.documents}`, "",
     "## Knowledge", ...data.knowledge.flatMap((item) => [`### ${item.title}`, item.body, ""]),
-    "## Rules", ...data.rules.flatMap((item) => [`### ${item.title}`, item.body, ""]),
-    "## Changes", ...data.changes.flatMap((item) => [`### ${item.title}`, item.body, ""])
+    "## Rules", ...rules.flatMap((item) => [`### ${item.title}`, item.body, ""]),
+    "## Changes", ...changes.flatMap((item) => [`### ${item.title}`, item.body, ""])
   ];
   const url = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" }));
   const anchor = document.createElement("a");
@@ -507,15 +509,18 @@ export function ProjectSemanticPanels({ api, projectId }: { api: HunterApi; proj
   const [hits, setHits] = useState<SemanticDocument[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingCount, setPendingCount] = useState(0);
+  const [exporting, setExporting] = useState(false);
+  const rulesRequest = useRef<{ projectId: string; promise: Promise<SemanticDocument[]> } | null>(null);
+  const changesRequest = useRef<{ projectId: string; promise: Promise<SemanticDocument[]> } | null>(null);
 
   const copy = lang === "zh" ? {
     title: "项目知识", subtitle: "浏览从项目内容中整理出的知识、规则、变更总结和关联信息。", library: "知识库", rules: "项目规则", changes: "变更总结", relations: "知识关系",
-    search: "搜索标题、正文或路径", export: "导出上下文", noKnowledge: "还没有项目知识", noRules: "还没有项目规则。", noChanges: "还没有变更总结。",
+    search: "搜索标题、正文或路径", export: "导出上下文", preparingExport: "正在准备…", noKnowledge: "还没有项目知识", noRules: "还没有项目规则。", noChanges: "还没有变更总结。",
     loading: "正在加载项目知识…", loadingGraph: "正在更新关系…", failed: "项目知识暂不可用。", documents: "已整理文档", knowledge: "知识", edges: "关系",
     pending: "还有 {n} 条知识正在整理，内容可能暂时不完整。", emptyPushHint: "通过 Hunter Harness 上传项目内容后，平台会自动整理知识。"
   } : {
     title: "Project knowledge", subtitle: "Searchable knowledge from push-indexed files and ingest projection.", library: "Knowledge library", rules: "Project rules", changes: "Change summaries", relations: "Relationship explorer",
-    search: "Search titles, content, or paths", export: "Export context", noKnowledge: "No project knowledge yet. Sources: push file index and knowledge ingest projection.", noRules: "No project rules yet.", noChanges: "No change summaries yet.",
+    search: "Search titles, content, or paths", export: "Export context", preparingExport: "Preparing…", noKnowledge: "No project knowledge yet. Sources: push file index and knowledge ingest projection.", noRules: "No project rules yet.", noChanges: "No change summaries yet.",
     loading: "Loading project knowledge…", loadingGraph: "Updating relations…", failed: "Project knowledge is unavailable.", documents: "Indexed documents", knowledge: "Knowledge", edges: "Relationships",
     pending: "{n} ingest entries pending projection — the semantic library may be incomplete.", emptyPushHint: "If empty: CLI push first, or wait for ingest projection; after purge/DB swap, push again."
   };
@@ -527,29 +532,65 @@ export function ProjectSemanticPanels({ api, projectId }: { api: HunterApi; proj
     setQuery("");
     setSelectedId(null);
     setGraph(null);
+    setData(null);
+    setPendingCount(0);
     void (async () => {
-      if (api.getProjectSemanticOverview === undefined || api.listProjectSemanticKnowledge === undefined || api.listProjectSemanticRules === undefined || api.listProjectSemanticChanges === undefined) throw new Error("semantic API unavailable");
-      const [overview, knowledgePage, rules, changes] = await Promise.all([
+      if (api.getProjectSemanticOverview === undefined || api.listProjectSemanticKnowledge === undefined) throw new Error("semantic API unavailable");
+      const pendingRequest = api.getKnowledgeProjectionStatus === undefined
+        ? Promise.resolve(0)
+        : api.getKnowledgeProjectionStatus(projectId).then((status) => status.pending_count).catch(() => 0);
+      const [overview, knowledgePage, pending] = await Promise.all([
         api.getProjectSemanticOverview(projectId), api.listProjectSemanticKnowledge(projectId, { includeBody: true }),
-        api.listProjectSemanticRules(projectId), api.listProjectSemanticChanges(projectId)
+        pendingRequest
       ]);
       const knowledge = knowledgePage.items;
-      let pending = 0;
-      if (api.getKnowledgeProjectionStatus !== undefined) {
-        try {
-          const status = await api.getKnowledgeProjectionStatus(projectId);
-          pending = status.pending_count;
-        } catch {
-          pending = 0;
-        }
-      }
       if (!active) return;
-      setData({ overview, knowledge, rules, changes });
+      setData({ overview, knowledge, rules: null, changes: null });
       setPendingCount(pending);
       setSelectedId(knowledge[0]?.document_id ?? null);
     })().catch(() => { if (active) setError(copy.failed); });
     return () => { active = false; };
   }, [api, projectId, copy.failed]);
+
+  const requestRules = useCallback((): Promise<SemanticDocument[]> => {
+    if (api.listProjectSemanticRules === undefined) return Promise.reject(new Error("semantic rules API unavailable"));
+    if (rulesRequest.current?.projectId === projectId) return rulesRequest.current.promise;
+    const promise = api.listProjectSemanticRules(projectId).catch((reason: unknown) => {
+      if (rulesRequest.current?.promise === promise) rulesRequest.current = null;
+      throw reason;
+    });
+    rulesRequest.current = { projectId, promise };
+    return promise;
+  }, [api, projectId]);
+
+  const requestChanges = useCallback((): Promise<SemanticDocument[]> => {
+    if (api.listProjectSemanticChanges === undefined) return Promise.reject(new Error("semantic changes API unavailable"));
+    if (changesRequest.current?.projectId === projectId) return changesRequest.current.promise;
+    const promise = api.listProjectSemanticChanges(projectId).catch((reason: unknown) => {
+      if (changesRequest.current?.promise === promise) changesRequest.current = null;
+      throw reason;
+    });
+    changesRequest.current = { projectId, promise };
+    return promise;
+  }, [api, projectId]);
+
+  useEffect(() => {
+    if (data === null || data.rules !== null || (tab !== "rules" && tab !== "relations")) return;
+    let active = true;
+    void requestRules()
+      .then((rules) => { if (active) setData((current) => current === null ? current : { ...current, rules }); })
+      .catch(() => { if (active) setError(copy.failed); });
+    return () => { active = false; };
+  }, [data, tab, requestRules, copy.failed]);
+
+  useEffect(() => {
+    if (data === null || data.changes !== null || (tab !== "changes" && tab !== "relations")) return;
+    let active = true;
+    void requestChanges()
+      .then((changes) => { if (active) setData((current) => current === null ? current : { ...current, changes }); })
+      .catch(() => { if (active) setError(copy.failed); });
+    return () => { active = false; };
+  }, [data, tab, requestChanges, copy.failed]);
 
   useEffect(() => {
     if (tab !== "relations" || api.getProjectSemanticGraph === undefined) return;
@@ -585,9 +626,29 @@ export function ProjectSemanticPanels({ api, projectId }: { api: HunterApi; proj
     }
   }
 
+  async function exportAll(): Promise<void> {
+    if (data === null || exporting) return;
+    setExporting(true);
+    setError(null);
+    try {
+      const [rules, changes] = await Promise.all([
+        data.rules === null ? requestRules() : Promise.resolve(data.rules),
+        data.changes === null ? requestChanges() : Promise.resolve(data.changes)
+      ]);
+      const complete = { ...data, rules, changes };
+      setData(complete);
+      exportContextPack(projectId, complete);
+    } catch {
+      setError(copy.failed);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   if (error !== null && data === null) return <div className="empty-state">{error}</div>;
   if (data === null) return <div className="empty-state">{copy.loading}</div>;
-  const items = tab === "rules" ? data.rules : tab === "changes" ? data.changes : hits ?? data.knowledge;
+  const items = tab === "rules" ? data.rules ?? [] : tab === "changes" ? data.changes ?? [] : hits ?? data.knowledge;
+  const documentsLoading = (tab === "rules" && data.rules === null) || (tab === "changes" && data.changes === null);
   const emptyCopy = tab === "rules"
     ? copy.noRules
     : tab === "changes"
@@ -595,7 +656,7 @@ export function ProjectSemanticPanels({ api, projectId }: { api: HunterApi; proj
       : copy.noKnowledge;
 
   return <section className="project-knowledge-v2">
-    <header className="knowledge-header"><div><p className="eyebrow">{copy.title}</p><h2>{copy.subtitle}</h2></div><button type="button" className="secondary" onClick={() => exportContextPack(projectId, data)}>⇩ {copy.export}</button></header>
+    <header className="knowledge-header"><div><p className="eyebrow">{copy.title}</p><h2>{copy.subtitle}</h2></div><button type="button" className="secondary" disabled={exporting} onClick={() => void exportAll()}>⇩ {exporting ? copy.preparingExport : copy.export}</button></header>
     <div className="knowledge-metrics"><span><strong>{data.overview.counts.documents}</strong>{copy.documents}</span><span><strong>{data.overview.counts.knowledge}</strong>{copy.knowledge}</span><span><strong>{data.overview.counts.edges}</strong>{copy.edges}</span></div>
     {pendingCount > 0 ? <p className="notice warning" role="status">{copy.pending.replace("{n}", String(pendingCount))}</p> : null}
     <div className="knowledge-controls">
@@ -606,12 +667,12 @@ export function ProjectSemanticPanels({ api, projectId }: { api: HunterApi; proj
       {graphLoading ? <p className="relation-refresh-hint" aria-live="polite">{copy.loadingGraph}</p> : null}
       <RelationWorkbench
         graph={graph}
-        candidates={[...data.knowledge, ...data.rules, ...data.changes]}
+        candidates={[...data.knowledge, ...(data.rules ?? []), ...(data.changes ?? [])]}
         selectedId={selectedId}
         onSelect={selectDocument}
         lang={lang}
       />
-    </div> : <DocumentBrowser items={items} selectedId={selectedId} onSelect={selectDocument} empty={emptyCopy} {...(tab === "library" && data.knowledge.length === 0 ? { emptyHint: copy.emptyPushHint } : {})} lang={lang} enableStatusFilter={tab === "library"} statusLabels={statusLabels} />}
+    </div> : documentsLoading ? <div className="empty-state">{copy.loading}</div> : <DocumentBrowser items={items} selectedId={selectedId} onSelect={selectDocument} empty={emptyCopy} {...(tab === "library" && data.knowledge.length === 0 ? { emptyHint: copy.emptyPushHint } : {})} lang={lang} enableStatusFilter={tab === "library"} statusLabels={statusLabels} />}
     {error === null || data === null ? null : <div className="notice danger">{error}</div>}
   </section>;
 }

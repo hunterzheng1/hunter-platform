@@ -4,6 +4,8 @@ import {
   type AiProviderConfig,
   type AiProviderWithKeySet,
   type AiQuotaUsage,
+  type CodexConnectionState,
+  type CodexLoginStart,
   type ProviderModel,
   type DashboardOverview,
   type DraftState,
@@ -23,6 +25,8 @@ import {
   type RegistrySkillDetail,
   type RegistrySkillVersion,
   type RegistryTag,
+  type SkillCatalogOrder,
+  type UpdateSkillCatalogOrderRequest,
   type SetDefaultAgentRequest,
   type SkillCheckResult,
   type SkillDiffFile,
@@ -322,11 +326,14 @@ export interface HunterApi {
   getProposal(proposalId: string): Promise<ProposalDetailModel>;
   reviewProposal?(proposalId: string, input: ReviewInput): Promise<ReviewResult>;
   listSkills?(filters?: Record<string, string>): Promise<RegistrySkillDetail[]>;
+  getSkillCatalogOrder?(): Promise<SkillCatalogOrder>;
+  updateSkillCatalogOrder?(input: UpdateSkillCatalogOrderRequest): Promise<SkillCatalogOrder>;
   listExternalSkills?(filters?: Record<string, string>): Promise<ExternalSkill[]>;
   getExternalSkill?(id: string): Promise<ExternalSkill>;
   createExternalSkill?(input: CreateExternalSkillRequest): Promise<ExternalSkill>;
   patchExternalSkill?(id: string, input: PatchExternalSkillRequest): Promise<ExternalSkill>;
   refreshExternalSkill?(id: string): Promise<ExternalSkill>;
+  generateExternalSkillSummary?(id: string, revision: number, force?: boolean): Promise<ExternalSkill>;
   deleteExternalSkill?(id: string): Promise<{ id: string; deleted: boolean }>;
   listSkillArtifacts?(): Promise<RegistryArtifact[]>;
   getSkill?(slug: string): Promise<RegistrySkillDetail>;
@@ -408,6 +415,12 @@ export interface HunterApi {
   setDefaultAgent?(slug: string, agent: RegistryAgent, revision: number): Promise<RegistrySkillDetail>;
   deleteSkill?(slug: string): Promise<{ slug: string; deleted: boolean }>;
   listAiProviders?(): Promise<{ items: AiProviderWithKeySet[]; default_provider: string | null }>;
+  getCodexConnection?(): Promise<CodexConnectionState>;
+  startCodexLogin?(): Promise<CodexLoginStart>;
+  cancelCodexLogin?(loginId: string): Promise<{ cancelled: boolean }>;
+  updateCodexConnection?(input: { selected_model?: string | null; enabled?: boolean }): Promise<CodexConnectionState>;
+  disconnectCodex?(): Promise<{ disconnected: boolean }>;
+  testCodexConnection?(): Promise<{ ok: boolean; model: string | null }>;
   createAiProvider?(input: {
     provider_id: string; label: string; base_url: string; model: string;
     enabled: boolean; api_key_env: string; is_default?: boolean;
@@ -760,6 +773,14 @@ export class HttpHunterApi implements HunterApi {
     return result.items;
   }
 
+  async getSkillCatalogOrder(): Promise<SkillCatalogOrder> {
+    return this.request("GET", "/api/v1/skill-catalog/order");
+  }
+
+  async updateSkillCatalogOrder(input: UpdateSkillCatalogOrderRequest): Promise<SkillCatalogOrder> {
+    return this.request("PUT", "/api/v1/skill-catalog/order", input);
+  }
+
   async listExternalSkills(filters: Record<string, string> = {}): Promise<ExternalSkill[]> {
     const query = new URLSearchParams(filters);
     const result = await this.request<{ items: ExternalSkill[] }>(
@@ -782,6 +803,13 @@ export class HttpHunterApi implements HunterApi {
 
   async refreshExternalSkill(id: string): Promise<ExternalSkill> {
     return this.request("POST", "/api/v1/external-skills/" + encodeURIComponent(id) + "/refresh");
+  }
+
+  async generateExternalSkillSummary(id: string, revision: number, force = false): Promise<ExternalSkill> {
+    return this.request("POST", "/api/v1/external-skills/" + encodeURIComponent(id) + "/summary", {
+      revision,
+      force
+    });
   }
 
   async deleteExternalSkill(id: string): Promise<{ id: string; deleted: boolean }> {
@@ -1302,6 +1330,24 @@ export class HttpHunterApi implements HunterApi {
 
   async listAiProviders(): Promise<{ items: AiProviderWithKeySet[]; default_provider: string | null }> {
     return this.request("GET", "/api/v1/ai-config/providers");
+  }
+  async getCodexConnection(): Promise<CodexConnectionState> {
+    return this.request("GET", "/api/v1/ai-config/codex");
+  }
+  async startCodexLogin(): Promise<CodexLoginStart> {
+    return this.request("POST", "/api/v1/ai-config/codex/login", { schema_version: 1 });
+  }
+  async cancelCodexLogin(loginId: string): Promise<{ cancelled: boolean }> {
+    return this.request("POST", "/api/v1/ai-config/codex/login/cancel", { schema_version: 1, login_id: loginId });
+  }
+  async updateCodexConnection(input: { selected_model?: string | null; enabled?: boolean }): Promise<CodexConnectionState> {
+    return this.request("PATCH", "/api/v1/ai-config/codex", { schema_version: 1, ...input });
+  }
+  async disconnectCodex(): Promise<{ disconnected: boolean }> {
+    return this.request("DELETE", "/api/v1/ai-config/codex", {});
+  }
+  async testCodexConnection(): Promise<{ ok: boolean; model: string | null }> {
+    return this.request("POST", "/api/v1/ai-config/codex/test", { schema_version: 1 });
   }
   async createAiProvider(input: {
     provider_id: string; label: string; base_url: string; model: string;

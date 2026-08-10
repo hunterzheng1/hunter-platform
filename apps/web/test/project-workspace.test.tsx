@@ -83,6 +83,40 @@ function api(overrides: Partial<HunterApi> = {}): HunterApi {
 }
 
 describe("ProjectWorkspace", () => {
+  it("keeps project knowledge mounted after its first visit", async () => {
+    const listProjectSemanticKnowledge = vi.fn(async () => ({ items: [], total: 0, next_cursor: null }));
+    const semanticApi = api({
+      getProjectSemanticOverview: vi.fn(async () => ({
+        project_id: "prj_one",
+        artifact_id: null,
+        counts: { documents: 0, knowledge: 0, rules: 0, changes: 0, agent_instructions: 0, edges: 0 }
+      })),
+      listProjectSemanticKnowledge,
+      listProjectSemanticRules: vi.fn(async () => []),
+      listProjectSemanticChanges: vi.fn(async () => []),
+      getKnowledgeProjectionStatus: vi.fn(async () => ({ pending_count: 0, pending_capped: false })),
+      getProjectSemanticGraph: vi.fn(async () => ({
+        nodes: [], edges: [], focus_document_id: null, relation_status: "no_relations" as const, indexed_documents: 0
+      })),
+      searchSemanticDocuments: vi.fn(async () => [])
+    });
+
+    render(
+      <ToastProvider>
+        <ProjectWorkspace api={semanticApi} projectId="prj_one" />
+      </ToastProvider>
+    );
+
+    fireEvent.click(await screen.findByRole("tab", { name: "项目知识" }));
+    expect(await screen.findByText("还没有项目知识")).toBeInTheDocument();
+    expect(listProjectSemanticKnowledge).toHaveBeenCalledOnce();
+
+    fireEvent.click(screen.getByRole("tab", { name: "文件" }));
+    fireEvent.click(screen.getByRole("tab", { name: "项目知识" }));
+    expect(screen.getByText("还没有项目知识")).toBeInTheDocument();
+    expect(listProjectSemanticKnowledge).toHaveBeenCalledOnce();
+  });
+
   it("loads only file metadata, then saves an edit directly", async () => {
     const getProjectFileContent = vi.fn(async (_projectId: string, path: string) => ({
       ...(files.find((file) => file.path === path) ?? files[0] as ProjectFileMetadata),

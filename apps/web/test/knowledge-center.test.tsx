@@ -28,7 +28,7 @@ describe("KnowledgeCenter (P3)", () => {
           kind: "knowledge_entry",
           source_path: "entries/candidate/x.json",
           title: "Use scrypt",
-          body: "Hash passwords with scrypt.",
+          body: "## 密码存储\n\n- 使用 **scrypt**\n- 保留随机盐\n\n运行 `npm test` 验证。",
           metadata: { status: "active", entry_id: "kn-1" },
           content_sha256: "sha256:abc"
         }
@@ -38,7 +38,7 @@ describe("KnowledgeCenter (P3)", () => {
     const api = {
       searchSemanticDocuments,
       listProjects: vi.fn().mockResolvedValue([
-        { project_id: "prj_demo", display_name: "Demo", role: "owner", created_at: "2026-01-01T00:00:00Z" }
+        { project_id: "prj_demo", display_name: "演示项目", role: "owner", created_at: "2026-01-01T00:00:00Z" }
       ]),
       listProjectSemanticKnowledge,
       listKnowledgeEntries: vi.fn().mockResolvedValue([]),
@@ -59,7 +59,11 @@ describe("KnowledgeCenter (P3)", () => {
     await waitFor(() => {
       expect(searchSemanticDocuments).toHaveBeenCalledWith("scrypt", undefined);
       expect(screen.getAllByText("Use scrypt").length).toBeGreaterThan(0);
-      expect(screen.getByText("Hash passwords with scrypt.")).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "密码存储", level: 2 })).toBeInTheDocument();
+      expect(screen.getAllByText("演示项目").length).toBeGreaterThan(0);
+      expect(screen.queryByText("prj_demo")).not.toBeInTheDocument();
+      expect(screen.getByText("scrypt", { selector: "strong" })).toBeInTheDocument();
+      expect(screen.getByText("npm test", { selector: "code" })).toBeInTheDocument();
     });
   });
 

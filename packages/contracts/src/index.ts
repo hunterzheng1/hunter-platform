@@ -17,4 +17,5 @@ export * from "./registry.js";
 export * from "./recovery.js";
 export * from "./semantic.js";
 export * from "./skill-package.js";
+export * from "./skill-catalog.js";
 export * from "./workflow-family.js";

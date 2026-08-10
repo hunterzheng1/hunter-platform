@@ -45,6 +45,8 @@ describe("ProjectSemanticPanels", () => {
       relation_status: "no_relations" as const,
       indexed_documents: 1
     }));
+    const listProjectSemanticRules = vi.fn(async () => []);
+    const listProjectSemanticChanges = vi.fn(async () => []);
     const api = {
       getProjectSemanticOverview: vi.fn(async () => ({
         project_id: "prj_one",
@@ -52,15 +54,25 @@ describe("ProjectSemanticPanels", () => {
         counts: { documents: 1, knowledge: 1, rules: 0, changes: 0, agent_instructions: 0, edges: 0 }
       })),
       listProjectSemanticKnowledge: vi.fn(async () => ({ items: [knowledge], total: 1, next_cursor: null })),
-      listProjectSemanticRules: vi.fn(async () => []),
-      listProjectSemanticChanges: vi.fn(async () => []),
+      listProjectSemanticRules,
+      listProjectSemanticChanges,
       getProjectSemanticGraph,
       searchSemanticDocuments: vi.fn(async () => [{ document: knowledge, project_id: "prj_one" }])
     } as unknown as HunterApi;
 
     render(<ProjectSemanticPanels api={api} projectId="prj_one" />);
     expect(await screen.findByRole("heading", { name: "Architecture boundary" })).toBeInTheDocument();
+    expect(listProjectSemanticRules).not.toHaveBeenCalled();
+    expect(listProjectSemanticChanges).not.toHaveBeenCalled();
     expect(getProjectSemanticGraph).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("tab", { name: "项目规则" }));
+    await waitFor(() => expect(listProjectSemanticRules).toHaveBeenCalledOnce());
+    expect(listProjectSemanticChanges).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("tab", { name: "变更总结" }));
+    await waitFor(() => expect(listProjectSemanticChanges).toHaveBeenCalledOnce());
+
     fireEvent.click(screen.getByRole("tab", { name: "知识关系" }));
     await waitFor(() => expect(getProjectSemanticGraph).toHaveBeenCalledWith("prj_one", "sem_one"));
     expect(await screen.findByText("暂未发现可展示的知识关系")).toBeInTheDocument();

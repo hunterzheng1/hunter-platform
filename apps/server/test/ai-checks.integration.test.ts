@@ -84,6 +84,9 @@ describe("AI config + ai-checks API (簇 D, 任务 11/13)", () => {
   let app: Awaited<ReturnType<typeof createServer>>;
   let secretFile: string;
   let llmFn: (p: LlmPrompt) => Promise<LlmResponse>;
+  let resolvedProviderId: string | null;
+  let codexAnalyzeCalls: number;
+  let codexConnected: boolean;
 
   beforeEach(async () => {
     repository = new MemoryRepository();
@@ -91,11 +94,44 @@ describe("AI config + ai-checks API (簇 D, 任务 11/13)", () => {
     secretFile = path.join(os.tmpdir(), `hh-ai-int-${process.pid}.json`);
     await fs.writeFile(secretFile, JSON.stringify({ deepseek: { apiKey: "sk-test-123" } }), "utf8");
     llmFn = async () => ({ content: validAiJson, usage: { requests: 1, tokens: 50 } });
+    resolvedProviderId = null;
+    codexAnalyzeCalls = 0;
+    codexConnected = true;
     app = await createServer({
       repository,
       storage: new MemoryArtifactStorage(),
       config: { aiSecretFile: secretFile },
-      aiLlmClientFactory: () => new FakeLlmClient((p) => llmFn(p))
+      aiLlmClientFactory: (provider) => {
+        resolvedProviderId = provider.provider_id;
+        return new FakeLlmClient((p) => llmFn(p));
+      },
+      codexService: {
+        getConnection: async () => ({
+          status: codexConnected ? "connected" : "disconnected",
+          auth_mode: codexConnected ? "chatgpt" : null,
+          email: codexConnected ? "owner@example.com" : null,
+          plan_type: codexConnected ? "plus" : null,
+          models: codexConnected ? [
+            { id: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", is_default: true, reasoning_efforts: ["medium", "high"] },
+            { id: "gpt-5.6-terra", display_name: "GPT-5.6 Terra", is_default: false, reasoning_efforts: ["medium", "high"] }
+          ] : [],
+          error: null
+        }),
+        startDeviceLogin: async () => ({
+          login_id: "login_01",
+          verification_url: "https://auth.openai.com/codex/device",
+          user_code: "ABCD-EFGH"
+        }),
+        cancelLogin: async () => undefined,
+        logout: async () => { codexConnected = false; },
+        getLlmClient: async () => codexConnected
+          ? new FakeLlmClient(async (prompt) => {
+            codexAnalyzeCalls += 1;
+            return llmFn(prompt);
+          })
+          : null,
+        close: async () => undefined
+      }
     });
   });
 
@@ -113,9 +149,9 @@ describe("AI config + ai-checks API (簇 D, 任务 11/13)", () => {
     };
   }
 
-  async function uploadDraft(): Promise<void> {
+  async function uploadDraft(agent = "claude-code"): Promise<void> {
     const up = multipart([{ path: "SKILL.md", content: skillMd }]);
-    const res = await app.inject({ method: "POST", url: "/api/v1/skills/draft?agent=claude-code", payload: up.payload, headers: { ...headers(), ...up.headers } });
+    const res = await app.inject({ method: "POST", url: `/api/v1/skills/draft?agent=${agent}`, payload: up.payload, headers: { ...headers(), ...up.headers } });
     expect(res.statusCode).toBe(201);
   }
 
@@ -157,6 +193,130 @@ describe("AI config + ai-checks API (簇 D, 任务 11/13)", () => {
     expect(body.default_provider).toBe("deepseek");
     expect(JSON.stringify(body)).not.toContain("apiKey");
     expect(JSON.stringify(body)).not.toContain("sk-");
+  });
+
+  it("Codex 通过独立 ChatGPT 账号连接并用于 Codex 技能的 AI 调用", async () => {
+    await createDefaultProvider();
+    const list = await app.inject({ method: "GET", url: "/api/v1/ai-config/providers", headers: headers() });
+    expect(list.statusCode).toBe(200);
+    expect(list.json()).not.toHaveProperty("bindings");
+
+    const state = await app.inject({ method: "GET", url: "/api/v1/ai-config/codex", headers: headers() });
+    expect(state.statusCode).toBe(200);
+    expect(state.json()).toMatchObject({
+      status: "connected",
+      auth_mode: "chatgpt",
+      email: "owner@example.com",
+      enabled: false,
+      selected_model: "gpt-5.6-sol"
+    });
+    expect(state.json().models).toHaveLength(2);
+
+    const selected = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/ai-config/codex",
+      payload: { schema_version: 1, selected_model: "gpt-5.6-terra", enabled: true },
+      headers: headers()
+    });
+    expect(selected.statusCode).toBe(200);
+    expect(selected.json().selected_model).toBe("gpt-5.6-terra");
+    expect(selected.json().enabled).toBe(true);
+    const providersAfterCodex = (await app.inject({ method: "GET", url: "/api/v1/ai-config/providers", headers: headers() })).json().items;
+    expect(providersAfterCodex.find((item: { provider_id: string }) => item.provider_id === "deepseek")?.enabled).toBe(false);
+
+    await uploadDraft("codex");
+    const started = await app.inject({
+      method: "POST",
+      url: "/api/v1/skills/harness-ai/draft/codex/ai-checks",
+      payload: {},
+      headers: headers()
+    });
+    expect(started.statusCode).toBe(200);
+    await pollJob(started.json().jobId as string);
+    expect(codexAnalyzeCalls).toBe(1);
+    expect(resolvedProviderId).toBeNull();
+  });
+
+  it("没有 API 厂商时，已连接的 Codex 账号也能为通用 AI 功能提供模型", async () => {
+    const enabled = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/ai-config/codex",
+      payload: { schema_version: 1, enabled: true },
+      headers: headers()
+    });
+    expect(enabled.statusCode).toBe(200);
+    await uploadDraft("claude-code");
+    const started = await app.inject({
+      method: "POST",
+      url: "/api/v1/skills/harness-ai/draft/claude-code/ai-checks",
+      payload: {},
+      headers: headers()
+    });
+    expect(started.statusCode).toBe(200);
+    const job = await pollJob(started.json().jobId as string);
+    expect(job.status).toBe("completed");
+    expect(codexAnalyzeCalls).toBe(1);
+    expect(resolvedProviderId).toBeNull();
+  });
+
+  it("启用 API 供应商会停用 Codex，通用与 Codex Agent 都只使用当前启用来源", async () => {
+    await app.inject({
+      method: "PATCH",
+      url: "/api/v1/ai-config/codex",
+      payload: { schema_version: 1, enabled: true },
+      headers: headers()
+    });
+    const createdResponse = await app.inject({
+      method: "POST",
+      url: "/api/v1/ai-config/providers",
+      payload: { ...providerPayload, enabled: false, is_default: false },
+      headers: headers()
+    });
+    expect(createdResponse.statusCode).toBe(201);
+    const created = (await app.inject({ method: "GET", url: "/api/v1/ai-config/providers", headers: headers() })).json().items[0];
+    await app.inject({
+      method: "PATCH",
+      url: "/api/v1/ai-config/providers/deepseek",
+      payload: { schema_version: 1, revision: created.revision, enabled: true },
+      headers: headers()
+    });
+    const codex = await app.inject({ method: "GET", url: "/api/v1/ai-config/codex", headers: headers() });
+    expect(codex.json().enabled).toBe(false);
+
+    await uploadDraft("codex");
+    const started = await app.inject({
+      method: "POST",
+      url: "/api/v1/skills/harness-ai/draft/codex/ai-checks",
+      payload: {},
+      headers: headers()
+    });
+    expect(started.statusCode).toBe(200);
+    await pollJob(started.json().jobId as string);
+    expect(resolvedProviderId).toBe("deepseek");
+    expect(codexAnalyzeCalls).toBe(0);
+  });
+
+  it("API 供应商不再接受 bind_codex，Codex 授权入口返回官方设备码", async () => {
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/api/v1/ai-config/providers",
+      payload: { ...providerPayload, bind_codex: true },
+      headers: headers()
+    });
+    expect(rejected.statusCode).toBe(400);
+
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/v1/ai-config/codex/login",
+      payload: { schema_version: 1 },
+      headers: headers()
+    });
+    expect(login.statusCode).toBe(200);
+    expect(login.json()).toMatchObject({
+      login_id: "login_01",
+      verification_url: "https://auth.openai.com/codex/device",
+      user_code: "ABCD-EFGH"
+    });
   });
 
   it("API-002/020 POST 创建 + audit ai.provider.created + 幂等", async () => {
@@ -386,7 +546,8 @@ describe("AI config + ai-checks API (簇 D, 任务 11/13)", () => {
     expect(res.json().error.code).toBe("DRAFT_NOT_FOUND");
   });
 
-  it("API-014 ai-checks 未配置 AI（无 default provider）→ 422", async () => {
+  it("API-014 ai-checks 未配置 AI（无默认 API 且 Codex 未连接）→ 422", async () => {
+    codexConnected = false;
     await uploadDraft();
     const res = await app.inject({ method: "POST", url: "/api/v1/skills/harness-ai/draft/claude-code/ai-checks", payload: {}, headers: headers() });
     expect(res.statusCode).toBe(422);
@@ -488,7 +649,8 @@ describe("AI config + ai-checks API (簇 D, 任务 11/13)", () => {
       expect(await auditActions()).toContain("skill.draft.release-note.generated");
     });
 
-    it("API-002 AI_NOT_CONFIGURED 422（无默认 provider）", async () => {
+    it("API-002 AI_NOT_CONFIGURED 422（无默认 API 且 Codex 未连接）", async () => {
+      codexConnected = false;
       await uploadDraft();
       const res = await app.inject({ method: "POST", url: "/api/v1/skills/harness-ai/draft/claude-code/release-note:generate", payload: {}, headers: headers() });
       expect(res.statusCode).toBe(422);

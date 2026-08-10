@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -68,18 +68,37 @@ describe("Web Console", () => {
     expect(screen.getByLabelText(/正在加载总览|Loading overview/i)).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: /总览|Overview/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /最近项目|Recent projects/i })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /技能使用|Skill usage/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /版本与能力|Versions and capabilities/i })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /变更提交情况|Change activity/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Artifact changes" })).not.toBeInTheDocument();
   });
 
   it("renders dashboard and project registry from /api/v1", async () => {
     const dashboard = render(<DashboardConsole api={api()} />);
     expect(await screen.findByRole("heading", { name: /总览|Overview/i })).toBeInTheDocument();
-    expect(screen.getByRole("img", { name: /变更提交|Change activity/i })).toBeInTheDocument();
+    expect(screen.getByText(/项目版本与技能包合计|Project versions and skill packages/i)).toBeInTheDocument();
     dashboard.unmount();
     render(<ProjectRegistry api={api()} />);
     expect(await screen.findByRole("heading", { name: "Payments" })).toBeInTheDocument();
     expect(screen.queryByText("art_1")).not.toBeInTheDocument();
+  });
+
+  it("limits the overview activity list to the five most recent entries", async () => {
+    const activity = Array.from({ length: 8 }, (_, index) => ({
+      event_id: `evt_${index}`,
+      action: "artifact.published",
+      target_id: `art_${index}`,
+      project_id: "prj_one",
+      actor_id: "actor_owner",
+      created_at: `2026-06-22T0${index}:00:00.000Z`
+    }));
+    render(<DashboardConsole api={api({
+      getDashboardOverview: vi.fn(async () => ({ ...overview, activity }))
+    })} />);
+
+    const list = await screen.findByRole("list", { name: /活动记录|Activity/i });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(5);
+    expect(screen.getByText(/显示最近 5 条，共 8 条|Showing 5 of 8/i)).toBeInTheDocument();
   });
 
   it("loads projects without workflow N+1 calls and moves a project to the recycle bin", async () => {

@@ -85,8 +85,8 @@
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
-  width: min(520px, calc(100vw - 32px));
-  max-height: min(78vh, 720px);
+  width: min(520px, calc(100vw - 48px));
+  max-height: min(calc(100vh - 48px), 720px);
   display: flex;
   flex-direction: column;
   padding: 20px;
@@ -95,7 +95,7 @@
 }
 
 .modal-panel-wide {
-  width: min(860px, calc(100vw - 32px));
+  width: min(860px, calc(100vw - 48px));
 }
 
 .modal-head {

@@ -14,25 +14,33 @@ import {
   registrySlugSchema,
   sensitiveReviewSubmissionSchema,
   skillTargetAgentSchema,
+  updateSkillCatalogOrderRequestSchema,
   setDefaultAgentRequestSchema,
   workflowFamilyMutationSchema,
   bindProjectWorkflowFamilyRequestSchema,
   createExternalSkillRequestSchema,
+  generateExternalSkillSummaryRequestSchema,
   patchExternalSkillRequestSchema,
   SKILL_ERROR_CODE,
   type AiProviderConfig,
+  type CodexConnectionState,
+  type RegistryAgent,
   type FileOperation,
   type FixPlanItem,
   type SourceFile
 } from "@hunter-harness/contracts";
 import {
   buildAiCheckPrompt,
+  buildExternalSkillSummaryRepairPrompt,
+  buildExternalSkillSummaryPrompt,
   buildFixSuggestionPrompt,
   buildReleaseNotePrompt,
   classifyFile,
   decidePush,
   findEntryFile,
+  externalSkillSummarySourceHash,
   parseAiCheckResult,
+  parseExternalSkillSummary,
   parseFixSuggestionResult,
   parseFrontmatter,
   parseReleaseNote,
@@ -54,6 +62,7 @@ import multipart from "@fastify/multipart";
 import AdmZip from "adm-zip";
 
 import { MemoryAiJobStore, type AiJobStore } from "./ai/ai-job-store.js";
+import { CodexAppServerService, type CodexAiService } from "./ai/codex-app-server.js";
 import { createLlmClient } from "./ai/llm-factory.js";
 import { loadAiSecret, writeAiSecret } from "./ai/secret-loader.js";
 import { writeAudit } from "./audit/audit.js";
@@ -129,6 +138,8 @@ export interface CreateServerOptions {
   aiJobStore?: AiJobStore;
   // AI LlmClient ????? createLlmClient ?? DeepSeek?????? mock?
   aiLlmClientFactory?: (provider: AiProviderConfig, apiKey: string) => LlmClient | null;
+  /** Codex 独立 ChatGPT 账号连接；测试可注入内存实现。 */
+  codexService?: CodexAiService;
   npmPublisherDeps?: NpmPublisherDeps;
   npmPublishConfig?: ReturnType<typeof loadNpmPublishConfig>;
   /** External Skill ?? fetch ??????? */
@@ -476,6 +487,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   const aiJobStore = options.aiJobStore ?? new MemoryAiJobStore();
   const semanticStore = options.semanticStore ?? new SemanticMemoryStore();
   const runStore = options.runStore ?? new MemoryRunStore();
+  const codexService = options.codexService ?? new CodexAppServerService(config.codexHome);
   // R3???????? running/pending job?PG ??? failed ?? partial unique index?memory no-op??
   await aiJobStore.recoverOrphans();
   // AI LlmClient ???�12.9??? defaultProvider ??? provider + secret file key ?? DeepSeek ????
@@ -488,7 +500,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     const provider = providerId === null
       ? registry.getDefaultProvider()
       : registry.getProvider(providerId) ?? null;
-    if (provider === null || !provider.enabled) return null;
+    if (provider === null || (providerId === null && !provider.enabled)) return null;
     const secret = await loadAiSecret(config.aiSecretFile, provider.provider_id);
     if (secret === null) return null;
     const merged: AiProviderConfig = {
@@ -504,6 +516,62 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
       });
     }
     return { client, provider };
+  };
+  type ResolvedAgentClient = {
+    client: LlmClient;
+    provider: AiProviderConfig | null;
+    model: string;
+    source: "provider" | "codex";
+  };
+  const resolveCodexLlmClient = async (): Promise<ResolvedAgentClient | null> => {
+    if (!registry.isCodexEnabled()) return null;
+    const connection = await codexService.getConnection();
+    if (connection.status !== "connected") return null;
+    const preferred = registry.getCodexSelectedModel();
+    const model = connection.models.some((item) => item.id === preferred)
+      ? preferred
+      : connection.models.find((item) => item.is_default)?.id ?? connection.models[0]?.id ?? null;
+    if (model === null) return null;
+    const client = await codexService.getLlmClient(model);
+    return client === null ? null : { client, provider: null, model, source: "codex" };
+  };
+  const resolveProviderLlmClient = async (): Promise<ResolvedAgentClient | null> => {
+    const fallback = await resolveLlmClient(null);
+    return fallback === null ? null : {
+      ...fallback,
+      model: resolveRequestModel(fallback.provider),
+      source: "provider"
+    };
+  };
+  const resolveAgentLlmClient = async (agent: RegistryAgent): Promise<ResolvedAgentClient | null> => {
+    void agent;
+    // 所有平台 AI 功能共用一个明确的默认来源。连接或保存密钥只表示“可用”，
+    // enabled 才表示“正在使用”，避免不同 Agent 暗中选择不同后端。
+    return registry.isCodexEnabled()
+      ? await resolveCodexLlmClient()
+      : await resolveProviderLlmClient();
+  };
+  const resolvedBackendId = (resolved: ResolvedAgentClient): string =>
+    resolved.provider?.provider_id ?? "codex-account";
+  const checkAgentQuota = (resolved: ResolvedAgentClient): void => {
+    if (resolved.provider !== null) {
+      registry.checkQuota({ provider_id: resolved.provider.provider_id, requests: 1, tokens: 0 });
+    }
+  };
+  const recordAgentUsage = async (
+    resolved: ResolvedAgentClient,
+    usage: Awaited<ReturnType<LlmClient["analyze"]>>["usage"]
+  ): Promise<void> => {
+    if (resolved.provider === null) return;
+    await registry.recordUsage({
+      provider_id: resolved.provider.provider_id,
+      model: resolved.model,
+      requests: usage?.requests ?? 1,
+      input_tokens: usage?.input_tokens ?? 0,
+      output_tokens: usage?.output_tokens ?? 0,
+      cache_hit_tokens: usage?.cache_hit_tokens ?? 0,
+      cache_create_tokens: usage?.cache_create_tokens ?? 0
+    });
   };
   const app = Fastify({
     logger: options.logger ?? false,
@@ -2364,6 +2432,31 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     };
   });
 
+  app.get("/api/v1/skill-catalog/order", async (request, reply) => {
+    const { requestId } = await authenticated(request, repository);
+    reply.header("X-Request-Id", requestId);
+    return { ...registry.getSkillCatalogOrder(), request_id: requestId };
+  });
+
+  app.put("/api/v1/skill-catalog/order", async (request, reply) => {
+    const { actor, requestId } = await authenticated(request, repository);
+    const body = updateSkillCatalogOrderRequestSchema.parse(request.body);
+    const result = await mutation(request, repository, actor, requestId, async () => {
+      const order = await registry.updateSkillCatalogOrder(body);
+      await writeAudit(repository, {
+        actorId: actor.actorId,
+        projectId: null,
+        action: "skill_catalog.reordered",
+        targetId: "skill-catalog",
+        requestId,
+        details: { revision: order.revision, item_count: order.items.length }
+      });
+      return { statusCode: 200, body: order };
+    });
+    return send(reply, requestId, result);
+  });
+  app.addHook("onClose", async () => codexService.close());
+
   app.get("/api/v1/projects/:projectId/semantic/search", async (request, reply) => {
     const { actor, requestId } = await authenticated(request, repository, "knowledge:read");
     const { projectId } = request.params as { projectId: string };
@@ -2528,6 +2621,23 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
 
   // ---- AI ?? + AI ???�12.9 / �6.2?----
 
+  const loadCodexConnection = async (): Promise<CodexConnectionState> => {
+    const connection = await codexService.getConnection();
+    let selectedModel = registry.getCodexSelectedModel();
+    if (connection.status === "connected") {
+      if (!connection.models.some((item) => item.id === selectedModel)) {
+        selectedModel = connection.models.find((item) => item.is_default)?.id
+          ?? connection.models[0]?.id
+          ?? null;
+      }
+    }
+    return {
+      ...connection,
+      enabled: connection.status === "connected" && registry.isCodexEnabled(),
+      selected_model: selectedModel
+    };
+  };
+
   app.get("/api/v1/ai-config/providers", async (request, reply) => {
     const { requestId } = await authenticated(request, repository);
     const providers = registry.listProviders();
@@ -2542,6 +2652,117 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
       default_provider: defaultProvider?.provider_id ?? null,
       request_id: requestId
     };
+  });
+
+  app.get("/api/v1/ai-config/codex", async (request, reply) => {
+    const { requestId } = await authenticated(request, repository);
+    const state = await loadCodexConnection();
+    reply.header("X-Request-Id", requestId);
+    return { ...state, request_id: requestId };
+  });
+
+  app.post("/api/v1/ai-config/codex/login", async (request, reply) => {
+    const { actor, requestId } = await authenticated(request, repository);
+    z.object({ schema_version: z.literal(1) }).strict().parse(request.body);
+    let login;
+    try {
+      login = await codexService.startDeviceLogin();
+    } catch {
+      throw new ServerDomainError(503, "CODEX_UNAVAILABLE", "Codex account authorization is unavailable");
+    }
+    await writeAudit(repository, {
+      actorId: actor.actorId, projectId: null, action: "ai.codex.login-started",
+      targetId: "codex", requestId, details: { auth_mode: "chatgpt" }
+    });
+    // 设备码属于短时授权凭据，不写入幂等响应存储或审计详情。
+    reply.header("X-Request-Id", requestId);
+    return { ...login, request_id: requestId };
+  });
+
+  app.post("/api/v1/ai-config/codex/login/cancel", async (request, reply) => {
+    const { actor, requestId } = await authenticated(request, repository);
+    const body = z.object({ schema_version: z.literal(1), login_id: z.string().min(1) }).strict().parse(request.body);
+    const result = await mutation(request, repository, actor, requestId, async () => {
+      await codexService.cancelLogin(body.login_id);
+      await writeAudit(repository, {
+        actorId: actor.actorId, projectId: null, action: "ai.codex.login-cancelled",
+        targetId: "codex", requestId, details: {}
+      });
+      return { statusCode: 200, body: { cancelled: true } };
+    });
+    return send(reply, requestId, result);
+  });
+
+  app.patch("/api/v1/ai-config/codex", async (request, reply) => {
+    const { actor, requestId } = await authenticated(request, repository);
+    const body = z.object({
+      schema_version: z.literal(1),
+      selected_model: z.string().min(1).nullable().optional(),
+      enabled: z.boolean().optional()
+    }).strict().refine((value) => value.selected_model !== undefined || value.enabled !== undefined, {
+      message: "selected_model or enabled is required"
+    }).parse(request.body);
+    const result = await mutation(request, repository, actor, requestId, async () => {
+      const current = await loadCodexConnection();
+      if ((body.selected_model !== undefined || body.enabled === true) && current.status !== "connected") {
+        throw new ServerDomainError(409, "CODEX_NOT_CONNECTED", "Codex ChatGPT account is not connected");
+      }
+      if (body.selected_model !== undefined && body.selected_model !== null && !current.models.some((item) => item.id === body.selected_model)) {
+        throw new ServerDomainError(422, "CODEX_MODEL_NOT_AVAILABLE", "selected Codex model is not available for this account", {
+          selected_model: body.selected_model
+        });
+      }
+      await registry.updateCodexConfig({
+        ...(body.selected_model === undefined ? {} : { selected_model: body.selected_model }),
+        ...(body.enabled === undefined ? {} : { enabled: body.enabled })
+      });
+      await writeAudit(repository, {
+        actorId: actor.actorId, projectId: null, action: "ai.codex.updated",
+        targetId: "codex", requestId,
+        details: {
+          ...(body.selected_model === undefined ? {} : { selected_model: body.selected_model }),
+          ...(body.enabled === undefined ? {} : { enabled: body.enabled })
+        }
+      });
+      return { statusCode: 200, body: await loadCodexConnection() };
+    });
+    return send(reply, requestId, result);
+  });
+
+  app.delete("/api/v1/ai-config/codex", async (request, reply) => {
+    const { actor, requestId } = await authenticated(request, repository);
+    const result = await mutation(request, repository, actor, requestId, async () => {
+      await codexService.logout();
+      await registry.updateCodexConfig({ selected_model: null, enabled: false });
+      await writeAudit(repository, {
+        actorId: actor.actorId, projectId: null, action: "ai.codex.disconnected",
+        targetId: "codex", requestId, details: {}
+      });
+      return { statusCode: 200, body: { disconnected: true } };
+    });
+    return send(reply, requestId, result);
+  });
+
+  app.post("/api/v1/ai-config/codex/test", async (request, reply) => {
+    const { actor, requestId } = await authenticated(request, repository);
+    z.object({ schema_version: z.literal(1) }).strict().parse(request.body);
+    const result = await mutation(request, repository, actor, requestId, async () => {
+      const connection = await loadCodexConnection();
+      if (connection.status !== "connected" || connection.selected_model === null) {
+        throw new ServerDomainError(409, "CODEX_NOT_CONNECTED", "Codex ChatGPT account is not connected");
+      }
+      const client = await codexService.getLlmClient(connection.selected_model);
+      if (client === null) {
+        throw new ServerDomainError(503, "CODEX_UNAVAILABLE", "Codex model is unavailable");
+      }
+      try {
+        await client.analyze({ system: "只回复 ok", user: "连接测试" });
+      } catch {
+        return { statusCode: 200, body: { ok: false, model: connection.selected_model } };
+      }
+      return { statusCode: 200, body: { ok: true, model: connection.selected_model } };
+    });
+    return send(reply, requestId, result);
   });
 
   app.post("/api/v1/ai-config/providers", async (request, reply) => {
@@ -2602,6 +2823,9 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
       if (body.website !== undefined) patch.website = body.website;
       if (body.selected_model_id !== undefined) patch.selected_model_id = body.selected_model_id;
       if (body.sort_order !== undefined) patch.sort_order = body.sort_order;
+      const enabledBefore = body.enabled === true
+        ? registry.listProviders().filter((item) => item.enabled && item.provider_id !== providerId).map((item) => item.provider_id)
+        : [];
       let provider: AiProviderConfig;
       try {
         provider = await registry.updateProvider(providerId, body.revision, patch);
@@ -2618,12 +2842,8 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
         }
       }
       // enabled ?????enabled=true ?? provider true??? false????????API-04?
-      let exclusiveDisabled: string[] = [];
-      if (body.enabled === true) {
-        const before = await registry.listProviders();
-        exclusiveDisabled = before.filter((p) => p.enabled && p.provider_id !== providerId).map((p) => p.provider_id);
-        await registry.setEnabledExclusive(providerId);
-      }
+      const exclusiveDisabled = enabledBefore;
+      provider = registry.getProvider(providerId) ?? provider;
       await writeAudit(repository, {
         actorId: actor.actorId, projectId: null, action: "ai.provider.updated",
         targetId: providerId, requestId,
@@ -2753,12 +2973,12 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
       if (draft === undefined) {
         throw new ServerDomainError(404, SKILL_ERROR_CODE.DRAFT_NOT_FOUND, "skill draft not found", { slug, agent });
       }
-      const resolved = await resolveLlmClient(null);
+      const resolved = await resolveAgentLlmClient(agent);
       if (resolved === null) {
         throw new ServerDomainError(422, "AI_NOT_CONFIGURED", "no default ai provider configured or missing secret");
       }
       // ?????INT-002???? daily_limit ? 429 ?? LLM?
-      registry.checkQuota({ provider_id: resolved.provider.provider_id, requests: 1, tokens: 0 });
+      checkAgentQuota(resolved);
       // AiJobStore.startJob(slug,agent,fn) dedup?? slug+agent active job ??? jobId?? R2??
       const job = await aiJobStore.startJob(slug, agent, async () => {
         const entry = findEntryFile(draft.sourceFiles, agent);
@@ -2766,15 +2986,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
         const prompt = buildAiCheckPrompt({ meta, sourceFiles: draft.sourceFiles });
         const checkedAt = new Date().toISOString();
         const res = await resolved.client.analyze(prompt);
-        await registry.recordUsage({
-          provider_id: resolved.provider.provider_id,
-          model: resolveRequestModel(resolved.provider),
-          requests: res.usage?.requests ?? 1,
-          input_tokens: res.usage?.input_tokens ?? 0,
-          output_tokens: res.usage?.output_tokens ?? 0,
-          cache_hit_tokens: res.usage?.cache_hit_tokens ?? 0,
-          cache_create_tokens: res.usage?.cache_create_tokens ?? 0
-        });
+        await recordAgentUsage(resolved, res.usage);
         const aiChecks = parseAiCheckResult(res.content);
         await registry.setDraftAiChecks({ slug, agent, aiChecks, checkedAt });
         await writeAudit(repository, {
@@ -2829,7 +3041,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
       if (draft === undefined) {
         throw new ServerDomainError(404, SKILL_ERROR_CODE.DRAFT_NOT_FOUND, "skill draft not found", { slug, agent });
       }
-      const resolved = await resolveLlmClient(null);
+      const resolved = await resolveAgentLlmClient(agent);
       if (resolved === null) {
         throw new ServerDomainError(422, "AI_NOT_CONFIGURED", "no default ai provider configured or missing secret");
       }
@@ -2840,15 +3052,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
       const generatedAt = new Date().toISOString();
       try {
         const res = await resolved.client.analyze(prompt);
-        await registry.recordUsage({
-          provider_id: resolved.provider.provider_id,
-          model: resolveRequestModel(resolved.provider),
-          requests: res.usage?.requests ?? 1,
-          input_tokens: res.usage?.input_tokens ?? 0,
-          output_tokens: res.usage?.output_tokens ?? 0,
-          cache_hit_tokens: res.usage?.cache_hit_tokens ?? 0,
-          cache_create_tokens: res.usage?.cache_create_tokens ?? 0
-        });
+        await recordAgentUsage(resolved, res.usage);
         const releaseNote = parseReleaseNote(res.content);
         if (releaseNote === null) {
           // LLM ???/???? ? ?? AI_PARSE_FAILED?? 500??????????????
@@ -2897,7 +3101,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
       // ? aiChecks ? ? FixPlan????? ai-checks?????? 422?
       return send(reply, requestId, { statusCode: 200, body: { items: [], mergedFiles: [], summary: emptySummary } });
     }
-    const resolved = await resolveLlmClient(null);
+    const resolved = await resolveAgentLlmClient(agent);
     if (resolved === null) {
       throw new ServerDomainError(422, "AI_NOT_CONFIGURED", "no default ai provider configured or missing secret");
     }
@@ -2911,15 +3115,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
       let parsed: FixSuggestionParse | null;
       try {
         const res = await resolved.client.analyze(prompt);
-        await registry.recordUsage({
-          provider_id: resolved.provider.provider_id,
-          model: resolveRequestModel(resolved.provider),
-          requests: res.usage?.requests ?? 1,
-          input_tokens: res.usage?.input_tokens ?? 0,
-          output_tokens: res.usage?.output_tokens ?? 0,
-          cache_hit_tokens: res.usage?.cache_hit_tokens ?? 0,
-          cache_create_tokens: res.usage?.cache_create_tokens ?? 0
-        });
+        await recordAgentUsage(resolved, res.usage);
         parsed = parseFixSuggestionResult(res.content);
       } catch {
         // LLM ?? ? ?? message-only?? 500?
@@ -3096,6 +3292,84 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
           previous_version: before.snapshot.version,
           version: skill.snapshot.version,
           update_available: skill.updateAvailable
+        }
+      });
+      return { statusCode: 200, body: skill };
+    });
+    return send(reply, requestId, result);
+  });
+
+  app.post("/api/v1/external-skills/:id/summary", async (request, reply) => {
+    const { actor, requestId } = await authenticated(request, repository);
+    const { id } = request.params as { id: string };
+    const body = generateExternalSkillSummaryRequestSchema.parse(request.body);
+    const result = await mutation(request, repository, actor, requestId, async () => {
+      const before = registry.getExternalSkill(id);
+      if (before.revision !== body.revision) {
+        throw new ServerDomainError(409, "REVISION_CONFLICT", "external skill revision conflict", {
+          expected: before.revision,
+          provided: body.revision
+        });
+      }
+      const sourceHash = externalSkillSummarySourceHash(before.snapshot);
+      if (!body.force && before.aiSummary?.source_sha256 === sourceHash) {
+        return { statusCode: 200, body: before };
+      }
+      const resolved = await resolveAgentLlmClient("generic");
+      if (resolved === null) {
+        throw new ServerDomainError(422, "AI_NOT_CONFIGURED", "no API provider or Codex account is available");
+      }
+      checkAgentQuota(resolved);
+      const prompt = buildExternalSkillSummaryPrompt({
+        name: before.snapshot.name,
+        sourceRef: before.source.ref,
+        description: before.snapshot.description,
+        readme: before.snapshot.readme
+      });
+      let response: Awaited<ReturnType<LlmClient["analyze"]>>;
+      try {
+        response = await resolved.client.analyze(prompt);
+      } catch {
+        throw new ServerDomainError(502, "AI_GENERATION_FAILED", "ai summary generation failed");
+      }
+      await recordAgentUsage(resolved, response.usage);
+      let content = parseExternalSkillSummary(response.content);
+      if (content === null) {
+        checkAgentQuota(resolved);
+        const repairPrompt = buildExternalSkillSummaryRepairPrompt(response.content);
+        let repairedResponse: Awaited<ReturnType<LlmClient["analyze"]>>;
+        try {
+          repairedResponse = await resolved.client.analyze(repairPrompt);
+        } catch {
+          throw new ServerDomainError(502, "AI_GENERATION_FAILED", "ai summary repair failed");
+        }
+        await recordAgentUsage(resolved, repairedResponse.usage);
+        content = parseExternalSkillSummary(repairedResponse.content);
+      }
+      if (content === null) {
+        throw new ServerDomainError(502, "AI_PARSE_FAILED", "ai summary response was not valid structured content");
+      }
+      const skill = await registry.setExternalSkillAiSummary({
+        id,
+        revision: body.revision,
+        summary: {
+          ...content,
+          source_sha256: sourceHash,
+          provider_id: resolvedBackendId(resolved),
+          model: resolved.model,
+          generated_at: new Date().toISOString()
+        }
+      });
+      await writeAudit(repository, {
+        actorId: actor.actorId,
+        projectId: null,
+        action: "external_skill.ai-summary.generated",
+        targetId: skill.id,
+        requestId,
+        details: {
+          provider_id: resolvedBackendId(resolved),
+          model: resolved.model,
+          source_sha256: sourceHash
         }
       });
       return { statusCode: 200, body: skill };

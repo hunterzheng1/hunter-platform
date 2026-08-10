@@ -36,7 +36,7 @@ describe("AI provider config-store (簇 C, 任务 9)", () => {
     const p = await store.upsertProvider(baseProviderInput);
     expect(p.provider_id).toBe("deepseek");
     expect(p.revision).toBe(1);
-    expect(p.is_default).toBe(false);
+    expect(p.is_default).toBe(true);
     expect(p.created_at).toBe(p.updated_at);
 
     const listed = store.listProviders();
@@ -81,6 +81,60 @@ describe("AI provider config-store (簇 C, 任务 9)", () => {
   it("UT-011c setDefault 不存在 → 404 PROVIDER_NOT_FOUND", async () => {
     const store = newStore();
     await expect(store.setDefault("nope")).rejects.toMatchObject({ code: "PROVIDER_NOT_FOUND" });
+  });
+
+  it("Codex 独立保存账号模型偏好，不再绑定 API 供应商", async () => {
+    const persistence = new MemoryPersistence();
+    const store = newStore(persistence);
+    await store.upsertProvider(baseProviderInput);
+    await store.setCodexSelectedModel("gpt-5.6-terra");
+    expect(store.getCodexSelectedModel()).toBe("gpt-5.6-terra");
+
+    const reloaded = newStore(persistence);
+    await reloaded.initialize();
+    expect(reloaded.getCodexSelectedModel()).toBe("gpt-5.6-terra");
+    await reloaded.deleteProvider("deepseek");
+    expect(reloaded.getCodexSelectedModel()).toBe("gpt-5.6-terra");
+  });
+
+  it("Codex 与 API 供应商共享一个启用槽位，并把启用来源作为全局默认", async () => {
+    const persistence = new MemoryPersistence();
+    const store = newStore(persistence);
+    await store.upsertProvider({ ...baseProviderInput, is_default: true });
+
+    await store.setCodexEnabledExclusive(true);
+    expect(store.isCodexEnabled()).toBe(true);
+    expect(store.getProvider("deepseek")?.enabled).toBe(false);
+    expect(store.getProvider("deepseek")?.is_default).toBe(false);
+    expect(store.getDefaultProvider()).toBeNull();
+
+    const reloaded = newStore(persistence);
+    await reloaded.initialize();
+    expect(reloaded.isCodexEnabled()).toBe(true);
+
+    await reloaded.setEnabledExclusive("deepseek");
+    expect(reloaded.isCodexEnabled()).toBe(false);
+    expect(reloaded.getProvider("deepseek")?.enabled).toBe(true);
+    expect(reloaded.getProvider("deepseek")?.is_default).toBe(true);
+    expect(reloaded.getDefaultProvider()?.provider_id).toBe("deepseek");
+  });
+
+  it("旧版 Codex 供应商绑定迁移时安全忽略", async () => {
+    const persistence = new MemoryPersistence();
+    persistence.snapshot = {
+      schemaVersion: 4,
+      compilerVersion: "1.0.0",
+      skills: [], proposals: [], tags: [], workflows: [], projectBindings: [], drafts: [],
+      aiConfig: {
+        defaultProvider: null,
+        providers: [],
+        usage: [],
+        bindings: { codex: "deepseek" }
+      }
+    };
+    const store = newStore(persistence);
+    await store.initialize();
+    expect(store.getCodexSelectedModel()).toBeNull();
   });
 
   it("UT-012 updateProvider 旧 revision → 409 REVISION_CONFLICT；正确 revision 更新成功", async () => {

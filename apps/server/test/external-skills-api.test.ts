@@ -1,4 +1,8 @@
-import { uuidV7 } from "@hunter-harness/core";
+import { promises as fs } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
+import { uuidV7, type LlmClient, type LlmPrompt, type LlmResponse } from "@hunter-harness/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createServer } from "../src/app.js";
@@ -12,7 +16,7 @@ class MemoryPersistence implements RegistryPersistence {
   async save(snapshot: unknown): Promise<void> { this.snapshot = structuredClone(snapshot); }
 }
 
-function fakeNpmFetch(version: string): typeof fetch {
+function fakeNpmFetch(version: string, readme = "# Widget\nInstall me."): typeof fetch {
   return async (input) => {
     const url = String(input);
     if (url.includes("registry.npmjs.org")) {
@@ -21,7 +25,7 @@ function fakeNpmFetch(version: string): typeof fetch {
         description: "A widget skill",
         license: "MIT",
         homepage: "https://example.com/widget",
-        readme: "# Widget\nInstall me.",
+        readme,
         "dist-tags": { latest: version }
       }), { status: 200 });
     }
@@ -29,27 +33,54 @@ function fakeNpmFetch(version: string): typeof fetch {
   };
 }
 
+class FakeLlmClient implements LlmClient {
+  constructor(private readonly fn: (prompt: LlmPrompt) => Promise<LlmResponse>) {}
+  analyze(prompt: LlmPrompt): Promise<LlmResponse> { return this.fn(prompt); }
+}
+
 describe("/api/v1/external-skills", () => {
   const token = "external-owner-token";
   let repository: MemoryRepository;
   let persistence: MemoryPersistence;
   let app: Awaited<ReturnType<typeof createServer>>;
+  let secretFile: string;
+  let llmFn: (prompt: LlmPrompt) => Promise<LlmResponse>;
 
   beforeEach(async () => {
     repository = new MemoryRepository();
     persistence = new MemoryPersistence();
     await repository.createActorWithToken({ actorId: "actor_owner", token });
+    secretFile = path.join(os.tmpdir(), `hh-external-summary-${uuidV7()}.json`);
+    await fs.writeFile(secretFile, JSON.stringify({ deepseek: { apiKey: "sk-test-external" } }), "utf8");
+    llmFn = async () => ({
+      content: JSON.stringify({
+        overview: "用于构建和查询代码知识图谱。",
+        use_cases: ["分析大型代码库"],
+        capabilities: ["索引代码关系"],
+        quick_start: [
+          {
+            title: "安装并初始化",
+            instruction: "安装后进入项目根目录构建索引。",
+            commands: ["npm install -g @acme/widget", "widget init --index"]
+          }
+        ],
+        caveats: ["首次使用前需要建立索引"]
+      }),
+      usage: { requests: 1, tokens: 120, input_tokens: 100, output_tokens: 20 }
+    });
     app = await createServer({
       repository,
       storage: new MemoryArtifactStorage(),
       registryPersistence: persistence,
-      config: { externalSkillRefreshIntervalMs: 0 },
-      externalFetch: fakeNpmFetch("1.0.0")
+      config: { externalSkillRefreshIntervalMs: 0, aiSecretFile: secretFile },
+      externalFetch: fakeNpmFetch("1.0.0"),
+      aiLlmClientFactory: () => new FakeLlmClient((prompt) => llmFn(prompt))
     });
   });
 
   afterEach(async () => {
     await app.close();
+    await fs.rm(secretFile, { force: true });
   });
 
   function headers(): Record<string, string> {
@@ -91,10 +122,11 @@ describe("/api/v1/external-skills", () => {
       method: "PATCH",
       url: `/api/v1/external-skills/${skill.id}`,
       headers: headers(),
-      payload: { curationNote: "Still the best pick", revision: skill.revision }
+      payload: { curationNote: "Still the best pick", tags: ["code-intelligence", "sap"], revision: skill.revision }
     });
     expect(patched.statusCode).toBe(200);
     expect((patched.json() as { curationNote: string }).curationNote).toBe("Still the best pick");
+    expect((patched.json() as { tags: string[] }).tags).toEqual(["code-intelligence", "sap"]);
 
     await app.close();
     app = await createServer({
@@ -163,6 +195,239 @@ describe("/api/v1/external-skills", () => {
     const listed = await app.inject({ method: "GET", url: "/api/v1/external-skills", headers: headers() });
     expect(listed.statusCode).toBe(200);
     expect((listed.json() as { items: unknown[] }).items).toEqual([]);
+  });
+
+  it("persists a manually arranged skill catalog order with revision protection", async () => {
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/external-skills",
+      headers: headers(),
+      payload: { source: { type: "npm", ref: "@acme/widget" } }
+    });
+    const skill = created.json() as { id: string };
+
+    const initial = await app.inject({
+      method: "GET",
+      url: "/api/v1/skill-catalog/order",
+      headers: headers()
+    });
+    expect(initial.statusCode).toBe(200);
+    expect(initial.json()).toMatchObject({ items: [], revision: 0, updated_at: null });
+
+    const saved = await app.inject({
+      method: "PUT",
+      url: "/api/v1/skill-catalog/order",
+      headers: headers(),
+      payload: { items: [`external:${skill.id}`], revision: 0 }
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()).toMatchObject({ items: [`external:${skill.id}`], revision: 1 });
+
+    const stale = await app.inject({
+      method: "PUT",
+      url: "/api/v1/skill-catalog/order",
+      headers: headers(),
+      payload: { items: [], revision: 0 }
+    });
+    expect(stale.statusCode).toBe(409);
+
+    await app.close();
+    app = await createServer({
+      repository,
+      storage: new MemoryArtifactStorage(),
+      registryPersistence: persistence,
+      config: { externalSkillRefreshIntervalMs: 0 },
+      externalFetch: fakeNpmFetch("1.0.0")
+    });
+    const restored = await app.inject({
+      method: "GET",
+      url: "/api/v1/skill-catalog/order",
+      headers: headers()
+    });
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json()).toMatchObject({ items: [`external:${skill.id}`], revision: 1 });
+  });
+
+  it("generates and caches a Chinese AI summary, then invalidates it when upstream content changes", async () => {
+    const createdProvider = await app.inject({
+      method: "POST",
+      url: "/api/v1/ai-config/providers",
+      headers: headers(),
+      payload: {
+        schema_version: 1,
+        provider_id: "deepseek",
+        label: "DeepSeek",
+        base_url: "https://api.deepseek.com",
+        model: "deepseek-chat",
+        enabled: true,
+        api_key_env: "secret-file",
+        is_default: true
+      }
+    });
+    expect(createdProvider.statusCode).toBe(201);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/external-skills",
+      headers: headers(),
+      payload: { source: { type: "npm", ref: "@acme/widget" } }
+    });
+    const skill = created.json() as { id: string; revision: number; aiSummary?: unknown };
+    expect(skill.aiSummary ?? null).toBeNull();
+
+    const generated = await app.inject({
+      method: "POST",
+      url: `/api/v1/external-skills/${skill.id}/summary`,
+      headers: headers(),
+      payload: { revision: skill.revision }
+    });
+    expect(generated.statusCode).toBe(200);
+    const summarized = generated.json() as {
+      revision: number;
+      aiSummary: {
+        overview: string;
+        provider_id: string;
+        source_sha256: string;
+        quick_start: Array<{ title: string; commands: string[] }>;
+      };
+    };
+    expect(summarized.aiSummary.overview).toBe("用于构建和查询代码知识图谱。");
+    expect(summarized.aiSummary.provider_id).toBe("deepseek");
+    expect(summarized.aiSummary.source_sha256).toMatch(/^sha256:[a-f0-9]{64}$/);
+    expect(summarized.aiSummary.quick_start).toEqual([
+      {
+        title: "安装并初始化",
+        instruction: "安装后进入项目根目录构建索引。",
+        commands: ["npm install -g @acme/widget", "widget init --index"]
+      }
+    ]);
+
+    llmFn = async () => { throw new Error("cache should avoid another LLM call"); };
+    const cached = await app.inject({
+      method: "POST",
+      url: `/api/v1/external-skills/${skill.id}/summary`,
+      headers: headers(),
+      payload: { revision: summarized.revision }
+    });
+    expect(cached.statusCode).toBe(200);
+    expect((cached.json() as { aiSummary: { overview: string } }).aiSummary.overview)
+      .toBe("用于构建和查询代码知识图谱。");
+
+    await app.close();
+    app = await createServer({
+      repository,
+      storage: new MemoryArtifactStorage(),
+      registryPersistence: persistence,
+      config: { externalSkillRefreshIntervalMs: 0, aiSecretFile: secretFile },
+      externalFetch: fakeNpmFetch("1.0.0", "# Widget\nThe README changed."),
+      aiLlmClientFactory: () => new FakeLlmClient((prompt) => llmFn(prompt))
+    });
+    const refreshed = await app.inject({
+      method: "POST",
+      url: `/api/v1/external-skills/${skill.id}/refresh`,
+      headers: headers()
+    });
+    expect(refreshed.statusCode).toBe(200);
+    expect((refreshed.json() as { aiSummary?: unknown }).aiSummary ?? null).toBeNull();
+  });
+
+  it("repairs one malformed summary response and never retries more than once", async () => {
+    const createdProvider = await app.inject({
+      method: "POST",
+      url: "/api/v1/ai-config/providers",
+      headers: headers(),
+      payload: {
+        schema_version: 1,
+        provider_id: "deepseek",
+        label: "DeepSeek",
+        base_url: "https://api.deepseek.com",
+        model: "deepseek-chat",
+        enabled: true,
+        api_key_env: "secret-file",
+        is_default: true
+      }
+    });
+    expect(createdProvider.statusCode).toBe(201);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/external-skills",
+      headers: headers(),
+      payload: { source: { type: "npm", ref: "@acme/widget" } }
+    });
+    const skill = created.json() as { id: string; revision: number };
+    const prompts: LlmPrompt[] = [];
+    llmFn = async (prompt) => {
+      prompts.push(prompt);
+      if (prompts.length === 1) {
+        return { content: "这不是结构化摘要", usage: { requests: 1, tokens: 10 } };
+      }
+      return {
+        content: JSON.stringify({
+          overview: "用于构建和查询代码知识图谱。",
+          use_cases: ["分析大型代码库"],
+          capabilities: ["索引代码关系"],
+          getting_started: [],
+          caveats: []
+        }),
+        usage: { requests: 1, tokens: 20 }
+      };
+    };
+
+    const generated = await app.inject({
+      method: "POST",
+      url: `/api/v1/external-skills/${skill.id}/summary`,
+      headers: headers(),
+      payload: { revision: skill.revision }
+    });
+
+    expect(generated.statusCode).toBe(200);
+    expect((generated.json() as { aiSummary: { overview: string } }).aiSummary.overview)
+      .toBe("用于构建和查询代码知识图谱。");
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]?.user).toContain("<invalid_summary>");
+  });
+
+  it("returns a parse error after exactly one unsuccessful repair attempt", async () => {
+    const createdProvider = await app.inject({
+      method: "POST",
+      url: "/api/v1/ai-config/providers",
+      headers: headers(),
+      payload: {
+        schema_version: 1,
+        provider_id: "deepseek",
+        label: "DeepSeek",
+        base_url: "https://api.deepseek.com",
+        model: "deepseek-chat",
+        enabled: true,
+        api_key_env: "secret-file",
+        is_default: true
+      }
+    });
+    expect(createdProvider.statusCode).toBe(201);
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/external-skills",
+      headers: headers(),
+      payload: { source: { type: "npm", ref: "@acme/widget" } }
+    });
+    const skill = created.json() as { id: string; revision: number };
+    let calls = 0;
+    llmFn = async () => {
+      calls += 1;
+      return { content: "仍然不是 JSON", usage: { requests: 1, tokens: 10 } };
+    };
+
+    const generated = await app.inject({
+      method: "POST",
+      url: `/api/v1/external-skills/${skill.id}/summary`,
+      headers: headers(),
+      payload: { revision: skill.revision }
+    });
+
+    expect(generated.statusCode).toBe(502);
+    expect(generated.json().error.code).toBe("AI_PARSE_FAILED");
+    expect(calls).toBe(2);
   });
 
   it("rejects unauthenticated access", async () => {

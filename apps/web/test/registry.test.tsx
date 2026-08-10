@@ -3,6 +3,7 @@ import "@testing-library/jest-dom/vitest";
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ExternalSkill } from "@hunter-harness/contracts";
 
 import { SkillDetail, SkillRegistry } from "../components/registry";
 import type { HunterApi } from "../lib/api";
@@ -50,6 +51,29 @@ const securityTag = {
   usageCount: 0,
   created_at: "2026-06-20T00:00:00Z",
   updated_at: "2026-06-20T00:00:00Z"
+};
+
+const externalSkill: ExternalSkill = {
+  id: "ext_codegraph",
+  source: { type: "github", ref: "colbymchenry/codegraph" },
+  snapshot: {
+    name: "colbymchenry/codegraph",
+    description: "Pre-indexed code knowledge graph, auto syncs on code changes, for Claude Code, Codex, Gemini, Cursor, OpenCode, AntiGravity, Kiro, and Hermes Agent — fewer tokens, fewer tool calls, 100% local",
+    version: "v1.5.0",
+    readme: "<div align=\"center\">\n\n# CodeGraph\n\n## Fast code intelligence\n\nReadable project knowledge.",
+    installCommand: "https://github.com/colbymchenry/codegraph",
+    license: "MIT",
+    homepage: "https://github.com/colbymchenry/codegraph",
+    releaseUrl: "https://github.com/colbymchenry/codegraph/releases/tag/v1.5.0",
+    fetchedAt: "2026-08-10T08:00:00Z"
+  },
+  curationNote: "适合大型代码库分析",
+  tags: ["code-intelligence"],
+  updateAvailable: false,
+  lastCheckedAt: "2026-08-10T08:00:00Z",
+  revision: 1,
+  created_at: "2026-08-10T08:00:00Z",
+  updated_at: "2026-08-10T08:00:00Z"
 };
 
 const workflowFamily = {
@@ -154,16 +178,137 @@ afterEach(cleanup);
 
 describe("governed workflow and Skill Center", () => {
   it("loads the canonical registry, exposes governance metadata, and applies compound filters", async () => {
-    render(<SkillRegistry api={api()} />);
+    const { container } = render(<SkillRegistry api={api()} />);
     expect(await screen.findByText("harness-review")).toBeInTheDocument();
     expect(screen.getByText(/技能列表|Skill list/i)).toBeInTheDocument();
-    expect(screen.getByText(/技能统计|Skill stats/i)).toBeInTheDocument();
+    expect(container.querySelector('[data-slot="skill-registry-workbench"]')).toBeInTheDocument();
+    expect(container.querySelector('[data-slot="skill-metric-strip"]')).toBeInTheDocument();
+    expect(container.querySelector(".hub-rail")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /上传技能|Upload skill/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /引入外部技能|Import external skill/i })).toBeInTheDocument();
+    expect(screen.queryByText(/^工作流$|^workflows$/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Security" }));
     expect(screen.getByText("harness-review")).toBeInTheDocument();
     const statusFilter = screen.getAllByLabelText(/状态|Status/i).at(0);
     expect(statusFilter).toBeDefined();
     fireEvent.change(statusFilter as HTMLElement, { target: { value: "unpublished" } });
     expect(screen.queryByText("harness-review")).not.toBeInTheDocument();
+  });
+
+  it("presents external skill import as a clear two-source form", async () => {
+    render(<SkillRegistry api={api()} />);
+    await screen.findByText("harness-review");
+
+    fireEvent.click(screen.getByRole("button", { name: /引入外部技能|Import external skill/i }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.querySelector('[data-slot="external-skill-import"]')).toBeInTheDocument();
+    expect(dialog.querySelector('[data-slot="external-source-guides"]')).toBeInTheDocument();
+    expect(within(dialog).getByText(/^(npm 包|npm package)$/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/^(GitHub 仓库|GitHub repository)$/i)).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/来源标识|Source identifier/i)).toHaveAttribute(
+      "placeholder",
+      expect.stringMatching(/package|github/i)
+    );
+    expect(within(dialog).getByLabelText(/策展笔记（可选）|Curator note \(optional\)/i)).toBeInTheDocument();
+    expect(dialog.querySelector('[data-slot="external-skill-import-trust"]')).toHaveTextContent(
+      /不托管代码|does not host code/i
+    );
+  });
+
+  it("shows a readable external skill name, repository reference, and aligned metadata", async () => {
+    const summarizedExternalSkill: ExternalSkill = {
+      ...externalSkill,
+      aiSummary: {
+        overview: "CodeGraph 是一个本地运行的代码知识图谱，可为编码智能体提供调用关系和源码上下文。",
+        use_cases: ["理解大型代码库"],
+        capabilities: ["查询调用关系"],
+        getting_started: [],
+        caveats: [],
+        source_sha256: "sha256:" + "a".repeat(64),
+        provider_id: "codex-account",
+        model: "gpt-5.6-sol",
+        generated_at: "2026-08-10T13:01:00Z"
+      }
+    };
+    const { container } = render(<SkillRegistry api={api({
+      listExternalSkills: vi.fn(async () => [summarizedExternalSkill])
+    })} />);
+
+    expect(await screen.findByText("CodeGraph")).toBeInTheDocument();
+    const row = container.querySelector('[data-slot="external-skill-row"]');
+    expect(row).toBeInTheDocument();
+    expect(within(row as HTMLElement).getByText("colbymchenry/codegraph")).toBeInTheDocument();
+    expect(within(row as HTMLElement).getByText(/本地运行的代码知识图谱/)).toBeInTheDocument();
+    expect(within(row as HTMLElement).queryByText(/Pre-indexed code knowledge graph/)).not.toBeInTheDocument();
+    expect(row?.querySelector('[data-slot="skill-card"]')).toHaveClass("external-skill-card");
+    expect(row?.querySelector('[data-slot="external-skill-metadata"]')).toHaveTextContent(/v1\.5\.0/);
+    expect(row?.querySelector('[data-slot="external-skill-metadata"]')).toHaveTextContent(/GitHub/i);
+  });
+
+  it("uses a dense card grid and keeps twelve skills on one page", async () => {
+    const manySkills = Array.from({ length: 10 }, (_, index) => ({
+      ...skill,
+      skill_id: `skl_${index + 1}`,
+      slug: `skill-${index + 1}`,
+      name: `Skill ${index + 1}`,
+      description: `第 ${index + 1} 个技能的简短说明`
+    }));
+    const { container } = render(<SkillRegistry api={api({
+      listSkills: vi.fn(async () => manySkills),
+      listExternalSkills: vi.fn(async () => [])
+    })} />);
+
+    expect(await screen.findByText("Skill 9")).toBeInTheDocument();
+    const grid = container.querySelector('[data-slot="skill-card-grid"]');
+    expect(grid).toHaveClass("skill-catalog-grid");
+    expect(grid?.querySelectorAll('[data-slot="skill-card"]')).toHaveLength(10);
+    expect(screen.queryByRole("button", { name: /下一页|next page/i })).not.toBeInTheDocument();
+  });
+
+  it("shows readable tag labels and persists card order after drag", async () => {
+    const codeTag = {
+      ...securityTag,
+      tag_id: "tag_code_intelligence",
+      slug: "code-intelligence",
+      label: "代码理解"
+    };
+    const getSkillCatalogOrder = vi.fn(async () => ({
+      items: ["registry:harness-review", "external:ext_codegraph"],
+      revision: 3,
+      updated_at: "2026-08-10T14:00:00Z"
+    }));
+    const updateSkillCatalogOrder = vi.fn(async (input: { items: string[]; revision: number }) => ({
+      items: input.items,
+      revision: input.revision + 1,
+      updated_at: "2026-08-10T14:01:00Z"
+    }));
+    const client = api({
+      listSkills: vi.fn(async () => [skill]),
+      listExternalSkills: vi.fn(async () => [externalSkill]),
+      listTags: vi.fn(async () => [securityTag, codeTag])
+    });
+    Object.assign(client, { getSkillCatalogOrder, updateSkillCatalogOrder });
+
+    const { container } = render(<SkillRegistry api={client} />);
+    expect(await screen.findByText("CodeGraph")).toBeInTheDocument();
+
+    const cards = [...container.querySelectorAll<HTMLElement>('[data-catalog-card="true"]')];
+    expect(cards).toHaveLength(2);
+    expect(cards[0]).toHaveTextContent("harness-review");
+    const externalCard = container.querySelector<HTMLElement>('[data-card-kind="external"]');
+    expect(externalCard).toHaveTextContent("代码理解");
+    expect(within(externalCard as HTMLElement).queryByText("code-intelligence")).not.toBeInTheDocument();
+
+    const handles = screen.getAllByRole("button", { name: /拖动.*顺序|drag.*order/i });
+    fireEvent.dragStart(handles[0] as HTMLElement);
+    fireEvent.dragOver(cards[1] as HTMLElement);
+    fireEvent.drop(cards[1] as HTMLElement);
+
+    await waitFor(() => expect(updateSkillCatalogOrder).toHaveBeenCalledWith({
+      items: ["external:ext_codegraph", "registry:harness-review"],
+      revision: 3
+    }));
   });
 
   it("renders source files, version history, and an agent-specific install command", async () => {
@@ -206,6 +351,9 @@ describe("governed workflow and Skill Center", () => {
     const listSkills = vi.fn(async () => [skill]);
     render(<SkillRegistry api={api({ uploadSkillDraft, listSkills })} />);
     await screen.findByText("harness-review");
+    expect(screen.queryByLabelText(/选择文件|choose file/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /上传技能|Upload skill/i }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
     const input = screen.getByLabelText(/选择文件|choose file/i);
     fireEvent.change(input, { target: { files: [new File([skillMd], "SKILL.md")] } });
     const uploadButton = await screen.findByRole("button", { name: /添加为未发布|add as unpublished/i });

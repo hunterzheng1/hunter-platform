@@ -8,6 +8,8 @@ export interface ServerConfig {
   maxChunkBytes: number;
   sessionTtlMs: number;
   aiSecretFile: string;
+  /** Codex App Server 保存 ChatGPT 账号授权状态的独立目录。 */
+  codexHome: string;
   /** External Skill 上游刷新间隔；0 表示禁用定时任务（测试默认禁用）。 */
   externalSkillRefreshIntervalMs: number;
   projectCleanupIntervalMs: number;
@@ -21,6 +23,12 @@ function defaultAiSecretFile(): string {
   const envFile = process.env.HUNTER_HARNESS_AI_SECRET_FILE;
   if (typeof envFile === "string" && envFile.length > 0) return envFile;
   return path.join(os.homedir(), ".hunter-harness", "secrets", "ai-providers.json");
+}
+
+function defaultCodexHome(): string {
+  const value = process.env.HUNTER_PLATFORM_CODEX_HOME;
+  if (typeof value === "string" && value.trim() !== "") return value.trim();
+  return path.join(os.homedir(), ".hunter-harness", "codex");
 }
 
 function defaultGithubToken(): string | null {
@@ -63,6 +71,7 @@ export const defaultServerConfig: ServerConfig = {
   maxChunkBytes: 4 * 1024 * 1024,
   sessionTtlMs: 24 * 60 * 60 * 1000,
   aiSecretFile: defaultAiSecretFile(),
+  codexHome: defaultCodexHome(),
   externalSkillRefreshIntervalMs: defaultExternalSkillRefreshIntervalMs(),
   projectCleanupIntervalMs: defaultProjectCleanupIntervalMs(),
   projectBlobGcGraceMs: defaultProjectBlobGcGraceMs(),

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import { Icon } from "./icons";
@@ -28,6 +28,7 @@ export function Modal({
 }) {
   const [mounted, setMounted] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
 
   useEffect(() => setMounted(true), []);
 
@@ -59,10 +60,11 @@ export function Modal({
         className={`modal-panel${wide ? " modal-panel-wide" : ""}`}
         role="dialog"
         aria-modal="true"
+        aria-labelledby={titleId}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="modal-head">
-          <h2>{title}</h2>
+          <h2 id={titleId}>{title}</h2>
           <button type="button" className="icon-button modal-close" aria-label={closeLabel} onClick={onClose}>
             <Icon name="close" size={15} />
           </button>

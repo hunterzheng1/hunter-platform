@@ -2,10 +2,7 @@
 
 import Link from "next/link";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
-import type {
-  DashboardOverview,
-  RegistrySkillDetail
-} from "@hunter-harness/contracts";
+import type { DashboardOverview } from "@hunter-harness/contracts";
 
 import {
   browserApi,
@@ -33,22 +30,16 @@ export function DashboardConsole({ api: propApi }: { api?: HunterApi }) {
   const api = useMemo(() => propApi ?? resolveApi(), [propApi]);
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
-  const [skills, setSkills] = useState<RegistrySkillDetail[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
     setError(null);
-    void Promise.all([
-      api.getDashboardOverview(7),
-      api.listProjects(),
-      api.listSkills?.() ?? Promise.resolve([])
-    ])
-      .then(([nextOverview, nextProjects, nextSkills]) => {
+    void Promise.all([api.getDashboardOverview(7), api.listProjects()])
+      .then(([nextOverview, nextProjects]) => {
         if (!active) return;
         setOverview(nextOverview);
         setProjects(nextProjects);
-        setSkills(nextSkills);
       })
       .catch((reason: unknown) => {
         if (active) setError(apiError(reason, t));
@@ -61,8 +52,9 @@ export function DashboardConsole({ api: propApi }: { api?: HunterApi }) {
   if (error !== null) return <Empty>{error}</Empty>;
   if (overview === null) {
     return (
-      <section className="stack governance-page page-module-v2 dashboard-stack" aria-busy="true" aria-label={t.dashboard.loading}>
+      <section className="stack governance-page page-module-v2 dashboard-stack dashboard-v2" aria-busy="true" aria-label={t.dashboard.loading}>
         <div className="dashboard-metric-grid">
+          <Skeleton variant="metric" />
           <Skeleton variant="metric" />
           <Skeleton variant="metric" />
           <Skeleton variant="metric" />
@@ -76,48 +68,124 @@ export function DashboardConsole({ api: propApi }: { api?: HunterApi }) {
     );
   }
 
-  const attention = overview.health.some((item) => item.status === "attention");
   const locale = lang === "zh" ? "zh-CN" : "en-US";
+  const coreHealth = overview.health.filter((item) => item.key !== "review_backlog" && item.key !== "review_outcome");
+  const serviceIssues = overview.services.filter((item) => item.status !== "operational");
+  const healthIssues = coreHealth.filter((item) => item.status !== "healthy");
+  const attention = serviceIssues.length > 0 || healthIssues.length > 0;
+  const healthyServices = overview.services.length - serviceIssues.length;
+  const healthyChecks = coreHealth.length - healthIssues.length;
+  const versionedProjects = Math.min(
+    projects.filter((project) => project.latest_project_version != null).length,
+    overview.metrics.projects
+  );
+  const recentActivity = overview.activity.slice(0, 5);
+  const artifactParts = overview.metrics.project_artifacts + overview.metrics.skill_artifacts;
+  const projectArtifactShare = artifactParts === 0 ? 0 : (overview.metrics.project_artifacts / artifactParts) * 100;
+  const skillArtifactShare = artifactParts === 0 ? 0 : 100 - projectArtifactShare;
+  const projectNames = new Map(projects.map((project) => [project.project_id, project.display_name]));
   const metricCards = [
-    { label: t.dashboard.registeredProjects, value: overview.metrics.projects, href: "/projects", icon: "projects" as const },
-    { label: t.dashboard.workflows, value: overview.metrics.workflows, href: "/workflows", icon: "workflow" as const },
-    { label: t.dashboard.publishedSkills, value: overview.metrics.published_skills, href: "/skills", icon: "skill" as const }
+    {
+      label: t.dashboard.registeredProjects,
+      value: overview.metrics.projects,
+      detail: t.dashboard.registeredProjectsHint.replace("{count}", String(versionedProjects)),
+      href: "/projects",
+      icon: "projects" as const
+    },
+    {
+      label: t.dashboard.projectVersions,
+      value: overview.metrics.project_artifacts,
+      detail: t.dashboard.projectVersionsHint,
+      href: "/projects",
+      icon: "version" as const
+    },
+    {
+      label: t.dashboard.publishedSkills,
+      value: overview.metrics.published_skills,
+      detail: t.dashboard.publishedSkillsHint.replace("{count}", String(overview.metrics.skills)),
+      href: "/skills",
+      icon: "skill" as const
+    },
+    {
+      label: t.dashboard.workflows,
+      value: overview.metrics.workflows,
+      detail: t.dashboard.workflowsHint,
+      href: "/workflows",
+      icon: "workflow" as const
+    }
   ];
+  const action = attention
+    ? { title: t.dashboard.attentionTitle, hint: t.dashboard.attentionHint }
+    : projects.length === 0
+      ? { title: t.dashboard.connectProjectTitle, hint: t.dashboard.connectProjectHint }
+      : overview.metrics.project_artifacts === 0
+        ? { title: t.dashboard.addVersionTitle, hint: t.dashboard.addVersionHint }
+        : { title: t.dashboard.platformReady, hint: t.dashboard.platformReadyHint };
 
   return (
-    <section className="stack governance-page page-module-v2 dashboard-stack">
-      <header className="project-registry-hero">
-        <div>
+    <section className="stack governance-page page-module-v2 dashboard-stack dashboard-v2">
+      <header className="dashboard-hero">
+        <div className="dashboard-hero-copy">
           <p className="eyebrow">{t.dashboard.eyebrow}</p>
-          <h1>{t.dashboard.title}</h1>
-          <p>{t.dashboard.subtitle.replace("{days}", String(overview.window.days)).replace("{time}", new Date(overview.generated_at).toLocaleString(locale))}</p>
+          <div className="dashboard-heading"><h1>{t.dashboard.title}</h1><Status value={attention ? "attention" : "clear"} /></div>
+          <p>{t.dashboard.subtitle}</p>
         </div>
-        <Status value={attention ? "attention" : "clear"} />
+        <div className="dashboard-freshness">
+          <span>{t.dashboard.dataUpdated}</span>
+          <strong>{new Date(overview.generated_at).toLocaleString(locale)}</strong>
+          <small>{attention ? t.dashboard.statusAttentionSummary : t.dashboard.statusClearSummary}</small>
+        </div>
       </header>
 
       <div className="dashboard-metric-grid rise-in">
         {metricCards.map((metric) => (
           <Link className="dashboard-metric" href={metric.href} key={metric.label}>
             <DashboardIcon name={metric.icon} />
-            <strong>{metric.value}</strong>
-            <span>{metric.label}</span>
-            <small>{t.dashboard.view}</small>
+            <div><span>{metric.label}</span><strong>{metric.value}</strong><small>{metric.detail}</small></div>
+            <Icon name="chevron-right" size={15} className="dashboard-metric-arrow" />
           </Link>
         ))}
       </div>
 
       <div className="dashboard-main-grid rise-in" style={{ animationDelay: "60ms" }}>
-        <section className="panel dashboard-chart-panel">
+        <section className="panel dashboard-assets-panel">
           <div className="panel-title dashboard-panel-title">
-            <div><p className="eyebrow">{t.dashboard.sevenDaySignal}</p><h2>{t.dashboard.proposalActivity}</h2></div>
-            <div className="chart-legend"><span className="submitted">{t.dashboard.submitted}</span><span className="approved">{t.dashboard.approved}</span><span className="rejected">{t.dashboard.rejected}</span></div>
+            <div><p className="eyebrow">{t.dashboard.serverAssets}</p><h2>{t.dashboard.versionsAndCapabilities}</h2></div>
+            <span>{t.dashboard.managedAssetsSummary}</span>
           </div>
-          <TrendChart trend={overview.trend} />
+          <div className="dashboard-assets-body">
+            <div className="dashboard-artifact-total">
+              <span>{t.dashboard.artifactPackages}</span>
+              <strong>{overview.metrics.artifacts}</strong>
+              <small>{t.dashboard.artifactTotalHint}</small>
+            </div>
+            <div className="dashboard-asset-composition">
+              <div className="dashboard-asset-bar" aria-label={t.dashboard.assetComposition}>
+                <span className="project" style={{ width: `${projectArtifactShare}%` }} />
+                <span className="skill" style={{ width: `${skillArtifactShare}%` }} />
+              </div>
+              <div className="dashboard-asset-legend">
+                <div><i className="project" /><span>{t.dashboard.projectArtifacts}</span><strong>{overview.metrics.project_artifacts}</strong></div>
+                <div><i className="skill" /><span>{t.dashboard.skillArtifacts}</span><strong>{overview.metrics.skill_artifacts}</strong></div>
+              </div>
+              <div className="dashboard-capability-row">
+                <Link href="/skills"><span>{t.dashboard.skillCoverage}</span><strong>{overview.metrics.published_skills}/{overview.metrics.skills}</strong><small>{t.dashboard.publishedCoverage}</small></Link>
+                <Link href="/workflows"><span>{t.dashboard.workflowCoverage}</span><strong>{overview.metrics.workflows}</strong><small>{t.dashboard.workflowsHint}</small></Link>
+              </div>
+            </div>
+          </div>
+          <SkillComposition items={overview.distributions.skill_categories} />
         </section>
-
-        <section className="panel dashboard-distribution-panel">
-          <div className="panel-title dashboard-panel-title"><div><p className="eyebrow">{t.dashboard.registryComposition}</p><h2>{t.dashboard.skillDistribution}</h2></div><span>{overview.metrics.skills} {t.dashboard.total}</span></div>
-          <DistributionChart items={overview.distributions.skill_categories} />
+        <section className="panel dashboard-status-panel">
+          <div className="panel-title dashboard-panel-title"><div><p className="eyebrow">{t.dashboard.platformHealth}</p><h2>{t.dashboard.serviceHealth}</h2></div><Status value={attention ? "attention" : "clear"} /></div>
+          <div className="dashboard-status-summary">
+            <div><span>{t.dashboard.servicesOnline}</span><strong>{healthyServices}/{overview.services.length}</strong><small>{serviceIssues.length === 0 ? t.dashboard.statusNormal : t.dashboard.statusIssue}</small></div>
+            <div><span>{t.dashboard.coreChecks}</span><strong>{healthyChecks}/{coreHealth.length}</strong><small>{healthIssues.length === 0 ? t.dashboard.statusNormal : t.dashboard.statusIssue}</small></div>
+            <div><span>{t.dashboard.projectVersionCoverage}</span><strong>{versionedProjects}/{overview.metrics.projects}</strong><small>{t.dashboard.remoteVersions}</small></div>
+          </div>
+          <div className="dashboard-service-list">
+            {overview.services.map((service) => <div key={service.key}><span className={`service-dot ${service.status}`} aria-hidden="true" /><strong>{localizeDashboardLabel(service.label, lang)}</strong><Status value={service.status} /></div>)}
+          </div>
         </section>
       </div>
 
@@ -127,64 +195,41 @@ export function DashboardConsole({ api: propApi }: { api?: HunterApi }) {
             <div><p className="eyebrow">{t.dashboard.projectsPanelEyebrow}</p><h2>{t.dashboard.recentProjects}</h2></div>
             <Link href="/projects">{t.dashboard.viewAll}</Link>
           </div>
-          <div className="dashboard-project-list">
-            {projects.length === 0 ? <Empty>{t.dashboard.noProjects}</Empty> : projects.slice(0, 4).map((project) => (
-              <Link href={`/projects/${project.project_id}`} key={project.project_id}>
+          {projects.length === 0 ? <Empty>{t.dashboard.noProjects}</Empty> : <ul className="dashboard-project-list">
+            {projects.slice(0, 4).map((project) => (
+              <li key={project.project_id}><Link href={`/projects/${project.project_id}`}>
                 <span className="dashboard-project-mark" aria-hidden="true">{project.display_name.slice(0, 1).toUpperCase()}</span>
-                <div><strong>{project.display_name}</strong><code>{project.latest_project_version ?? t.dashboard.noVersion}</code></div>
+                <div><strong>{project.display_name}</strong><small>{project.latest_project_version === null ? t.dashboard.noVersion : t.dashboard.remoteVersionAvailable}{project.current_file_count === undefined ? "" : ` · ${t.dashboard.currentFiles.replace("{count}", String(project.current_file_count))}`}</small></div>
                 <span className="dashboard-role">{statusLabel(project.role, t)}</span>
-              </Link>
+              </Link></li>
             ))}
-          </div>
+          </ul>}
         </section>
 
-        <section className="panel dashboard-work-panel">
+        <section className="panel dashboard-work-panel dashboard-activity-panel">
           <div className="panel-title dashboard-panel-title">
-            <div><p className="eyebrow">{t.dashboard.skillsPanelEyebrow}</p><h2>{t.dashboard.skillUsage}</h2></div>
-            <Link href="/skills">{t.dashboard.openSkills}</Link>
+            <div><p className="eyebrow">{t.dashboard.recentOperations}</p><h2>{t.dashboard.recentActivity}</h2></div>
+            <span>{t.dashboard.activityCount.replace("{shown}", String(recentActivity.length)).replace("{total}", String(overview.activity.length))}</span>
           </div>
-          <div className="skill-usage-summary">
-            <div><span>{t.dashboard.publishedCoverage}</span><strong>{overview.metrics.published_skills}/{overview.metrics.skills}</strong><i><b style={{ width: `${overview.metrics.skills === 0 ? 0 : (overview.metrics.published_skills / overview.metrics.skills) * 100}%` }} /></i></div>
-            <div><span>{t.dashboard.workflowBindings}</span><strong>{overview.metrics.workflows}</strong><small>{t.dashboard.activeWorkflows}</small></div>
-          </div>
-          <div className="dashboard-skill-list">
-            {skills.slice(0, 3).map((skill) => <Link href={`/skills/${skill.slug}`} key={skill.skill_id}><span>{skill.kind == null ? t.dashboard.unknownKind : statusLabel(skill.kind, t)}</span><strong>{skill.name}</strong><code>{skill.latest_version ?? t.dashboard.unversioned}</code></Link>)}
-            {skills.length === 0 ? <Empty>{t.dashboard.noSkills}</Empty> : null}
-          </div>
-        </section>
-      </div>
-
-      <div className="dashboard-lower-grid rise-in" style={{ animationDelay: "180ms" }}>
-        <section className="panel dashboard-list-panel">
-          <div className="panel-title dashboard-panel-title"><div><p className="eyebrow">{t.dashboard.controlChecks}</p><h2>{t.dashboard.governanceHealth}</h2></div><Status value={attention ? "attention" : "clear"} /></div>
-          <div className="signal-list">
-            {overview.health.map((item) => <article className="health-row" key={item.key}><Status value={item.status} /><div><strong>{localizeDashboardLabel(item.label, lang)}</strong><p>{localizeDashboardDetail(item.detail, lang)}</p></div><b>{localizeDashboardValue(item.value, lang)}</b></article>)}
-          </div>
-        </section>
-
-        <section className="panel dashboard-list-panel">
-          <div className="panel-title dashboard-panel-title"><div><p className="eyebrow">{t.dashboard.liveReads}</p><h2>{t.dashboard.systemSignals}</h2></div><span>{new Date(overview.generated_at).toLocaleTimeString(locale)}</span></div>
-          <div className="signal-list">
-            {overview.services.map((service) => <article className="service-row" key={service.key}><span className={`service-dot ${service.status}`} aria-hidden="true" /><div><strong>{localizeDashboardLabel(service.label, lang)}</strong><p>{localizeDashboardDetail(service.detail, lang)}</p></div><Status value={service.status} /></article>)}
-          </div>
-        </section>
-
-        <section className="panel dashboard-list-panel">
-          <div className="panel-title dashboard-panel-title"><div><p className="eyebrow">{t.dashboard.immutableEvidence}</p><h2>{t.dashboard.recentActivity}</h2></div><Link href="/projects">{t.dashboard.openRegistry}</Link></div>
-          <div className="activity-list">
-            {overview.activity.length === 0 ? <Empty>{t.dashboard.noActivity}</Empty> : overview.activity.map((event) => <article key={event.event_id}><DashboardIcon name="activity" /><div><strong>{actionLabel(event.action, t)}</strong><p>{event.target_id} · {event.project_id ?? t.dashboard.registryScope}</p></div><time dateTime={event.created_at}>{new Date(event.created_at).toLocaleString(locale)}</time></article>)}
-          </div>
+          {recentActivity.length === 0 ? <Empty>{t.dashboard.noActivity}</Empty> : <ol className="activity-list dashboard-activity-list" aria-label={t.dashboard.recentActivity}>
+            {recentActivity.map((event) => <li key={event.event_id} title={event.target_id}>
+              <DashboardIcon name="activity" />
+              <div><strong>{actionLabel(event.action, t)}</strong><p>{event.project_id === null ? t.dashboard.registryScope : projectNames.get(event.project_id) ?? t.dashboard.projectScope}</p></div>
+              <time dateTime={event.created_at}>{new Date(event.created_at).toLocaleString(locale)}</time>
+            </li>)}
+          </ol>}
         </section>
       </div>
 
       <section className="dashboard-actions">
         <div>
           <p className="eyebrow">{t.dashboard.nextAction}</p>
-          <strong>{overview.metrics.pending_reviews === 0 ? t.dashboard.queueClear : `${overview.metrics.pending_reviews} ${t.dashboard.needReview}`}</strong>
-          <span>{overview.metrics.pending_reviews === 0 ? t.dashboard.queueClearHint : t.dashboard.needReviewHint}</span>
+          <strong>{action.title}</strong>
+          <span>{action.hint}</span>
         </div>
         <div className="dashboard-action-links">
           <Link href="/projects">{t.dashboard.openRegistry}</Link>
+          <Link href="/knowledge">{t.dashboard.browseKnowledge}</Link>
           <Link href="/workflows">{t.dashboard.maintainWorkflows}</Link>
           <Link href="/skills">{t.dashboard.browseSkills}</Link>
         </div>
@@ -208,30 +253,6 @@ function localizeDashboardLabel(label: string, lang: "zh" | "en"): string {
   return map[label] ?? label;
 }
 
-function localizeDashboardDetail(detail: string, lang: "zh" | "en"): string {
-  if (lang !== "zh") return detail;
-  const map: Record<string, string> = {
-    "Human review is required before pending proposals can publish.": "还有变更等待人工确认后才能发布。",
-    "Calculated from recorded review decisions.": "根据已记录的审核结果统计。",
-    "Every demo artifact has a governed source.": "每个版本都有对应来源记录。",
-    "Recent immutable audit entries are available.": "近期操作记录可查。",
-    "Authenticated overview request completed.": "总览接口访问正常。",
-    "Projects, proposals, and artifacts were read successfully.": "项目与版本数据读取正常。",
-    "Skill and Workflow metadata were read successfully.": "技能与工作流数据读取正常。",
-    "Recent audit events were read without exposing details.": "操作日志读取正常，未暴露敏感细节。"
-  };
-  return map[detail] ?? detail;
-}
-
-function localizeDashboardValue(value: string, lang: "zh" | "en"): string {
-  if (lang !== "zh") return value;
-  return value
-    .replace(/\bpending\b/gi, "待处理")
-    .replace(/\bapproved\b/gi, "已通过")
-    .replace(/\blinked\b/gi, "已关联")
-    .replace(/\brecent events\b/gi, "条近期记录");
-}
-
 // 把枚举值（role / kind / 分类 key 等）映射到当前语言文案，查不到时做可读化兜底
 function statusLabel(value: string, t: ReturnType<typeof useI18n>["t"]): string {
   const labels = t.status as Record<string, string>;
@@ -244,9 +265,10 @@ function actionLabel(action: string, t: ReturnType<typeof useI18n>["t"]): string
   return map[action] ?? action;
 }
 
-function DashboardIcon({ name }: { name: "projects" | "workflow" | "skill" | "activity" }) {
+function DashboardIcon({ name }: { name: "projects" | "version" | "workflow" | "skill" | "activity" }) {
   const map: Record<typeof name, IconName> = {
     projects: "folder",
+    version: "package",
     workflow: "workflow",
     skill: "sparkles",
     activity: "activity"
@@ -254,29 +276,21 @@ function DashboardIcon({ name }: { name: "projects" | "workflow" | "skill" | "ac
   return <Icon name={map[name]} size={22} className="dashboard-icon" />;
 }
 
-function TrendChart({ trend }: { trend: DashboardOverview["trend"] }) {
-  const { t } = useI18n();
-  const maximum = Math.max(1, ...trend.flatMap((point) => [point.submitted, point.approved, point.rejected]));
-  const points = (key: "submitted" | "approved" | "rejected") => trend.map((point, index) => `${(index / Math.max(1, trend.length - 1)) * 100},${88 - (point[key] / maximum) * 72}`).join(" ");
-  const submittedPoints = points("submitted");
-  const submittedArea = `0,100 ${submittedPoints} 100,100`;
-  const approvedTotal = trend.reduce((sum, point) => sum + point.approved, 0);
-  return <div className="trend-chart" role="img" aria-label={t.dashboard.chartAria}>
-    <div className="trend-chart-meta"><span>{t.dashboard.chartMeta}</span><strong>{approvedTotal} <small>{t.dashboard.approved}</small></strong></div>
-    <svg viewBox="0 0 100 100" preserveAspectRatio="none"><defs><linearGradient id="submitted-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--accent)" stopOpacity=".26" /><stop offset="100%" stopColor="var(--accent)" stopOpacity="0" /></linearGradient></defs><path className="chart-grid-line" d="M0 16H100M0 52H100M0 88H100" /><polygon className="submitted-area" points={submittedArea} /><polyline className="chart-line submitted-line" points={submittedPoints} /><polyline className="chart-line approved-line" points={points("approved")} /><polyline className="chart-line rejected-line" points={points("rejected")} /></svg>
-    <div className="chart-axis">{trend.map((point) => <span key={point.date}>{point.date.slice(5)}</span>)}</div>
-    <div className="chart-summary"><span>{trend.reduce((sum, point) => sum + point.submitted, 0)} {t.dashboard.submitted}</span><span>{approvedTotal} {t.dashboard.approved}</span><span>{trend.reduce((sum, point) => sum + point.rejected, 0)} {t.dashboard.rejected}</span></div>
-  </div>;
-}
-
-function DistributionChart({ items }: { items: DashboardOverview["distributions"]["skill_categories"] }) {
+function SkillComposition({ items }: { items: DashboardOverview["distributions"]["skill_categories"] }) {
   const { t } = useI18n();
   const total = items.reduce((sum, item) => sum + item.count, 0);
-  let offset = 0;
-  const palette = ["#17d4ff", "#8f7cff", "#20e3a2", "#f6a956"];
-  const segments = items.map((item, index) => { const share = total === 0 ? 0 : item.count / total; const segment = { ...item, color: palette[index % palette.length], offset, share }; offset += share; return segment; });
-  const style = { background: total === 0 ? "conic-gradient(var(--line) 0 100%)" : `conic-gradient(${segments.map((segment) => `${segment.color} ${segment.offset * 100}% ${(segment.offset + segment.share) * 100}%`).join(", ")})` };
-  return <div className="distribution-chart"><div className="distribution-donut" style={style}><span>{total}</span><small>{t.dashboard.publishedSkills}</small></div><div className="distribution-list">{segments.map((item) => <div key={item.key}><i style={{ background: item.color }} /><span>{statusLabel(item.key, t)}</span><b>{item.count}</b><small>{total === 0 ? 0 : Math.round(item.share * 100)}%</small></div>)}</div></div>;
+  const palette = ["var(--accent)", "var(--skill)", "var(--success)", "var(--review)"];
+  return <div className="dashboard-skill-composition">
+    <span>{t.dashboard.skillCategories}</span>
+    {total === 0 ? <small>{t.dashboard.noSkillCategories}</small> : <>
+      <div className="dashboard-composition-bar" aria-label={t.dashboard.skillCategories}>
+        {items.map((item, index) => <i key={item.key} style={{ width: `${(item.count / total) * 100}%`, background: palette[index % palette.length] }} />)}
+      </div>
+      <div className="dashboard-composition-legend">
+        {items.slice(0, 4).map((item, index) => <span key={item.key}><i style={{ background: palette[index % palette.length] }} />{statusLabel(item.key, t)} <b>{item.count}</b></span>)}
+      </div>
+    </>}
+  </div>;
 }
 
 export function AuthTokenForm() {

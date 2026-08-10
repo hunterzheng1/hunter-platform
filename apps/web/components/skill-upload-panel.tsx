@@ -76,7 +76,7 @@ async function summarize(files: File[], kind: "folder" | "zip"): Promise<UploadS
 export function SkillUploadPanel(props: {
   api: HunterApi;
   agent: RegistryAgent;
-  onUploaded: (draft: DraftState) => void;
+  onUploaded: (draft: DraftState) => void | Promise<void>;
   hasDraft?: boolean;
   className?: string;
 }): React.JSX.Element {
@@ -118,9 +118,9 @@ export function SkillUploadPanel(props: {
     setError(null);
     try {
       const draft = await upload.call(props.api, buildUploadFormData(files, evidence), props.agent);
-      setState("success");
       setReview(null);
-      props.onUploaded(draft);
+      await props.onUploaded(draft);
+      setState("success");
     } catch (reason) {
       if (reason instanceof ApiClientError && reason.code === "SENSITIVE_CONTENT_REVIEW_REQUIRED" && isReviewDetails(reason.details)) {
         setReview(reason.details);

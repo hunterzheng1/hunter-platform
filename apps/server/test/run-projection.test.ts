@@ -250,6 +250,73 @@ describe("run monitoring projection", () => {
     });
   });
 
+  it("auto-seals an earlier phase when later lifecycle events prove the workflow advanced", () => {
+    const events = [
+      event(1, "phase.start", "run", "2026-08-10T03:26:46.022Z", { attempt: 1 }),
+      // The local phase.end(run) and phase.start(test) were lost during a legacy
+      // to split-v1 stream switch. Later durable events still prove run ended.
+      event(2, "phase.end", "test", "2026-08-10T03:47:20.805Z", {
+        attempt: 1,
+        status: "WARN"
+      }),
+      event(3, "phase.start", "review", "2026-08-10T03:48:15.000Z", { attempt: 1 }),
+      event(4, "phase.end", "review", "2026-08-10T03:48:53.000Z", {
+        attempt: 1,
+        status: "OK"
+      }),
+      event(5, "phase.start", "archive", "2026-08-10T03:57:16.000Z", { attempt: 1 }),
+      event(6, "phase.end", "archive", "2026-08-10T03:57:18.073Z", {
+        attempt: 1,
+        status: "WARN"
+      })
+    ];
+    const phases = aggregateRunPhases(events);
+    const coding = phases.find((phase) => phase.id === "run");
+
+    expect(coding).toMatchObject({
+      active_attempt: null,
+      ended_at: "2026-08-10T03:47:20.805Z",
+      duration_ms: 1_234_783,
+      latest_status: "AUTO_SEALED",
+      reconciled: true
+    });
+    expect(publicRun(run({
+      runStatus: "partial",
+      currentPhase: "archive",
+      endedAt: "2026-08-10T03:57:18.073Z"
+    }), phases, events)).toMatchObject({
+      workflow_status: "completed",
+      active_phase: null,
+      connection_status: "closed",
+      sync_completeness: "degraded"
+    });
+  });
+
+  it("never exposes an active phase after the run reached a terminal status", () => {
+    const events = [
+      event(1, "phase.start", "run", "2026-08-10T03:26:46.022Z", { attempt: 1 })
+    ];
+    const projected = publicRun(run({
+      runStatus: "partial",
+      currentPhase: "archive",
+      endedAt: "2026-08-10T03:57:18.073Z"
+    }), aggregateRunPhases(events), events);
+
+    expect(projected).toMatchObject({
+      workflow_status: "completed",
+      active_phase: null,
+      connection_status: "closed",
+      sync_completeness: "degraded",
+      phases: [{
+        id: "run",
+        active_attempt: null,
+        ended_at: "2026-08-10T03:57:18.073Z",
+        latest_status: "AUTO_SEALED",
+        reconciled: true
+      }]
+    });
+  });
+
   it("keeps safe review delegation metadata but drops prompts and raw output", () => {
     expect(sanitizeEventPayload({
       executor_tool: "codex",

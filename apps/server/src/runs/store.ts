@@ -191,6 +191,7 @@ export interface RunPhaseSummary {
   preparation_attempt_count: number;
   active_preparation: number | null;
   blocked_preparation_count: number;
+  reconciled: boolean;
   latest_preparation: RunPhasePreparationSummary | null;
   preparations: RunPhasePreparationSummary[];
   validity: "current" | "stale" | "pending" | "unknown";
@@ -265,6 +266,7 @@ export function aggregateRunPhases(events: readonly RunEventRecord[]): RunPhaseS
   const order: string[] = [];
   const attemptsByPhase = new Map<string, MutableAttempt[]>();
   const preparationsByPhase = new Map<string, MutablePreparation[]>();
+  const reconciledPhases = new Set<string>();
   const sorted = [...events].sort((left, right) =>
     left.serverCursor - right.serverCursor || left.eventId.localeCompare(right.eventId)
   );
@@ -284,6 +286,20 @@ export function aggregateRunPhases(events: readonly RunEventRecord[]): RunPhaseS
     const preparations = preparationsByPhase.get(phase) ?? [];
     const declaredAttempt = positiveAttempt(event.payload.attempt);
     const note = payloadText(event.payload, "note") ?? "";
+    if (["phase.start", "phase.end", "phase.auto_sealed"].includes(event.eventType)) {
+      for (const [candidate, candidateAttempts] of attemptsByPhase) {
+        if (candidate === phase) continue;
+        const openAttempt = candidateAttempts.findLast((item) => item.ended_at === null);
+        if (openAttempt === undefined) continue;
+        const duration = durationBetween(openAttempt.started_at, event.occurredAt);
+        if (duration === null) continue;
+        openAttempt.ended_at = event.occurredAt;
+        openAttempt.status = "AUTO_SEALED";
+        openAttempt.duration_ms = duration;
+        openAttempt.endCursor = event.serverCursor;
+        reconciledPhases.add(candidate);
+      }
+    }
     const isLegacyArchivePreparationStart = phase === "archive" &&
       event.eventType === "phase.start" &&
       /^finalize operation a-[0-9a-f]+ failed before publish$/i.test(note);
@@ -512,6 +528,7 @@ export function aggregateRunPhases(events: readonly RunEventRecord[]): RunPhaseS
       blocked_preparation_count: publicPreparations.filter((item) =>
         item.status === "BLOCKED"
       ).length,
+      reconciled: reconciledPhases.has(id),
       latest_preparation: latestPreparation,
       preparations: publicPreparations,
       validity: invalidatedByUpstream ? "stale" : attempts.length === 0 ? "pending" : "current",
@@ -618,7 +635,37 @@ export function publicRun(
   phases?: readonly RunPhaseSummary[],
   events: readonly RunEventRecord[] = []
 ): Record<string, unknown> {
-  const phaseItems = phases === undefined ? [] : phases.map((phase) => ({ ...phase }));
+  const phaseItems = phases === undefined ? [] : phases.map((phase) => {
+    if (run.runStatus === "running" || run.endedAt === null || phase.active_attempt === null) {
+      return { ...phase };
+    }
+    const attempts = phase.attempts.map((attempt) => {
+      if (attempt.attempt !== phase.active_attempt || attempt.ended_at !== null) return attempt;
+      return {
+        ...attempt,
+        ended_at: run.endedAt,
+        status: run.runStatus === "failed" ? "FAIL" : "AUTO_SEALED",
+        duration_ms: durationBetween(attempt.started_at, run.endedAt)
+      };
+    });
+    const latest = attempts.at(-1);
+    return {
+      ...phase,
+      ended_at: latest?.ended_at ?? run.endedAt,
+      duration_ms: latest?.duration_ms ?? null,
+      total_duration_ms: attempts.reduce(
+        (sum, attempt) => sum + (attempt.duration_ms ?? 0),
+        0
+      ),
+      active_attempt: null,
+      latest_status: latest?.status ?? (run.runStatus === "failed" ? "FAIL" : "AUTO_SEALED"),
+      reconciled: true,
+      attempts
+    };
+  });
+  const syncCompleteness = phaseItems.some((phase) => phase.reconciled)
+    ? "degraded"
+    : run.syncCompleteness;
   const reportedPlan = reportedWorkflowPlan(events);
   const reportedOutcome = reportedRunOutcome(events);
   const activePhase = [...phaseItems].reverse().find((phase) => phase.active_attempt !== null)?.id ?? null;
@@ -667,7 +714,7 @@ export function publicRun(
     title: run.title,
     run_status: run.runStatus,
     connection_status: connectionStatus,
-    sync_completeness: run.syncCompleteness,
+    sync_completeness: syncCompleteness,
     current_phase: run.currentPhase,
     active_phase: activePhase,
     preparing_phase: preparingPhase,

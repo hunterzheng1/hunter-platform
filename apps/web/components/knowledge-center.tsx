@@ -12,6 +12,7 @@ import {
 } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import { mockApi } from "../lib/mock-api";
+import { MarkdownDocument } from "./skill-shared";
 import { EmptyState } from "./ui/EmptyState";
 import { Icon } from "./ui/icons";
 import { PageHeader } from "./ui/PageHeader";
@@ -71,6 +72,11 @@ function GlobalKnowledgeSearch({
     setPage,
     total
   } = usePagination(hits ?? [], 20, [hits?.length, mode, projectId]);
+  const projectNames = useMemo(
+    () => new Map(projects.map((project) => [project.project_id, project.display_name])),
+    [projects]
+  );
+  const projectName = (id: string): string => projectNames.get(id) ?? copy.unknownProject;
 
   const browse = useCallback(async (selectedProjectId: string) => {
     const listKnowledge = api.listProjectSemanticKnowledge?.bind(api);
@@ -196,7 +202,7 @@ function GlobalKnowledgeSearch({
                   >
                     <strong>{hit.document.title}</strong>
                     <small>
-                      {hit.project_id} · {statusLabel(
+                      {projectName(hit.project_id)} · {statusLabel(
                         String(hit.document.metadata.status ?? hit.document.kind),
                         t.status as Record<string, string>
                       )}
@@ -229,10 +235,12 @@ function GlobalKnowledgeSearch({
               <p className="lede">
                 {copy.project}:{" "}
                 <Link href={"/projects/" + encodeURIComponent(selected.project_id)}>
-                  {selected.project_id}
+                  {projectName(selected.project_id)}
                 </Link>
               </p>
-              <pre className="knowledge-body">{selected.document.body}</pre>
+              <div className="knowledge-body">
+                <MarkdownDocument content={selected.document.body} />
+              </div>
             </article>
           )}
         </div>
@@ -255,6 +263,7 @@ const COPY = {
     emptyLibrary: "还没有可搜索的知识",
     emptyHint: "先在本地完成项目归档并上传；平台整理完成后，知识会显示在这里。",
     project: "项目",
+    unknownProject: "未命名项目",
     filterProject: "项目筛选",
     allProjects: "全部项目",
     refresh: "刷新",
@@ -280,6 +289,7 @@ const COPY = {
     emptyLibrary: "The semantic library is empty.",
     emptyHint: "Push archives/knowledge via the CLI, or wait for ingest projection. If the DB was purged or replaced, push again.",
     project: "Project",
+    unknownProject: "Unnamed project",
     filterProject: "Filter by project",
     allProjects: "All projects",
     refresh: "Refresh",

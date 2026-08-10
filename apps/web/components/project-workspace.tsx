@@ -290,6 +290,7 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
   const copy = COPY[lang];
   const [data, setData] = useState<WorkspaceData | null>(null);
   const [activeTab, setActiveTab] = useState<WorkspaceTab>("monitor");
+  const [knowledgeActivated, setKnowledgeActivated] = useState(false);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [contentByPath, setContentByPath] = useState<Map<string, string>>(new Map());
   const [loadingContent, setLoadingContent] = useState(false);
@@ -300,6 +301,11 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const contentRequest = useRef(0);
+
+  useEffect(() => {
+    setActiveTab("monitor");
+    setKnowledgeActivated(false);
+  }, [api, projectId]);
 
   useEffect(() => {
     let active = true;
@@ -504,7 +510,10 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
         aria-selected={activeTab === id}
         className={activeTab === id ? "selected" : ""}
         onMouseDown={suppressMouseFocusScroll}
-        onClick={() => runPreservingWindowScroll(() => setActiveTab(id))}
+        onClick={() => runPreservingWindowScroll(() => {
+          if (id === "knowledge") setKnowledgeActivated(true);
+          setActiveTab(id);
+        })}
       >{label}</button>)}
     </div>
 
@@ -555,7 +564,9 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
 
     {activeTab === "monitor" ? <RunsMonitor api={api} projectId={projectId} /> : null}
 
-    {activeTab === "knowledge" ? <ProjectSemanticPanels api={api} projectId={projectId} /> : null}
+    {knowledgeActivated ? <div hidden={activeTab !== "knowledge"} aria-hidden={activeTab !== "knowledge"}>
+      <ProjectSemanticPanels api={api} projectId={projectId} />
+    </div> : null}
 
     {activeTab === "versions" ? <ProjectVersionsPanel api={api} artifacts={data.artifacts} lang={lang} /> : null}
 

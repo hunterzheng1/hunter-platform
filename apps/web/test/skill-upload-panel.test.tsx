@@ -99,4 +99,39 @@ describe("SkillUploadPanel", () => {
     });
     expect(onUploaded).toHaveBeenCalledWith(expect.objectContaining({ slug: "frontend-ui-beautify" }));
   });
+
+  it("keeps the upload state visible until the refreshed skill list is ready", async () => {
+    let finishRefresh: (() => void) | undefined;
+    const uploadSkillDraft = vi.fn().mockResolvedValue({
+      slug: "frontend-ui-beautify",
+      agent: "claude-code",
+      sourceFiles: [],
+      examples: [],
+      draftVersion: "0.1.0",
+      checks: null,
+      aiChecks: null,
+      releaseNote: null,
+      revision: 1,
+      created_at: "2026-07-20T00:00:00Z",
+      updated_at: "2026-07-20T00:00:00Z"
+    });
+    const onUploaded = vi.fn(() => new Promise<void>((resolve) => {
+      finishRefresh = resolve;
+    }));
+    const api = { uploadSkillDraft } as unknown as HunterApi;
+    render(<SkillUploadPanel api={api} agent="claude-code" onUploaded={onUploaded} />);
+    const skillFile = new File(["---\nname: frontend-ui-beautify\ndescription: UI\n---\n"], "SKILL.md");
+
+    fireEvent.change(screen.getByLabelText(/选择文件夹|choose folder/i), { target: { files: [skillFile] } });
+    const submit = screen.getByRole("button", { name: /添加为未发布|add as unpublished/i });
+    await waitFor(() => expect(submit).not.toBeDisabled());
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(onUploaded).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("status")).toHaveTextContent(/正在上传|uploading/i);
+    expect(screen.queryByText("技能已创建为未发布草稿。")).not.toBeInTheDocument();
+
+    finishRefresh?.();
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("技能已创建为未发布草稿"));
+  });
 });

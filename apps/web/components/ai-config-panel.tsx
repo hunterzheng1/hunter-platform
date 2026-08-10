@@ -1,10 +1,22 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 import { ApiClientError, browserApi, type HunterApi } from "../lib/api";
+import {
+  AI_PROVIDER_PRESETS,
+  createProviderId,
+  findAiProviderPreset,
+  type AiProviderPreset
+} from "../lib/ai-provider-presets";
 import { mockApi } from "../lib/mock-api";
-import type { AiProviderConfig, AiProviderWithKeySet, AiQuotaUsage } from "@hunter-harness/contracts";
+import type {
+  AiProviderConfig,
+  AiProviderWithKeySet,
+  AiQuotaUsage,
+  CodexConnectionState,
+  CodexLoginStart
+} from "@hunter-harness/contracts";
 import { useI18n } from "../lib/i18n";
 import { EmptyState } from "./ui/EmptyState";
 import { Icon } from "./ui/icons";
@@ -73,6 +85,57 @@ function emptyProvider(id: string): ProviderDraft {
   };
 }
 
+function providerFromPreset(preset: AiProviderPreset, id: string, enabled: boolean): ProviderDraft {
+  return {
+    provider_id: id,
+    label: preset.label,
+    note: preset.note,
+    website: preset.website,
+    apiKey: "",
+    keySet: false,
+    base_url: preset.baseUrl,
+    api_format: preset.apiFormat,
+    enabled,
+    models: preset.models.map((item) => ({ ...item })),
+    selectedModelId: ""
+  };
+}
+
+function matchingPreset(provider: ProviderDraft): AiProviderPreset | null {
+  const normalizedUrl = provider.base_url.replace(/\/$/, "");
+  return AI_PROVIDER_PRESETS.find((preset) => preset.baseUrl.replace(/\/$/, "") === normalizedUrl) ??
+    findAiProviderPreset(provider.provider_id.replace(/-(?:copy-)?[a-z0-9]+$/i, ""));
+}
+
+function providerVisual(provider: ProviderDraft): { initials: string; accent: string } {
+  const preset = matchingPreset(provider);
+  if (preset !== null) return { initials: preset.initials, accent: preset.accent };
+  const words = (provider.label || provider.provider_id).split(/[\s_-]+/).filter(Boolean);
+  const initials = words.slice(0, 2).map((word) => word[0]?.toUpperCase() ?? "").join("") || "AI";
+  return { initials, accent: "#7086ff" };
+}
+
+function endpointLabel(value: string): string {
+  try {
+    return new URL(value).host;
+  } catch {
+    return value;
+  }
+}
+
+function providerCanSave(provider: ProviderDraft, isNew: boolean): boolean {
+  if (provider.label.trim() === "") return false;
+  if (isNew && provider.apiKey.trim() === "") return false;
+  try {
+    const url = new URL(provider.base_url);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return false;
+  } catch {
+    return false;
+  }
+  const selected = provider.models.find((model) => model.id === provider.selectedModelId);
+  return selected !== undefined && selected.requestModel.trim() !== "";
+}
+
 const API_FORMATS: ApiFormat[] = ["openai", "anthropic", "custom"];
 const DEFAULT_API_KEY_ENV = "secret-file";
 
@@ -110,7 +173,7 @@ function fromDraft(d: ProviderDraft): {
   model: string;
   selected_model_id: string | null;
 } {
-  const selected = d.models.find((m) => m.id === d.selectedModelId) ?? d.models[0];
+  const selected = d.models.find((m) => m.id === d.selectedModelId);
   return {
     models: d.models.map((m) => ({
       id: m.id, display_model: m.displayModel, request_model: m.requestModel,
@@ -140,6 +203,30 @@ function toUsageRecord(u: AiQuotaUsage): UsageRecord {
 
 const fmt = (n: number): string => new Intl.NumberFormat("en-US").format(n);
 
+const EMPTY_CODEX_CONNECTION: CodexConnectionState = {
+  status: "disconnected",
+  auth_mode: null,
+  email: null,
+  plan_type: null,
+  enabled: false,
+  selected_model: null,
+  models: [],
+  error: null
+};
+
+function codexPlanLabel(plan: string | null): string {
+  if (plan === null || plan === "unknown") return "ChatGPT 账号";
+  const labels: Record<string, string> = {
+    free: "ChatGPT Free",
+    plus: "ChatGPT Plus",
+    pro: "ChatGPT Pro",
+    team: "ChatGPT Team",
+    business: "ChatGPT Business",
+    enterprise: "ChatGPT Enterprise"
+  };
+  return labels[plan.toLowerCase()] ?? `ChatGPT ${plan}`;
+}
+
 export function AiConfigPanel() {
   const { t } = useI18n();
   const toast = useToast();
@@ -151,19 +238,29 @@ export function AiConfigPanel() {
   useEffect(() => { revisionsRef.current = revisions; }, [revisions]);
   const [usage, setUsage] = useState<UsageRecord[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [presetPickerOpen, setPresetPickerOpen] = useState(false);
   const [usageProviderId, setUsageProviderId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [codexConnection, setCodexConnection] = useState<CodexConnectionState>(EMPTY_CODEX_CONNECTION);
+  const [codexLogin, setCodexLogin] = useState<CodexLoginStart | null>(null);
+  const [codexBusy, setCodexBusy] = useState(false);
 
   useEffect(() => {
     const api = resolveApi();
     Promise.all([
       api.listAiProviders?.() ?? Promise.resolve({ items: [] as AiProviderWithKeySet[], default_provider: null }),
-      api.getAiUsage?.() ?? Promise.resolve([] as AiQuotaUsage[])
-    ]).then(([list, u]) => {
-      setProviders(list.items.map(toDraft));
+      api.getAiUsage?.() ?? Promise.resolve([] as AiQuotaUsage[]),
+      api.getCodexConnection?.().catch(() => ({
+        ...EMPTY_CODEX_CONNECTION,
+        status: "unavailable" as const,
+        error: "Codex 服务暂不可用，请稍后重试。"
+      })) ?? Promise.resolve(EMPTY_CODEX_CONNECTION)
+    ]).then(([list, u, codex]) => {
+      setProviders(list.items.map((provider) => toDraft(provider)));
       setRevisions(new Map(list.items.map((p) => [p.provider_id, p.revision])));
       setUsage(u.map(toUsageRecord));
+      setCodexConnection(codex);
     }).catch(() => {
       // 加载失败（未配 token / 服务器不可达）静默降级为空列表，不弹 danger toast——
       // token 缺失是预期状态（用户尚未配置），非错误；用户主动操作失败才提示
@@ -172,8 +269,25 @@ export function AiConfigPanel() {
     }).finally(() => setLoading(false));
   }, [t]);
 
+  useEffect(() => {
+    if (codexLogin === null) return;
+    const timer = window.setInterval(() => {
+      const api = resolveApi();
+      void api.getCodexConnection?.().then((connection) => {
+        setCodexConnection(connection);
+        if (connection.status === "connected") setCodexLogin(null);
+      }).catch(() => undefined);
+    }, 2_000);
+    return () => window.clearInterval(timer);
+  }, [codexLogin]);
+
   const editing = providers.find((p) => p.provider_id === editingId) ?? null;
-  const enabledCount = providers.filter((p) => p.enabled).length;
+  const codexConnected = codexConnection.status === "connected";
+  const sourceCount = providers.length + (codexConnected ? 1 : 0);
+  const enabledCount = providers.filter((p) => p.enabled).length + (codexConnection.enabled ? 1 : 0);
+  const readyCount = providers.filter((p) => p.keySet).length + (codexConnected ? 1 : 0);
+  const modelCount = providers.reduce((sum, provider) => sum + provider.models.length, 0)
+    + (codexConnected ? codexConnection.models.length : 0);
 
   function patch(id: string, fn: (p: ProviderDraft) => ProviderDraft): void {
     setProviders((cur) => cur.map((p) => (p.provider_id === id ? fn(p) : p)));
@@ -206,7 +320,14 @@ export function AiConfigPanel() {
     if (target === undefined) return;
     const newEnabled = !target.enabled;
     const prev = providers;
-    patch(id, (cur) => ({ ...cur, enabled: newEnabled }));
+    const previousCodex = codexConnection;
+    setProviders((current) => current.map((provider) => ({
+      ...provider,
+      enabled: provider.provider_id === id ? newEnabled : newEnabled ? false : provider.enabled
+    })));
+    if (newEnabled) {
+      setCodexConnection((current) => ({ ...current, enabled: false }));
+    }
     try {
       const api = resolveApi();
       const doUpdate = async (rev: number): Promise<void> => {
@@ -233,6 +354,7 @@ export function AiConfigPanel() {
       }
     } catch {
       setProviders(prev);
+      setCodexConnection(previousCodex);
       toast.danger(t.aiConfig.saveFailed);
     }
   }
@@ -299,9 +421,26 @@ export function AiConfigPanel() {
   }
 
   function addProvider(): void {
-    const id = `provider-${uid()}`;
-    setProviders((cur) => [...cur, emptyProvider(id)]);
+    setPresetPickerOpen(true);
+  }
+
+  function selectPreset(preset: AiProviderPreset | null): void {
+    const id = preset === null
+      ? `provider-${uid()}`
+      : createProviderId(preset.id, providers.map((provider) => provider.provider_id));
+    const draft = preset === null
+      ? emptyProvider(id)
+      : providerFromPreset(preset, id, providers.length === 0);
+    setProviders((current) => [...current, draft]);
+    setPresetPickerOpen(false);
     setEditingId(id);
+  }
+
+  function closeDetail(): void {
+    if (editingId !== null && !revisionsRef.current.has(editingId)) {
+      setProviders((current) => current.filter((provider) => provider.provider_id !== editingId));
+    }
+    setEditingId(null);
   }
 
   async function saveDetail(): Promise<void> {
@@ -310,18 +449,27 @@ export function AiConfigPanel() {
     const base = fromDraft(editing);
     const payload = editing.apiKey !== "" ? { ...base, api_key: editing.apiKey } : base;
     const nextKeySet = editing.apiKey !== "" ? true : editing.keySet;
+    const applySavedProvider = (saved: AiProviderConfig): void => {
+      const next = { ...toDraft(saved), keySet: nextKeySet };
+      setProviders((current) => current.map((provider) => {
+        if (provider.provider_id === editing.provider_id) return next;
+        return saved.enabled ? { ...provider, enabled: false } : provider;
+      }));
+      if (saved.enabled) setCodexConnection((current) => ({ ...current, enabled: false }));
+    };
     try {
       if (!revisionsRef.current.has(editing.provider_id)) {
         const created = await api.createAiProvider?.({
           provider_id: editing.provider_id,
           label: editing.label,
           enabled: editing.enabled,
+          is_default: editing.enabled,
           api_key_env: DEFAULT_API_KEY_ENV,
           ...payload
         });
         if (created !== undefined) {
           setRevisions((cur) => { const m = new Map(cur); m.set(editing.provider_id, created.revision); return m; });
-          patch(editing.provider_id, () => ({ ...toDraft(created), keySet: nextKeySet }));
+          applySavedProvider(created);
         }
         toast.success(t.aiConfig.saveSuccess.replace("{provider}", editing.label || editing.provider_id));
         setEditingId(null);
@@ -332,7 +480,7 @@ export function AiConfigPanel() {
         const updated = await api.updateAiProvider?.(editing.provider_id, rev, payload);
         if (updated !== undefined) {
           setRevisions((cur) => { const m = new Map(cur); m.set(editing.provider_id, updated.revision); return m; });
-          patch(editing.provider_id, () => ({ ...toDraft(updated), keySet: nextKeySet }));
+          applySavedProvider(updated);
         }
       };
       const rev = revisionsRef.current.get(editing.provider_id) ?? 1;
@@ -387,13 +535,108 @@ export function AiConfigPanel() {
     }
   }
 
+  async function startCodexLogin(): Promise<void> {
+    setPresetPickerOpen(false);
+    setCodexBusy(true);
+    try {
+      const login = await resolveApi().startCodexLogin?.();
+      if (login !== undefined) setCodexLogin(login);
+    } catch {
+      toast.danger("无法启动 ChatGPT 授权，请稍后重试。");
+    } finally {
+      setCodexBusy(false);
+    }
+  }
+
+  async function cancelCodexLogin(): Promise<void> {
+    if (codexLogin === null) return;
+    setCodexBusy(true);
+    try {
+      await resolveApi().cancelCodexLogin?.(codexLogin.login_id);
+      setCodexLogin(null);
+    } catch {
+      toast.danger("取消授权失败，请稍后重试。");
+    } finally {
+      setCodexBusy(false);
+    }
+  }
+
+  async function selectCodexModel(model: string): Promise<void> {
+    const previous = codexConnection;
+    setCodexConnection((current) => ({ ...current, selected_model: model }));
+    try {
+      const updated = await resolveApi().updateCodexConnection?.({ selected_model: model });
+      if (updated !== undefined) setCodexConnection(updated);
+    } catch {
+      setCodexConnection(previous);
+      toast.danger("Codex 模型保存失败。");
+    }
+  }
+
+  async function toggleCodexEnabled(): Promise<void> {
+    if (codexConnection.status !== "connected") return;
+    const previousCodex = codexConnection;
+    const previousProviders = providers;
+    const enabled = !codexConnection.enabled;
+    setCodexConnection((current) => ({ ...current, enabled }));
+    if (enabled) {
+      setProviders((current) => current.map((provider) => ({ ...provider, enabled: false })));
+    }
+    try {
+      const updated = await resolveApi().updateCodexConnection?.({ enabled });
+      if (updated !== undefined) setCodexConnection(updated);
+    } catch {
+      setCodexConnection(previousCodex);
+      setProviders(previousProviders);
+      toast.danger("默认模型来源保存失败。");
+    }
+  }
+
+  async function testCodexConnection(): Promise<void> {
+    setCodexBusy(true);
+    try {
+      const result = await resolveApi().testCodexConnection?.();
+      if (result?.ok === true) toast.success(`Codex 连接正常，当前模型：${result.model ?? "自动选择"}`);
+      else toast.danger("Codex 连接测试未通过。");
+    } catch {
+      toast.danger("Codex 连接测试未通过。");
+    } finally {
+      setCodexBusy(false);
+    }
+  }
+
+  async function disconnectCodex(): Promise<void> {
+    setCodexBusy(true);
+    try {
+      await resolveApi().disconnectCodex?.();
+      setCodexConnection(EMPTY_CODEX_CONNECTION);
+      setCodexLogin(null);
+      toast.info("已解除 Codex 账号连接。");
+    } catch {
+      toast.danger("解除 Codex 账号连接失败。");
+    } finally {
+      setCodexBusy(false);
+    }
+  }
+
+  async function copyCodexCode(): Promise<void> {
+    if (codexLogin === null) return;
+    try {
+      await navigator.clipboard.writeText(codexLogin.user_code);
+      toast.success("验证码已复制。");
+    } catch {
+      toast.info(`验证码：${codexLogin.user_code}`);
+    }
+  }
+
   if (editing !== null) {
     return (
       <ProviderDetail
         draft={editing}
+        isNew={!revisions.has(editing.provider_id)}
         t={t}
         onChange={(fn) => patch(editing.provider_id, fn)}
-        onBack={() => setEditingId(null)}
+        onBack={closeDetail}
         onSave={saveDetail}
       />
     );
@@ -403,11 +646,11 @@ export function AiConfigPanel() {
   const usageProvider = providers.find((p) => p.provider_id === usageProviderId) ?? null;
 
   return (
-    <section className="stack governance-page page-module-v2">
+    <section className="stack governance-page page-module-v2 ai-provider-workbench">
       <PageHeader
         eyebrow={t.aiConfig.eyebrow}
         title={t.aiConfig.title}
-        lede={t.aiConfig.description}
+        lede="统一管理 API 厂商与 Codex 账号。连接信息表示来源可用；全局只能启用一个来源，其默认模型将用于平台 AI 功能。"
         actions={
           <>
             <span className="status status-clear">{enabledCount} {t.aiConfig.enabled}</span>
@@ -418,14 +661,21 @@ export function AiConfigPanel() {
         }
       />
 
+      <div className="provider-summary-strip" aria-label={t.aiConfig.configuredProviders}>
+        <article><span>{t.aiConfig.configuredProviders}</span><strong>{sourceCount}</strong><small>API 密钥或 ChatGPT 授权</small></article>
+        <article><span>{t.aiConfig.enabledProviders}</span><strong>{enabledCount}</strong><small>{enabledCount === 1 ? "平台当前默认来源" : "请选择一个默认来源"}</small></article>
+        <article><span>{t.aiConfig.keysReady}</span><strong>{readyCount}</strong><small>{sourceCount === 0 ? "—" : `${Math.round((readyCount / sourceCount) * 100)}%`}</small></article>
+        <article><span>{t.aiConfig.modelsConfigured}</span><strong>{modelCount}</strong><small>{t.aiConfig.modelMapping}</small></article>
+      </div>
+
       <div className="panel provider-table rise-in">
         <div className="panel-title">
-          <h2>{t.aiConfig.providers}</h2>
-          <span>{providers.length}</span>
+          <div><h2>{t.aiConfig.providers}</h2><p>启用一个来源后，其默认模型将供平台统一使用。</p></div>
+          <span>{sourceCount}</span>
         </div>
         {loading ? (
           <Skeleton variant="table" lines={4} />
-        ) : providers.length === 0 ? (
+        ) : sourceCount === 0 ? (
           <EmptyState
             icon="sparkles"
             title={t.aiConfig.noProviders}
@@ -458,9 +708,51 @@ export function AiConfigPanel() {
                 onDelete={() => setConfirmDeleteId(p.provider_id)}
               />
             ))}
+            {codexConnected ? (
+              <CodexProviderRow
+                connection={codexConnection}
+                busy={codexBusy}
+                onToggleEnabled={() => void toggleCodexEnabled()}
+                onSelectModel={(model) => void selectCodexModel(model)}
+                onTest={() => void testCodexConnection()}
+                onDisconnect={() => void disconnectCodex()}
+              />
+            ) : null}
           </div>
         )}
       </div>
+
+      <ProviderPresetModal
+        open={presetPickerOpen}
+        t={t}
+        onClose={() => setPresetPickerOpen(false)}
+        onSelect={selectPreset}
+        onSelectCodex={() => void startCodexLogin()}
+        codexConnected={codexConnected}
+      />
+
+      <Modal
+        open={codexLogin !== null}
+        onClose={() => void cancelCodexLogin()}
+        title="连接 Codex"
+        closeLabel={t.common.cancel}
+      >
+        {codexLogin !== null ? (
+          <div className="codex-device-login">
+            <div className="codex-device-login-intro">
+              <span className="provider-mark codex">CX</span>
+              <div><strong>使用 ChatGPT 账号授权</strong><p>在 OpenAI 官方页面登录，然后输入下面的一次性验证码。</p></div>
+            </div>
+            <strong className="codex-device-code">{codexLogin.user_code}</strong>
+            <div>
+              <a className="prominent-action" href={codexLogin.verification_url} target="_blank" rel="noreferrer">打开授权页面</a>
+              <button type="button" className="secondary" onClick={() => void copyCodexCode()}>复制验证码</button>
+              <button type="button" className="secondary" disabled={codexBusy} onClick={() => void cancelCodexLogin()}>取消</button>
+            </div>
+            <small>授权完成后会自动加入模型来源列表；平台不会读取或展示登录令牌。</small>
+          </div>
+        ) : null}
+      </Modal>
 
       {usageProvider !== null ? (
         <UsageModal
@@ -491,7 +783,160 @@ export function AiConfigPanel() {
   );
 }
 
+function ProviderPresetModal({
+  open,
+  t,
+  onClose,
+  onSelect,
+  onSelectCodex,
+  codexConnected
+}: {
+  open: boolean;
+  t: ReturnType<typeof useI18n>["t"];
+  onClose: () => void;
+  onSelect: (preset: AiProviderPreset | null) => void;
+  onSelectCodex: () => void;
+  codexConnected: boolean;
+}) {
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={t.aiConfig.chooseProvider}
+      closeLabel={t.common.cancel}
+      wide
+    >
+      <div className="provider-preset-picker">
+        <header>
+          <p>{t.aiConfig.chooseProviderHint}</p>
+          <span><Icon name="shield" size={14} /> {t.aiConfig.presetProviders}</span>
+        </header>
+        <div className="provider-preset-grid">
+          <button
+            type="button"
+            className="provider-preset-card codex-preset-card"
+            style={{ "--provider-accent": "#10a37f" } as CSSProperties}
+            onClick={onSelectCodex}
+            disabled={codexConnected}
+          >
+            <span className="provider-mark">CX</span>
+            <span className="provider-preset-copy">
+              <strong>Codex（ChatGPT 账号）</strong>
+              <small>通过 OpenAI 官方账号授权接入，无需填写 API Key。</small>
+              <code>模型由当前账号动态提供</code>
+            </span>
+            <span className="provider-preset-ready"><Icon name="shield" size={12} /> {codexConnected ? "已连接" : "官方账号授权"}</span>
+            <Icon name="chevron-right" size={15} className="provider-preset-arrow" />
+          </button>
+          {AI_PROVIDER_PRESETS.map((preset) => (
+            <button
+              type="button"
+              key={preset.id}
+              className="provider-preset-card"
+              style={{ "--provider-accent": preset.accent } as CSSProperties}
+              onClick={() => onSelect(preset)}
+            >
+              <span className="provider-mark">{preset.initials}</span>
+              <span className="provider-preset-copy">
+                <strong>{preset.label}</strong>
+                <small>{preset.description}</small>
+                <code>{t.aiConfig.modelOptions.replace("{count}", String(preset.models.length))}</code>
+              </span>
+              <span className="provider-preset-ready"><Icon name="check" size={12} /> {t.aiConfig.presetReady}</span>
+              <Icon name="chevron-right" size={15} className="provider-preset-arrow" />
+            </button>
+          ))}
+        </div>
+        <button type="button" className="provider-custom-option" onClick={() => onSelect(null)}>
+          <span className="provider-mark custom"><Icon name="settings" size={17} /></span>
+          <span><strong>{t.aiConfig.customProvider}</strong><small>{t.aiConfig.customProviderHint}</small></span>
+          <Icon name="chevron-right" size={15} />
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 // ── 列表行 ──────────────────────────────────────────────────
+function CodexProviderRow({
+  connection,
+  busy,
+  onToggleEnabled,
+  onSelectModel,
+  onTest,
+  onDisconnect
+}: {
+  connection: CodexConnectionState;
+  busy: boolean;
+  onToggleEnabled: () => void;
+  onSelectModel: (model: string) => void;
+  onTest: () => void;
+  onDisconnect: () => void;
+}) {
+  return (
+    <div
+      className="provider-row codex-provider-row"
+      data-model-source="codex"
+      style={{ "--provider-accent": "#10a37f" } as CSSProperties}
+    >
+      <span className="drag-handle codex-source-lock" title="账号授权来源固定在列表中" aria-hidden>
+        <Icon name="shield" size={14} />
+      </span>
+      <span className="provider-mark provider-row-mark">CX</span>
+      <div className="provider-row-main">
+        <div className="provider-row-title">
+          <strong>Codex</strong>
+          <span className="key-badge set">ChatGPT 授权</span>
+        </div>
+        <small>{connection.email ?? "ChatGPT 账号"} · {codexPlanLabel(connection.plan_type)}</small>
+      </div>
+
+      <label className="provider-model-select codex-model-picker">
+        <span>默认模型</span>
+        <select
+          aria-label="Codex 默认模型"
+          className="codex-model-select"
+          data-slot="codex-model-select"
+          value={connection.selected_model ?? ""}
+          onChange={(event) => onSelectModel(event.target.value)}
+          disabled={connection.models.length === 0 || busy}
+        >
+          {connection.models.map((model) => (
+            <option key={model.id} value={model.id}>
+              {model.display_name}{model.is_default ? "（账号推荐）" : ""}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <div className="provider-key-state">
+        <span>连接状态</span>
+        <strong className="key-badge set"><Icon name="check" size={12} /> 已连接</strong>
+      </div>
+
+      <button
+        type="button"
+        className={`toggle-pill ${connection.enabled ? "on" : "off"}`}
+        onClick={onToggleEnabled}
+        disabled={busy}
+        title={connection.enabled ? "已启用" : "未启用"}
+      >
+        <span className="toggle-knob" />
+        <span className="toggle-label">{connection.enabled ? "已启用" : "未启用"}</span>
+      </button>
+
+      <div className="provider-row-actions">
+        <button type="button" className="provider-action primary-action" disabled={busy} onClick={onTest}>
+          <Icon name="zap" size={13} /> 测试连接
+        </button>
+        <button type="button" className="provider-action danger-action" disabled={busy} onClick={onDisconnect}>
+          解除连接
+        </button>
+      </div>
+    </div>
+  );
+}
+
 interface ProviderRowProps {
   provider: ProviderDraft;
   t: ReturnType<typeof useI18n>["t"];
@@ -511,10 +956,12 @@ interface ProviderRowProps {
 function ProviderRow(props: ProviderRowProps) {
   const { provider: p, t } = props;
   const selectedModel = p.models.find((m) => m.id === p.selectedModelId) ?? p.models[0] ?? null;
+  const visual = providerVisual(p);
 
   return (
     <div
       className={`provider-row${props.isDragging ? " dragging" : ""}`}
+      style={{ "--provider-accent": visual.accent } as CSSProperties}
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => { e.preventDefault(); props.onDrop(); }}
     >
@@ -525,16 +972,17 @@ function ProviderRow(props: ProviderRowProps) {
         onDragEnd={props.onDragEnd}
         aria-hidden
       ><Icon name="grip" size={14} /></span>
-      <span className={`service-dot ${p.enabled ? "operational" : "disabled"}`} />
+      <span className="provider-mark provider-row-mark">{visual.initials}</span>
       <div className="provider-row-main">
         <div className="provider-row-title">
           <strong>{p.label || p.provider_id}</strong>
-          <span className={`key-badge ${p.keySet ? "set" : "not-set"}`}>{p.keySet ? t.aiConfig.keySet : t.aiConfig.keyNotSet}</span>
+          {p.api_format === "openai" ? null : <span className="key-badge not-set">{t.aiConfig.providerNotSupported}</span>}
         </div>
-        <small>{p.note || p.base_url}</small>
+        <small>{p.note || endpointLabel(p.base_url)}</small>
       </div>
 
       <label className="provider-model-select">
+        <span>{t.aiConfig.activeModel}</span>
         <select value={selectedModel?.id ?? ""} onChange={(e) => props.onSelectModel(e.target.value)} disabled={p.models.length === 0}>
           {p.models.length === 0 ? <option value="">{t.aiConfig.noModels}</option> : null}
           {p.models.map((m) => (
@@ -542,6 +990,11 @@ function ProviderRow(props: ProviderRowProps) {
           ))}
         </select>
       </label>
+
+      <div className="provider-key-state">
+        <span>{t.aiConfig.apiKey}</span>
+        <strong className={`key-badge ${p.keySet ? "set" : "not-set"}`}><Icon name={p.keySet ? "check" : "warning"} size={12} /> {p.keySet ? t.aiConfig.keySet : t.aiConfig.keyNotSet}</strong>
+      </div>
 
       <button
         type="button"
@@ -554,11 +1007,16 @@ function ProviderRow(props: ProviderRowProps) {
       </button>
 
       <div className="provider-row-actions">
-        <button type="button" className="icon-action" onClick={props.onEdit} title={t.common.edit}>{t.common.edit}</button>
-        <button type="button" className="icon-action" onClick={props.onDuplicate} title={t.aiConfig.duplicate}>{t.aiConfig.duplicate}</button>
-        <button type="button" className="icon-action" onClick={props.onTest} title={t.aiConfig.testConnection}>{t.aiConfig.testConnection}</button>
-        <button type="button" className="icon-action" onClick={props.onUsage} title={t.aiConfig.usageStats}>{t.aiConfig.usage}</button>
-        <button type="button" className="icon-action danger" onClick={props.onDelete} title={t.common.delete} aria-label={t.common.delete}><Icon name="trash" size={14} /></button>
+        <button type="button" className="provider-action primary-action" onClick={props.onEdit} title={t.common.edit}><Icon name="edit" size={13} /> {t.common.edit}</button>
+        <button type="button" className="provider-action" onClick={props.onTest} title={t.aiConfig.testConnection}><Icon name="zap" size={13} /> {t.aiConfig.testConnection}</button>
+        <details className="provider-row-menu">
+          <summary aria-label={t.aiConfig.moreActions} title={t.aiConfig.moreActions}><Icon name="settings" size={14} /></summary>
+          <div>
+            <button type="button" onClick={props.onUsage}>{t.aiConfig.usage}</button>
+            <button type="button" onClick={props.onDuplicate}>{t.aiConfig.duplicate}</button>
+            <button type="button" className="danger" onClick={props.onDelete}>{t.common.delete}</button>
+          </div>
+        </details>
       </div>
     </div>
   );
@@ -567,6 +1025,7 @@ function ProviderRow(props: ProviderRowProps) {
 // ── 详情编辑态 ──────────────────────────────────────────────
 interface ProviderDetailProps {
   draft: ProviderDraft;
+  isNew: boolean;
   t: ReturnType<typeof useI18n>["t"];
   onChange: (fn: (p: ProviderDraft) => ProviderDraft) => void;
   onBack: () => void;
@@ -576,6 +1035,10 @@ interface ProviderDetailProps {
 function ProviderDetail(props: ProviderDetailProps) {
   const { draft: p, t, onChange } = props;
   const [showKey, setShowKey] = useState(false);
+  const preset = matchingPreset(p);
+  const visual = providerVisual(p);
+  const selectedModel = p.models.find((model) => model.id === p.selectedModelId) ?? null;
+  const canSave = providerCanSave(p, props.isNew);
 
   function setField<K extends keyof ProviderDraft>(key: K, value: ProviderDraft[K]): void {
     onChange((cur) => ({ ...cur, [key]: value }));
@@ -596,80 +1059,127 @@ function ProviderDetail(props: ProviderDetailProps) {
   }
 
   return (
-    <section className="stack governance-page provider-detail">
-      <header className="page-heading command-hero">
-        <div className="skill-detail-hero">
-          <div className="page-heading-main">
-            <button type="button" className="back-button" onClick={props.onBack} title={t.common.back} aria-label={t.common.back}><Icon name="back" size={15} /></button>
-            <div>
-              <p className="eyebrow">{t.aiConfig.editProvider}</p>
-              <h1>{p.label || t.aiConfig.newProvider}</h1>
-            </div>
-          </div>
+    <section
+      className="stack governance-page provider-detail provider-detail-v2"
+      style={{ "--provider-accent": visual.accent } as CSSProperties}
+    >
+      <header className="panel provider-detail-header">
+        <button type="button" className="back-button" onClick={props.onBack} title={t.common.back} aria-label={t.common.back}><Icon name="back" size={15} /></button>
+        <span className="provider-mark provider-detail-mark">{visual.initials}</span>
+        <div>
+          <p className="eyebrow">{props.isNew ? t.aiConfig.newProvider : t.aiConfig.editProvider}</p>
+          <h1>{p.label || t.aiConfig.newProvider}</h1>
+          <p>{preset?.description ?? t.aiConfig.customProviderHint}</p>
         </div>
+        <span className={`key-badge ${p.keySet ? "set" : "not-set"}`}>{p.keySet ? t.aiConfig.keySet : t.aiConfig.keyNotSet}</span>
       </header>
 
-      <div className="provider-detail-body">
-        <div className="provider-detail-form">
-          <article className="panel compact-form">
-            <div className="panel-title"><h2>{t.aiConfig.basicInfo}</h2></div>
-            <div className="form-grid form-grid-compact">
-              <label className="span-2">{t.aiConfig.provider}<input value={p.label} onChange={(e) => setField("label", e.target.value)} placeholder={t.aiConfig.providerPlaceholder} /></label>
-              <label className="span-2">{t.aiConfig.note}<input value={p.note} onChange={(e) => setField("note", e.target.value)} placeholder={t.aiConfig.notePlaceholder} /></label>
-              <label className="span-2">{t.aiConfig.website}<input value={p.website} onChange={(e) => setField("website", e.target.value)} placeholder="https://" /></label>
+      <main className="provider-detail-shell">
+        <article className="panel provider-quick-connect">
+          <div className="provider-quick-copy">
+            <span className="provider-quick-icon"><Icon name="shield" size={18} /></span>
+            <div>
+              <p className="eyebrow">{t.aiConfig.quickConnect}</p>
+              <h2>{t.aiConfig.apiKey}</h2>
+              <p>{props.isNew && preset !== null ? t.aiConfig.quickConnectHint : t.aiConfig.replaceKeyHint}</p>
             </div>
-          </article>
-
-          <article className="panel compact-form">
-            <div className="panel-title"><h2>{t.aiConfig.accessConfig}</h2></div>
-            <div className="form-grid form-grid-compact">
-              <label className="span-2">{t.aiConfig.baseUrl}<input value={p.base_url} onChange={(e) => setField("base_url", e.target.value)} placeholder="https://" /></label>
-              <label>{t.aiConfig.apiFormat}
-                <select value={p.api_format} onChange={(e) => setField("api_format", e.target.value as ApiFormat)}>
-                  {API_FORMATS.map((f) => <option key={f} value={f}>{t.aiConfig.apiFormatLabels[f] ?? f}</option>)}
-                </select>
-              </label>
-              <label>{t.aiConfig.apiKey}
-                <div className="api-key-input">
-                  <input type={showKey ? "text" : "password"} value={p.apiKey} onChange={(e) => setField("apiKey", e.target.value)} placeholder={t.aiConfig.apiKeyPlaceholder} />
-                  <button type="button" className="icon-action" onClick={() => setShowKey((v) => !v)} aria-label={t.aiConfig.toggleKey} title={t.aiConfig.toggleKey}><Icon name={showKey ? "eye-off" : "eye"} size={15} /></button>
-                  <span className={`key-badge ${p.keySet ? "set" : "not-set"}`}>{p.keySet ? t.aiConfig.keySet : t.aiConfig.keyNotSet}</span>
-                </div>
-              </label>
-              <p className="span-2 api-key-hint">{t.aiConfig.apiKeyHint}</p>
-            </div>
-          </article>
-        </div>
-
-        <article className="panel provider-models-panel">
-          <div className="panel-title">
-            <h2>{t.aiConfig.modelMapping}</h2>
-            <button type="button" className="add-model-btn" onClick={addModel}><Icon name="plus" size={14} /> {t.aiConfig.addModel}</button>
           </div>
-          <div className="model-mapping-list">
-            {p.models.length === 0 ? <EmptyState icon="box" title={t.aiConfig.noModels} /> : null}
-            {p.models.map((m) => (
-              <div key={m.id} className="model-mapping-card">
-                <div className="model-mapping-head">
-                  <label>{t.aiConfig.displayModel}<input value={m.displayModel} onChange={(e) => setModel(m.id, (cur) => ({ ...cur, displayModel: e.target.value }))} placeholder={t.aiConfig.displayModelPh} /></label>
-                  <label>{t.aiConfig.requestModel}<input value={m.requestModel} onChange={(e) => setModel(m.id, (cur) => ({ ...cur, requestModel: e.target.value }))} placeholder={t.aiConfig.requestModelPh} /></label>
-                  <button type="button" className="icon-action danger" onClick={() => removeModel(m.id)} title={t.common.delete} aria-label={t.common.delete}><Icon name="close" size={14} /></button>
-                </div>
-                <div className="pricing-grid">
-                  <label className="pricing-cell">{t.aiConfig.inputCost}<input type="number" min={0} step={0.01} value={m.inputCost} onChange={(e) => setModel(m.id, (cur) => ({ ...cur, inputCost: Number(e.target.value) }))} /><span>$/M</span></label>
-                  <label className="pricing-cell">{t.aiConfig.outputCost}<input type="number" min={0} step={0.01} value={m.outputCost} onChange={(e) => setModel(m.id, (cur) => ({ ...cur, outputCost: Number(e.target.value) }))} /><span>$/M</span></label>
-                  <label className="pricing-cell">{t.aiConfig.cacheHitCost}<input type="number" min={0} step={0.01} value={m.cacheHitCost} onChange={(e) => setModel(m.id, (cur) => ({ ...cur, cacheHitCost: Number(e.target.value) }))} /><span>$/M</span></label>
-                  <label className="pricing-cell">{t.aiConfig.cacheCreateCost}<input type="number" min={0} step={0.01} value={m.cacheCreateCost} onChange={(e) => setModel(m.id, (cur) => ({ ...cur, cacheCreateCost: Number(e.target.value) }))} /><span>$/M</span></label>
-                </div>
-              </div>
-            ))}
+          <label className="provider-key-primary">
+            <span>{t.aiConfig.apiKey}</span>
+            <div className="api-key-input">
+              <input
+                autoFocus={props.isNew}
+                type={showKey ? "text" : "password"}
+                value={p.apiKey}
+                onChange={(event) => setField("apiKey", event.target.value)}
+                placeholder={t.aiConfig.apiKeyPlaceholder}
+              />
+              <button type="button" className="icon-action" onClick={() => setShowKey((value) => !value)} aria-label={t.aiConfig.toggleKey} title={t.aiConfig.toggleKey}><Icon name={showKey ? "eye-off" : "eye"} size={15} /></button>
+            </div>
+            <small>{p.keySet ? t.aiConfig.replaceKeyHint : t.aiConfig.apiKeyHint}</small>
+          </label>
+          <div className="provider-quick-options">
+            <label className="provider-primary-model">
+              <span>{t.aiConfig.selectModel}</span>
+              <select
+                aria-label={t.aiConfig.selectModel}
+                value={p.selectedModelId}
+                onChange={(event) => setField("selectedModelId", event.target.value)}
+              >
+                <option value="">{t.aiConfig.selectModelPlaceholder}</option>
+                {p.models.map((model) => (
+                  <option key={model.id} value={model.id}>{model.displayModel || model.requestModel}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <div className="provider-quick-facts">
+            <span><small>{t.aiConfig.endpoint}</small><strong>{endpointLabel(p.base_url)}</strong></span>
+            <span><small>{t.aiConfig.activeModel}</small><strong>{selectedModel?.displayModel || selectedModel?.requestModel || "—"}</strong></span>
+            <span><small>{t.aiConfig.apiFormat}</small><strong>{t.aiConfig.apiFormatLabels[p.api_format] ?? p.api_format}</strong></span>
           </div>
         </article>
-      </div>
 
-      <footer className="provider-detail-footer">
+        <details className="panel provider-advanced-settings">
+          <summary>
+            <span className="provider-settings-icon"><Icon name="settings" size={16} /></span>
+            <span><strong>{t.aiConfig.advancedSettings}</strong><small>{t.aiConfig.advancedSettingsHint}</small></span>
+            <Icon name="chevron-right" size={15} className="provider-settings-chevron" />
+          </summary>
+          <div className="provider-advanced-content form-grid form-grid-compact">
+            <label>{t.aiConfig.provider}<input value={p.label} onChange={(event) => setField("label", event.target.value)} placeholder={t.aiConfig.providerPlaceholder} /></label>
+            <label>{t.aiConfig.note}<input value={p.note} onChange={(event) => setField("note", event.target.value)} placeholder={t.aiConfig.notePlaceholder} /></label>
+            <label className="span-2">{t.aiConfig.website}<input value={p.website} onChange={(event) => setField("website", event.target.value)} placeholder="https://" /></label>
+            <label className="span-2">{t.aiConfig.baseUrl}<input value={p.base_url} onChange={(event) => setField("base_url", event.target.value)} placeholder="https://" /></label>
+            <label>{t.aiConfig.apiFormat}
+              <select value={p.api_format} onChange={(event) => setField("api_format", event.target.value as ApiFormat)}>
+                {API_FORMATS.map((format) => <option key={format} value={format}>{t.aiConfig.apiFormatLabels[format] ?? format}</option>)}
+              </select>
+            </label>
+          </div>
+        </details>
+
+        <details className="panel provider-advanced-settings provider-model-settings">
+          <summary>
+            <span className="provider-settings-icon"><Icon name="layers" size={16} /></span>
+            <span><strong>{t.aiConfig.modelSettings}</strong><small>{t.aiConfig.modelSettingsHint}</small></span>
+            <span className="provider-model-count">{p.models.length}</span>
+            <Icon name="chevron-right" size={15} className="provider-settings-chevron" />
+          </summary>
+          <div className="provider-model-settings-content">
+            <div className="provider-model-settings-head">
+              <p>{t.aiConfig.modelMapping}</p>
+              <button type="button" className="add-model-btn" onClick={addModel}><Icon name="plus" size={14} /> {t.aiConfig.addModel}</button>
+            </div>
+            <div className="model-mapping-list">
+              {p.models.length === 0 ? <EmptyState icon="box" title={t.aiConfig.noModels} /> : null}
+              {p.models.map((model) => (
+                <div key={model.id} className="model-mapping-card">
+                  <div className="model-mapping-head">
+                    <label>{t.aiConfig.displayModel}<input value={model.displayModel} onChange={(event) => setModel(model.id, (current) => ({ ...current, displayModel: event.target.value }))} placeholder={t.aiConfig.displayModelPh} /></label>
+                    <label>{t.aiConfig.requestModel}<input value={model.requestModel} onChange={(event) => setModel(model.id, (current) => ({ ...current, requestModel: event.target.value }))} placeholder={t.aiConfig.requestModelPh} /></label>
+                    <button type="button" className="icon-action danger" onClick={() => removeModel(model.id)} title={t.common.delete} aria-label={t.common.delete}><Icon name="close" size={14} /></button>
+                  </div>
+                  <div className="pricing-grid">
+                    <label className="pricing-cell">{t.aiConfig.inputCost}<input type="number" min={0} step={0.01} value={model.inputCost} onChange={(event) => setModel(model.id, (current) => ({ ...current, inputCost: Number(event.target.value) }))} /><span>$/M</span></label>
+                    <label className="pricing-cell">{t.aiConfig.outputCost}<input type="number" min={0} step={0.01} value={model.outputCost} onChange={(event) => setModel(model.id, (current) => ({ ...current, outputCost: Number(event.target.value) }))} /><span>$/M</span></label>
+                    <label className="pricing-cell">{t.aiConfig.cacheHitCost}<input type="number" min={0} step={0.01} value={model.cacheHitCost} onChange={(event) => setModel(model.id, (current) => ({ ...current, cacheHitCost: Number(event.target.value) }))} /><span>$/M</span></label>
+                    <label className="pricing-cell">{t.aiConfig.cacheCreateCost}<input type="number" min={0} step={0.01} value={model.cacheCreateCost} onChange={(event) => setModel(model.id, (current) => ({ ...current, cacheCreateCost: Number(event.target.value) }))} /><span>$/M</span></label>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </details>
+      </main>
+
+      <footer className="provider-detail-footer provider-detail-footer-v2">
+        <div>
+          <span>{canSave ? endpointLabel(p.base_url) : t.aiConfig.completeRequiredFields}</span>
+          <strong>{selectedModel?.requestModel ?? "—"}</strong>
+        </div>
         <button type="button" className="secondary" onClick={props.onBack}>{t.common.cancel}</button>
-        <button type="button" className="prominent-action" onClick={props.onSave}>{t.common.save}</button>
+        <button type="button" className="prominent-action" disabled={!canSave} onClick={props.onSave}><Icon name="check" size={14} /> {t.common.save}</button>
       </footer>
     </section>
   );

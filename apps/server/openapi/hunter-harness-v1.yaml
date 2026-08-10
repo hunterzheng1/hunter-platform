@@ -198,6 +198,36 @@ paths:
       responses:
         "200": { description: Canonical Skill Registry }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/skill-catalog/order:
+    get:
+      operationId: getSkillCatalogOrder
+      responses:
+        "200": { description: Persisted manual ordering for local and external skill cards }
+        default: { $ref: "#/components/responses/Error" }
+    put:
+      operationId: updateSkillCatalogOrder
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [items, revision]
+              properties:
+                items:
+                  type: array
+                  maxItems: 10000
+                  uniqueItems: true
+                  items: { type: string, pattern: "^(registry|external):[A-Za-z0-9][A-Za-z0-9._-]*$" }
+                revision: { type: integer, minimum: 0 }
+      responses:
+        "200": { description: Skill card order saved }
+        "409": { description: Skill card order revision conflict }
+        "422": { description: Order contains an unknown skill }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/skills/{slug}:
     get:
       operationId: getSkill
@@ -429,14 +459,14 @@ paths:
     get:
       operationId: listAiProviders
       responses:
-        "200": { description: AI provider configurations without secrets }
+        "200": { description: API-key provider configurations without secrets; Codex account authorization is managed by its independent endpoint }
         default: { $ref: "#/components/responses/Error" }
     post:
       operationId: createAiProvider
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       responses:
-        "201": { description: AI provider created with optional daily_request_limit/daily_token_limit quota (null=unlimited) }
+        "201": { description: API-key provider created }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/ai-config/providers/{provider_id}:
     patch:
@@ -444,7 +474,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       responses:
-        "200": { description: AI provider updated (label/base_url/model/enabled/api_key_env/daily_request_limit/daily_token_limit) }
+        "200": { description: API-key provider updated }
         default: { $ref: "#/components/responses/Error" }
     delete:
       operationId: deleteAiProvider
@@ -460,6 +490,112 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "200": { description: AI provider connectivity test result }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/ai-config/codex:
+    get:
+      operationId: getCodexConnection
+      responses:
+        "200":
+          description: ChatGPT account connection and the models currently visible to Codex; never contains tokens
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CodexConnectionState" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateCodexConnection
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [schema_version]
+              anyOf:
+                - required: [selected_model]
+                - required: [enabled]
+              properties:
+                schema_version: { const: 1 }
+                selected_model: { type: [string, "null"] }
+                enabled:
+                  type: boolean
+                  description: Enables Codex as the single platform-wide model source; enabling it disables every API provider
+      responses:
+        "200":
+          description: Codex default model or platform-wide enabled state updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CodexConnectionState" }
+        "409": { description: ChatGPT account is not connected }
+        "422": { description: Model is not available for this account }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: disconnectCodex
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200": { description: ChatGPT account disconnected and Codex model preference cleared }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/ai-config/codex/login:
+    post:
+      operationId: startCodexLogin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [schema_version]
+              properties:
+                schema_version: { const: 1 }
+      responses:
+        "200":
+          description: Official ChatGPT device-code authorization instructions
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CodexLoginStart" }
+        "503": { description: Codex App Server is unavailable }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/ai-config/codex/login/cancel:
+    post:
+      operationId: cancelCodexLogin
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [schema_version, login_id]
+              properties:
+                schema_version: { const: 1 }
+                login_id: { type: string, minLength: 1 }
+      responses:
+        "200": { description: Pending ChatGPT device-code authorization cancelled }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/ai-config/codex/test:
+    post:
+      operationId: testCodexConnection
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [schema_version]
+              properties:
+                schema_version: { const: 1 }
+      responses:
+        "200": { description: Codex account and selected-model connectivity result }
+        "409": { description: ChatGPT account is not connected }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/ai-config/usage:
     get:
@@ -678,6 +814,28 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "200": { description: Upstream metadata refreshed; curationNote is never modified }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/external-skills/{id}/summary:
+    post:
+      operationId: generateExternalSkillSummary
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [revision]
+              properties:
+                revision: { type: integer, minimum: 1 }
+                force: { type: boolean, default: false }
+              additionalProperties: false
+      responses:
+        "200": { description: Cached or newly generated structured Chinese AI summary }
+        "409": { description: Revision conflict or upstream content changed during generation }
+        "422": { description: Neither a default API provider nor a connected Codex account is available }
+        "502": { description: AI generation or structured response parsing failed }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/projects/{project_id}/workflow-binding:
     get:
@@ -940,6 +1098,44 @@ components:
       schema:
         $ref: "#/components/schemas/RegistryAgent"
   schemas:
+    CodexModelOption:
+      type: object
+      additionalProperties: false
+      required: [id, display_name, is_default, reasoning_efforts]
+      properties:
+        id: { type: string }
+        display_name: { type: string }
+        is_default: { type: boolean }
+        reasoning_efforts:
+          type: array
+          items: { type: string }
+    CodexConnectionState:
+      type: object
+      additionalProperties: true
+      required: [status, auth_mode, email, plan_type, enabled, selected_model, models, error]
+      properties:
+        status: { type: string, enum: [connected, disconnected, unavailable] }
+        auth_mode: { type: [string, "null"], enum: [chatgpt, null] }
+        email: { type: [string, "null"] }
+        plan_type: { type: [string, "null"] }
+        enabled:
+          type: boolean
+          description: Whether Codex is the single platform-wide active model source
+        selected_model: { type: [string, "null"] }
+        models:
+          type: array
+          items: { $ref: "#/components/schemas/CodexModelOption" }
+        error: { type: [string, "null"] }
+        request_id: { type: string, format: uuid }
+    CodexLoginStart:
+      type: object
+      additionalProperties: true
+      required: [login_id, verification_url, user_code]
+      properties:
+        login_id: { type: string }
+        verification_url: { type: string, format: uri }
+        user_code: { type: string }
+        request_id: { type: string, format: uuid }
     DashboardOverview:
       type: object
       additionalProperties: false

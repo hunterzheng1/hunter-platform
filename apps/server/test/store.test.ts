@@ -589,6 +589,67 @@ describe("RegistryStore uploadDraft validation", () => {
     expect(draft.draftVersion).toBe("0.1.0");
   });
 
+  it("首次上传后立即出现在未发布技能列表，重启后仍可见", async () => {
+    const persistence = new MemoryPersistence();
+    const store = newStore(persistence);
+
+    await store.uploadDraft({ files, actorId: "owner", agent: CC });
+
+    expect(store.listSkills()).toEqual([
+      expect.objectContaining({
+        slug: "harness-x",
+        name: "harness-x",
+        description: "demo skill",
+        kind: "governance",
+        status: "draft",
+        latest_version: null,
+        defaultAgent: CC,
+        agents: expect.arrayContaining([
+          expect.objectContaining({ agent: CC, draftVersion: "0.1.0", isDefault: true })
+        ])
+      })
+    ]);
+    expect(store.getSkill("harness-x").sourceFiles).toEqual(files);
+
+    const reloaded = newStore(persistence);
+    await reloaded.initialize();
+    expect(reloaded.listSkills()).toEqual([
+      expect.objectContaining({ slug: "harness-x", status: "draft" })
+    ]);
+  });
+
+  it("初始化时修复历史上只有草稿、没有目录项的未发布技能", async () => {
+    const persistence = new MemoryPersistence();
+    const legacy = newStore(persistence);
+    await legacy.upsertDraft({ slug: "harness-x", agent: CC, sourceFiles: files, draftVersion: "0.1.0" });
+    expect(legacy.listSkills()).toEqual([]);
+
+    const repaired = newStore(persistence);
+    await repaired.initialize();
+    expect(repaired.listSkills()).toEqual([
+      expect.objectContaining({
+        slug: "harness-x",
+        name: "harness-x",
+        status: "draft",
+        latest_version: null
+      })
+    ]);
+
+    const persistedRepair = newStore(persistence);
+    await persistedRepair.initialize();
+    expect(persistedRepair.getSkill("harness-x").sourceFiles).toEqual(files);
+  });
+
+  it("删除唯一草稿时同时移除未发布技能目录项", async () => {
+    const store = newStore();
+    const draft = await store.uploadDraft({ files, actorId: "owner", agent: CC });
+
+    await store.deleteDraft("harness-x", CC, draft.revision);
+
+    expect(store.listSkills()).toEqual([]);
+    expect(() => store.getSkill("harness-x")).toThrowError(expect.objectContaining({ code: "SKILL_NOT_FOUND" }));
+  });
+
   it("blocks on sensitive high-risk content", async () => {
     const store = newStore();
     const bad = [{ path: "SKILL.md", content: skillMd }, { path: "secret.md", content: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----" }];

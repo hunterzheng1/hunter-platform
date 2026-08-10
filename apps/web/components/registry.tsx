@@ -6,14 +6,16 @@ import type {
   RegistryAgent,
   RegistrySkillDetail,
   RegistrySkillVersion,
-  RegistryTag
+  RegistryTag,
+  SkillCatalogOrder
 } from "@hunter-harness/contracts";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent } from "react";
 
 import { browserApi, type HunterApi } from "../lib/api";
 import type { DemoAgent } from "../lib/demo-skills/types";
 import { findDemoSourceSkill } from "../lib/demo-skills/sap-field-mapper";
+import { externalSkillDescription, externalSkillDisplayName, externalSkillSourceName } from "../lib/external-skill-view";
 import { useI18n } from "../lib/i18n";
 import { mockApi } from "../lib/mock-api";
 import { DemoSystemConfig } from "./demo-system-config";
@@ -42,8 +44,10 @@ import {
 import { EmptyState } from "./ui/EmptyState";
 import { Icon } from "./ui/icons";
 import { Modal } from "./ui/Modal";
+import { PageHeader } from "./ui/PageHeader";
 import { Pagination } from "./ui/Pagination";
 import { Skeleton } from "./ui/Skeleton";
+import { Spinner } from "./ui/Spinner";
 
 function useApi(value?: HunterApi): HunterApi {
   return useMemo(() => value ?? (
@@ -67,6 +71,10 @@ export function SkillRegistry({ api: apiValue }: { api?: HunterApi }) {
   const [skills, setSkills] = useState<RegistrySkillDetail[] | null>(null);
   const [externalSkills, setExternalSkills] = useState<ExternalSkill[]>([]);
   const [tags, setTags] = useState<RegistryTag[]>([]);
+  const [catalogOrder, setCatalogOrder] = useState<SkillCatalogOrder>({ items: [], revision: 0, updated_at: null });
+  const [draggedCatalogKey, setDraggedCatalogKey] = useState<string | null>(null);
+  const [dragOverCatalogKey, setDragOverCatalogKey] = useState<string | null>(null);
+  const [orderSaving, setOrderSaving] = useState(false);
   const [search, setSearch] = useState("");
   const [agent, setAgent] = useState("");
   const [sourceFilter, setSourceFilter] = useState<"" | "registry" | "external" | "npm" | "github">("");
@@ -76,6 +84,7 @@ export function SkillRegistry({ api: apiValue }: { api?: HunterApi }) {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [deleteModal, setDeleteModal] = useState<RegistrySkillDetail | null>(null);
+  const [uploadOpen, setUploadOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [importRef, setImportRef] = useState("");
   const [importNote, setImportNote] = useState("");
@@ -83,14 +92,18 @@ export function SkillRegistry({ api: apiValue }: { api?: HunterApi }) {
 
   async function refresh(): Promise<void> {
     try {
-      const [nextSkills, nextTags, nextExternal] = await Promise.all([
+      const [nextSkills, nextTags, nextExternal, nextOrder] = await Promise.all([
         required(api, "listSkills")(),
         required(api, "listTags")(),
-        api.listExternalSkills === undefined ? Promise.resolve([]) : required(api, "listExternalSkills")()
+        api.listExternalSkills === undefined ? Promise.resolve([]) : required(api, "listExternalSkills")(),
+        api.getSkillCatalogOrder === undefined
+          ? Promise.resolve({ items: [], revision: 0, updated_at: null } satisfies SkillCatalogOrder)
+          : required(api, "getSkillCatalogOrder")()
       ]);
       setSkills(nextSkills);
       setTags(nextTags);
       setExternalSkills(nextExternal);
+      setCatalogOrder(nextOrder);
       setError(null);
     } catch (reason) {
       setError(apiError(reason, t));
@@ -101,14 +114,33 @@ export function SkillRegistry({ api: apiValue }: { api?: HunterApi }) {
   useEffect(() => { setPage(1); }, [search, agent, status, selectedTags, sourceFilter]);
 
   const activeTags = tags.filter((tag) => tag.active);
+  const tagLabelBySlug = new Map(tags.map((tag) => [tag.slug, tag.label]));
   type MixedItem =
-    | { kind: "registry"; skill: RegistrySkillDetail; sortKey: string }
-    | { kind: "external"; skill: ExternalSkill; sortKey: string };
+    | { kind: "registry"; skill: RegistrySkillDetail; sortKey: string; catalogKey: string }
+    | { kind: "external"; skill: ExternalSkill; sortKey: string; catalogKey: string };
 
+  const catalogOrderIndex = new Map(catalogOrder.items.map((key, index) => [key, index]));
   const mixed: MixedItem[] = [
-    ...(skills ?? []).map((skill) => ({ kind: "registry" as const, skill, sortKey: skill.name.toLowerCase() })),
-    ...externalSkills.map((skill) => ({ kind: "external" as const, skill, sortKey: skill.snapshot.name.toLowerCase() }))
-  ].sort((left, right) => left.sortKey.localeCompare(right.sortKey));
+    ...(skills ?? []).map((skill) => ({
+      kind: "registry" as const,
+      skill,
+      sortKey: skill.name.toLowerCase(),
+      catalogKey: `registry:${skill.slug}`
+    })),
+    ...externalSkills.map((skill) => ({
+      kind: "external" as const,
+      skill,
+      sortKey: externalSkillDisplayName(skill).toLowerCase(),
+      catalogKey: `external:${skill.id}`
+    }))
+  ].sort((left, right) => {
+    const leftOrder = catalogOrderIndex.get(left.catalogKey);
+    const rightOrder = catalogOrderIndex.get(right.catalogKey);
+    if (leftOrder !== undefined && rightOrder !== undefined) return leftOrder - rightOrder;
+    if (leftOrder !== undefined) return -1;
+    if (rightOrder !== undefined) return 1;
+    return left.sortKey.localeCompare(right.sortKey);
+  });
 
   const filtered = mixed.filter((item) => {
     const needle = search.trim().toLowerCase();
@@ -125,20 +157,85 @@ export function SkillRegistry({ api: apiValue }: { api?: HunterApi }) {
     if (sourceFilter === "github" && item.skill.source.type !== "github") return false;
     if (sourceFilter === "" && (agent !== "" || status !== "")) return false;
     const skill = item.skill;
-    return (needle === "" || `${skill.snapshot.name} ${skill.source.ref} ${skill.snapshot.description} ${skill.curationNote}`.toLowerCase().includes(needle)) &&
+    return (needle === "" || `${skill.snapshot.name} ${skill.source.ref} ${externalSkillDescription(skill)} ${skill.snapshot.description} ${skill.curationNote}`.toLowerCase().includes(needle)) &&
       (selectedTags.length === 0 || selectedTags.every((tag) => skill.tags.includes(tag)));
   });
-  const pageSize = 6;
+  const pageSize = 12;
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const pageItems = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   const publishedCount = (skills ?? []).filter((skill) => skill.status === "published").length;
   const unpublishedCount = (skills ?? []).length - publishedCount;
   const configuredAgentCount = new Set((skills ?? []).flatMap((skill) => skill.agents.map((a) => a.agent))).size;
-  const usedSkillCount = 0;
 
   function toggleTag(slug: string): void {
     setSelectedTags((current) => current.includes(slug) ? current.filter((item) => item !== slug) : [...current, slug]);
+  }
+
+  async function moveCatalogItem(sourceKey: string, targetKey: string): Promise<void> {
+    if (sourceKey === targetKey || orderSaving) return;
+    const visibleKeys = pageItems.map((item) => item.catalogKey);
+    const sourceIndex = visibleKeys.indexOf(sourceKey);
+    const targetIndex = visibleKeys.indexOf(targetKey);
+    if (sourceIndex < 0 || targetIndex < 0) return;
+    const reorderedVisible = [...visibleKeys];
+    const [moved] = reorderedVisible.splice(sourceIndex, 1);
+    if (moved === undefined) return;
+    reorderedVisible.splice(targetIndex, 0, moved);
+    const visibleSet = new Set(visibleKeys);
+    let visibleIndex = 0;
+    const nextItems = mixed.map((item) => visibleSet.has(item.catalogKey)
+      ? reorderedVisible[visibleIndex++] ?? item.catalogKey
+      : item.catalogKey);
+    const previous = catalogOrder;
+    setCatalogOrder({ ...previous, items: nextItems });
+    setOrderSaving(true);
+    setError(null);
+    try {
+      const saved = await required(api, "updateSkillCatalogOrder")({
+        items: nextItems,
+        revision: previous.revision
+      });
+      setCatalogOrder(saved);
+      setMessage(t.skills.skillOrderSaved);
+    } catch (reason) {
+      setCatalogOrder(previous);
+      const message = apiError(reason, t);
+      await refresh();
+      setError(message);
+    } finally {
+      setOrderSaving(false);
+      setDraggedCatalogKey(null);
+      setDragOverCatalogKey(null);
+    }
+  }
+
+  function beginCatalogDrag(event: DragEvent<HTMLButtonElement>, catalogKey: string): void {
+    setDraggedCatalogKey(catalogKey);
+    setDragOverCatalogKey(null);
+    event.dataTransfer?.setData("text/plain", catalogKey);
+    if (event.dataTransfer !== undefined) event.dataTransfer.effectAllowed = "move";
+  }
+
+  function dropCatalogItem(event: DragEvent<HTMLElement>, targetKey: string): void {
+    event.preventDefault();
+    const sourceKey = draggedCatalogKey ?? event.dataTransfer?.getData("text/plain") ?? "";
+    void moveCatalogItem(sourceKey, targetKey);
+  }
+
+  function moveCatalogItemByKeyboard(event: KeyboardEvent<HTMLButtonElement>, catalogKey: string): void {
+    const direction = event.key === "ArrowLeft" || event.key === "ArrowUp"
+      ? -1
+      : event.key === "ArrowRight" || event.key === "ArrowDown"
+        ? 1
+        : 0;
+    if (direction === 0) return;
+    const visibleKeys = pageItems.map((item) => item.catalogKey);
+    const index = visibleKeys.indexOf(catalogKey);
+    const targetKey = visibleKeys[index + direction];
+    if (targetKey === undefined) return;
+    event.preventDefault();
+    void moveCatalogItem(catalogKey, targetKey);
   }
 
   async function submitImport(): Promise<void> {
@@ -184,17 +281,33 @@ export function SkillRegistry({ api: apiValue }: { api?: HunterApi }) {
 
   if (error !== null && skills === null) return <Empty>{error}</Empty>;
   return (
-    <section className="stack governance-page page-module-v2">
-      <header className="project-registry-hero">
-         <div>
-           <p className="eyebrow">{t.skills.eyebrow}</p>
-           <h1>{t.skills.title}</h1>
-           <p>{t.skills.description}</p>
-        </div>
-         <div className="hero-actions"><Status value="governed" /><span>{(skills?.length ?? 0) + externalSkills.length} {t.skills.publishedCount}</span></div>
-      </header>
+    <section className="stack governance-page page-module-v2 skill-registry-workbench" data-slot="skill-registry-workbench">
+      <PageHeader
+        eyebrow={t.skills.eyebrow}
+        title={t.skills.title}
+        lede={t.skills.description}
+        actions={<>
+          <button type="button" className="secondary" onClick={() => setImportOpen(true)}>
+            <Icon name="download" size={14} />
+            {t.skills.importExternal}
+          </button>
+          <button type="button" className="primary" onClick={() => setUploadOpen(true)}>
+            <Icon name="upload" size={14} />
+            {t.skills.uploadSkill}
+          </button>
+        </>}
+      />
 
-      <div className="registry-toolbar registry-toolbar-expanded panel panel-themed panel-toolbar">
+      <div className="skill-metric-strip" data-slot="skill-metric-strip">
+        <article><span>{t.skills.totalSkills}</span><strong>{(skills?.length ?? 0) + externalSkills.length}</strong></article>
+        <article><span>{t.skills.statusPublished}</span><strong>{publishedCount}</strong></article>
+        <article><span>{t.skills.statusUnpublished}</span><strong>{unpublishedCount}</strong></article>
+        <article><span>{t.skills.sourceExternal}</span><strong>{externalSkills.length}</strong></article>
+        <article><span>{t.skills.activeTags}</span><strong>{activeTags.length}</strong></article>
+        <article><span>{t.skills.configuredAgents}</span><strong>{configuredAgentCount}</strong></article>
+      </div>
+
+      <div className="registry-toolbar registry-toolbar-expanded skill-workbench-toolbar panel panel-themed panel-toolbar">
         <label className="search-wide">{t.skills.searchSkills}<input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t.skills.searchPlaceholder} /></label>
         <label>{t.skills.source}<select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value as typeof sourceFilter)}><option value="">{t.skills.sourceAll}</option><option value="registry">{t.skills.sourceRegistry}</option><option value="external">{t.skills.sourceExternal}</option><option value="npm">{t.skills.sourceNpm}</option><option value="github">{t.skills.sourceGithub}</option></select></label>
         <label>{t.skills.agent}<select value={agent} onChange={(event) => setAgent(event.target.value)}><option value="">{t.common.all}</option><option value="claude-code">Claude Code</option><option value="codex">Codex</option><option value="cursor">Cursor</option><option value="codebuddy">CodeBuddy</option></select></label>
@@ -207,48 +320,123 @@ export function SkillRegistry({ api: apiValue }: { api?: HunterApi }) {
         </div>
       </div>
 
-      <div className="hub-grid">
-        <div className="panel panel-themed panel-list registry-list">
-          <div className="panel-title"><h2>{t.skills.skillList}</h2><span>{filtered.length}</span></div>
-          <div className="registry-list-body">
-          {skills === null ? <Skeleton variant="table" lines={6} /> : filtered.length === 0 ? <EmptyState icon="search" title={t.skills.noMatch} /> : pageItems.map((item) => {
+      <div className="panel panel-themed panel-list registry-list skill-workbench-list" data-slot="skill-list">
+        <div className="panel-title skill-list-title">
+          <div className="skill-list-heading">
+            <h2>{t.skills.skillList}</h2>
+            <p><Icon name="grip" size={13} /> {t.skills.skillOrderHint}</p>
+          </div>
+          <span>{filtered.length}</span>
+        </div>
+        <div className="registry-list-body skill-workbench-body skill-catalog-grid" data-slot="skill-card-grid">
+          {skills === null ? <Skeleton variant="table" lines={6} /> : filtered.length === 0 ? <EmptyState
+            icon={mixed.length === 0 ? "sparkles" : "search"}
+            title={mixed.length === 0 ? t.skills.noSkills : t.skills.noMatch}
+            hint={mixed.length === 0 ? t.skills.noSkillsHint : t.skills.noMatchHint}
+            action={mixed.length === 0 ? <button type="button" className="primary" onClick={() => setUploadOpen(true)}>{t.skills.uploadSkill}</button> : undefined}
+          /> : pageItems.map((item) => {
             if (item.kind === "external") {
               const skill = item.skill;
+              const displayName = externalSkillDisplayName(skill);
+              const description = externalSkillDescription(skill);
+              const sourceName = externalSkillSourceName(skill);
               return (
-                <div className="skill-row-with-actions" key={skill.id}>
-                  <Link className="skill-row" href={`/external-skills/${skill.id}`}>
-                    <div className="skill-row-main">
-                      <strong className="skill-row-name">{skill.snapshot.name}</strong>
-                      <p className="skill-row-desc" title={skill.snapshot.description}>{skill.snapshot.description || skill.curationNote}</p>
-                      <div className="tag-row">
-                        <span className="tag">{t.skills.externalBadge}</span>
-                        <span className="tag">{skill.source.type}</span>
+                <div
+                  className={`skill-card-shell external-skill-card-shell has-drag-handle${draggedCatalogKey === item.catalogKey ? " is-dragging" : ""}${dragOverCatalogKey === item.catalogKey ? " is-drop-target" : ""}`}
+                  data-slot="external-skill-row"
+                  data-catalog-card="true"
+                  data-card-kind="external"
+                  key={skill.id}
+                  onDragEnter={() => setDragOverCatalogKey(item.catalogKey)}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => dropCatalogItem(event, item.catalogKey)}
+                >
+                  <button
+                    type="button"
+                    className="skill-card-drag-handle"
+                    data-slot="skill-card-drag-handle"
+                    draggable={!orderSaving}
+                    disabled={orderSaving}
+                    aria-label={t.skills.dragSkillOrder.replace("{name}", displayName)}
+                    title={t.skills.dragSkillOrder.replace("{name}", displayName)}
+                    onDragStart={(event) => beginCatalogDrag(event, item.catalogKey)}
+                    onDragEnd={() => { setDraggedCatalogKey(null); setDragOverCatalogKey(null); }}
+                    onKeyDown={(event) => moveCatalogItemByKeyboard(event, item.catalogKey)}
+                  ><Icon name="grip" size={15} /></button>
+                  <Link className="skill-catalog-card external-skill-card" data-slot="skill-card" href={`/external-skills/${skill.id}`}>
+                    <div className="skill-card-header external-skill-heading">
+                        <span className="external-skill-glyph"><Icon name={skill.source.type === "github" ? "folder" : "package"} size={16} /></span>
+                        <span className="external-skill-identity">
+                          <strong className="skill-card-name">{displayName}</strong>
+                          <span className="external-skill-source-ref">{skill.source.ref}</span>
+                        </span>
+                        <span className="skill-card-status skill-card-status-external">{t.skills.externalBadge}</span>
+                    </div>
+                    <p className="skill-card-description" title={description}>{description}</p>
+                    <div className="skill-card-tags">
                         {skill.updateAvailable ? <span className="tag">{t.skills.updateAvailableBadge}</span> : null}
-                        {skill.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}
-                      </div>
+                        {skill.tags.slice(0, 3).map((tag) => <span className="tag" key={tag}>{tagLabelBySlug.get(tag) ?? tag}</span>)}
+                        {skill.tags.length > 3 ? <span className="tag skill-card-tag-more">+{skill.tags.length - 3}</span> : null}
                     </div>
-                    <div className="skill-meta">
-                      <span className="meta-pill meta-pill-version">{skill.snapshot.version ?? "—"}</span>
-                      <span className="skill-meta-cell" title={`${t.skills.updated} ${skill.updated_at.slice(0, 10)}`}>{skill.updated_at.slice(0, 10)}</span>
-                      <span className="status status-published">{t.skills.externalBadge}</span>
-                    </div>
+                    <dl className="skill-card-facts" data-slot="external-skill-metadata">
+                      <div><dt>{t.skills.version}</dt><dd>{skill.snapshot.version ?? "—"}</dd></div>
+                      <div><dt>{t.skills.source}</dt><dd>{sourceName}</dd></div>
+                      <div><dt>{t.skills.updated}</dt><dd>{skill.updated_at.slice(0, 10)}</dd></div>
+                    </dl>
                   </Link>
                 </div>
               );
             }
             const skill = item.skill;
-            const usageCount = 0;
             return (
-              <div className="skill-row-with-actions" key={skill.skill_id}>
-                <Link className="skill-row" href={`/skills/${skill.slug}`}>
-                  <div className="skill-row-main"><strong className="skill-row-name">{skill.name}</strong><p className="skill-row-desc" title={displayValue(skill.description, t.skillDetail)}>{displayValue(skill.description, t.skillDetail)}</p><div className="tag-row">{skill.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}</div></div>
-                  <div className="skill-meta"><span className="meta-pill meta-pill-version">v{skill.latest_version ?? "0.0.0"}</span><span className="skill-meta-cell"><strong>{skill.agents.length}</strong>{t.skills.adapters}</span><span className="skill-meta-cell"><strong>{usageCount}</strong>{t.skills.workflowsPl}</span><span className="skill-meta-cell" title={`${t.skills.updated} ${skill.updated_at.slice(0, 10)}`}>{skill.updated_at.slice(0, 10)}</span><span className={`status ${skill.status === "published" ? "status-published" : "status-draft"}`}>{skillStatusLabel(skill.status, t.skills)}</span></div>
+              <div
+                className={`skill-card-shell has-card-action has-drag-handle${draggedCatalogKey === item.catalogKey ? " is-dragging" : ""}${dragOverCatalogKey === item.catalogKey ? " is-drop-target" : ""}`}
+                data-slot="registry-skill-card"
+                data-catalog-card="true"
+                data-card-kind="registry"
+                key={skill.skill_id}
+                onDragEnter={() => setDragOverCatalogKey(item.catalogKey)}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => dropCatalogItem(event, item.catalogKey)}
+              >
+                <button
+                  type="button"
+                  className="skill-card-drag-handle"
+                  data-slot="skill-card-drag-handle"
+                  draggable={!orderSaving}
+                  disabled={orderSaving}
+                  aria-label={t.skills.dragSkillOrder.replace("{name}", skill.name)}
+                  title={t.skills.dragSkillOrder.replace("{name}", skill.name)}
+                  onDragStart={(event) => beginCatalogDrag(event, item.catalogKey)}
+                  onDragEnd={() => { setDraggedCatalogKey(null); setDragOverCatalogKey(null); }}
+                  onKeyDown={(event) => moveCatalogItemByKeyboard(event, item.catalogKey)}
+                ><Icon name="grip" size={15} /></button>
+                <Link className="skill-catalog-card registry-skill-card" data-slot="skill-card" href={`/skills/${skill.slug}`}>
+                  <div className="skill-card-header">
+                    <span className="external-skill-glyph"><Icon name="sparkles" size={16} /></span>
+                    <span className="skill-card-identity">
+                      <strong className="skill-card-name">{skill.name}</strong>
+                      <span className="skill-card-slug">{skill.slug === skill.name ? t.skills.sourceRegistry : skill.slug}</span>
+                    </span>
+                    <span className={`skill-card-status ${skill.status === "published" ? "skill-card-status-published" : "skill-card-status-draft"}`}>{skillStatusLabel(skill.status, t.skills)}</span>
+                  </div>
+                  <p className="skill-card-description" title={displayValue(skill.description, t.skillDetail)}>{displayValue(skill.description, t.skillDetail)}</p>
+                  <div className="skill-card-tags">
+                    {skill.tags.slice(0, 3).map((tag) => <span className="tag" key={tag}>{tagLabelBySlug.get(tag) ?? tag}</span>)}
+                    {skill.tags.length > 3 ? <span className="tag skill-card-tag-more">+{skill.tags.length - 3}</span> : null}
+                  </div>
+                  <dl className="skill-card-facts">
+                    <div><dt>{t.skills.version}</dt><dd>v{skill.latest_version ?? "0.0.0"}</dd></div>
+                    <div><dt>{t.skills.adapters}</dt><dd>{skill.agents.length}</dd></div>
+                    <div><dt>{t.skills.updated}</dt><dd>{skill.updated_at.slice(0, 10)}</dd></div>
+                  </dl>
                 </Link>
-                <button type="button" className="skill-delete-button" aria-label={t.common.delete} title={t.common.delete} onClick={(event) => { event.preventDefault(); event.stopPropagation(); deleteSkill(skill); }}><Icon name="trash" size={14} /></button>
+                <button type="button" className="skill-card-delete" aria-label={t.common.delete} title={t.common.delete} onClick={(event) => { event.preventDefault(); event.stopPropagation(); deleteSkill(skill); }}><Icon name="trash" size={14} /></button>
               </div>
             );
           })}
-          </div>
+        </div>
+        {totalPages <= 1 ? null : (
           <Pagination
             page={currentPage}
             totalPages={totalPages}
@@ -262,37 +450,26 @@ export function SkillRegistry({ api: apiValue }: { api?: HunterApi }) {
               pageInfo: t.skills.pageInfo
             }}
           />
-        </div>
-        <aside className="hub-rail">
-          <div className="panel panel-themed panel-upload compact-form">
-            <div className="panel-title"><h2>{t.skills.uploadSkill}</h2><Status value="draft" /></div>
-            <p>{t.skills.uploadHint}</p>
-            <SkillUploadPanel api={api} agent="claude-code" onUploaded={(draft) => {
-              void refresh();
-              setMessage(t.skills.uploadedAsDraft.replace("{name}", draft.slug));
-            }} />
-          </div>
-          <div className="panel panel-themed panel-upload compact-form">
-            <div className="panel-title"><h2>{t.skills.importExternal}</h2><span>{t.skills.externalBadge}</span></div>
-            <p>{t.skills.importExternalHint}</p>
-            <button type="button" className="secondary" onClick={() => setImportOpen(true)}>{t.skills.importExternal}</button>
-          </div>
-          <div className="panel panel-themed panel-stats skill-stats-panel">
-            <div className="panel-title"><h2>{t.skills.stats}</h2><span>{t.skills.liveLocal}</span></div>
-            <div className="skill-stat-grid">
-              <article><strong>{(skills?.length ?? 0) + externalSkills.length}</strong><span>{t.skills.totalSkills}</span></article>
-              <article><strong>{publishedCount}</strong><span>{t.skills.statusPublished}</span></article>
-              <article><strong>{unpublishedCount}</strong><span>{t.skills.statusUnpublished}</span></article>
-              <article><strong>{externalSkills.length}</strong><span>{t.skills.sourceExternal}</span></article>
-              <article><strong>{activeTags.length}</strong><span>{t.skills.activeTags}</span></article>
-              <article><strong>{configuredAgentCount}</strong><span>{t.skills.configuredAgents}</span></article>
-              <article><strong>{usedSkillCount}</strong><span>{t.skills.usedInWorkflows}</span></article>
-            </div>
-          </div>
-        </aside>
+        )}
       </div>
       {message === null ? null : <div className="notice success">{message}</div>}
       {error === null ? null : <div className="notice danger">{error}</div>}
+      <Modal
+        open={uploadOpen}
+        onClose={() => setUploadOpen(false)}
+        title={t.skills.uploadSkill}
+        closeLabel={t.common.cancel}
+        wide
+      >
+        <div className="skill-upload-dialog">
+          <p>{t.skills.uploadHint}</p>
+          <SkillUploadPanel api={api} agent="claude-code" onUploaded={async (draft) => {
+            await refresh();
+            setMessage(t.skills.uploadedAsDraft.replace("{name}", draft.slug));
+            setUploadOpen(false);
+          }} />
+        </div>
+      </Modal>
       <Modal
         open={deleteModal !== null}
         onClose={cancelDelete}
@@ -311,13 +488,70 @@ export function SkillRegistry({ api: apiValue }: { api?: HunterApi }) {
         title={t.skills.importExternal}
         closeLabel={t.common.cancel}
         footer={<>
-          <button type="button" className="secondary" onClick={() => setImportOpen(false)}>{t.common.cancel}</button>
-          <button type="button" disabled={importRef.trim() === "" || importing} onClick={() => void submitImport()}>{t.skills.importExternalSubmit}</button>
+          <button type="button" className="secondary external-skill-import-cancel" onClick={() => setImportOpen(false)}>{t.common.cancel}</button>
+          <button
+            type="submit"
+            form="external-skill-import-form"
+            className="primary external-skill-import-submit"
+            disabled={importRef.trim() === "" || importing}
+          >
+            {importing ? <Spinner size={14} label={t.skills.importingExternal} /> : <Icon name="download" size={14} />}
+            {importing ? t.skills.importingExternal : t.skills.importExternalSubmit}
+          </button>
         </>}
       >
-        <p>{t.skills.importExternalHint}</p>
-        <label>{t.skills.slug}<input value={importRef} onChange={(event) => setImportRef(event.target.value)} placeholder={t.skills.importExternalPlaceholder} /></label>
-        <label>{t.skills.importExternalNote}<textarea value={importNote} onChange={(event) => setImportNote(event.target.value)} rows={3} /></label>
+        <form
+          id="external-skill-import-form"
+          className="external-skill-import"
+          data-slot="external-skill-import"
+          onSubmit={(event) => { event.preventDefault(); void submitImport(); }}
+        >
+          <p id="external-skill-import-intro" className="external-skill-import-intro">{t.skills.importExternalHint}</p>
+          <div
+            className="external-source-guides"
+            data-slot="external-source-guides"
+            aria-label={t.skills.importExternalFormats}
+          >
+            <div className="external-source-guide" data-slot="external-source-guide">
+              <span className="external-source-icon"><Icon name="package" size={17} /></span>
+              <span><strong>{t.skills.importExternalNpm}</strong><code>@scope/package</code></span>
+            </div>
+            <div className="external-source-guide" data-slot="external-source-guide">
+              <span className="external-source-icon"><Icon name="folder" size={17} /></span>
+              <span><strong>{t.skills.importExternalGithub}</strong><code>owner/repo</code></span>
+            </div>
+          </div>
+          <label className="form-field external-skill-import-field" htmlFor="external-skill-source">
+            <span className="form-label">{t.skills.importExternalSource}<abbr title={t.skills.requiredField}>*</abbr></span>
+            <input
+              id="external-skill-source"
+              value={importRef}
+              onChange={(event) => setImportRef(event.target.value)}
+              placeholder={t.skills.importExternalPlaceholder}
+              aria-describedby="external-skill-import-intro external-skill-import-trust"
+              autoComplete="off"
+              required
+            />
+          </label>
+          <label className="form-field external-skill-import-field" htmlFor="external-skill-note">
+            <span className="form-label">{t.skills.importExternalNoteOptional}</span>
+            <textarea
+              id="external-skill-note"
+              value={importNote}
+              onChange={(event) => setImportNote(event.target.value)}
+              placeholder={t.skills.importExternalNotePlaceholder}
+              rows={4}
+            />
+          </label>
+          <div
+            id="external-skill-import-trust"
+            className="external-skill-import-trust"
+            data-slot="external-skill-import-trust"
+          >
+            <Icon name="info" size={16} />
+            <p>{t.skills.importExternalTrust}</p>
+          </div>
+        </form>
       </Modal>
     </section>
   );

@@ -1,4 +1,9 @@
-import { skillCheckResultSchema, type SkillCheckResult } from "@hunter-harness/contracts";
+import {
+  externalSkillSummaryContentSchema,
+  skillCheckResultSchema,
+  type ExternalSkillSummaryContent,
+  type SkillCheckResult
+} from "@hunter-harness/contracts";
 
 // 解析 LLM 输出为 SkillCheckResult；失败降级为 AI_PARSE_FAILED yellow（不抛错，保证 draft 可继续）
 export function parseAiCheckResult(raw: string): SkillCheckResult {
@@ -88,6 +93,102 @@ export function parseReleaseNote(raw: string): string | null {
   const fence = /^```[a-zA-Z]*\s*([\s\S]*?)\s*```$/i.exec(trimmed);
   const text = (fence === null ? trimmed : (fence[1] ?? "")).trim();
   return text.length === 0 ? null : text;
+}
+
+export function parseExternalSkillSummary(raw: string): ExternalSkillSummaryContent | null {
+  try {
+    const text = stripMarkdownFence(raw);
+    const jsonText = extractJsonObject(text);
+    if (jsonText === null) return null;
+    const parsed: unknown = JSON.parse(jsonText);
+    const source = unwrapExternalSummary(parsed);
+    if (source === null) return null;
+    const quickStart = normalizedQuickStart(
+      pickSummaryValue(source, ["quick_start", "quickStart", "workflow", "典型工作流"]),
+      6
+    );
+    const result = externalSkillSummaryContentSchema.safeParse({
+      overview: normalizedSummaryText(pickSummaryValue(source, ["overview", "what_it_is", "whatIsIt", "是什么"])),
+      use_cases: normalizedSummaryList(pickSummaryValue(source, ["use_cases", "useCases", "use_case", "scenarios", "适用场景"]), 6),
+      capabilities: normalizedSummaryList(pickSummaryValue(source, ["capabilities", "core_capabilities", "coreCapabilities", "features", "核心功能"]), 8),
+      ...(quickStart.length === 0 ? {} : { quick_start: quickStart }),
+      getting_started: normalizedSummaryList(pickSummaryValue(source, ["getting_started", "gettingStarted", "快速开始"]), 6),
+      caveats: normalizedSummaryList(pickSummaryValue(source, ["caveats", "limitations", "warnings", "使用前注意", "注意事项"]), 6)
+    });
+    return result.success ? result.data : null;
+  } catch {
+    return null;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function unwrapExternalSummary(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value)) return null;
+  let current = value;
+  for (let depth = 0; depth < 3; depth++) {
+    if (["overview", "what_it_is", "whatIsIt", "是什么", "use_cases", "useCases", "capabilities", "features"]
+      .some((key) => current[key] !== undefined)) break;
+    const nested = ["summary", "result", "data"]
+      .map((key) => current[key])
+      .find(isRecord);
+    if (nested === undefined) break;
+    current = nested;
+  }
+  return current;
+}
+
+function pickSummaryValue(source: Record<string, unknown>, keys: readonly string[]): unknown {
+  for (const key of keys) {
+    if (source[key] !== undefined) return source[key];
+  }
+  return undefined;
+}
+
+function normalizedSummaryText(value: unknown): unknown {
+  return typeof value === "string" ? value.trim() : value;
+}
+
+function normalizedSummaryList(value: unknown, limit: number): unknown {
+  const values = typeof value === "string" ? [value] : value;
+  if (!Array.isArray(values)) return [];
+  const normalized = values
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim().replace(/^(?:[-*•]\s+|\d+[.)]\s+)/, ""))
+    .filter((item) => item.length > 0);
+  return [...new Set(normalized)].slice(0, limit);
+}
+
+function normalizedQuickStart(value: unknown, limit: number): Array<{
+  title: string;
+  instruction: string;
+  commands: string[];
+}> {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(isRecord)
+    .map((step) => ({
+      title: normalizedSummaryText(pickSummaryValue(step, ["title", "name", "step", "步骤"])),
+      instruction: normalizedSummaryText(pickSummaryValue(step, ["instruction", "description", "action", "说明"])),
+      commands: normalizedCommandList(pickSummaryValue(step, ["commands", "command", "命令"]), 8)
+    }))
+    .filter((step): step is { title: string; instruction: string; commands: string[] } =>
+      typeof step.title === "string" && step.title.length > 0 &&
+      typeof step.instruction === "string" && step.instruction.length > 0)
+    .slice(0, limit);
+}
+
+function normalizedCommandList(value: unknown, limit: number): string[] {
+  const values = typeof value === "string" ? [value] : value;
+  if (!Array.isArray(values)) return [];
+  const commands = values.flatMap((item) => typeof item === "string" ? item.split(/\r?\n/) : [])
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0 && !/^```/.test(item))
+    .map((item) => item.replace(/^\$\s+/, "").replace(/^`+|`+$/g, "").trim())
+    .filter((item) => item.length > 0);
+  return [...new Set(commands)].slice(0, limit);
 }
 
 // #2 appliesTo 白名单（与 contracts/src/fix.ts fixPlanItemSchema.appliesTo 对齐）

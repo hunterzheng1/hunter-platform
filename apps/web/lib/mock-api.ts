@@ -2,6 +2,8 @@ import type {
   AiProviderConfig,
   AiProviderWithKeySet,
   AiQuotaUsage,
+  CodexConnectionState,
+  CodexLoginStart,
   CreateExternalSkillRequest,
   DashboardOverview,
   DraftState,
@@ -11,6 +13,8 @@ import type {
   RegistrySkillDetail,
   RegistrySkillVersion,
   RegistryTag,
+  SkillCatalogOrder,
+  UpdateSkillCatalogOrderRequest,
   WorkflowFamily,
   WorkflowFamilyDraftState,
   WorkflowFamilyMutation,
@@ -777,6 +781,7 @@ function buildMockRunEvents(run: RunSummary): RunEventSummary[] {
 }
 
 export class MockApiClient implements HunterApi {
+  private skillCatalogOrder: SkillCatalogOrder = { items: [], revision: 0, updated_at: null };
   private readonly projectLifecycle = new Map<string, {
     state: "active" | "archived" | "purged";
     archivedAt: string | null;
@@ -788,6 +793,22 @@ export class MockApiClient implements HunterApi {
 
   async listSkills(): Promise<RegistrySkillDetail[]> {
     return delay(clone(MOCK_SKILLS));
+  }
+
+  async getSkillCatalogOrder(): Promise<SkillCatalogOrder> {
+    return delay(clone(this.skillCatalogOrder));
+  }
+
+  async updateSkillCatalogOrder(input: UpdateSkillCatalogOrderRequest): Promise<SkillCatalogOrder> {
+    if (input.revision !== this.skillCatalogOrder.revision) {
+      throw new ApiClientError(409, "SKILL_CATALOG_ORDER_CONFLICT", "Demo catalog order revision is stale.");
+    }
+    this.skillCatalogOrder = {
+      items: [...input.items],
+      revision: input.revision + 1,
+      updated_at: new Date().toISOString()
+    };
+    return delay(clone(this.skillCatalogOrder));
   }
 
   async listExternalSkills(): Promise<ExternalSkill[]> {
@@ -813,6 +834,13 @@ export class MockApiClient implements HunterApi {
 
   async refreshExternalSkill(_id: string): Promise<ExternalSkill> {
     void _id;
+    return demoReadOnly();
+  }
+
+  async generateExternalSkillSummary(_id: string, _revision: number, _force = false): Promise<ExternalSkill> {
+    void _id;
+    void _revision;
+    void _force;
     return demoReadOnly();
   }
 
@@ -1359,6 +1387,25 @@ export class MockApiClient implements HunterApi {
 
   async listAiProviders(): Promise<{ items: AiProviderWithKeySet[]; default_provider: string | null }> {
     return delay({ items: clone(MOCK_AI_PROVIDERS).map((p) => ({ ...p, key_set: p.provider_id === "deepseek" })), default_provider: "deepseek" });
+  }
+  async getCodexConnection(): Promise<CodexConnectionState> {
+    return delay({
+      status: "connected", auth_mode: "chatgpt", email: "demo@example.com", plan_type: "plus",
+      enabled: false,
+      selected_model: "gpt-5.6-sol",
+      models: [
+        { id: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", is_default: true, reasoning_efforts: ["medium", "high"] },
+        { id: "gpt-5.6-terra", display_name: "GPT-5.6 Terra", is_default: false, reasoning_efforts: ["medium", "high"] }
+      ],
+      error: null
+    });
+  }
+  async startCodexLogin(): Promise<CodexLoginStart> { return demoReadOnly(); }
+  async cancelCodexLogin(): Promise<{ cancelled: boolean }> { return demoReadOnly(); }
+  async updateCodexConnection(): Promise<CodexConnectionState> { return demoReadOnly(); }
+  async disconnectCodex(): Promise<{ disconnected: boolean }> { return demoReadOnly(); }
+  async testCodexConnection(): Promise<{ ok: boolean; model: string | null }> {
+    return delay({ ok: true, model: "gpt-5.6-sol" });
   }
   async createAiProvider(): Promise<AiProviderConfig> { return demoReadOnly(); }
   async updateAiProvider(): Promise<AiProviderConfig> { return demoReadOnly(); }

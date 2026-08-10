@@ -19,8 +19,12 @@ FROM node:24.14.0-bookworm-slim AS runtime
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=3001 \
-    ARTIFACT_ROOT=/var/lib/hunter-harness/artifacts
+    ARTIFACT_ROOT=/var/lib/hunter-harness/artifacts \
+    HUNTER_PLATFORM_CODEX_HOME=/var/lib/hunter-harness/codex
 WORKDIR /app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json /app/package-lock.json ./
 COPY --from=build /app/packages/contracts/package.json ./packages/contracts/package.json
@@ -31,7 +35,9 @@ COPY --from=build /app/apps/server/package.json ./apps/server/package.json
 COPY --from=build /app/apps/server/dist ./apps/server/dist
 COPY --from=build /app/apps/server/migrations ./apps/server/migrations
 COPY --from=build /app/resources ./resources
-RUN mkdir -p /var/lib/hunter-harness/artifacts && chown -R node:node /var/lib/hunter-harness /app
+RUN mkdir -p /var/lib/hunter-harness/artifacts /var/lib/hunter-harness/codex \
+    && chown -R node:node /var/lib/hunter-harness /app \
+    && chmod 700 /var/lib/hunter-harness/codex
 USER node
 EXPOSE 3001
 CMD ["node", "apps/server/dist/main.js"]

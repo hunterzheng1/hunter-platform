@@ -69,7 +69,37 @@ export const aiQuotaUsageSchema = z.object({
 export const aiConfigStateSchema = z.object({
   defaultProvider: z.string().nullable(),
   providers: z.array(aiProviderConfigSchema),
-  usage: z.array(aiQuotaUsageSchema).default([])
+  usage: z.array(aiQuotaUsageSchema).default([]),
+  codex: z.object({
+    selected_model: z.string().nullable().default(null),
+    enabled: z.boolean().default(false)
+  }).strict().default({ selected_model: null, enabled: false })
+}).strict();
+
+// Codex 使用 ChatGPT 账号授权，由 Codex App Server 持有并刷新令牌。
+// 平台只展示非敏感账号摘要和动态模型目录，不保存 access/refresh token。
+export const codexModelOptionSchema = z.object({
+  id: z.string().min(1),
+  display_name: z.string().min(1),
+  is_default: z.boolean(),
+  reasoning_efforts: z.array(z.string()).default([])
+}).strict();
+
+export const codexConnectionStateSchema = z.object({
+  status: z.enum(["connected", "disconnected", "unavailable"]),
+  auth_mode: z.literal("chatgpt").nullable(),
+  email: z.string().nullable(),
+  plan_type: z.string().nullable(),
+  enabled: z.boolean(),
+  selected_model: z.string().nullable(),
+  models: z.array(codexModelOptionSchema),
+  error: z.string().nullable()
+}).strict();
+
+export const codexLoginStartSchema = z.object({
+  login_id: z.string().min(1),
+  verification_url: z.url(),
+  user_code: z.string().min(1)
 }).strict();
 
 // POST /api/v1/ai-config/providers/reorder 请求体：provider_ids 为有序完整列表（不多不少，否则 422）。
@@ -82,6 +112,9 @@ export type AiProviderReorderRequest = z.infer<typeof aiProviderReorderRequestSc
 export type AiProviderConfig = z.infer<typeof aiProviderConfigSchema>;
 export type AiQuotaUsage = z.infer<typeof aiQuotaUsageSchema>;
 export type AiConfigState = z.infer<typeof aiConfigStateSchema>;
+export type CodexModelOption = z.infer<typeof codexModelOptionSchema>;
+export type CodexConnectionState = z.infer<typeof codexConnectionStateSchema>;
+export type CodexLoginStart = z.infer<typeof codexLoginStartSchema>;
 
 // 异步 AI 检查 job 状态（GET /api/v1/ai-jobs/:id 响应；与 server AiJobStore 对齐）。
 // slug + agent 为 dedup key：同 slug+agent 重复启动 job 返已有 jobId（治 R2 并发限制）。
