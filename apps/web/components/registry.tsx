@@ -620,7 +620,7 @@ export function SkillDetail({ api: apiValue, skillId }: { api?: HunterApi; skill
   }, [api, skillId]);
 
   useEffect(() => { setSourcePath("SKILL.md"); }, [skillId]);
-  const command = `npx @hunter-harness/skill-cli install ${skillId} --agent ${installAgent}`;
+  const command = `npx @hunter-harness/skills install ${skillId} --agent ${installAgent}`;
   const latestNpmRelease = skill?.npmReleases.find((entry) => entry.version === skill.latest_version) ?? null;
   const npmBadgeLabel = latestNpmRelease?.status === "published"
     ? `${t.skillDetail.npmBadgePublished} v${latestNpmRelease.version}`

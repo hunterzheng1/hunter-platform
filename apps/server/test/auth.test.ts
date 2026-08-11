@@ -59,7 +59,8 @@ describe("account login and session tokens (P2 auth)", () => {
     expect(result.statusCode).toBe(201);
     expect(result.body.user).toMatchObject({
       username: "owner",
-      actor_id: "actor_owner"
+      actor_id: "actor_owner",
+      system_role: "owner"
     });
   });
 
@@ -93,6 +94,7 @@ describe("account login and session tokens (P2 auth)", () => {
 
     const second = await register("second", "super-secret-2", code);
     expect(second.statusCode).toBe(201);
+    expect(second.body.user).toMatchObject({ system_role: "member" });
     expect((second.body.user as Record<string, unknown>).actor_id).not.toBe("actor_owner");
 
     // Invite codes are single-use.
@@ -126,7 +128,7 @@ describe("account login and session tokens (P2 auth)", () => {
       headers: { authorization: "Bearer " + token }
     });
     expect(me.statusCode).toBe(200);
-    expect(me.json().user).toMatchObject({ username: "owner" });
+    expect(me.json().user).toMatchObject({ username: "owner", system_role: "owner" });
   });
 
   it("invalidates the session after logout", async () => {

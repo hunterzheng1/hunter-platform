@@ -30,6 +30,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-hunter_harness}
       ARTIFACT_ROOT: /var/lib/hunter-harness/artifacts
       HUNTER_HARNESS_AI_SECRET_FILE: /var/lib/hunter-harness/secrets/ai-providers.json
+      HUNTER_HARNESS_CREDENTIAL_KEY_FILE: /var/lib/hunter-harness/secrets/credential-key
       HUNTER_PLATFORM_CODEX_HOME: /var/lib/hunter-harness/codex
       HUNTER_HARNESS_BOOTSTRAP_TOKEN_FILE: /run/secrets/bootstrap_token
       HUNTER_HARNESS_BOOTSTRAP_ACTOR: ${HUNTER_HARNESS_BOOTSTRAP_ACTOR:-actor_owner}
@@ -42,8 +43,14 @@ services:
         POSTGRES_PASSWORD_ENCODED="$$(node -e "process.stdout.write(encodeURIComponent(require('fs').readFileSync('/run/secrets/postgres_password','utf8').trim()))")"
         export DATABASE_URL="postgresql://$${POSTGRES_USER}:$${POSTGRES_PASSWORD_ENCODED}@postgres:5432/$${POSTGRES_DB}"
         mkdir -p /var/lib/hunter-harness/artifacts /var/lib/hunter-harness/secrets /var/lib/hunter-harness/codex
+        CREDENTIAL_KEY_FILE="$${HUNTER_HARNESS_CREDENTIAL_KEY_FILE}"
+        if [ ! -s "$${CREDENTIAL_KEY_FILE}" ]; then
+          umask 077
+          node -e "process.stdout.write(require('node:crypto').randomBytes(32).toString('base64'))" > "$${CREDENTIAL_KEY_FILE}"
+        fi
         chown -R node:node /var/lib/hunter-harness/artifacts /var/lib/hunter-harness/secrets /var/lib/hunter-harness/codex
         chmod 700 /var/lib/hunter-harness/secrets /var/lib/hunter-harness/codex
+        chmod 600 "$${CREDENTIAL_KEY_FILE}"
         exec setpriv --reuid=1000 --regid=1000 --clear-groups node apps/server/dist/main.js
     secrets:
       - postgres_password

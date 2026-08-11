@@ -10,6 +10,7 @@ export interface AuthUser {
   username: string;
   display_name: string;
   actor_id: string;
+  system_role: "owner" | "member";
 }
 
 const base = process.env.NEXT_PUBLIC_HUNTER_HARNESS_API_URL ?? "";
@@ -118,6 +119,6 @@ export function clearStoredToken(): void {
   window.sessionStorage.removeItem(TOKEN_STORAGE_KEY);
 }
 
-export function isSessionToken(token: string | null): boolean {
+export function isSessionToken(token: string | null): token is string {
   return token !== null && token.startsWith("hhs_");
 }

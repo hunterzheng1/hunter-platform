@@ -455,6 +455,81 @@ paths:
         "422": { description: Agent not enabled for this skill (AGENT_NOT_ENABLED) or request body validation failed }
         "409": { description: Skill revision conflict (REVISION_CONFLICT) }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/system/npm-publishing:
+    get:
+      operationId: getNpmPublishingCredentialStatus
+      summary: Read the server-wide npm publishing credential status
+      description: Owner session only. The response never contains the credential token or encrypted envelope.
+      responses:
+        "200":
+          description: Active managed or deployment credential metadata
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NpmPublishingCredentialStatus" }
+        "403": { description: A human Owner session is required }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/system/npm-publishing/credential:
+    put:
+      operationId: replaceNpmPublishingCredential
+      summary: Verify and atomically replace the managed npm credential
+      description: Owner session only. The write-only token is verified with npm before its encrypted envelope replaces the active managed credential.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NpmPublishingCredentialReplaceRequest" }
+      responses:
+        "200":
+          description: Managed credential verified and encrypted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NpmPublishingCredentialStatus" }
+        "403": { description: A human Owner session is required }
+        "422": { description: npm rejected the credential or the supplied expiration has passed }
+        "503": { description: The server credential-encryption key is unavailable }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: removeNpmPublishingCredential
+      summary: Remove the managed credential and fall back to the deployment secret
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SchemaVersionRequest" }
+      responses:
+        "200":
+          description: Managed credential removed; response describes the active fallback
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NpmPublishingCredentialStatus" }
+        "403": { description: A human Owner session is required }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/system/npm-publishing/verify:
+    post:
+      operationId: verifyNpmPublishingCredential
+      summary: Verify the active credential against npm
+      description: Owner session only. Managed credentials are decrypted only in memory for the verification request.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SchemaVersionRequest" }
+      responses:
+        "200":
+          description: Active credential identity verified
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NpmPublishingCredentialStatus" }
+        "403": { description: A human Owner session is required }
+        "422": { description: npm rejected the active credential or it has expired }
+        "503": { description: The managed credential cannot be decrypted }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/ai-config/providers:
     get:
       operationId: listAiProviders
@@ -1098,6 +1173,44 @@ components:
       schema:
         $ref: "#/components/schemas/RegistryAgent"
   schemas:
+    SchemaVersionRequest:
+      type: object
+      additionalProperties: false
+      required: [schema_version]
+      properties:
+        schema_version: { type: integer, const: 1 }
+    NpmPublishingCredentialReplaceRequest:
+      type: object
+      additionalProperties: false
+      required: [schema_version, token, expires_at]
+      properties:
+        schema_version: { type: integer, const: 1 }
+        token:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          writeOnly: true
+          format: password
+          description: npm Granular Access Token; never returned or logged
+        expires_at:
+          type: [string, "null"]
+          format: date-time
+          description: Operator-recorded token expiration used to block expired publishing credentials
+    NpmPublishingCredentialStatus:
+      type: object
+      additionalProperties: false
+      required: [scope, source, state, username, expires_at, last_verified_at, can_manage]
+      properties:
+        scope: { type: [string, "null"] }
+        source: { type: string, enum: [none, deployment, managed] }
+        state: { type: string, enum: [not_configured, configured, ready, expired, invalid, locked] }
+        username: { type: [string, "null"] }
+        expires_at: { type: [string, "null"], format: date-time }
+        last_verified_at: { type: [string, "null"], format: date-time }
+        can_manage:
+          type: boolean
+          description: Whether the server has a valid encryption key for page-managed credentials
+        request_id: { type: string, format: uuid }
     CodexModelOption:
       type: object
       additionalProperties: false

@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 
+import { fetchMe, isSessionToken, storedToken, type AuthUser } from "../lib/auth";
 import { I18nProvider, useI18n } from "../lib/i18n";
 import { ThemeProvider, useTheme } from "../lib/theme";
 import { SettingsPanel } from "./settings-panel";
@@ -12,7 +14,8 @@ import { ToastProvider } from "./ui/Toast";
 interface NavItem {
   href: string;
   icon: IconName;
-  labelKey: "overview" | "projects" | "knowledge" | "runs" | "workflows" | "skills" | "aiConfig";
+  labelKey: "overview" | "projects" | "knowledge" | "runs" | "workflows" | "skills" | "aiConfig" | "publishing";
+  ownerOnly?: boolean;
 }
 
 interface NavGroup {
@@ -44,6 +47,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     sectionKey: "sectionSystem",
     items: [
+      { href: "/publishing", icon: "package", labelKey: "publishing", ownerOnly: true },
       { href: "/ai-config", icon: "settings", labelKey: "aiConfig" }
     ]
   }
@@ -53,6 +57,17 @@ function Sidebar() {
   const { t } = useI18n();
   const pathname = usePathname();
   const { theme, setTheme } = useTheme();
+  const [user, setUser] = useState<AuthUser | null>(null);
+
+  useEffect(() => {
+    const token = storedToken();
+    if (!isSessionToken(token)) return;
+    let active = true;
+    void fetchMe(token).then((value) => {
+      if (active) setUser(value);
+    });
+    return () => { active = false; };
+  }, []);
 
   function isActive(href: string) {
     if (href === "/") return pathname === href;
@@ -76,7 +91,7 @@ function Sidebar() {
         {NAV_GROUPS.map((group) => (
           <div className="nav-group" key={group.sectionKey}>
             <p className="nav-section">{t.nav[group.sectionKey]}</p>
-            {group.items.map((item) => (
+            {group.items.filter((item) => !item.ownerOnly || user?.system_role === "owner").map((item) => (
               <Link
                 href={item.href}
                 className={isActive(item.href) ? "active" : ""}

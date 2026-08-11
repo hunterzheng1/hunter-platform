@@ -66,6 +66,9 @@ describe("OpenAPI v1 contract", () => {
       "/api/v1/skills/{slug}/draft/{agent}/release-note:generate",
       "/api/v1/skills/{slug}/tags/{tag_id}",
       "/api/v1/skills/{slug}/versions",
+      "/api/v1/system/npm-publishing",
+      "/api/v1/system/npm-publishing/credential",
+      "/api/v1/system/npm-publishing/verify",
       "/api/v1/tags",
       "/api/v1/tags/{tag_id}",
       "/api/v1/tags/{tag_id}/merge",
@@ -94,6 +97,20 @@ describe("OpenAPI v1 contract", () => {
       Object.values(path).map((operation) => operation.operationId).filter(Boolean)
     );
     expect(new Set(operationIds).size).toBe(operationIds.length);
+  });
+
+  it("documents npm credentials as Owner-only metadata with a write-only token", async () => {
+    const document = parseYaml(await readFile(
+      new URL("../openapi/hunter-harness-v1.yaml", import.meta.url),
+      "utf8"
+    )) as {
+      paths: Record<string, Record<string, { description?: string; responses?: Record<string, unknown> }>>;
+      components: { schemas: Record<string, { properties?: Record<string, { writeOnly?: boolean }> }> };
+    };
+    expect(document.paths["/api/v1/system/npm-publishing"]?.get?.description).toContain("Owner session");
+    expect(document.paths["/api/v1/system/npm-publishing/credential"]?.put?.responses).toHaveProperty("503");
+    expect(document.components.schemas.NpmPublishingCredentialReplaceRequest?.properties?.token?.writeOnly).toBe(true);
+    expect(document.components.schemas.NpmPublishingCredentialStatus?.properties).not.toHaveProperty("token");
   });
 
   it("documents unified publish, review errors, and deprecated compatibility routes", async () => {

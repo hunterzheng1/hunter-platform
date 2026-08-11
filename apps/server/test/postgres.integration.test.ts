@@ -8,6 +8,7 @@ import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createServer } from "../src/app.js";
+import { createNpmPublishingCredentials } from "../src/npm/credentials.js";
 import { runMigrations } from "../src/repositories/migrate.js";
 import { PostgresRepository } from "../src/repositories/postgres.js";
 import { PostgresRegistryPersistence } from "../src/registry/persistence.js";
@@ -30,7 +31,7 @@ postgresDescribe("PostgreSQL repository integration", () => {
     await pool.query(`
       TRUNCATE TABLE
         semantic_edges, semantic_documents, project_files_current,
-        registry_state, idempotency_records, audit_events, reviews, artifacts, proposal_items,
+        registry_state, npm_publishing_credentials, idempotency_records, audit_events, reviews, artifacts, proposal_items,
         proposals, proposal_sessions, project_bindings, projects, api_tokens, actors
       CASCADE
     `);
@@ -117,6 +118,45 @@ postgresDescribe("PostgreSQL repository integration", () => {
       statusCode: 201,
       response: { ok: true }
     });
+  });
+
+  it("persists only an encrypted npm publishing credential and reloads it", async () => {
+    const persistence = {
+      load: () => repository.getNpmPublishingCredential(),
+      save: (record: Parameters<typeof repository.saveNpmPublishingCredential>[0]) =>
+        repository.saveNpmPublishingCredential(record),
+      clear: () => repository.clearNpmPublishingCredential()
+    };
+    const plaintext = "npm_postgres_integration_secret";
+    const manager = createNpmPublishingCredentials({
+      deploymentConfig: { scope: "@hunter-harness", token: null },
+      persistence,
+      encryptionKey: Buffer.alloc(32, 7),
+      verifier: {
+        async verify(token) {
+          expect(token).toBe(plaintext);
+          return { username: "postgres-publisher" };
+        }
+      }
+    });
+
+    await manager.replace({ token: plaintext, expiresAt: "2099-01-01T00:00:00.000Z", actorId: "actor_pg" });
+    const raw = await pool.query("SELECT * FROM npm_publishing_credentials WHERE singleton_id = 1");
+    expect(raw.rowCount).toBe(1);
+    expect(JSON.stringify(raw.rows[0])).not.toContain(plaintext);
+
+    const reloaded = createNpmPublishingCredentials({
+      deploymentConfig: { scope: "@hunter-harness", token: null },
+      persistence,
+      encryptionKey: Buffer.alloc(32, 7),
+      verifier: { async verify() { return { username: "postgres-publisher" }; } }
+    });
+    await expect(reloaded.resolveForPublish()).resolves.toEqual({
+      scope: "@hunter-harness",
+      token: plaintext
+    });
+    await reloaded.clear();
+    await expect(repository.getNpmPublishingCredential()).resolves.toBeNull();
   });
 
   it("serializes restore against permanent purge and releases purged bindings", async () => {

@@ -89,6 +89,16 @@ export interface RunPhaseSummary {
   }>;
 }
 
+export interface NpmPublishingCredentialStatus {
+  scope: string | null;
+  source: "none" | "deployment" | "managed";
+  state: "not_configured" | "configured" | "ready" | "expired" | "invalid" | "locked";
+  username: string | null;
+  expires_at: string | null;
+  last_verified_at: string | null;
+  can_manage: boolean;
+}
+
 export interface RunPhasePreparationSummary {
   attempt: number;
   run_id?: string | null;
@@ -414,6 +424,10 @@ export interface HunterApi {
   diffSkillDraft?(slug: string, agent: RegistryAgent): Promise<SkillDiffFile[]>;
   setDefaultAgent?(slug: string, agent: RegistryAgent, revision: number): Promise<RegistrySkillDetail>;
   deleteSkill?(slug: string): Promise<{ slug: string; deleted: boolean }>;
+  getNpmPublishingStatus?(): Promise<NpmPublishingCredentialStatus>;
+  replaceNpmPublishingCredential?(input: { token: string; expires_at: string | null }): Promise<NpmPublishingCredentialStatus>;
+  verifyNpmPublishingCredential?(): Promise<NpmPublishingCredentialStatus>;
+  clearNpmPublishingCredential?(): Promise<NpmPublishingCredentialStatus>;
   listAiProviders?(): Promise<{ items: AiProviderWithKeySet[]; default_provider: string | null }>;
   getCodexConnection?(): Promise<CodexConnectionState>;
   startCodexLogin?(): Promise<CodexLoginStart>;
@@ -1326,6 +1340,25 @@ export class HttpHunterApi implements HunterApi {
 
   async deleteSkill(slug: string): Promise<{ slug: string; deleted: boolean }> {
     return this.request("DELETE", "/api/v1/skills/" + encodeURIComponent(slug), {});
+  }
+
+  async getNpmPublishingStatus(): Promise<NpmPublishingCredentialStatus> {
+    return this.request("GET", "/api/v1/system/npm-publishing");
+  }
+
+  async replaceNpmPublishingCredential(input: { token: string; expires_at: string | null }): Promise<NpmPublishingCredentialStatus> {
+    return this.request("PUT", "/api/v1/system/npm-publishing/credential", {
+      schema_version: 1,
+      ...input
+    });
+  }
+
+  async verifyNpmPublishingCredential(): Promise<NpmPublishingCredentialStatus> {
+    return this.request("POST", "/api/v1/system/npm-publishing/verify", { schema_version: 1 });
+  }
+
+  async clearNpmPublishingCredential(): Promise<NpmPublishingCredentialStatus> {
+    return this.request("DELETE", "/api/v1/system/npm-publishing/credential", { schema_version: 1 });
   }
 
   async listAiProviders(): Promise<{ items: AiProviderWithKeySet[]; default_provider: string | null }> {

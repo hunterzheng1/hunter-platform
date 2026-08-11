@@ -67,7 +67,7 @@ import {
   generateProjectApiKey,
   projectApiKeyHash
 } from "./auth/accounts.js";
-import { registerAuthRoutes } from "./auth/routes.js";
+import { registerAuthRoutes, requireSessionUser } from "./auth/routes.js";
 import {
   assertProjectKeyScope,
   authenticateRequest,
@@ -86,6 +86,12 @@ import {
 import { defaultServerConfig, type ServerConfig } from "./config.js";
 import { buildDashboardOverview } from "./dashboard/overview.js";
 import { isNpmPublishConfigured, loadNpmPublishConfig } from "./npm/config.js";
+import {
+  createNpmPublishingCredentials,
+  FetchNpmCredentialVerifier,
+  NpmCredentialError,
+  type NpmCredentialPersistence
+} from "./npm/credentials.js";
 import {
   publishSkillNpmPackage,
   publishWorkflowFamilyNpmPackage,
@@ -139,6 +145,9 @@ export interface CreateServerOptions {
   codexService?: CodexAiService;
   npmPublisherDeps?: NpmPublisherDeps;
   npmPublishConfig?: ReturnType<typeof loadNpmPublishConfig>;
+  npmCredentialPersistence?: NpmCredentialPersistence;
+  npmCredentialEncryptionKey?: Uint8Array | null;
+  npmCredentialVerifier?: (token: string, scope: string) => Promise<{ username: string }>;
   /** External Skill ?? fetch ??????? */
   externalFetch?: typeof fetch;
 }
@@ -405,6 +414,30 @@ async function authenticated(
   return { actor, requestId: routeRequestId(request) };
 }
 
+async function ownerAuthenticated(
+  request: FastifyRequest,
+  repository: ServerRepository,
+  ownerActorId: string
+): Promise<{ actor: Actor; requestId: string }> {
+  const authenticatedRequest = await authenticated(request, repository);
+  if (authenticatedRequest.actor.actorId !== ownerActorId) {
+    throw new ServerDomainError(403, "OWNER_REQUIRED", "server owner access is required");
+  }
+  return authenticatedRequest;
+}
+
+async function ownerSessionAuthenticated(
+  request: FastifyRequest,
+  repository: ServerRepository,
+  ownerActorId: string
+): Promise<{ actor: Actor; requestId: string }> {
+  const { user } = await requireSessionUser(request, repository);
+  if (user.actorId !== ownerActorId) {
+    throw new ServerDomainError(403, "OWNER_REQUIRED", "server owner access is required");
+  }
+  return { actor: { actorId: user.actorId }, requestId: routeRequestId(request) };
+}
+
 async function mutation(
   request: FastifyRequest,
   repository: ServerRepository,
@@ -473,7 +506,41 @@ function send(reply: FastifyReply, requestId: string, result: MutationResult) {
 
 export async function createServer(options: CreateServerOptions): Promise<FastifyInstance> {
   const config = { ...defaultServerConfig, ...options.config };
+  const ownerActorId = process.env.HUNTER_HARNESS_BOOTSTRAP_ACTOR ?? "actor_owner";
   const { repository, storage } = options;
+  const deploymentNpmConfig = options.npmPublishConfig ?? loadNpmPublishConfig();
+  const defaultNpmVerifier = new FetchNpmCredentialVerifier();
+  const npmCredentials = createNpmPublishingCredentials({
+    deploymentConfig: deploymentNpmConfig,
+    persistence: options.npmCredentialPersistence ?? {
+      load: () => repository.getNpmPublishingCredential(),
+      save: (record) => repository.saveNpmPublishingCredential(record),
+      clear: () => repository.clearNpmPublishingCredential()
+    },
+    encryptionKey: options.npmCredentialEncryptionKey ?? null,
+    verifier: {
+      verify: options.npmCredentialVerifier ?? ((token) => defaultNpmVerifier.verify(token))
+    }
+  });
+  const resolveNpmPublishConfig = async (required: boolean) => {
+    let npmConfig;
+    try {
+      npmConfig = await npmCredentials.resolveForPublish();
+    } catch (error) {
+      if (error instanceof NpmCredentialError) {
+        throw new ServerDomainError(503, error.code, error.message);
+      }
+      throw error;
+    }
+    if (required && !isNpmPublishConfigured(npmConfig)) {
+      throw new ServerDomainError(
+        503,
+        "NPM_PUBLISH_NOT_CONFIGURED",
+        "npm publishing is not configured; add a token in Publishing settings or configure a deployment secret"
+      );
+    }
+    return npmConfig;
+  };
   const registry = new RegistryStore(storage, options.registryPersistence);
   await registry.initialize(options.bootstrapBundle);
   registry.setExternalFetcherDeps({
@@ -676,7 +743,116 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   // P2 auth: username/password login -> hhs_ session token (Bearer-compatible).
   registerAuthRoutes(app, {
     repository,
-    ownerActorId: process.env.HUNTER_HARNESS_BOOTSTRAP_ACTOR ?? "actor_owner"
+    ownerActorId
+  });
+
+  app.get("/api/v1/system/npm-publishing", async (request, reply) => {
+    const { requestId } = await ownerSessionAuthenticated(request, repository, ownerActorId);
+    const status = await npmCredentials.status();
+    reply.header("X-Request-Id", requestId);
+    return {
+      ...status,
+      request_id: requestId
+    };
+  });
+
+  app.put("/api/v1/system/npm-publishing/credential", async (request, reply) => {
+    const { actor, requestId } = await ownerSessionAuthenticated(request, repository, ownerActorId);
+    const body = z.object({
+      schema_version: z.literal(1),
+      token: z.string().min(1).max(2048),
+      expires_at: z.iso.datetime().nullable()
+    }).strict().parse(request.body);
+    const result = await mutation(request, repository, actor, requestId, async () => {
+      let status;
+      try {
+        status = await npmCredentials.replace({
+          token: body.token,
+          expiresAt: body.expires_at,
+          actorId: actor.actorId
+        });
+      } catch (error) {
+        if (error instanceof NpmCredentialError) {
+          await writeAudit(repository, {
+            actorId: actor.actorId,
+            projectId: null,
+            action: "npm.credential.rejected",
+            targetId: deploymentNpmConfig.scope ?? "npm",
+            requestId,
+            details: { code: error.code }
+          });
+          throw new ServerDomainError(
+            error.code === "NPM_CREDENTIAL_LOCKED" ? 503 : 422,
+            error.code,
+            error.message
+          );
+        }
+        throw error;
+      }
+      await writeAudit(repository, {
+        actorId: actor.actorId,
+        projectId: null,
+        action: "npm.credential.set",
+        targetId: status.scope ?? "npm",
+        requestId,
+        details: {
+          scope: status.scope,
+          source: status.source,
+          username: status.username,
+          expires_at: status.expires_at
+        }
+      });
+      return { statusCode: 200, body: { ...status } };
+    });
+    return send(reply, requestId, result);
+  });
+
+  app.post("/api/v1/system/npm-publishing/verify", async (request, reply) => {
+    const { actor, requestId } = await ownerSessionAuthenticated(request, repository, ownerActorId);
+    z.object({ schema_version: z.literal(1) }).strict().parse(request.body);
+    const result = await mutation(request, repository, actor, requestId, async () => {
+      let status;
+      try {
+        status = await npmCredentials.verifyActive();
+      } catch (error) {
+        if (error instanceof NpmCredentialError) {
+          throw new ServerDomainError(
+            error.code === "NPM_CREDENTIAL_LOCKED" ? 503 : 422,
+            error.code,
+            error.message
+          );
+        }
+        throw error;
+      }
+      await writeAudit(repository, {
+        actorId: actor.actorId,
+        projectId: null,
+        action: "npm.credential.verified",
+        targetId: status.scope ?? "npm",
+        requestId,
+        details: { scope: status.scope, source: status.source, username: status.username }
+      });
+      return { statusCode: 200, body: { ...status } };
+    });
+    return send(reply, requestId, result);
+  });
+
+  app.delete("/api/v1/system/npm-publishing/credential", async (request, reply) => {
+    const { actor, requestId } = await ownerSessionAuthenticated(request, repository, ownerActorId);
+    z.object({ schema_version: z.literal(1) }).strict().parse(request.body);
+    const result = await mutation(request, repository, actor, requestId, async () => {
+      const status = await npmCredentials.clear();
+      await writeAudit(repository, {
+        actorId: actor.actorId,
+        projectId: null,
+        action: "npm.credential.removed",
+        targetId: status.scope ?? "npm",
+        requestId,
+        details: { fallback_source: status.source }
+      });
+      return { statusCode: 200, body: { ...status } };
+    });
+    return send(reply, requestId, result);
   });
 
   app.get("/api/v1/dashboard/overview", async (request, reply) => {
@@ -1435,10 +1611,10 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     const { requestId } = await authenticated(request, repository);
     const { slug } = request.params as { slug: string };
     reply.header("X-Request-Id", requestId);
-    const npmConfig = options.npmPublishConfig ?? loadNpmPublishConfig();
+    const npmStatus = await npmCredentials.status();
     return {
       ...registry.getSkill(slug),
-      npm_publish_available: isNpmPublishConfigured(npmConfig),
+      npm_publish_available: npmStatus.state === "configured" || npmStatus.state === "ready",
       request_id: requestId
     };
   });
@@ -1606,16 +1782,9 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   app.post("/api/v1/skills/:slug/publish", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository);
+    const { actor, requestId } = await ownerAuthenticated(request, repository, ownerActorId);
     const { slug } = request.params as { slug: string };
-    const npmConfig = options.npmPublishConfig ?? loadNpmPublishConfig();
-    if (!isNpmPublishConfigured(npmConfig)) {
-      throw new ServerDomainError(
-        503,
-        "NPM_PUBLISH_NOT_CONFIGURED",
-        "npm publish is not configured on the server (set HUNTER_HARNESS_NPM_SCOPE and HUNTER_HARNESS_NPM_TOKEN_FILE)"
-      );
-    }
+    const npmConfig = await resolveNpmPublishConfig(true);
     const rawBody = request.body as { sourceAgent?: unknown };
     const registrySourceAgentResult = registryAgentSchema.safeParse(rawBody.sourceAgent);
     if (!registrySourceAgentResult.success) {
@@ -1656,7 +1825,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   app.post("/api/v1/skills/:slug/draft/:agent/publish", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository);
+    const { actor, requestId } = await ownerAuthenticated(request, repository, ownerActorId);
     const { slug, agent: agentValue } = request.params as { slug: string; agent: string };
     const agentResult = registryAgentSchema.safeParse(agentValue);
     if (!agentResult.success) {
@@ -1666,7 +1835,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     reply.header("Deprecation", "true");
     const result = await mutation(request, repository, actor, requestId, async () => {
       const body = publishSkillRequestSchema.parse(request.body);
-      const npmConfig = options.npmPublishConfig ?? loadNpmPublishConfig();
+      const npmConfig = await resolveNpmPublishConfig(false);
       if (isNpmPublishConfigured(npmConfig)) {
         const draft = registry.getDraft(slug, agent);
         if (draft === undefined) {
@@ -1708,17 +1877,10 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   app.post("/api/v1/skills/:slug/npm-release", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository);
+    const { actor, requestId } = await ownerAuthenticated(request, repository, ownerActorId);
     const { slug } = request.params as { slug: string };
-    const npmConfig = options.npmPublishConfig ?? loadNpmPublishConfig();
+    const npmConfig = await resolveNpmPublishConfig(true);
     reply.header("Deprecation", "true");
-    if (!isNpmPublishConfigured(npmConfig)) {
-      throw new ServerDomainError(
-        503,
-        "NPM_PUBLISH_NOT_CONFIGURED",
-        "npm publish is not configured on the server (set HUNTER_HARNESS_NPM_SCOPE and HUNTER_HARNESS_NPM_TOKEN)"
-      );
-    }
     const result = await mutation(request, repository, actor, requestId, async () => {
       const release = await registry.releaseSkillToNpm(
         slug,
@@ -1760,16 +1922,9 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   app.post("/api/v1/workflow-families/:slug/npm-release", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository);
+    const { actor, requestId } = await ownerAuthenticated(request, repository, ownerActorId);
     const { slug } = request.params as { slug: string };
-    const npmConfig = options.npmPublishConfig ?? loadNpmPublishConfig();
-    if (!isNpmPublishConfigured(npmConfig)) {
-      throw new ServerDomainError(
-        503,
-        "NPM_PUBLISH_NOT_CONFIGURED",
-        "npm publish is not configured on the server (set HUNTER_HARNESS_NPM_SCOPE and HUNTER_HARNESS_NPM_TOKEN)"
-      );
-    }
+    const npmConfig = await resolveNpmPublishConfig(true);
     const result = await mutation(request, repository, actor, requestId, async () => {
       const release = await registry.releaseFamilyToNpm(
         slug,
@@ -2558,7 +2713,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   app.post("/api/v1/workflow-families/:slug/publish", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository);
+    const { actor, requestId } = await ownerAuthenticated(request, repository, ownerActorId);
     const { slug } = request.params as { slug: string };
     const result = await mutation(request, repository, actor, requestId, async () => {
       const body = publishWorkflowFamilyRequestSchema.parse(request.body);

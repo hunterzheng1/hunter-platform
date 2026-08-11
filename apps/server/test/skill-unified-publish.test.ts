@@ -98,12 +98,14 @@ describe("unified skill publish", () => {
   let repository: MemoryRepository;
   let storage: MemoryArtifactStorage;
   let publishCount = 0;
+  let managedCredentialValid = true;
 
   beforeEach(async () => {
     repository = new MemoryRepository();
     storage = new MemoryArtifactStorage();
     await repository.createActorWithToken({ actorId: "actor_owner", token });
     publishCount = 0;
+    managedCredentialValid = true;
     app = await createServer({
       repository,
       storage,
@@ -112,6 +114,11 @@ describe("unified skill publish", () => {
         save: (snapshot) => repository.saveRegistryState(snapshot)
       },
       npmPublishConfig: { scope: "@hunter-harness", token: "npm-token" },
+      npmCredentialEncryptionKey: Buffer.alloc(32, 23),
+      npmCredentialVerifier: async (value) => {
+        if (!managedCredentialValid || value !== "npm-managed-token") throw new Error("credential rejected");
+        return { username: "hunterzheng" };
+      },
       npmPublisherDeps: {
         packDirectory: async () => Buffer.from("unified-tarball"),
         publish: async () => { publishCount += 1; }
@@ -154,6 +161,29 @@ describe("unified skill publish", () => {
     });
     expect(accepted.statusCode).toBe(201);
     return accepted.json().revision as number;
+  }
+
+  async function configureManagedCredential(): Promise<void> {
+    await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/register",
+      payload: { username: "owner", password: "owner-password-1" }
+    });
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "owner", password: "owner-password-1" }
+    });
+    const configured = await app.inject({
+      method: "PUT",
+      url: "/api/v1/system/npm-publishing/credential",
+      headers: {
+        authorization: `Bearer ${login.json().token as string}`,
+        "idempotency-key": uuidV7()
+      },
+      payload: { schema_version: 1, token: "npm-managed-token", expires_at: null }
+    });
+    expect(configured.statusCode).toBe(200);
   }
 
   async function mutatePersistedDraft(mutator: (files: Array<{ path: string; content: string }>) => void): Promise<void> {
@@ -252,6 +282,40 @@ describe("unified skill publish", () => {
     expect(retryAfterRestart.statusCode).toBe(200);
     expect(retryAfterRestart.json().npmRelease.status).toBe("idempotent");
     expect(publishCount).toBe(1);
+  });
+
+  it("rejects a revoked managed credential before the npm publish side effect", async () => {
+    await configureManagedCredential();
+    const upload = multipart();
+    const draft = await app.inject({
+      method: "POST",
+      url: "/api/v1/skills/draft?agent=claude-code",
+      payload: upload.payload,
+      headers: { ...headers(), ...upload.headers }
+    });
+    expect(draft.statusCode).toBe(201);
+
+    managedCredentialValid = false;
+    const published = await app.inject({
+      method: "POST",
+      url: "/api/v1/skills/frontend-ui-beautify/publish",
+      payload: {
+        version: "0.1.0",
+        sourceAgent: "claude-code",
+        draftRevision: draft.json().revision
+      },
+      headers: headers()
+    });
+
+    expect(published.statusCode).toBe(503);
+    expect(published.json().error.code).toBe("NPM_CREDENTIAL_INVALID");
+    expect(publishCount).toBe(0);
+    const stillDraft = await app.inject({
+      method: "GET",
+      url: "/api/v1/skills/frontend-ui-beautify/draft/claude-code",
+      headers: headers()
+    });
+    expect(stillDraft.statusCode).toBe(200);
   });
 
   it("does not treat a new revision-one draft as an idempotent retry of an older release", async () => {

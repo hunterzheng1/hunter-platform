@@ -62,17 +62,18 @@ function publicProjectKey(key: ProjectApiKeyRecord): Record<string, unknown> {
   };
 }
 
-function publicUser(user: UserRecord): Record<string, unknown> {
+function publicUser(user: UserRecord, ownerActorId: string): Record<string, unknown> {
   return {
     user_id: user.userId,
     username: user.username,
     display_name: user.displayName,
     actor_id: user.actorId,
+    system_role: user.actorId === ownerActorId ? "owner" : "member",
     created_at: user.createdAt
   };
 }
 
-async function sessionUser(
+export async function requireSessionUser(
   request: FastifyRequest,
   repository: ServerRepository
 ): Promise<{ token: string; user: UserRecord }> {
@@ -130,7 +131,7 @@ export function registerAuthRoutes(app: FastifyInstance, options: AuthRoutesOpti
       // First user inherits the bootstrap actor so pre-login data stays visible.
       actorId: isFirstUser ? ownerActorId : "actor_" + randomUUID().replaceAll("-", "")
     });
-    return reply.code(201).send({ user: publicUser(user) });
+    return reply.code(201).send({ user: publicUser(user, ownerActorId) });
   });
 
   app.post("/api/v1/auth/login", async (request, reply) => {
@@ -152,17 +153,17 @@ export function registerAuthRoutes(app: FastifyInstance, options: AuthRoutesOpti
     return reply.code(200).send({
       token,
       expires_at: expiresAt,
-      user: publicUser(user)
+      user: publicUser(user, ownerActorId)
     });
   });
 
   app.get("/api/v1/auth/me", async (request) => {
-    const { user } = await sessionUser(request, repository);
-    return { user: publicUser(user) };
+    const { user } = await requireSessionUser(request, repository);
+    return { user: publicUser(user, ownerActorId) };
   });
 
   app.post("/api/v1/auth/logout", async (request) => {
-    const { token } = await sessionUser(request, repository);
+    const { token } = await requireSessionUser(request, repository);
     await repository.revokeUserSession(sessionTokenHash(token));
     return { ok: true };
   });
@@ -191,7 +192,7 @@ export function registerAuthRoutes(app: FastifyInstance, options: AuthRoutesOpti
 
   // Project API key management is restricted to logged-in humans.
   app.post("/api/v1/projects/:projectId/api-keys", async (request, reply) => {
-    const { user } = await sessionUser(request, repository);
+    const { user } = await requireSessionUser(request, repository);
     const { projectId } = request.params as { projectId: string };
     // Ownership check: throws 404 when the project is not visible to this actor.
     await repository.getProject(user.actorId, projectId);
@@ -213,7 +214,7 @@ export function registerAuthRoutes(app: FastifyInstance, options: AuthRoutesOpti
   });
 
   app.get("/api/v1/projects/:projectId/api-keys", async (request) => {
-    const { user } = await sessionUser(request, repository);
+    const { user } = await requireSessionUser(request, repository);
     const { projectId } = request.params as { projectId: string };
     await repository.getProject(user.actorId, projectId);
     const keys = await repository.listProjectApiKeys(projectId);
@@ -221,7 +222,7 @@ export function registerAuthRoutes(app: FastifyInstance, options: AuthRoutesOpti
   });
 
   app.delete("/api/v1/projects/:projectId/api-keys/:keyId", async (request) => {
-    const { user } = await sessionUser(request, repository);
+    const { user } = await requireSessionUser(request, repository);
     const { projectId, keyId } = request.params as { projectId: string; keyId: string };
     await repository.getProject(user.actorId, projectId);
     const revoked = await repository.revokeProjectApiKey(projectId, keyId);
@@ -232,7 +233,7 @@ export function registerAuthRoutes(app: FastifyInstance, options: AuthRoutesOpti
   });
 
   app.post("/api/v1/auth/invites", async (request, reply) => {
-    const { user } = await sessionUser(request, repository);
+    const { user } = await requireSessionUser(request, repository);
     const code = generateInviteCode();
     const expiresAt = new Date(Date.now() + inviteTtlMs).toISOString();
     await repository.createInviteCode({

@@ -55,13 +55,17 @@ function QuickStartWorkflow({
   legacyItems,
   title,
   hint,
-  missing
+  missing,
+  startLabel,
+  stepCountLabel
 }: {
   steps: ExternalSkillQuickStartStep[];
   legacyItems: string[];
   title: string;
   hint: string;
   missing: string;
+  startLabel: string;
+  stepCountLabel: string;
 }) {
   const items = steps.length > 0
     ? steps
@@ -71,15 +75,29 @@ function QuickStartWorkflow({
         commands: []
       }));
   return (
-    <section className="external-summary-section external-summary-workflow" data-slot="external-summary-workflow">
+    <section
+      className="external-summary-section external-summary-workflow"
+      data-slot="external-summary-workflow"
+      data-priority="primary"
+      aria-labelledby="external-summary-workflow-title"
+    >
       <header>
-        <h3><Icon name="play" size={15} /> {title}</h3>
-        <p>{hint}</p>
+        <div className="external-workflow-heading">
+          <span className="external-workflow-icon"><Icon name="play" size={16} /></span>
+          <div>
+            <div className="external-workflow-title-row">
+              <h3 id="external-summary-workflow-title">{title}</h3>
+              <span className="external-workflow-start">{startLabel}</span>
+            </div>
+            <p>{hint}</p>
+          </div>
+        </div>
+        <span className="external-workflow-count">{stepCountLabel.replace("{count}", String(items.length))}</span>
       </header>
       {items.length === 0 ? <p className="external-workflow-empty">{missing}</p> : (
         <ol className="external-workflow-steps">
           {items.map((step, index) => (
-            <li key={`${step.title}-${index}`}>
+            <li key={`${step.title}-${index}`} data-slot="external-workflow-step">
               <span className="external-workflow-index" aria-hidden="true">{index + 1}</span>
               <div className="external-workflow-copy">
                 <strong>{step.title}</strong>
@@ -367,15 +385,17 @@ export function ExternalSkillDetail({ api: apiValue, skillId }: { api?: HunterAp
                 <p className="external-summary-overview">{summary.overview}</p>
               </section>
               <div className="external-summary-grid">
-                <SummaryList title={t.skills.externalSummaryCapabilities} items={summary.capabilities} icon="zap" />
-                <SummaryList title={t.skills.externalSummaryUseCases} items={summary.use_cases} icon="tasks" />
                 <QuickStartWorkflow
                   title={t.skills.externalSummaryGettingStarted}
                   hint={t.skills.externalSummaryWorkflowHint}
                   steps={summary.quick_start ?? []}
                   legacyItems={summary.getting_started}
                   missing={t.skills.externalSummaryGettingStartedMissing}
+                  startLabel={t.skills.externalSummaryWorkflowStart}
+                  stepCountLabel={t.skills.externalSummaryWorkflowSteps}
                 />
+                <SummaryList title={t.skills.externalSummaryCapabilities} items={summary.capabilities} icon="zap" />
+                <SummaryList title={t.skills.externalSummaryUseCases} items={summary.use_cases} icon="tasks" />
                 {summary.caveats.length === 0 ? null : (
                   <SummaryList title={t.skills.externalSummaryCaveats} items={summary.caveats} icon="warning" tone="warning" wide />
                 )}

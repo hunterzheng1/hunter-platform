@@ -40,6 +40,20 @@ export interface UserSessionRecord {
   revokedAt: string | null;
 }
 
+export interface NpmPublishingCredentialRecord {
+  schemaVersion: 1;
+  keyId: string;
+  ciphertext: string;
+  iv: string;
+  authTag: string;
+  scope: string;
+  username: string;
+  expiresAt: string | null;
+  lastVerifiedAt: string;
+  updatedBy: string;
+  updatedAt: string;
+}
+
 export const PROJECT_KEY_SCOPES = [
   "push",
   "knowledge:read",
@@ -221,6 +235,9 @@ export interface ServerRepository extends TransactionRepository {
     key: string;
   }): Promise<{ release(): Promise<void> }>;
   authenticateToken(token: string): Promise<Actor | null>;
+  getNpmPublishingCredential(): Promise<NpmPublishingCredentialRecord | null>;
+  saveNpmPublishingCredential(record: NpmPublishingCredentialRecord): Promise<void>;
+  clearNpmPublishingCredential(): Promise<boolean>;
   resolveProject(input: {
     actorId: string;
     localProjectKey: string;

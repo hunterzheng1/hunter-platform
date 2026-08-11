@@ -1,6 +1,6 @@
 import type { ProjectSummary } from "./api";
 
-export const PROJECT_LIST_PAGE_SIZE = 6;
+export const PROJECT_LIST_PAGE_SIZE = 10;
 
 export function projectUpdatedAtMs(project: ProjectSummary): number {
   return Date.parse(project.updated_at ?? project.created_at);

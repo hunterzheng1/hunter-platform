@@ -11,6 +11,7 @@ import { PostgresRepository } from "./repositories/postgres.js";
 import { PgSemanticStore } from "./semantic/pg-store.js";
 import { PgRunStore } from "./runs/pg-store.js";
 import { LocalArtifactStorage } from "./storage/local.js";
+import { decodeNpmCredentialEncryptionKey } from "./npm/credentials.js";
 
 async function secret(name: string, required: boolean): Promise<string | undefined> {
   const value = process.env[name];
@@ -53,6 +54,10 @@ const bootstrapBundle = {
   skills: []
 };
 const bootstrapToken = await secret("HUNTER_HARNESS_BOOTSTRAP_TOKEN", false);
+const credentialKeyValue = await secret("HUNTER_HARNESS_CREDENTIAL_KEY", false);
+const npmCredentialEncryptionKey = credentialKeyValue === undefined
+  ? null
+  : decodeNpmCredentialEncryptionKey(credentialKeyValue);
 if (bootstrapToken !== undefined && bootstrapToken !== "") {
   await repository.createActorWithToken({
     actorId: process.env.HUNTER_HARNESS_BOOTSTRAP_ACTOR ?? "actor_owner",
@@ -70,6 +75,7 @@ const app = await createServer({
   aiJobStore: new PgAiJobStore(pool),
   semanticStore: new PgSemanticStore(pool),
   runStore: new PgRunStore(pool),
+  npmCredentialEncryptionKey,
   logger: true
 });
 const port = Number(process.env.PORT ?? "3001");

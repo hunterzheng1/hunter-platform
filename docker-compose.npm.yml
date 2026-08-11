@@ -1,0 +1,10 @@
+services:
+  server:
+    environment:
+      HUNTER_HARNESS_NPM_TOKEN_FILE: /run/secrets/npm_token
+    secrets:
+      - npm_token
+
+secrets:
+  npm_token:
+    environment: HUNTER_HARNESS_NPM_TOKEN

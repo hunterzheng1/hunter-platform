@@ -112,6 +112,8 @@ interface MarkdownHeading {
   level: number;
 }
 
+const MARKDOWN_IMAGE_GRID_TITLE = "__hunter_image_grid__";
+
 function safeMarkdownUrl(value: string, baseUrl: string | undefined, image: boolean): string | null {
   const raw = value.trim();
   if (!image && raw.startsWith("#")) return raw;
@@ -131,21 +133,32 @@ function htmlAttribute(tag: string, name: string): string | undefined {
   return tag.match(new RegExp(`\\b${name}\\s*=\\s*([^\\s>]+)`, "i"))?.[1];
 }
 
+function htmlImageMarkdown(tag: string, imageGrid = false): string | null {
+  const src = htmlAttribute(tag, "src");
+  if (src === undefined || src.trim() === "") return null;
+  const alt = (htmlAttribute(tag, "alt") ?? "").replaceAll("[", "").replaceAll("]", "");
+  return `![${alt}](${src}${imageGrid ? ` "${MARKDOWN_IMAGE_GRID_TITLE}"` : ""})`;
+}
+
 function normalizeMarkdownContent(content: string): string {
   return content
     .replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)/, "")
     .replace(/<!--([\s\S]*?)-->/g, "")
     .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, "")
     .replace(/\[!\[([^\]]*)\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g, "![$1]($2)")
+    .replace(/<(p|center)\b[^>]*>([\s\S]*?)<\/\1>/gi, (block, _tagName: string, body: string) => {
+      const imageTags = body.match(/<img\b[^>]*>/gi) ?? [];
+      if (imageTags.length < 2 || body.replace(/<img\b[^>]*>/gi, "").trim() !== "") return block;
+      const images = imageTags.map((tag) => htmlImageMarkdown(tag, true)).filter((image) => image !== null);
+      return images.length < 2 ? block : `\n${images.join(" ")}\n`;
+    })
     .replace(/<img\b[^>]*>/gi, (tag) => {
-      const src = htmlAttribute(tag, "src");
-      if (src === undefined || src.trim() === "") return "";
-      const alt = (htmlAttribute(tag, "alt") ?? "").replaceAll("[", "").replaceAll("]", "");
-      return `\n![${alt}](${src})\n`;
+      const image = htmlImageMarkdown(tag);
+      return image === null ? "" : `\n${image}\n`;
     })
     .replace(/<br\s*\/?\s*>/gi, "\n")
     .replace(/<\/?(?:div|center|picture|source|details|summary|p|table|thead|tbody|tr|td|th|kbd|sub|sup)\b[^>]*>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
+    .replace(/<\/?(?:a|abbr|article|aside|b|big|button|caption|cite|code|col|colgroup|dd|del|dl|dt|em|figcaption|figure|footer|form|h[1-6]|header|i|iframe|input|ins|label|li|main|mark|nav|object|ol|pre|section|small|span|strike|strong|time|u|ul)\b[^>]*>/gi, "")
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
@@ -208,11 +221,12 @@ function tableCells(line: string): string[] {
   return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
 }
 
-function markdownMediaClass(value: string): "markdown-badge-row" | "markdown-figure" | "markdown-media-inline" | undefined {
+function markdownMediaClass(value: string): "markdown-badge-row" | "markdown-figure" | "markdown-image-grid" | "markdown-media-inline" | undefined {
   const images = value.match(/!\[[^\]]*\]\([^)]+\)/g) ?? [];
   if (images.length === 0) return undefined;
   const text = value.replace(/!\[[^\]]*\]\([^)]+\)/g, "").trim();
   if (text !== "") return "markdown-media-inline";
+  if (images.some((image) => image.includes(`"${MARKDOWN_IMAGE_GRID_TITLE}"`))) return "markdown-image-grid";
   return images.length > 1 ? "markdown-badge-row" : "markdown-figure";
 }
 
@@ -295,7 +309,7 @@ function MarkdownDocument({
     const mediaClass = markdownMediaClass(paragraphValue);
     blocks.push(<p
       className={mediaClass}
-      data-slot={mediaClass === "markdown-badge-row" ? "markdown-badge-row" : undefined}
+      data-slot={mediaClass === "markdown-badge-row" || mediaClass === "markdown-image-grid" ? mediaClass : undefined}
       key={`paragraph-${blocks.length}`}
     >{renderInlineMarkdown(paragraphValue, `paragraph-${blocks.length}`, options)}</p>);
   }

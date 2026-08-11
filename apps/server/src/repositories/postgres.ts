@@ -11,6 +11,7 @@ import type {
   ChangeArchivePackageRecord,
   IdempotencyRecord,
   KnowledgeIngestRecord,
+  NpmPublishingCredentialRecord,
   ProjectApiKeyRecord,
   ProjectFileRecord,
   ProjectKeyScope,
@@ -69,6 +70,22 @@ function userFrom(row: QueryResultRow): UserRecord {
     actorId: String(row.actor_id),
     createdAt: timestamp(row.created_at),
     disabledAt: row.disabled_at == null ? null : timestamp(row.disabled_at)
+  };
+}
+
+function npmPublishingCredentialFrom(row: QueryResultRow): NpmPublishingCredentialRecord {
+  return {
+    schemaVersion: 1,
+    keyId: String(row.key_id),
+    ciphertext: String(row.ciphertext),
+    iv: String(row.iv),
+    authTag: String(row.auth_tag),
+    scope: String(row.scope),
+    username: String(row.username),
+    expiresAt: row.expires_at == null ? null : timestamp(row.expires_at),
+    lastVerifiedAt: timestamp(row.last_verified_at),
+    updatedBy: String(row.updated_by),
+    updatedAt: timestamp(row.updated_at)
   };
 }
 
@@ -295,6 +312,54 @@ export class PostgresRepository implements ServerRepository {
       [tokenHash(token)]
     );
     return result.rowCount === 0 ? null : { actorId: String(result.rows[0]?.actor_id) };
+  }
+
+  async getNpmPublishingCredential(): Promise<NpmPublishingCredentialRecord | null> {
+    const result = await this.pool.query(
+      `SELECT * FROM npm_publishing_credentials WHERE singleton_id = 1`
+    );
+    return result.rowCount === 0 ? null : npmPublishingCredentialFrom(result.rows[0] ?? {});
+  }
+
+  async saveNpmPublishingCredential(record: NpmPublishingCredentialRecord): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO npm_publishing_credentials(
+         singleton_id, schema_version, key_id, ciphertext, iv, auth_tag, scope,
+         username, expires_at, last_verified_at, updated_by, updated_at
+       ) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       ON CONFLICT (singleton_id) DO UPDATE SET
+         schema_version = EXCLUDED.schema_version,
+         key_id = EXCLUDED.key_id,
+         ciphertext = EXCLUDED.ciphertext,
+         iv = EXCLUDED.iv,
+         auth_tag = EXCLUDED.auth_tag,
+         scope = EXCLUDED.scope,
+         username = EXCLUDED.username,
+         expires_at = EXCLUDED.expires_at,
+         last_verified_at = EXCLUDED.last_verified_at,
+         updated_by = EXCLUDED.updated_by,
+         updated_at = EXCLUDED.updated_at`,
+      [
+        record.schemaVersion,
+        record.keyId,
+        record.ciphertext,
+        record.iv,
+        record.authTag,
+        record.scope,
+        record.username,
+        record.expiresAt,
+        record.lastVerifiedAt,
+        record.updatedBy,
+        record.updatedAt
+      ]
+    );
+  }
+
+  async clearNpmPublishingCredential(): Promise<boolean> {
+    const result = await this.pool.query(
+      `DELETE FROM npm_publishing_credentials WHERE singleton_id = 1`
+    );
+    return (result.rowCount ?? 0) > 0;
   }
 
   async countUsers(): Promise<number> {

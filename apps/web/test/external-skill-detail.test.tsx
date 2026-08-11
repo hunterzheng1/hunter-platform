@@ -42,6 +42,28 @@ npx codegraph init
 \`\`\`
 </div>`;
 
+const imageGalleryReadme = `## Language Support
+
+<p align="center">
+  <img src="https://example.com/typescript.svg" width="104" height="104" alt="TypeScript" />
+  <img src="https://example.com/javascript.svg" width="104" height="104" alt="JavaScript" />
+  <img src="https://example.com/python.svg" width="104" height="104" alt="Python" />
+</p>`;
+
+const comparisonInFenceReadme = `## Auto-sync
+
+\`\`\`text
+watcher fires (<100ms)
+\`\`\`
+
+<span>Index status</span>
+
+## Measured cross-file coverage
+
+| Language | Coverage |
+|---|---|
+| TypeScript | 95.8% |`;
+
 const externalSkill: ExternalSkill = {
   id: "ext_codegraph",
   source: { type: "github", ref: "colbymchenry/codegraph" },
@@ -68,6 +90,15 @@ const externalSkill: ExternalSkill = {
 function api(): HunterApi {
   return {
     getExternalSkill: vi.fn(async () => externalSkill)
+  } as unknown as HunterApi;
+}
+
+function apiWithReadme(content: string): HunterApi {
+  return {
+    getExternalSkill: vi.fn(async () => ({
+      ...externalSkill,
+      snapshot: { ...externalSkill.snapshot, readme: content }
+    }))
   } as unknown as HunterApi;
 }
 
@@ -126,6 +157,35 @@ describe("external skill reader", () => {
     expect(screen.queryByRole("heading", { name: "官方安装命令" })).not.toBeInTheDocument();
   });
 
+  it("将 HTML 段落中的连续内容图片渲染为同一横向图片组", async () => {
+    const { container } = renderWithToast(
+      <ExternalSkillDetail api={apiWithReadme(imageGalleryReadme)} skillId={externalSkill.id} />
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "查看原始 README" }));
+    const reader = await waitFor(() => container.querySelector('[data-slot="external-readme-reader"]'));
+    const imageGrid = reader?.querySelector('[data-slot="markdown-image-grid"]');
+
+    expect(imageGrid).toBeInTheDocument();
+    expect(within(imageGrid as HTMLElement).getAllByRole("img")).toHaveLength(3);
+  });
+
+  it("保留代码围栏中的小于号文本并继续渲染后续 Markdown 块", async () => {
+    const { container } = renderWithToast(
+      <ExternalSkillDetail api={apiWithReadme(comparisonInFenceReadme)} skillId={externalSkill.id} />
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "查看原始 README" }));
+    const reader = await waitFor(() => container.querySelector('[data-slot="external-readme-reader"]'));
+
+    expect(within(reader as HTMLElement).getByText("watcher fires (<100ms)")).toBeInTheDocument();
+    expect(within(reader as HTMLElement).getByRole("heading", { name: "Measured cross-file coverage" }))
+      .toBeInTheDocument();
+    expect(Array.from(reader?.querySelectorAll("pre") ?? []).some((pre) =>
+      pre.textContent?.includes("## Measured cross-file coverage")
+    )).toBe(false);
+  });
+
   it("优先展示已缓存的结构化中文 AI 摘要", async () => {
     const { container } = renderWithToast(<ExternalSkillDetail api={{ getExternalSkill: vi.fn(async () => summarizedSkill) } as unknown as HunterApi} skillId={externalSkill.id} />);
 
@@ -135,18 +195,23 @@ describe("external skill reader", () => {
     expect(summaryTemplate).not.toBeNull();
     expect(within(summaryTemplate as HTMLElement).getAllByRole("heading").map((heading) => heading.textContent?.trim())).toEqual([
       "它是什么",
+      "典型工作流",
       "核心功能",
       "适用场景",
-      "典型工作流",
       "使用前注意"
     ]);
     const workflow = container.querySelector('[data-slot="external-summary-workflow"]');
     expect(workflow).not.toBeNull();
+    expect(workflow).toHaveAttribute("data-priority", "primary");
+    expect(workflow).toHaveAttribute("aria-labelledby", "external-summary-workflow-title");
+    expect(within(workflow as HTMLElement).getByText("从这里开始")).toBeInTheDocument();
+    expect(within(workflow as HTMLElement).getByText("2 个步骤")).toBeInTheDocument();
     expect(within(workflow as HTMLElement).getByText("全局安装")).toBeInTheDocument();
     expect(within(workflow as HTMLElement).getByText("npm install -g @colbymchenry/codegraph")).toBeInTheDocument();
     expect(workflow).toHaveTextContent("codegraph init --index");
     expect(workflow).toHaveTextContent("codegraph status");
     expect(within(workflow as HTMLElement).getAllByRole("listitem")).toHaveLength(2);
+    expect(workflow?.querySelectorAll('[data-slot="external-workflow-step"]')).toHaveLength(2);
     expect(screen.getByRole("heading", { name: "适用场景" })).toBeInTheDocument();
     expect(screen.getByText("快速理解大型代码库")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "核心功能" })).toBeInTheDocument();

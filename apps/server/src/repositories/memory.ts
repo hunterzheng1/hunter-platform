@@ -13,6 +13,7 @@ import type {
   ProposalSessionRecord,
   ReviewRecord,
   KnowledgeIngestRecord,
+  NpmPublishingCredentialRecord,
   ProjectApiKeyRecord,
   ProjectKeyScope,
   ServerRepository,
@@ -52,6 +53,7 @@ export class MemoryRepository implements ServerRepository {
   /** key: projectId + "\0" + entryId */
   private readonly knowledgeEntries = new Map<string, KnowledgeIngestRecord>();
   private readonly auditEvents: AuditEvent[] = [];
+  private npmPublishingCredential: NpmPublishingCredentialRecord | null = null;
   private readonly idempotencyLocks = new Map<string, Promise<void>>();
   private counters = {
     project: 0,
@@ -96,6 +98,20 @@ export class MemoryRepository implements ServerRepository {
 
   async authenticateToken(token: string): Promise<Actor | null> {
     return this.tokens.get(tokenHash(token)) ?? null;
+  }
+
+  async getNpmPublishingCredential(): Promise<NpmPublishingCredentialRecord | null> {
+    return this.npmPublishingCredential === null ? null : structuredClone(this.npmPublishingCredential);
+  }
+
+  async saveNpmPublishingCredential(record: NpmPublishingCredentialRecord): Promise<void> {
+    this.npmPublishingCredential = structuredClone(record);
+  }
+
+  async clearNpmPublishingCredential(): Promise<boolean> {
+    const existed = this.npmPublishingCredential !== null;
+    this.npmPublishingCredential = null;
+    return existed;
   }
 
   async countUsers(): Promise<number> {

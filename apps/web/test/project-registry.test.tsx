@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ProjectRegistry } from "../components/project-registry";
-import type { HunterApi, ProjectSummary } from "../lib/api";
+import type { HunterApi, ProjectSummary, RunSummary } from "../lib/api";
 import {
   formatProjectDateTime,
   paginateProjects,
@@ -27,7 +27,32 @@ function project(partial: Partial<ProjectSummary> & Pick<ProjectSummary, "projec
   };
 }
 
+function run(projectId: string, partial: Partial<RunSummary> = {}): RunSummary {
+  return {
+    run_id: `run_${projectId}`,
+    project_id: projectId,
+    change_key: `change-${projectId}`,
+    title: `运行 ${projectId}`,
+    run_status: "running",
+    connection_status: "online",
+    sync_completeness: "complete",
+    current_phase: "test",
+    started_at: "2026-08-11T08:00:00Z",
+    ended_at: null,
+    last_event_at: "2026-08-11T08:05:00Z",
+    last_heartbeat_at: "2026-08-11T08:05:00Z",
+    server_cursor: 12,
+    workflow_status: "running",
+    result_status: "pending",
+    ...partial
+  };
+}
+
 describe("project-list helpers", () => {
+  it("uses a ten-project page for the denser card layout", () => {
+    expect(PROJECT_LIST_PAGE_SIZE).toBe(10);
+  });
+
   it("sorts by updated_at descending and falls back to created_at", () => {
     const items = [
       project({ project_id: "a", display_name: "Alpha", updated_at: "2026-07-01T10:00:00Z" }),
@@ -61,6 +86,56 @@ describe("project-list helpers", () => {
 });
 
 describe("ProjectRegistry list UX", () => {
+  it("keeps project ids out of the visible catalog and labels search by project name", async () => {
+    const hiddenId = "prj_internal_8f62a9";
+    const api = {
+      listProjects: vi.fn(async (state: "active" | "archived" = "active") => state === "active"
+        ? [project({ project_id: hiddenId, display_name: "支付网关" })]
+        : []),
+      listProjectRuns: vi.fn(async () => ({ items: [], total: 0, next_cursor: null }))
+    } as unknown as HunterApi;
+
+    render(<ProjectRegistry api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "支付网关" })).toBeInTheDocument();
+    expect(screen.queryByText(hiddenId)).toBeNull();
+    expect(screen.getByRole("textbox", { name: /搜索项目|Search projects/i }))
+      .toHaveAttribute("placeholder", "按项目名称搜索");
+    expect(document.querySelector('[data-slot="project-card-grid"]'))
+      .toHaveAttribute("data-layout", "two-column");
+  });
+
+  it("loads latest run summaries only for projects on the visible page", async () => {
+    const items = Array.from({ length: 13 }, (_, index) => project({
+      project_id: `prj_${String(index + 1).padStart(2, "0")}`,
+      display_name: `项目 ${String(index + 1).padStart(2, "0")}`,
+      updated_at: "2026-08-11T08:00:00Z"
+    }));
+    const listProjectRuns = vi.fn(async (projectId: string) => ({
+      items: [run(projectId)],
+      total: 7,
+      next_cursor: null
+    }));
+    const api = {
+      listProjects: vi.fn(async (state: "active" | "archived" = "active") => state === "active" ? items : []),
+      listProjectRuns
+    } as unknown as HunterApi;
+
+    render(<ProjectRegistry api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "项目 01" })).toBeInTheDocument();
+    await waitFor(() => expect(listProjectRuns).toHaveBeenCalledTimes(PROJECT_LIST_PAGE_SIZE));
+    expect(listProjectRuns).not.toHaveBeenCalledWith("prj_11", expect.anything());
+    expect(screen.getByText("运行 prj_01")).toBeInTheDocument();
+    expect(screen.getAllByText("运行中").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/当前阶段：测试/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("共 7 次").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: /下一页|Next/i }));
+    await waitFor(() => expect(listProjectRuns).toHaveBeenCalledTimes(items.length));
+    expect(await screen.findByText("运行 prj_11")).toBeInTheDocument();
+  });
+
   it("shows newest projects first with second-precision timestamps and pages at 6", async () => {
     const items = Array.from({ length: PROJECT_LIST_PAGE_SIZE + 3 }, (_, index) => {
       const n = index + 1;

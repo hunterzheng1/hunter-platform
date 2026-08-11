@@ -78,6 +78,7 @@ tmp/
 temp/
 .worktrees/
 .playwright-mcp/
+.superdesign/tmp/
 
 # ===== AI 工具本地目录 =====
 .agents/

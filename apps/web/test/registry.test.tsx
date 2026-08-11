@@ -380,7 +380,7 @@ describe("governed workflow and Skill Center", () => {
     render(<SkillDetail api={client} skillId="harness-review" />);
     expect(await screen.findByRole("heading", { name: "harness-review" })).toBeInTheDocument();
     expect(screen.getAllByText(/1\.1\.0/).length).toBeGreaterThan(0);
-    expect(screen.getByText("npx @hunter-harness/skill-cli install harness-review --agent claude-code")).toBeInTheDocument();
+    expect(screen.getByText("npx @hunter-harness/skills install harness-review --agent claude-code")).toBeInTheDocument();
     // source tab 展示 SKILL.md body（frontmatter 剥离后的内容），取代旧 canonical IR JSON 展示
     fireEvent.click(screen.getByRole("tab", { name: /文件内容|files/i }));
     expect(await screen.findByText(/Review workflow body/)).toBeInTheDocument();
@@ -399,7 +399,7 @@ describe("governed workflow and Skill Center", () => {
     const install = container.querySelector('[data-slot="skill-hero-install"]');
     expect(install).toBeInTheDocument();
     expect(install?.closest("header")).toBe(container.querySelector("header.skill-detail-hero"));
-    expect(within(install as HTMLElement).getByText("npx @hunter-harness/skill-cli install harness-review --agent claude-code")).toBeInTheDocument();
+    expect(within(install as HTMLElement).getByText("npx @hunter-harness/skills install harness-review --agent claude-code")).toBeInTheDocument();
     expect(screen.queryByText(/个可用 Agent|available agents/i)).not.toBeInTheDocument();
     expect(listTags).not.toHaveBeenCalled();
   });
