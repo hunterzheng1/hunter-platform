@@ -14,9 +14,13 @@ export function parseAiCheckResult(raw: string): SkillCheckResult {
     if (jsonText !== null) {
       const parsed = JSON.parse(jsonText) as Record<string, unknown>;
       // LLM 可能漏 checkedAt 或加额外字段；schema 已 .strip() 容错多余字段，checkedAt 缺则补当前时间
+      const checkedAt = typeof parsed.checkedAt === "string" ? parsed.checkedAt : fallbackCheckedAt;
       const candidate = {
         ...parsed,
-        checkedAt: typeof parsed.checkedAt === "string" ? parsed.checkedAt : fallbackCheckedAt
+        items: Array.isArray(parsed.items)
+          ? parsed.items.map((item) => normalizeAiCheckItem(item, checkedAt))
+          : parsed.items,
+        checkedAt
       };
       const result = skillCheckResultSchema.safeParse(candidate);
       if (result.success) {
@@ -27,6 +31,30 @@ export function parseAiCheckResult(raw: string): SkillCheckResult {
     // fall through to degrade
   }
   return degrade(fallbackCheckedAt);
+}
+
+const DIRECTLY_WRITABLE_SUGGESTION_TARGETS = new Set(["examples", "instructions", "description"]);
+
+function normalizeAiCheckItem(value: unknown, generatedAt: string): unknown {
+  if (!isRecord(value)) return value;
+  if (value.status === "green") {
+    return { ...value, fixable: false, suggestion: null };
+  }
+  if (!isRecord(value.suggestion)) return value;
+  const rawSuggestion = value.suggestion;
+  const suggestion = {
+    ...rawSuggestion,
+    generatedAt,
+    applicationState: "ready",
+    appliedAt: null
+  };
+  const suggestedContent = rawSuggestion["suggestedContent"];
+  const appliesTo = rawSuggestion["appliesTo"];
+  const directlyWritable = typeof suggestedContent === "string" &&
+    suggestedContent.trim().length > 0 &&
+    typeof appliesTo === "string" &&
+    DIRECTLY_WRITABLE_SUGGESTION_TARGETS.has(appliesTo);
+  return { ...value, fixable: value.fixable === true && directlyWritable, suggestion };
 }
 
 // 剥离 LLM 常见的 markdown 围栏（```json ... ``` 或 ``` ... ```）

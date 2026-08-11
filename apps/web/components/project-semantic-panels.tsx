@@ -7,6 +7,7 @@ import type { HunterApi, ProjectSemanticGraph } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import { runPreservingWindowScroll, suppressMouseFocusScroll } from "../lib/preserve-scroll";
 import { MarkdownDocument } from "./skill-shared";
+import { ToastFeedback } from "./ui/Toast";
 
 type SemanticTab = "library" | "rules" | "changes" | "relations";
 
@@ -673,6 +674,6 @@ export function ProjectSemanticPanels({ api, projectId }: { api: HunterApi; proj
         lang={lang}
       />
     </div> : documentsLoading ? <div className="empty-state">{copy.loading}</div> : <DocumentBrowser items={items} selectedId={selectedId} onSelect={selectDocument} empty={emptyCopy} {...(tab === "library" && data.knowledge.length === 0 ? { emptyHint: copy.emptyPushHint } : {})} lang={lang} enableStatusFilter={tab === "library"} statusLabels={statusLabels} />}
-    {error === null || data === null ? null : <div className="notice danger">{error}</div>}
+    {data === null ? null : <ToastFeedback tone="danger" message={error} />}
   </section>;
 }

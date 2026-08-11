@@ -7,6 +7,7 @@ import { storedToken } from "../lib/auth";
 import { useI18n } from "../lib/i18n";
 import { Icon } from "./ui/icons";
 import { Modal } from "./ui/Modal";
+import { ToastFeedback } from "./ui/Toast";
 
 const SCOPES = ["push", "knowledge:read", "knowledge:write", "progress:write", "files:read"] as const;
 
@@ -380,12 +381,13 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
         </div>
       )}
 
-      {message === null ? null : (
+      {message === null || !needLogin ? null : (
         <p className={messageTone === "success" ? "notice success" : "api-keys-message"} role="alert">
           {message}
           {needLogin ? <>{" "}<Link href="/login">{copy.goLogin}</Link></> : null}
         </p>
       )}
+      {needLogin ? null : <ToastFeedback tone={messageTone === "success" ? "success" : "danger"} message={message} />}
 
       {items === null || loading ? (
         <div className="skeleton-block api-keys-skeleton" aria-busy="true" aria-label={copy.loading} />

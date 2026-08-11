@@ -281,8 +281,8 @@ describe("AiConfigPanel 接后端 API (T11, I-01~I-06)", () => {
     vi.mocked(api.updateAiProvider).mockRejectedValueOnce(new Error("fail"));
     fireEvent.click(btn(EDIT));
     fireEvent.click(screen.getByRole("button", { name: /^保存$|^Save$/ }));
-    await waitFor(() => expect(screen.getByRole("status")).toBeInTheDocument());
-    const toast = screen.getByRole("status");
+    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    const toast = screen.getByRole("alert");
     expect(toast).toHaveTextContent(/保存失败|Save failed/i);
     expect(toast).not.toHaveTextContent(/保存 Key 失败|Failed to save key/i);
   });

@@ -961,7 +961,7 @@ export class RegistryStore {
   }
 
   // 采纳 AI 修复建议：按 appliesTo 白名单写入 draft.sourceFiles / draft.examples 对应字段，
-  // 校验写入后内容不含敏感信息，清 aiChecks（建议已采纳，待重新 check），revision+1（§6.3 第4步/§3.6）。
+  // 校验写入后内容不含敏感信息；保留 AI 检查快照并只标记当前建议已应用，便于继续处理其他建议。
   // 可写白名单：examples(→draft.examples) / allowed_capabilities / instructions / description(→ir 字段)。
   // tags 与 null 为展示型建议（无对应可写 draft 字段，tag 绑定走 bindTag 独立流程），不可采纳 → 422。
   async applyFixSuggestion(input: {
@@ -1046,18 +1046,32 @@ export class RegistryStore {
     }
     const updatedSourceFiles: SourceFile[] = Object.entries(fileMap).map(([path, content]) => ({ path, content }));
     const now = new Date().toISOString();
-    const cleared = draftStateSchema.parse({
+    const retainedAiChecks = draft.aiChecks === null ? null : {
+      ...draft.aiChecks,
+      items: draft.aiChecks.items.map((item) => item.id !== input.checkId ? item : {
+        ...item,
+        suggestion: {
+          suggestedContent: input.suggestedContent,
+          explanation: item.suggestion?.explanation ?? item.message,
+          appliesTo: target,
+          generatedAt: item.suggestion?.generatedAt ?? draft.aiChecks?.checkedAt,
+          applicationState: "applied" as const,
+          appliedAt: now
+        }
+      })
+    };
+    const updated = draftStateSchema.parse({
       ...draft,
       agent: input.agent,
       sourceFiles: updatedSourceFiles,
       examples: fixedExamples,
-      aiChecks: null,
+      aiChecks: retainedAiChecks,
       revision: draft.revision + 1,
       updated_at: now
     }) as DraftState;
-    this.setDraftState(input.slug, input.agent, cleared);
+    this.setDraftState(input.slug, input.agent, updated);
     await this.persist();
-    return structuredClone(cleared);
+    return structuredClone(updated);
   }
 
   // per-agent publish：只产当前 agent 的 1 个 artifact，只前进该 agent 的 latestVersion，其他 agent 不动。

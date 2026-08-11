@@ -697,31 +697,53 @@ describe("AI config + ai-checks API (簇 D, 任务 11/13)", () => {
     });
   });
 
-  // T10 fix-suggestions（只读预览，不 persist；复用本 describe 的 AI beforeEach + 设置）
+  // T10 fix-suggestions：建议随 AI 质量检查一次生成并持久化；该端点只读取快照，不再二次调用模型。
   describe("fix-suggestions (T10)", () => {
-    async function setAiChecks(items: Array<{ id: string; label: string; status: "green" | "yellow" | "red"; message: string; fixable: boolean }>): Promise<void> {
+    async function setAiChecks(items: Array<{
+      id: string;
+      label: string;
+      status: "green" | "yellow" | "red";
+      message: string;
+      fixable: boolean;
+      suggestion?: { suggestedContent: string; explanation: string; appliesTo: "examples" | "instructions" | "description" | null };
+    }>): Promise<void> {
       llmFn = async () => ({
         content: JSON.stringify({ items: items.map((i) => ({ ...i, filePath: null })), summary: { green: 0, yellow: items.length, red: 0 }, checkedAt: new Date().toISOString() }),
         usage: { requests: 1, tokens: 20 }
       });
       const res = await app.inject({ method: "POST", url: "/api/v1/skills/harness-ai/draft/claude-code/ai-checks", payload: {}, headers: headers() });
       expect(res.statusCode).toBe(200);
+      const job = await pollJob(res.json().jobId);
+      expect(job.status).toBe("completed");
     }
 
-    it("API-007 200 + items 带 suggestedContent/explanation/appliesTo + audit", async () => {
+    it("API-007 直接返回 AI 检查时已生成的建议，不再发起第二次模型请求", async () => {
       await createDefaultProvider();
       await uploadDraft();
-      await setAiChecks([{ id: "AI_USAGE_EXAMPLES", label: "缺少示例", status: "yellow", message: "建议补充示例", fixable: true }]);
-      llmFn = async () => ({ content: JSON.stringify({ suggestedContent: '[{"title":"ex","description":"d","request":"r","result":"res"}]', explanation: "补充一个示例", appliesTo: "examples" }), usage: { requests: 1, tokens: 40 } });
+      await setAiChecks([{
+        id: "AI_USAGE_EXAMPLES",
+        label: "缺少示例",
+        status: "yellow",
+        message: "建议补充示例",
+        fixable: true,
+        suggestion: {
+          suggestedContent: '[{"title":"ex","description":"d","request":"r","result":"res"}]',
+          explanation: "补充一个示例",
+          appliesTo: "examples"
+        }
+      }]);
+      let secondModelCall = false;
+      llmFn = async () => { secondModelCall = true; throw new Error("不应再次调用模型"); };
       const res = await app.inject({ method: "POST", url: "/api/v1/skills/harness-ai/draft/claude-code/fix-suggestions", payload: { checkIds: null }, headers: headers() });
       expect(res.statusCode).toBe(200);
+      expect(secondModelCall).toBe(false);
       expect(res.json().items).toHaveLength(1);
       expect(res.json().items[0].suggestedContent).toBeDefined();
       expect(res.json().items[0].appliesTo).toBe("examples");
       expect(res.json().items[0].explanation).toBe("补充一个示例");
       expect(res.json().items[0].action).toBe("suggest");
       expect(res.json().summary.suggestCount).toBe(1);
-      expect(await auditActions()).toContain("skill.draft.fix-suggestion.generated");
+      expect(res.json().items[0].applicationState).toBe("ready");
     });
 
     it("API-008 无 aiChecks → 空 items FixPlan", async () => {
@@ -737,33 +759,31 @@ describe("AI config + ai-checks API (簇 D, 任务 11/13)", () => {
       await createDefaultProvider();
       await uploadDraft();
       await setAiChecks([
-        { id: "AI_USAGE_EXAMPLES", label: "缺少示例", status: "yellow", message: "补示例", fixable: true },
-        { id: "AI_TRIGGER_QUALITY", label: "触发质量", status: "yellow", message: "改触发", fixable: true }
+        { id: "AI_USAGE_EXAMPLES", label: "缺少示例", status: "yellow", message: "补示例", fixable: true, suggestion: { suggestedContent: '[{"title":"ex","description":"d","request":"r","result":"res"}]', explanation: "补示例", appliesTo: "examples" } },
+        { id: "AI_TRIGGER_QUALITY", label: "触发质量", status: "yellow", message: "改触发", fixable: true, suggestion: { suggestedContent: "更明确的描述", explanation: "明确触发范围", appliesTo: "description" } }
       ]);
-      llmFn = async () => ({ content: JSON.stringify({ suggestedContent: "x", explanation: "y", appliesTo: "description" }), usage: { requests: 1, tokens: 10 } });
       const res = await app.inject({ method: "POST", url: "/api/v1/skills/harness-ai/draft/claude-code/fix-suggestions", payload: { checkIds: ["AI_USAGE_EXAMPLES"] }, headers: headers() });
       expect(res.statusCode).toBe(200);
       expect(res.json().items).toHaveLength(1);
       expect(res.json().items[0].checkId).toBe("AI_USAGE_EXAMPLES");
     });
 
-    it("API-010 AI_TIMEOUT 降级回退 message-only（不 500）", async () => {
+    it("API-010 旧检查结果没有内嵌建议时返回空计划，不临时调用 AI", async () => {
       await createDefaultProvider();
       await uploadDraft();
       await setAiChecks([{ id: "AI_USAGE_EXAMPLES", label: "缺少示例", status: "yellow", message: "建议补充示例", fixable: true }]);
-      llmFn = async () => { throw new Error("ETIMEDOUT"); };
+      let secondModelCall = false;
+      llmFn = async () => { secondModelCall = true; throw new Error("ETIMEDOUT"); };
       const res = await app.inject({ method: "POST", url: "/api/v1/skills/harness-ai/draft/claude-code/fix-suggestions", payload: { checkIds: null }, headers: headers() });
       expect(res.statusCode).toBe(200);
-      expect(res.json().items).toHaveLength(1);
-      expect(res.json().items[0].suggestedContent).toBeUndefined();
-      expect(res.json().items[0].message).toBe("建议补充示例");
+      expect(secondModelCall).toBe(false);
+      expect(res.json().items).toHaveLength(0);
     });
 
     it("API-011 no-key-leak", async () => {
       await createDefaultProvider();
       await uploadDraft();
-      await setAiChecks([{ id: "AI_USAGE_EXAMPLES", label: "缺少示例", status: "yellow", message: "建议补充示例", fixable: true }]);
-      llmFn = async () => ({ content: JSON.stringify({ suggestedContent: "新描述", explanation: "改描述", appliesTo: "description" }), usage: { requests: 1, tokens: 10 } });
+      await setAiChecks([{ id: "AI_USAGE_EXAMPLES", label: "缺少示例", status: "yellow", message: "建议补充示例", fixable: true, suggestion: { suggestedContent: "新描述", explanation: "改描述", appliesTo: "description" } }]);
       const res = await app.inject({ method: "POST", url: "/api/v1/skills/harness-ai/draft/claude-code/fix-suggestions", payload: { checkIds: null }, headers: headers() });
       expect(res.statusCode).toBe(200);
       expect(JSON.stringify(res.json())).not.toContain("sk-");
@@ -773,20 +793,25 @@ describe("AI config + ai-checks API (簇 D, 任务 11/13)", () => {
 
   // T11 apply-fix-suggestion（mutation 四件套+applyFixSuggestion+audit；复用本 describe 的 AI beforeEach）
   describe("apply-fix-suggestion (T11)", () => {
-    it("API-012 200 + 写 ir + 清 aiChecks + revision+1 + audit", async () => {
+    it("API-012 应用一条建议后保留 AI 检查与其他建议，并标记该项已应用", async () => {
       await createDefaultProvider();
       await uploadDraft();
-      // 设 aiChecks（含 fixable 项），验证采纳后被清空
-      llmFn = async () => ({ content: JSON.stringify({ items: [{ id: "AI_DESC", label: "描述质量", status: "yellow", message: "描述不清", filePath: null, fixable: true }], summary: { green: 0, yellow: 1, red: 0 }, checkedAt: new Date().toISOString() }), usage: { requests: 1, tokens: 20 } });
+      llmFn = async () => ({ content: JSON.stringify({ items: [
+        { id: "AI_DESC", label: "描述质量", status: "yellow", message: "描述不清", filePath: null, fixable: true, suggestion: { suggestedContent: "更清晰的描述", explanation: "直接说明用途", appliesTo: "description" } },
+        { id: "AI_BODY_QUALITY", label: "正文质量", status: "yellow", message: "正文重复", filePath: "SKILL.md", fixable: true, suggestion: { suggestedContent: '["合并重复内容"]', explanation: "减少重复", appliesTo: "instructions" } }
+      ], summary: { green: 0, yellow: 2, red: 0 }, checkedAt: new Date().toISOString() }), usage: { requests: 1, tokens: 20 } });
       const ac = await app.inject({ method: "POST", url: "/api/v1/skills/harness-ai/draft/claude-code/ai-checks", payload: {}, headers: headers() });
       expect(ac.statusCode).toBe(200);
+      await pollJob(ac.json().jobId);
       const before = (await app.inject({ method: "GET", url: "/api/v1/skills/harness-ai/draft/claude-code", headers: headers() })).json();
       expect(before.aiChecks).not.toBeNull();
       const res = await app.inject({ method: "POST", url: "/api/v1/skills/harness-ai/draft/claude-code/apply-fix-suggestion", payload: { checkId: "AI_DESC", suggestedContent: "更清晰的描述", appliesTo: "description" }, headers: headers() });
       expect(res.statusCode).toBe(200);
       // 新模型：description 写入 SKILL.md frontmatter（非 ir.description）
       expect(frontmatterField(res.json(), "description")).toBe("更清晰的描述");
-      expect(res.json().aiChecks).toBeNull();
+      expect(res.json().aiChecks.items).toHaveLength(2);
+      expect(res.json().aiChecks.items[0].suggestion.applicationState).toBe("applied");
+      expect(res.json().aiChecks.items[1].suggestion.applicationState).toBe("ready");
       expect(res.json().revision).toBe(before.revision + 1);
       expect(await auditActions()).toContain("skill.draft.fix-suggestion.applied");
     });

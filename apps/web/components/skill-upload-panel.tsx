@@ -11,6 +11,7 @@ import { useState } from "react";
 
 import { ApiClientError, buildUploadFormData, type HunterApi } from "../lib/api";
 import { useI18n } from "../lib/i18n";
+import { ToastFeedback } from "./ui/Toast";
 
 interface ReviewDetails {
   scanner_version: string;
@@ -142,30 +143,35 @@ export function SkillUploadPanel(props: {
   }
 
   return <div data-slot="skill-upload-panel" className={`skill-upload-panel${props.className === undefined ? "" : ` ${props.className}`}`} aria-busy={state === "uploading"}>
-    <div data-slot="skill-upload-choices" className="skill-upload-choices">
-      <label data-slot="skill-upload-folder-choice" className="secondary upload-choice-button">
-        <input
-          className="visually-hidden-input"
-          type="file"
-          multiple
-          aria-label={copy.chooseFolder}
-          onChange={(event) => void selectFiles(Array.from(event.target.files ?? []), "folder")}
-          {...{ webkitdirectory: "" }}
-        />
-        <strong>{copy.chooseFolder}</strong>
-        <span>{copy.chooseFolderHint}</span>
-      </label>
-      <label data-slot="skill-upload-zip-choice" className="secondary upload-choice-button">
-        <input
-          className="visually-hidden-input"
-          type="file"
-          accept=".zip"
-          aria-label={copy.chooseZip}
-          onChange={(event) => void selectFiles(Array.from(event.target.files ?? []), "zip")}
-        />
-        <strong>{copy.chooseZip}</strong>
-        <span>{copy.chooseZipHint}</span>
-      </label>
+    <div data-slot="skill-upload-source" className="skill-upload-source-picker">
+      <div className="skill-upload-source-copy">
+        <strong>{copy.chooseSource}</strong>
+        <span>{copy.chooseSourceHint}</span>
+      </div>
+      <div data-slot="skill-upload-choices" className="skill-upload-source-actions">
+        <label data-slot="skill-upload-folder-choice" className="secondary skill-upload-source-action">
+          <input
+            className="visually-hidden-input"
+            type="file"
+            multiple
+            aria-label={copy.chooseFolder}
+            onChange={(event) => void selectFiles(Array.from(event.target.files ?? []), "folder")}
+            {...{ webkitdirectory: "" }}
+          />
+          <strong>{copy.chooseFolder}</strong>
+        </label>
+        <span className="skill-upload-source-divider">{copy.or}</span>
+        <label data-slot="skill-upload-zip-choice" className="secondary skill-upload-source-action">
+          <input
+            className="visually-hidden-input"
+            type="file"
+            accept=".zip"
+            aria-label={copy.chooseZip}
+            onChange={(event) => void selectFiles(Array.from(event.target.files ?? []), "zip")}
+          />
+          <strong>{copy.chooseZip}</strong>
+        </label>
+      </div>
     </div>
 
     {summary === null ? <p className="skill-upload-placeholder">{copy.uploadDropHint}</p> : <div data-slot="skill-upload-summary" className="skill-upload-summary" aria-live="polite">
@@ -189,8 +195,8 @@ export function SkillUploadPanel(props: {
       <label className="skill-review-reason">{copy.reviewReason}<textarea value={reviewReason} onChange={(event) => setReviewReason(event.target.value)} /></label>
       <button type="button" disabled={reviewReason.trim().length < 3 || state === "uploading"} onClick={confirmReview}>{copy.confirmReviewRetry}</button>
     </div>}
-    {error === null ? null : <div className="notice danger" role="alert">{error}</div>}
-    {state === "success" ? <div className="notice success" role="status">{copy.uploadSuccess}</div> : null}
+    <ToastFeedback tone="danger" message={error} />
+    <ToastFeedback tone="success" message={state === "success" ? copy.uploadSuccess : null} />
     {review === null ? <button type="button" disabled={files.length === 0 || summary === null || summary.entryPath === null || state === "uploading"} onClick={() => void submit()}>
       {state === "uploading" ? copy.uploading : props.hasDraft === true ? copy.replaceDraft : copy.addUnpublishedSkill}
     </button> : null}

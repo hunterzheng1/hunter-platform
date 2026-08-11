@@ -1,164 +1,38 @@
 "use client";
 
 import type {
-  AgentSkillConfig,
   DraftState,
   FixPlan,
   FixPlanItem,
-  PublishSkillResponse,
   RegistryAgent,
   SkillTargetAgent,
-  SkillCheckItem,
   SkillCheckResult,
   SkillDiffFile,
-  SkillFrontmatter,
   RegistrySkillVersion
 } from "@hunter-harness/contracts";
-import { useEffect, useState } from "react";
+import { SKILL_AI_CHECK_POLICY, SKILL_AI_POLICY_PRINCIPLES } from "@hunter-harness/contracts";
+import { useEffect, useRef, useState } from "react";
 
 import { type HunterApi } from "../lib/api";
 import type { useI18n } from "../lib/i18n";
 import {
   CheckLight,
   Empty,
-  EnabledTargets,
-  ValueChips,
-  agentLabel,
   apiError,
   computeDiff,
   diffStats,
-  displayValue,
   required,
-  shiftPatchVersion,
-  tagSlug
+  shiftPatchVersion
 } from "./skill-shared";
 import { SkillUploadPanel } from "./skill-upload-panel";
+import { Modal } from "./ui/Modal";
+import { useToast } from "./ui/Toast";
+
+const AI_JOB_POLL_INTERVAL_MS = 1_000;
+const AI_JOB_POLL_TIMEOUT_MS = 150_000;
 
 function isSkillTargetAgent(agent: RegistryAgent): agent is SkillTargetAgent {
   return agent === "claude-code" || agent === "codex" || agent === "cursor" || agent === "codebuddy";
-}
-
-function ContractSecurityOverview({ frontmatter, t }: { frontmatter: SkillFrontmatter | null; t: ReturnType<typeof useI18n>["t"]["skillDetail"] }) {
-  return <div className="contract-card-grid">
-    <article className="contract-card contract-card-wide">
-      <div>
-        <span className="contract-card-label">{t.triggers}</span>
-        <p>{t.triggersDescription}</p>
-      </div>
-      <ValueChips values={frontmatter?.triggers} empty={t.noneShort} t={t} />
-    </article>
-    <article className="contract-card">
-      <div>
-        <span className="contract-card-label">{t.inputs}</span>
-        <p>{t.inputsDescription}</p>
-      </div>
-      <ValueChips values={frontmatter?.inputs} empty={t.noneShort} t={t} />
-    </article>
-    <article className="contract-card">
-      <div>
-        <span className="contract-card-label">{t.outputs}</span>
-        <p>{t.outputsDescription}</p>
-      </div>
-      <ValueChips values={frontmatter?.outputs} empty={t.noneShort} t={t} />
-    </article>
-    <article className="contract-card contract-card-danger">
-      <div>
-        <span className="contract-card-label">{t.forbiddenActions}</span>
-        <p>{t.forbiddenActionsDescription}</p>
-      </div>
-      <ValueChips values={frontmatter?.forbidden_actions} empty={t.noneShort} t={t} />
-    </article>
-    <article className="contract-card">
-      <div>
-        <span className="contract-card-label">{t.requiredContext}</span>
-        <p>{t.requiredContextDescription}</p>
-      </div>
-      <ValueChips values={frontmatter?.required_context} empty={t.noneShort} t={t} />
-    </article>
-  </div>;
-}
-
-function SkillConfigOverview({
-  name: skillName,
-  description: skillDescription,
-  version: skillVersion,
-  agents,
-  t,
-  top,
-  tags,
-  onSaveMeta
-}: {
-  name: string;
-  description: string;
-  version: string | null;
-  agents: readonly AgentSkillConfig[];
-  t: ReturnType<typeof useI18n>["t"]["skillDetail"];
-  top?: React.ReactNode;
-  tags?: string[];
-  onSaveMeta?: (next: { description: string; tags: string[] }) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [description, setDescription] = useState(skillDescription);
-  const [tagDraft, setTagDraft] = useState("");
-  const [tagValues, setTagValues] = useState<string[]>(tags ?? []);
-  const tagLibrary = Array.from(new Set([...(tags ?? []), "sap", "mapping", "finance", "migration", "security"])).sort();
-
-  useEffect(() => {
-    if (editing) return;
-    setDescription(skillDescription);
-    setTagValues(tags ?? []);
-    setTagDraft("");
-  }, [editing, skillDescription, tags]);
-
-  function save(): void {
-    onSaveMeta?.({ description: description.trim() || skillDescription, tags: tagValues });
-    setEditing(false);
-  }
-
-  function addTag(value: string): void {
-    const slug = tagSlug(value);
-    if (slug === "" || tagValues.includes(slug)) return;
-    setTagValues((current) => [...current, slug]);
-    setTagDraft("");
-  }
-
-  return <div className="system-config-grid">
-    {top}
-    <article className="system-config-card system-config-card-wide">
-      <div className="editable-card-heading">
-        <span className="config-card-label">{t.basicInfo}</span>
-        {onSaveMeta === undefined ? null : editing
-          ? <div className="editable-card-actions"><button type="button" onClick={save}>{t.saveBasicInfo}</button><button type="button" className="secondary" onClick={() => setEditing(false)}>{t.cancelEdit}</button></div>
-          : <button type="button" className="secondary" onClick={() => setEditing(true)}>{t.editBasicInfo}</button>}
-      </div>
-      <h3>{skillName}</h3>
-      {editing ? <div className="basic-info-editor">
-        <label className="config-edit-field">{t.description}<textarea value={description} onChange={(event) => setDescription(event.target.value)} /></label>
-        <section className="edit-panel">
-          <div className="edit-panel-title"><span>{t.tags}</span><small>{t.tagsHint}</small></div>
-          <div className="editable-tag-group">
-            {tagValues.length === 0 ? <span className="muted-inline">{t.noneShort}</span> : tagValues.map((tag) => <button type="button" className="editable-tag selected" key={tag} onClick={() => setTagValues((current) => current.filter((item) => item !== tag))}>{tag}<span aria-hidden="true">−</span></button>)}
-          </div>
-          <div className="tag-library">
-            <div className="edit-panel-title"><span>{t.tagLibrary}</span><small>{t.tagLibraryHint}</small></div>
-            <div className="editable-tag-group">
-              {tagLibrary.filter((tag) => !tagValues.includes(tag)).map((tag) => <button type="button" className="editable-tag addable" key={tag} onClick={() => addTag(tag)}>{tag}<span aria-hidden="true">＋</span></button>)}
-            </div>
-          </div>
-          <div className="inline-add-control"><input value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} placeholder={t.addTagPlaceholder} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addTag(tagDraft); } }} /><button type="button" className="secondary" onClick={() => addTag(tagDraft)}>＋</button></div>
-        </section>
-      </div> : <p>{displayValue(skillDescription, t)}</p>}
-      {!editing ? <dl>
-        <dt>{t.version}</dt><dd><span className="meta-pill meta-pill-version">v{skillVersion ?? "—"}</span></dd>
-        <dt>{t.tags}</dt>
-        <dd><ValueChips values={tags} empty={t.noneShort} /></dd>
-      </dl> : null}
-    </article>
-    <article className="system-config-card">
-      <span className="config-card-label">{t.adapters}</span>
-      <EnabledTargets agents={agents} empty={t.noneShort} enabledLabel={t.enabled} disabledLabel={t.disabled} />
-    </article>
-  </div>;
 }
 
 function checkStatusCopy(status: "green" | "yellow" | "red", t: ReturnType<typeof useI18n>["t"]["skillDetail"]): { title: string; description: string } {
@@ -167,9 +41,10 @@ function checkStatusCopy(status: "green" | "yellow" | "red", t: ReturnType<typeo
   return { title: t.checkFailed, description: t.checkFailedDescription };
 }
 
-const SUGGEST_APPLICABLE: readonly string[] = ["examples", "allowed_capabilities", "instructions", "description"];
+const SUGGEST_APPLICABLE: readonly string[] = ["examples", "instructions", "description"];
 
 function canAdoptSuggestion(item: FixPlanItem): boolean {
+  if (item.applicationState === "applied") return false;
   if (item.appliesTo === null || item.appliesTo === undefined) return false;
   if (!SUGGEST_APPLICABLE.includes(item.appliesTo)) return false;
   if (typeof item.suggestedContent !== "string" || item.suggestedContent.length === 0) return false;
@@ -186,6 +61,48 @@ function canAdoptSuggestion(item: FixPlanItem): boolean {
   return true;
 }
 
+function diffAppliedSuggestion(before: DraftState | null, after: DraftState): SkillDiffFile[] {
+  const sourceDiff = computeDiff(before?.sourceFiles ?? [], after.sourceFiles);
+  const beforeExamples = JSON.stringify(before?.examples ?? [], null, 2);
+  const afterExamples = JSON.stringify(after.examples, null, 2);
+  if (beforeExamples === afterExamples) return sourceDiff;
+  return [...sourceDiff, {
+    path: "examples.json",
+    status: (before?.examples.length ?? 0) === 0 ? "added" : after.examples.length === 0 ? "removed" : "modified",
+    publishedContent: (before?.examples.length ?? 0) === 0 ? null : beforeExamples,
+    draftContent: after.examples.length === 0 ? null : afterExamples
+  }];
+}
+
+function fixPlanFromAiChecks(result: SkillCheckResult | null, checkIds: readonly string[] | null = null): FixPlan {
+  const items: FixPlanItem[] = (result?.items ?? [])
+    .filter((check) => check.status !== "green" && check.suggestion !== null && check.suggestion !== undefined)
+    .filter((check) => checkIds === null || checkIds.includes(check.id))
+    .map((check) => {
+      const suggestion = check.suggestion;
+      if (suggestion === null || suggestion === undefined) throw new Error("AI suggestion is unexpectedly missing");
+      return {
+        checkId: check.id,
+        action: "suggest",
+        label: check.label,
+        affectedPaths: check.filePath === null ? [] : [check.filePath],
+        riskDelta: null,
+        message: check.message,
+        suggestedContent: suggestion.suggestedContent,
+        explanation: suggestion.explanation,
+        appliesTo: suggestion.appliesTo,
+        generatedAt: suggestion.generatedAt ?? result?.checkedAt ?? null,
+        applicationState: suggestion.applicationState,
+        appliedAt: suggestion.appliedAt
+      };
+    });
+  return {
+    items,
+    mergedFiles: [],
+    summary: { autoCount: 0, confirmCount: 0, suggestCount: items.length, changedFiles: 0, changedLines: 0 }
+  };
+}
+
 function appliesToLabel(appliesTo: NonNullable<FixPlanItem["appliesTo"]>, sd: ReturnType<typeof useI18n>["t"]["skillDetail"]): string {
   switch (appliesTo) {
     case "examples": return sd.appliesToExamples;
@@ -196,71 +113,48 @@ function appliesToLabel(appliesTo: NonNullable<FixPlanItem["appliesTo"]>, sd: Re
   }
 }
 
-function AgentContextSelector({
-  agents,
-  currentAgent,
-  defaultAgent,
-  onSelect,
-  onSetDefault,
-  settingDefault,
-  t
-}: {
-  agents: readonly AgentSkillConfig[];
-  currentAgent: RegistryAgent;
-  defaultAgent: RegistryAgent | null;
-  onSelect: (agent: RegistryAgent) => void;
-  onSetDefault?: (agent: RegistryAgent) => void;
-  settingDefault?: boolean;
-  t: ReturnType<typeof useI18n>["t"]["skillDetail"];
-}) {
-  if (agents.length === 0) return null;
-  const current = agents.find((a) => a.agent === currentAgent) ?? agents[0];
-  if (current === undefined) return null;
-  const fallbackSource = current.sourcePackagePath !== null && current.sourcePackagePath.startsWith("fallback:");
-  const multiAgent = agents.length > 1;
-  const canSetDefault = onSetDefault !== undefined && multiAgent && defaultAgent !== null && currentAgent !== defaultAgent;
-  return <div className="agent-context-selector">
-    <label className="agent-context-select">
-      <span>{t.currentAgent}</span>
-      <select value={currentAgent} onChange={(event) => onSelect(event.target.value as RegistryAgent)}>
-        {agents.map((a) => <option value={a.agent} key={a.agent}>{agentLabel(a.agent)}{a.agent === defaultAgent ? ` · ${t.defaultAgent}` : ""}</option>)}
-      </select>
-    </label>
-    {canSetDefault ? <button type="button" className="secondary" disabled={settingDefault === true} onClick={() => onSetDefault?.(currentAgent)}>{t.setDefault} · {agentLabel(currentAgent)}</button> : null}
-    {fallbackSource ? <span className="agent-fallback-badge">{t.agentFallbackNote}</span> : null}
-  </div>;
+function formatSuggestionContent(item: FixPlanItem): string {
+  const content = item.suggestedContent ?? "";
+  if (item.appliesTo === "description") return content;
+  try {
+    return JSON.stringify(JSON.parse(content) as unknown, null, 2);
+  } catch {
+    return content;
+  }
 }
 
 function AgentCheckPanel({
   api,
   slug,
-  currentAgent,
+  sourceAgent,
   draft,
   onPublished,
   t
 }: {
   api: HunterApi;
   slug: string;
-  currentAgent: RegistryAgent;
+  sourceAgent: RegistryAgent;
   draft: DraftState | null;
   onPublished: () => void;
   t: ReturnType<typeof useI18n>["t"];
 }) {
   const sd = t.skillDetail;
+  const toast = useToast();
   const [checksResult, setChecksResult] = useState<SkillCheckResult | null>(draft?.checks ?? null);
   const [aiChecksResult, setAiChecksResult] = useState<SkillCheckResult | null>(draft?.aiChecks ?? null);
   const [aiChecking, setAiChecking] = useState(false);
   const [diffFiles, setDiffFiles] = useState<readonly SkillDiffFile[]>([]);
-  const [diffRun, setDiffRun] = useState(false);
-  const [selectedStatus, setSelectedStatus] = useState<"green" | "yellow" | "red" | "suggestions" | null>(null);
+  const [suggestionDiffFiles, setSuggestionDiffFiles] = useState<readonly SkillDiffFile[] | null>(null);
+  const [diffView, setDiffView] = useState<"release" | "suggestion">("release");
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [checkDialog, setCheckDialog] = useState<"green" | "yellow" | "red" | "ai" | null>(null);
+  const [aiPolicyOpen, setAiPolicyOpen] = useState(false);
   const [selectedFile, setSelectedFile] = useState(0);
   const [checking, setChecking] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [publishPending, setPublishPending] = useState(false);
-  const [publishResult, setPublishResult] = useState<PublishSkillResponse | null>(null);
   const [publishVersion, setPublishVersion] = useState("");
   const [publishNote, setPublishNote] = useState("");
-  const [error, setError] = useState<string | null>(null);
   const [discarding, setDiscarding] = useState(false);
   const [fixPlan, setFixPlan] = useState<FixPlan | null>(null);
   const [fixing, setFixing] = useState(false);
@@ -268,271 +162,454 @@ function AgentCheckPanel({
   const [fixCheckIds, setFixCheckIds] = useState<string[] | null>(null);
   const [generatingReleaseNote, setGeneratingReleaseNote] = useState(false);
   const [fixSuggestions, setFixSuggestions] = useState<FixPlan | null>(null);
-  const [fixSuggestionRun, setFixSuggestionRun] = useState(false);
   const [adoptingSuggestion, setAdoptingSuggestion] = useState(false);
+  const [editingSuggestionId, setEditingSuggestionId] = useState<string | null>(null);
+  const [editedSuggestionContent, setEditedSuggestionContent] = useState("");
+  const latestDraftRef = useRef<DraftState | null>(draft);
 
   useEffect(() => {
+    latestDraftRef.current = draft;
     setChecksResult(draft?.checks ?? null);
     setAiChecksResult(draft?.aiChecks ?? null);
   }, [draft]);
 
-  const summary = {
-    green: (checksResult?.summary.green ?? 0) + (aiChecksResult?.summary.green ?? 0),
-    yellow: (checksResult?.summary.yellow ?? 0) + (aiChecksResult?.summary.yellow ?? 0),
-    red: (checksResult?.summary.red ?? 0) + (aiChecksResult?.summary.red ?? 0)
-  };
-  const checks: readonly SkillCheckItem[] = [
-    ...(checksResult?.items ?? []),
-    ...(aiChecksResult?.items ?? [])
-  ];
+  useEffect(() => {
+    setSuggestionDiffFiles(null);
+    setDiffView("release");
+    setSelectedFile(0);
+  }, [slug, sourceAgent]);
+
+  useEffect(() => {
+    if (draft === null) {
+      setDiffFiles([]);
+      setSuggestionDiffFiles(null);
+      setDiffView("release");
+      setSelectedFile(0);
+      setDiffLoading(false);
+      return;
+    }
+    let active = true;
+    setDiffLoading(true);
+    void (async () => {
+      try {
+        const files = await required(api, "diffSkillDraft")(slug, sourceAgent);
+        if (!active) return;
+        setDiffFiles(files);
+        setSelectedFile(0);
+      } catch (reason) {
+        if (active) toast.danger(apiError(reason, t));
+      } finally {
+        if (active) setDiffLoading(false);
+      }
+    })();
+    return () => { active = false; };
+  }, [api, draft?.revision, slug, sourceAgent]);
+
+  const summary = checksResult?.summary ?? { green: 0, yellow: 0, red: 0 };
+  const requiredChecks = checksResult?.items ?? [];
+  const aiChecks = aiChecksResult?.items ?? [];
+  const autoFixableChecks = requiredChecks.filter((check) => check.fixable && check.status !== "green");
   const defaultPublishVersion = draft?.draftVersion ?? "0.1.0";
   const resolvedPublishVersion = publishVersion || defaultPublishVersion;
   const resolvedPublishNote = publishNote || sd.defaultPublishModalNote;
-  const activeFile = diffFiles[selectedFile] ?? diffFiles[0];
+  const activeDiffFiles = diffView === "suggestion" && suggestionDiffFiles !== null ? suggestionDiffFiles : diffFiles;
+  const activeFile = activeDiffFiles[selectedFile] ?? activeDiffFiles[0];
   const stats = diffStats(diffFiles);
-  const selectedChecks = selectedStatus === null
-    ? checks
-    : selectedStatus === "suggestions"
-      ? checks.filter((check) => check.fixable)
-      : checks.filter((check) => check.status === selectedStatus);
+  const selectedChecks = checkDialog === null
+    ? []
+    : checkDialog === "ai"
+      ? aiChecks
+      : requiredChecks.filter((check) => check.status === checkDialog);
+  const checkDialogTitle = checkDialog === null
+    ? ""
+    : checkDialog === "ai"
+      ? sd.aiQualityAdvice
+      : checkStatusCopy(checkDialog, sd).title;
   const metricCards = [
-    { key: "green" as const, count: summary.green, ...checkStatusCopy("green", sd) },
-    { key: "yellow" as const, count: summary.yellow, ...checkStatusCopy("yellow", sd) },
-    { key: "red" as const, count: summary.red, ...checkStatusCopy("red", sd) },
-    { key: "suggestions" as const, count: checks.filter((c) => c.fixable).length, title: sd.fixSuggestions, description: sd.fixSuggestionsDescription }
+    { key: "green" as const, count: summary.green, slot: "required-check-green", ...checkStatusCopy("green", sd) },
+    { key: "yellow" as const, count: summary.yellow, slot: "required-check-yellow", ...checkStatusCopy("yellow", sd) },
+    { key: "red" as const, count: summary.red, slot: "required-check-red", ...checkStatusCopy("red", sd) },
+    { key: "ai" as const, count: aiChecks.length, slot: "ai-quality-advice", title: sd.aiQualityAdvice, description: sd.aiAdvisoryDescription }
   ];
   const publishedLines = (activeFile?.publishedContent ?? "").split("\n");
   const draftLines = (activeFile?.draftContent ?? "").split("\n");
 
   async function runChecks(): Promise<void> {
     setChecking(true);
-    setError(null);
     try {
-      const result = await required(api, "runSkillDraftChecks")(slug, currentAgent);
+      const result = await required(api, "runSkillDraftChecks")(slug, sourceAgent);
       setChecksResult(result);
-    } catch (reason) { setError(apiError(reason, t)); }
+    } catch (reason) { toast.danger(apiError(reason, t)); }
     finally { setChecking(false); }
   }
 
   async function runAiChecks(): Promise<void> {
     setAiChecking(true);
-    setError(null);
     try {
       // 异步 AI 检查（§3.3）：POST 启动 job → 轮询 GET /ai-jobs/:id 至 completed/failed。
-      // 轮询 100ms（设计建议 2s，实现选 100ms 平衡反馈速度与 server 负载；job 状态查询是内存操作不调 LLM）。
-      const start = await required(api, "runSkillAiChecks")(slug, currentAgent);
-      for (let i = 0; i < 120; i++) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
+      // 模型通道最长可运行 120s；客户端留出传输余量，并把轮询降为 1s 以避免无意义请求压力。
+      const start = await required(api, "runSkillAiChecks")(slug, sourceAgent);
+      const deadline = Date.now() + AI_JOB_POLL_TIMEOUT_MS;
+      while (Date.now() <= deadline) {
         const job = await required(api, "getAiJob")(start.jobId);
         if (job.status === "completed" && job.result !== null) {
           setAiChecksResult(job.result);
+          toast.success(sd.aiCheckCompleted);
           return;
         }
         if (job.status === "failed") {
-          setError(sd.aiCheckFailed + " " + (job.error ?? sd.aiJobErrorFallback));
+          toast.danger(sd.aiCheckFailed + " " + (job.error ?? sd.aiJobErrorFallback));
           return;
         }
+        await new Promise((resolve) => setTimeout(resolve, AI_JOB_POLL_INTERVAL_MS));
       }
-      setError(sd.aiCheckFailed + " " + sd.aiPollTimeout);
-    } catch (reason) { setError(sd.aiCheckFailed + " " + apiError(reason, t)); }
+      toast.danger(sd.aiCheckFailed + " " + sd.aiPollTimeout);
+    } catch (reason) { toast.danger(sd.aiCheckFailed + " " + apiError(reason, t)); }
     finally { setAiChecking(false); }
   }
 
   async function runDiff(): Promise<void> {
-    setError(null);
+    setDiffLoading(true);
     try {
-      const files = await required(api, "diffSkillDraft")(slug, currentAgent);
+      const files = await required(api, "diffSkillDraft")(slug, sourceAgent);
       setDiffFiles(files);
       setSelectedFile(0);
-      setDiffRun(true);
-    } catch (reason) { setError(apiError(reason, t)); }
+    } catch (reason) { toast.danger(apiError(reason, t)); }
+    finally { setDiffLoading(false); }
   }
 
   async function publish(): Promise<void> {
-    if (draft === null || publishPending || !isSkillTargetAgent(currentAgent)) return;
-    setError(null);
+    if (draft === null || publishPending || !isSkillTargetAgent(sourceAgent)) return;
     setPublishPending(true);
     try {
       const result = await required(api, "publishSkill")(slug, {
         version: resolvedPublishVersion,
-        sourceAgent: currentAgent,
+        sourceAgent,
         draftRevision: draft.revision,
         releaseNote: resolvedPublishNote
       });
-      setPublishResult(result);
       setPublishing(false);
       setPublishVersion("");
       setPublishNote("");
+      toast.success(sd.publishCompleted.replace("{version}", result.release.version));
       onPublished();
-    } catch (reason) { setError(apiError(reason, t)); }
+    } catch (reason) { toast.danger(apiError(reason, t)); }
     finally { setPublishPending(false); }
   }
 
   async function discard(): Promise<void> {
-    setError(null);
     try {
-      await required(api, "discardSkillDraft")(slug, currentAgent, draft?.revision ?? 0);
+      await required(api, "discardSkillDraft")(slug, sourceAgent, draft?.revision ?? 0);
       setDiscarding(false);
+      toast.info(sd.draftDiscardedNotice);
       onPublished();
-    } catch (reason) { setError(apiError(reason, t)); }
+    } catch (reason) { toast.danger(apiError(reason, t)); }
   }
 
   async function previewFix(checkIds: string[] | null): Promise<void> {
+    setCheckDialog(null);
     setFixing(true);
-    setError(null);
     try {
-      const plan = await required(api, "previewSkillFix")(slug, currentAgent, checkIds);
+      const plan = await required(api, "previewSkillFix")(slug, sourceAgent, checkIds);
       setFixPlan(plan);
       setFixCheckIds(checkIds);
       setFixPreviewRun(true);
-    } catch (reason) { setError(apiError(reason, t)); }
+    } catch (reason) { toast.danger(apiError(reason, t)); }
     finally { setFixing(false); }
   }
 
   async function applyFix(checkIds: string[] | null): Promise<void> {
     setFixing(true);
-    setError(null);
     try {
-      await required(api, "applySkillFix")(slug, currentAgent, checkIds);
+      await required(api, "applySkillFix")(slug, sourceAgent, checkIds);
       setFixPlan(null);
       setFixPreviewRun(false);
+      toast.success(sd.fixApplied);
       onPublished();
-    } catch (reason) { setError(apiError(reason, t)); }
+    } catch (reason) { toast.danger(apiError(reason, t)); }
     finally { setFixing(false); }
   }
 
   async function aiGenerateReleaseNote(): Promise<void> {
     setGeneratingReleaseNote(true);
-    setError(null);
     try {
-      const result = await required(api, "generateReleaseNote")(slug, currentAgent);
+      const result = await required(api, "generateReleaseNote")(slug, sourceAgent);
       if (result.releaseNote === null || result.degraded === true) {
-        setError(sd.aiGenerateFailed);
+        toast.danger(sd.aiGenerateFailed);
       } else {
         setPublishNote(result.releaseNote);
       }
     } catch {
-      setError(sd.aiGenerateFailed);
+      toast.danger(sd.aiGenerateFailed);
     } finally {
       setGeneratingReleaseNote(false);
     }
   }
 
-  async function fetchFixSuggestions(): Promise<void> {
-    setFixSuggestionRun(true);
-    setError(null);
-    try {
-      const plan = await required(api, "fetchFixSuggestions")(slug, currentAgent, null);
-      setFixSuggestions(plan);
-    } catch (reason) { setError(apiError(reason, t)); }
-    finally { setFixSuggestionRun(false); }
+  function openFixSuggestion(checkId: string): void {
+    const plan = fixPlanFromAiChecks(aiChecksResult, [checkId]);
+    if (plan.items.length === 0) {
+      toast.info(sd.suggestionUnavailable);
+      return;
+    }
+    setCheckDialog(null);
+    setFixSuggestions(plan);
+    setEditingSuggestionId(null);
+    setEditedSuggestionContent("");
   }
 
-  async function adoptFixSuggestion(item: FixPlanItem): Promise<void> {
+  async function adoptFixSuggestion(item: FixPlanItem, suggestedContent = item.suggestedContent ?? ""): Promise<void> {
     setAdoptingSuggestion(true);
-    setError(null);
     try {
-      await required(api, "applyFixSuggestion")(slug, currentAgent, {
+      const before = latestDraftRef.current;
+      const updated = await required(api, "applyFixSuggestion")(slug, sourceAgent, {
         checkId: item.checkId,
-        suggestedContent: item.suggestedContent ?? "",
+        suggestedContent,
         appliesTo: item.appliesTo ?? null
       });
-      setFixSuggestions(null);
+      latestDraftRef.current = updated;
+      setSuggestionDiffFiles(diffAppliedSuggestion(before, updated));
+      setDiffView("suggestion");
+      setSelectedFile(0);
+      setAiChecksResult(updated.aiChecks);
+      const visibleIds = fixSuggestions?.items.map((entry) => entry.checkId) ?? [item.checkId];
+      const updatedPlan = fixPlanFromAiChecks(updated.aiChecks, visibleIds);
+      if (updatedPlan.items.length > 0) {
+        setFixSuggestions(updatedPlan);
+      } else {
+        setFixSuggestions((current) => current === null ? null : ({
+          ...current,
+          items: current.items.map((entry) => entry.checkId === item.checkId ? {
+            ...entry,
+            suggestedContent,
+            applicationState: "applied",
+            appliedAt: new Date().toISOString()
+          } : entry)
+        }));
+      }
+      setEditingSuggestionId(null);
+      setEditedSuggestionContent("");
+      toast.success(sd.suggestionAdopted);
+      await runDiff();
       onPublished();
-    } catch (reason) { setError(apiError(reason, t)); }
+    } catch (reason) { toast.danger(apiError(reason, t)); }
     finally { setAdoptingSuggestion(false); }
   }
 
-  return <div className="check-publish-layout">
-    <div className="publish-toolbar publish-toolbar-stacked">
-      {isSkillTargetAgent(currentAgent)
-        ? <SkillUploadPanel api={api} agent={currentAgent} hasDraft={draft !== null} onUploaded={() => onPublished()} />
-        : null}
-      <div className="publish-toolbar-actions">
-        {draft === null ? null : <>
-          <button type="button" className="secondary prominent-action" disabled={checking} onClick={() => void runChecks()}>{checking ? sd.checkRunning : sd.checkAction}</button>
-          <button type="button" className="secondary prominent-action" disabled={aiChecking} onClick={() => void runAiChecks()}>{aiChecking ? sd.aiCheckRunning : sd.aiCheckAction}</button>
-          {aiChecksResult !== null && aiChecksResult.items.length > 0 ? <span className="status">{sd.aiChecksLabel}</span> : null}
-          <button type="button" className="secondary prominent-action" onClick={() => void runDiff()}>{sd.versionDiff}</button>
-          <button type="button" className="secondary prominent-action" disabled={fixing} onClick={() => void previewFix(null)}>{sd.oneClickFix}</button>
-          <button type="button" className="secondary prominent-action" disabled={fixSuggestionRun} onClick={() => void fetchFixSuggestions()}>{sd.aiFixSuggestion}</button>
-          {isSkillTargetAgent(currentAgent) ? <button type="button" className={`prominent-action ${summary.red > 0 ? "danger" : ""}`} onClick={() => { setPublishVersion(defaultPublishVersion); setPublishNote(sd.defaultPublishModalNote); setPublishing(true); }}>{sd.publishAction}</button> : null}
-          <button type="button" className="secondary" onClick={() => setDiscarding(true)}>{sd.discardAction}</button>
+  async function copyFixSuggestion(item: FixPlanItem): Promise<void> {
+    if (item.suggestedContent === null || item.suggestedContent === undefined || navigator.clipboard === undefined) return;
+    await navigator.clipboard.writeText(item.suggestedContent);
+    toast.success(sd.suggestionCopied);
+  }
+
+  return <div className="check-publish-layout" data-slot="check-publish-layout">
+    <div className="check-workbench-toolbar" data-slot="check-workbench-toolbar">
+      <section className="check-draft-source" data-slot="draft-source">
+        <div className="check-action-heading"><strong>{sd.draftSourceTitle}</strong><span>{sd.draftSourceHint}</span></div>
+        {isSkillTargetAgent(sourceAgent)
+          ? <SkillUploadPanel className="skill-upload-panel-compact" api={api} agent={sourceAgent} hasDraft={draft !== null} onUploaded={() => onPublished()} />
+          : null}
+      </section>
+      {draft === null ? null : <section className="check-action-board" data-slot="check-action-board">
+        <div className="check-action-group check-action-required" data-slot="required-check-actions">
+          <div className="check-action-heading"><strong>{sd.requiredChecks}</strong><span>{sd.requiredChecksHint}</span></div>
+          <div className="check-action-buttons">
+            <button type="button" className="primary" disabled={checking} onClick={() => void runChecks()}>{checking ? sd.checkRunning : sd.checkAction}</button>
+            {autoFixableChecks.length === 0 ? null : <button type="button" className="secondary" disabled={fixing} onClick={() => void previewFix(autoFixableChecks.map((check) => check.id))}>{sd.oneClickFix}</button>}
+          </div>
+        </div>
+        <div className="check-action-group check-action-ai" data-slot="ai-advisory-actions">
+          <div className="check-action-heading">
+            <div className="check-action-title-line"><strong>{sd.optionalAi}</strong><button type="button" className="analysis-policy-chip" onClick={() => setAiPolicyOpen(true)}>{sd.viewAiPolicy}</button></div>
+            <span>{sd.optionalAiHint}</span>
+          </div>
+          <div className="check-action-buttons">
+            <button type="button" className="secondary" disabled={aiChecking} onClick={() => void runAiChecks()}>{aiChecking ? sd.aiCheckRunning : sd.aiCheckAction}</button>
+          </div>
+        </div>
+        <div className="check-action-group check-action-release" data-slot="release-actions">
+          <div className="check-action-heading"><strong>{sd.releaseActions}</strong><span>{sd.releaseActionsHint}</span></div>
+          <div className="check-action-buttons">
+            {isSkillTargetAgent(sourceAgent) ? <button type="button" className={summary.red > 0 ? "danger" : "primary"} onClick={() => { setPublishVersion(defaultPublishVersion); setPublishNote(sd.defaultPublishModalNote); setPublishing(true); }}>{sd.publishAction}</button> : null}
+            <button type="button" className="secondary" onClick={() => setDiscarding(true)}>{sd.discardAction}</button>
+          </div>
           {summary.red > 0 ? <span className="publish-warning">{sd.redPublishWarning}</span> : null}
-        </>}
-      </div>
+        </div>
+      </section>}
     </div>
-    {publishResult === null ? null : <div className="publish-result-card notice success" role="status">
-      <strong>{publishResult.release.slug} v{publishResult.release.version}</strong>
-      <span>{publishResult.npmRelease.packageName}@{publishResult.npmRelease.version}</span>
-      <code>{publishResult.npmRelease.tarballHash}</code>
-    </div>}
     {draft === null ? <Empty>{sd.draftEmpty}</Empty> : <>
-    <div className="check-metrics">
-      {metricCards.map((metric) => <button type="button" className={`check-metric-card check-metric-${metric.key}`} key={metric.key} onClick={() => setSelectedStatus((cur) => cur === metric.key ? null : metric.key)}>
+    <div className="check-metrics" data-slot="check-metrics">
+      {metricCards.map((metric) => <button type="button" data-slot={metric.slot} aria-haspopup="dialog" className={`check-metric-card check-metric-${metric.key}`} key={metric.key} onClick={() => setCheckDialog(metric.key)}>
         <strong>{metric.count}</strong>
         <span>{metric.title}</span>
         <small>{metric.description}</small>
       </button>)}
     </div>
-    {checks.length === 0 ? null : <div className="check-list">
-      {selectedChecks.map((check) => <article className="check-row" key={check.id}>
-        <CheckLight status={check.status} />
-        <div><strong>{check.label}</strong><p>{check.message}</p>{check.filePath === null ? null : <code>{check.filePath}</code>}</div>
-        {check.fixable ? <button type="button" className="secondary" disabled={fixing} onClick={() => void previewFix([check.id])}>{sd.applyFix}</button> : null}
-      </article>)}
-    </div>}
-    {!fixPreviewRun || fixPlan === null ? null : fixPlan.items.length === 0 ? <Empty>{sd.fixEmpty}</Empty> : <div className="version-diff-workbench fix-preview-workbench">
-      <aside className="version-file-tree">
-        <div className="version-file-tree-title">{sd.fixPreview}</div>
-        {fixPlan.items.map((item) => <div className="check-row" key={item.checkId}>
-          <span className={`fix-action fix-action-${item.action}`}>{(t.status as Record<string, string>)[item.action] ?? item.action}</span>
-          <div><strong>{item.label}</strong><p>{item.message}</p>{item.riskDelta === null ? null : <small className="risk">{sd.riskDelta}: {item.riskDelta}</small>}{item.riskDelta !== null && item.riskDelta.includes("degraded") ? <p className="degraded-fix-notice" data-testid="degraded-fix-notice">{sd.fixDegradedHint}</p> : null}</div>
-        </div>)}
-      </aside>
-      <div className="version-diff-pane">
-        <div className="diff-column-title"><span>{sd.currentPublishedVersion}</span></div>
-        <pre>{(fixPlan.mergedFiles[0]?.publishedContent ?? "").split("\n").map((line, index) => <span className="diff-line diff-line-old" key={`fix-old-${index}`}>{line || " "}</span>)}</pre>
+    <section className="default-version-diff" data-slot="default-version-diff" data-diff-view={diffView} aria-busy={diffLoading && diffView === "release"}>
+      <div className="default-version-diff-heading">
+        <div className="default-version-diff-title"><span className="config-card-label">{diffView === "suggestion" ? sd.suggestionDiffTitle : sd.versionDiff}</span><strong>{sd.changedFiles}</strong></div>
+        <div className="default-version-diff-actions" data-slot="diff-view-actions">
+          {suggestionDiffFiles === null ? null : <div className="diff-view-switch" data-slot="diff-view-switch" aria-label={sd.diffViewLabel}>
+            <button type="button" data-slot="suggestion-diff-view" aria-pressed={diffView === "suggestion"} onClick={() => { setDiffView("suggestion"); setSelectedFile(0); }}>{sd.suggestionDiffView}</button>
+            <button type="button" data-slot="release-diff-view" aria-pressed={diffView === "release"} onClick={() => { setDiffView("release"); setSelectedFile(0); }}>{sd.releaseDiffView}</button>
+          </div>}
+          {diffView === "release" ? <button type="button" className="secondary compact-button" disabled={diffLoading} onClick={() => void runDiff()}>{diffLoading ? sd.loadingDiff : sd.refreshDiff}</button> : null}
+        </div>
       </div>
-      <div className="version-diff-pane">
-        <div className="diff-column-title"><span>{sd.stagedDraftVersion}</span></div>
-        <pre>{(fixPlan.mergedFiles[0]?.draftContent ?? "").split("\n").map((line, index) => <span className="diff-line diff-line-new" key={`fix-new-${index}`}>{line || " "}</span>)}</pre>
-      </div>
-      <div className="publish-modal-footer">
-        <button type="button" disabled={fixing} onClick={() => void applyFix(fixCheckIds)}>{sd.applyFix}</button>
-        <button type="button" className="secondary" onClick={() => { setFixPlan(null); setFixPreviewRun(false); }}>{sd.cancelEdit}</button>
-      </div>
-    </div>}
-    {fixSuggestions === null ? null : fixSuggestions.items.length === 0 ? <Empty>{sd.fixEmpty}</Empty> : <div className="fix-suggestion-list">
-      {fixSuggestions.items.map((item) => <article className="fix-suggestion-row" key={item.checkId}>
-        <div><strong>{item.label}</strong><p>{item.message}</p></div>
-        {item.suggestedContent === null || item.suggestedContent === undefined ? null : <div className="fix-suggestion-body">
-          <pre>{item.suggestedContent}</pre>
-          {item.explanation === null || item.explanation === undefined ? null : <p className="fix-suggestion-explanation"><span className="config-card-label">{sd.suggestionExplanation}</span> {item.explanation}</p>}
-          {item.appliesTo === null || item.appliesTo === undefined ? null : <span className="fix-suggestion-target">{appliesToLabel(item.appliesTo, sd)}</span>}
-          {canAdoptSuggestion(item) ? <button type="button" className="secondary" disabled={adoptingSuggestion} onClick={() => void adoptFixSuggestion(item)}>{sd.adoptSuggestion}</button> : null}
-        </div>}
-      </article>)}
-    </div>}
-    {!diffRun ? null : diffFiles.length === 0 ? <Empty>{sd.diffNoChange}</Empty> : <div className="version-diff-workbench">
-      <aside className="version-file-tree">
-        <div className="version-file-tree-title">{sd.changedFiles}</div>
-        {diffFiles.map((file, index) => <button type="button" className={index === selectedFile ? "selected" : ""} key={file.path} onClick={() => setSelectedFile(index)}>
-          <span className={`file-change-dot file-change-${file.status}`} />
-          <span>{file.path}</span>
-          <small>{sd.diffStatus[file.status]}</small>
-        </button>)}
-      </aside>
-      <div className="version-diff-pane">
-        <div className="diff-column-title"><span>{sd.currentPublishedVersion}</span></div>
-        <pre>{publishedLines.map((line, index) => <span className={line !== (draftLines[index] ?? "") ? "diff-line diff-line-old" : "diff-line"} key={`old-${index}`}>{line || " "}</span>)}</pre>
-      </div>
-      <div className="version-diff-pane">
-        <div className="diff-column-title"><span>{sd.stagedDraftVersion}</span></div>
-        <pre>{draftLines.map((line, index) => <span className={line !== (publishedLines[index] ?? "") ? "diff-line diff-line-new" : "diff-line"} key={`new-${index}`}>{line || " "}</span>)}</pre>
-      </div>
-    </div>}
+      {diffLoading && diffView === "release" && activeDiffFiles.length === 0
+        ? <div className="diff-loading" role="status">{sd.loadingDiff}</div>
+        : activeDiffFiles.length === 0
+          ? <Empty>{diffView === "suggestion" ? sd.suggestionDiffNoChange : sd.diffNoChange}</Empty>
+          : <div className="version-diff-workbench">
+            <aside className="version-file-tree" data-slot="version-file-tree-scroll" aria-label={sd.changedFiles}>
+              <div className="version-file-tree-title">{sd.changedFiles}</div>
+              {activeDiffFiles.map((file, index) => <button type="button" className={index === selectedFile ? "selected" : ""} key={file.path} onClick={() => setSelectedFile(index)}>
+                <span className={`file-change-dot file-change-${file.status}`} />
+                <span>{file.path}</span>
+                <small>{sd.diffStatus[file.status]}</small>
+              </button>)}
+            </aside>
+            <div className="version-diff-pane">
+              <div className="diff-column-title"><span>{diffView === "suggestion" ? sd.beforeSuggestion : sd.currentPublishedVersion}</span></div>
+              <pre>{publishedLines.map((line, index) => <span className={line !== (draftLines[index] ?? "") ? "diff-line diff-line-old" : "diff-line"} key={`old-${index}`}>{line || " "}</span>)}</pre>
+            </div>
+            <div className="version-diff-pane">
+              <div className="diff-column-title"><span>{diffView === "suggestion" ? sd.afterSuggestion : sd.stagedDraftVersion}</span></div>
+              <pre>{draftLines.map((line, index) => <span className={line !== (publishedLines[index] ?? "") ? "diff-line diff-line-new" : "diff-line"} key={`new-${index}`}>{line || " "}</span>)}</pre>
+            </div>
+          </div>}
+    </section>
     </>}
+    <Modal open={checkDialog !== null} onClose={() => setCheckDialog(null)} title={checkDialogTitle} closeLabel={sd.close} wide>
+      <div className="check-results-dialog" data-slot="check-results-dialog">
+        <p className="check-results-intro">{checkDialog === "ai" ? sd.aiResultsHint : sd.requiredResultsHint}</p>
+        {selectedChecks.length === 0 ? <Empty>{sd.noCheckResults}</Empty> : <div className="check-list check-dialog-list">
+          {selectedChecks.map((check) => <article className={`check-row check-row-${check.status}`} key={check.id}>
+            <CheckLight status={check.status} />
+            <div>
+              <div className="check-row-heading"><strong>{check.label}</strong>{checkDialog === "ai" ? <span className="ai-advisory-badge">{sd.aiAdvisoryBadge}</span> : null}</div>
+              <p>{check.message}</p>
+              {check.filePath === null ? null : <code>{check.filePath}</code>}
+            </div>
+            {check.fixable && check.status !== "green" && checkDialog !== "ai"
+              ? <button type="button" className="secondary" disabled={fixing} onClick={() => void previewFix([check.id])}>{sd.applyFix}</button>
+              : checkDialog !== "ai"
+                ? null
+                : check.status === "green"
+                  ? <span className="ai-suggestion-state ai-suggestion-passed">{sd.suggestionNotNeeded}</span>
+                  : check.suggestion === null || check.suggestion === undefined
+                    ? <span className="ai-suggestion-state ai-suggestion-missing">{sd.suggestionUnavailableShort}</span>
+                    : <button type="button" className="secondary" onClick={() => openFixSuggestion(check.id)}>
+                        {check.suggestion.applicationState === "applied"
+                          ? sd.viewAppliedSuggestion
+                          : check.fixable ? sd.viewAndApplySuggestion : sd.viewSuggestion}
+                      </button>}
+          </article>)}
+        </div>}
+      </div>
+    </Modal>
+    <Modal open={aiPolicyOpen} onClose={() => setAiPolicyOpen(false)} title={sd.aiPolicyTitle} closeLabel={sd.close} wide>
+      <div className="ai-policy-dialog" data-slot="ai-policy-dialog">
+        <div className="ai-policy-principles">
+          <span className="config-card-label">{sd.aiPolicyPrinciples}</span>
+          <ul>{SKILL_AI_POLICY_PRINCIPLES.map((principle) => <li key={principle}>{principle}</li>)}</ul>
+        </div>
+        <div className="ai-policy-grid">
+          {SKILL_AI_CHECK_POLICY.map((item, index) => <article key={item.id}>
+            <span>{String(index + 1).padStart(2, "0")}</span>
+            <div><strong>{item.label}</strong><p>{item.description}</p><code>{item.id}</code></div>
+          </article>)}
+        </div>
+        <p className="ai-policy-footnote">{sd.aiPolicyFootnote}</p>
+      </div>
+    </Modal>
+    <Modal
+      open={fixPreviewRun && fixPlan !== null}
+      onClose={() => { setFixPlan(null); setFixPreviewRun(false); }}
+      title={sd.fixPreview}
+      closeLabel={sd.close}
+      wide
+      footer={<>
+        <button type="button" disabled={fixing || (fixPlan?.items.length ?? 0) === 0} onClick={() => void applyFix(fixCheckIds)}>{sd.applyFix}</button>
+        <button type="button" className="secondary" onClick={() => { setFixPlan(null); setFixPreviewRun(false); }}>{sd.cancelEdit}</button>
+      </>}
+    >
+      {fixPlan === null || fixPlan.items.length === 0 ? <Empty>{sd.fixEmpty}</Empty> : <div className="version-diff-workbench fix-preview-workbench">
+        <aside className="version-file-tree">
+          <div className="version-file-tree-title">{sd.fixItems}</div>
+          {fixPlan.items.map((item) => <div className="check-row" key={item.checkId}>
+            <span className={`fix-action fix-action-${item.action}`}>{(t.status as Record<string, string>)[item.action] ?? item.action}</span>
+            <div><strong>{item.label}</strong><p>{item.message}</p>{item.riskDelta === null ? null : <small className="risk">{sd.riskDelta}: {item.riskDelta}</small>}{item.riskDelta !== null && item.riskDelta.includes("degraded") ? <p className="degraded-fix-notice" data-testid="degraded-fix-notice">{sd.fixDegradedHint}</p> : null}</div>
+          </div>)}
+        </aside>
+        <div className="version-diff-pane">
+          <div className="diff-column-title"><span>{sd.currentPublishedVersion}</span></div>
+          <pre>{(fixPlan.mergedFiles[0]?.publishedContent ?? "").split("\n").map((line, index) => <span className="diff-line diff-line-old" key={`fix-old-${index}`}>{line || " "}</span>)}</pre>
+        </div>
+        <div className="version-diff-pane">
+          <div className="diff-column-title"><span>{sd.stagedDraftVersion}</span></div>
+          <pre>{(fixPlan.mergedFiles[0]?.draftContent ?? "").split("\n").map((line, index) => <span className="diff-line diff-line-new" key={`fix-new-${index}`}>{line || " "}</span>)}</pre>
+        </div>
+      </div>}
+    </Modal>
+    <Modal open={fixSuggestions !== null} onClose={() => { setFixSuggestions(null); setEditingSuggestionId(null); }} title={sd.fixSuggestions} closeLabel={sd.close} wide>
+      {fixSuggestions === null || fixSuggestions.items.length === 0 ? <Empty>{sd.fixEmpty}</Empty> : <div className="fix-suggestion-dialog">
+        <header className="fix-suggestion-dialog-hero">
+          <div><strong>{fixSuggestions.items.length}</strong><span>{sd.fixItems}</span></div>
+          <p>{sd.suggestionDialogHint}</p>
+        </header>
+        <div className="fix-suggestion-list fix-suggestion-dialog-list">
+          {fixSuggestions.items.map((item, index) => {
+            const editing = editingSuggestionId === item.checkId;
+            const editedItem = { ...item, suggestedContent: editedSuggestionContent };
+            const applicable = canAdoptSuggestion(item);
+            const applied = item.applicationState === "applied";
+            const tone = applied ? "applied" : applicable ? "ready" : "manual";
+            return <article className={`fix-suggestion-card fix-suggestion-${tone}`} key={item.checkId}>
+              <header className="fix-suggestion-card-head">
+                <div className="fix-suggestion-title">
+                  <span className="fix-suggestion-index">{String(index + 1).padStart(2, "0")}</span>
+                  <div><strong>{item.label}</strong><small>{item.affectedPaths.join(" · ") || sd.suggestionFinding}</small></div>
+                </div>
+                <div className="fix-suggestion-badges">
+                  {item.appliesTo === null || item.appliesTo === undefined ? null : <span className="fix-suggestion-target">{appliesToLabel(item.appliesTo, sd)}</span>}
+                  <span className={`fix-suggestion-state fix-suggestion-state-${tone}`}>{applied ? sd.suggestionApplied : applicable ? sd.suggestionReady : sd.suggestionManual}</span>
+                </div>
+              </header>
+              <div className="fix-suggestion-grid">
+                <section className="fix-suggestion-finding">
+                  <span className="config-card-label">{sd.suggestionFinding}</span>
+                  <p>{item.message}</p>
+                  {item.explanation === null || item.explanation === undefined ? null : <div className="fix-suggestion-explanation"><span>{sd.suggestionExplanation}</span><p>{item.explanation}</p></div>}
+                </section>
+                <section className="fix-suggestion-proposal">
+                  <span className="config-card-label">{sd.suggestionProposal}</span>
+                  {item.suggestedContent === null || item.suggestedContent === undefined
+                    ? <p className="manual-suggestion-hint">{sd.manualSuggestionHint}</p>
+                    : editing
+                      ? <label className="fix-suggestion-editor"><span>{sd.suggestionContent}</span><textarea aria-label={sd.suggestionContent} value={editedSuggestionContent} onChange={(event) => setEditedSuggestionContent(event.target.value)} /></label>
+                      : <pre>{formatSuggestionContent(item)}</pre>}
+                </section>
+              </div>
+              <footer className="fix-suggestion-footer">
+                <span>{applied ? sd.suggestionSnapshotHint : applicable ? sd.suggestionSnapshotHint : sd.manualSuggestionHint}</span>
+                <div className="fix-suggestion-actions">
+                  {applicable && !editing ? <>
+                    <button type="button" disabled={adoptingSuggestion} onClick={() => void adoptFixSuggestion(item)}>{sd.applyDirectly}</button>
+                    <button type="button" className="secondary" onClick={() => { setEditingSuggestionId(item.checkId); setEditedSuggestionContent(formatSuggestionContent(item)); }}>{sd.editBeforeApply}</button>
+                  </> : null}
+                  {editing ? <>
+                    <button type="button" disabled={adoptingSuggestion || !canAdoptSuggestion(editedItem)} onClick={() => void adoptFixSuggestion(item, editedSuggestionContent)}>{sd.applyEditedContent}</button>
+                    <button type="button" className="secondary" onClick={() => { setEditingSuggestionId(null); setEditedSuggestionContent(""); }}>{sd.cancelEdit}</button>
+                  </> : null}
+                  {!applicable && !editing && typeof item.suggestedContent === "string" ? <button type="button" className="secondary" onClick={() => void copyFixSuggestion(item)}>{sd.copySuggestion}</button> : null}
+                </div>
+              </footer>
+            </article>;
+          })}
+        </div>
+      </div>}
+    </Modal>
     {!publishing ? null : <div className="modal-backdrop" role="presentation" onClick={() => setPublishing(false)}>
       <div className="publish-modal" role="dialog" aria-modal="true" aria-labelledby="publish-modal-title" onClick={(event) => event.stopPropagation()}>
         <div className="panel-title">
@@ -586,46 +663,30 @@ function AgentCheckPanel({
         </div>
       </div>
     </div>}
-    {error === null ? null : <div className="notice danger">{error}</div>}
   </div>;
 }
 
-function AgentConfigsOverview({ agents, t }: { agents: readonly AgentSkillConfig[]; t: ReturnType<typeof useI18n>["t"]["skillDetail"] }) {
-  if (agents.length === 0) return <span className="muted-inline">{t.noneShort}</span>;
-  return <article className="system-config-card system-config-card-wide">
-    <span className="config-card-label">{t.adapters}</span>
-    <div className="default-agent-actions">
-      {agents.map((a) => (
-        <span className={`config-chip config-chip-${a.enabled ? "enabled" : "disabled"}`} key={a.agent}>
-          <span>{a.agent}</span>
-          <small>{a.isDefault ? t.defaultAgent : a.enabled ? t.enabled : t.disabled}</small>
-        </span>
-      ))}
-    </div>
-  </article>;
-}
-
-function VersionHistoryPanel({
-  versions,
-  currentAgent,
-  t
-}: {
+function VersionHistoryPanel({ versions, t }: {
   versions: readonly RegistrySkillVersion[];
-  currentAgent: RegistryAgent;
   t: ReturnType<typeof useI18n>["t"]["skillDetail"];
 }) {
   // 按 created_at 倒序（最新在前）；previous = 倒序下一个 = 时序上一版本。
   // 显式 sort 防御 server 返回顺序不确定（设计文档「已有倒序」在此前置为强约束）。
-  const agentVersions = versions
-    .filter((v) => v.agent === currentAgent)
-    .sort((a, b) => b.created_at.localeCompare(a.created_at));
-  const [selectedVersion, setSelectedVersion] = useState(agentVersions[0]?.version ?? "");
+  const seenVersions = new Set<string>();
+  const sharedVersions = [...versions]
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .filter((version) => {
+      if (seenVersions.has(version.version)) return false;
+      seenVersions.add(version.version);
+      return true;
+    });
+  const [selectedVersion, setSelectedVersion] = useState(sharedVersions[0]?.version ?? "");
   const [selectedDiffFile, setSelectedDiffFile] = useState(0);
-  if (agentVersions.length === 0) return <Empty>{t.noVersionHistory}</Empty>;
-  const currentIndex = agentVersions.findIndex((v) => v.version === selectedVersion);
-  const current = currentIndex >= 0 ? agentVersions[currentIndex] : agentVersions[0];
+  if (sharedVersions.length === 0) return <Empty>{t.noVersionHistory}</Empty>;
+  const currentIndex = sharedVersions.findIndex((v) => v.version === selectedVersion);
+  const current = currentIndex >= 0 ? sharedVersions[currentIndex] : sharedVersions[0];
   if (current === undefined) return <Empty>{t.noVersionHistory}</Empty>;
-  const previous = currentIndex >= 0 ? agentVersions[currentIndex + 1] : undefined;
+  const previous = currentIndex >= 0 ? sharedVersions[currentIndex + 1] : undefined;
   const diffFiles = previous === undefined ? [] : computeDiff(previous.sourceFiles, current.sourceFiles);
   const stats = diffStats(diffFiles);
   const activeDiffFile = diffFiles[selectedDiffFile] ?? diffFiles[0];
@@ -640,7 +701,7 @@ function VersionHistoryPanel({
   return <div className="version-history-workbench">
     <aside className="version-history-list">
       <div className="version-file-tree-title">{t.versionHistory}</div>
-      {agentVersions.map((v) => <button type="button" className={v.version === current.version ? "selected" : ""} key={v.version} onClick={() => selectVersion(v.version)}>
+      {sharedVersions.map((v) => <button type="button" className={v.version === current.version ? "selected" : ""} key={v.version} onClick={() => selectVersion(v.version)}>
         <strong>v{v.version}</strong>
         <span>{new Date(v.created_at).toLocaleString()}</span>
         <small>{v.source_proposal_id ?? t.bootstrapSource}</small>
@@ -695,9 +756,5 @@ function VersionHistoryPanel({
 
 export {
   AgentCheckPanel,
-  AgentConfigsOverview,
-  AgentContextSelector,
-  ContractSecurityOverview,
-  SkillConfigOverview,
   VersionHistoryPanel
 };

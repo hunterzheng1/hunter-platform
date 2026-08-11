@@ -35,7 +35,8 @@ describe("buildReleaseNotePrompt (UT-001~003)", () => {
       { path: "SKILL.md", status: "modified", publishedContent: "old", draftContent: "new" }
     ];
     const p = buildReleaseNotePrompt({ meta, diff });
-    expect(p.system).toMatch(/release note/i);
+    expect(p.system).toMatch(/发布说明/);
+    expect(p.system).toContain("简体中文");
     expect(p.user).toContain("--- SKILL.md [modified] ---");
     expect(p.user).toContain("demo");
   });
@@ -77,6 +78,8 @@ describe("buildFixSuggestionPrompt (UT-007)", () => {
     expect(p.system).toContain("JSON");
     expect(p.system).toContain("examples");
     expect(p.system).toContain("allowed_capabilities");
+    expect(p.system).toContain("简体中文");
+    expect(p.system).toMatch(/explanation.*中文/i);
     expect(p.user).toContain("AI_USAGE_EXAMPLES");
     expect(p.user).toContain("缺少示例");
   });

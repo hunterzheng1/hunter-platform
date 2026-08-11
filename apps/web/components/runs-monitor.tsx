@@ -19,6 +19,7 @@ import { Icon } from "./ui/icons";
 import { Modal } from "./ui/Modal";
 import { PageHeader } from "./ui/PageHeader";
 import { Spinner } from "./ui/Spinner";
+import { ToastFeedback } from "./ui/Toast";
 import { MarkdownDocument } from "./skill-shared";
 
 type Tone = "success" | "danger" | "warning" | "info" | "neutral";
@@ -835,7 +836,7 @@ export function RunsMonitor({ api, projectId: fixedProjectId }: { api?: HunterAp
         </div>
       </div>
 
-      {error === null ? null : <p className="api-keys-message">{error}</p>}
+      <ToastFeedback tone="danger" message={error} />
 
       <div className="runs-split">
         <div className="runs-list-panel">

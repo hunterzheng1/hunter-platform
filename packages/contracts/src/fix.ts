@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { skillDiffFileSchema } from "./registry.js";
+import { skillDiffFileSchema, skillSuggestionTargetSchema } from "./registry.js";
 
 export const fixActionSchema = z.enum(["auto", "confirm", "suggest"]);
 
@@ -14,8 +14,10 @@ export const fixPlanItemSchema = z.object({
   // AI 内容生成切片：fix-suggestions 端点填充（fixer.buildFixPatch 填的 item 不带，向后兼容）
   suggestedContent: z.string().nullable().optional(),
   explanation: z.string().nullable().optional(),
-  appliesTo: z.enum(["examples", "allowed_capabilities", "instructions", "description", "tags"]).nullable().optional(),
-  generatedAt: z.string().nullable().optional()
+  appliesTo: skillSuggestionTargetSchema.nullable().optional(),
+  generatedAt: z.string().nullable().optional(),
+  applicationState: z.enum(["ready", "applied"]).optional(),
+  appliedAt: z.string().nullable().optional()
 }).strict();
 
 export const fixPlanSchema = z.object({

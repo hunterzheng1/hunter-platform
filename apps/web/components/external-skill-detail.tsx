@@ -18,6 +18,7 @@ import { useI18n } from "../lib/i18n";
 import { mockApi } from "../lib/mock-api";
 import { Empty, Status, apiError, required, MarkdownDocument } from "./skill-shared";
 import { Icon } from "./ui/icons";
+import { ToastFeedback } from "./ui/Toast";
 
 function useApi(value?: HunterApi): HunterApi {
   return useMemo(() => value ?? (
@@ -518,8 +519,8 @@ export function ExternalSkillDetail({ api: apiValue, skillId }: { api?: HunterAp
         </aside>
       </div>
 
-      {message === null ? null : <div className="notice success">{message}</div>}
-      {error === null ? null : <div className="notice danger">{error}</div>}
+      <ToastFeedback tone="success" message={message} />
+      <ToastFeedback tone="danger" message={error} />
     </section>
   );
 }

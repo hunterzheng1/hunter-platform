@@ -4,6 +4,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -37,19 +38,36 @@ const TONE_ICON: Record<ToastTone, IconName> = {
   warning: "warning"
 };
 
-const TOAST_MS = 3600;
+const TOAST_DURATION_MS: Record<ToastTone, number> = {
+  success: 4_800,
+  info: 4_800,
+  warning: 6_400,
+  danger: 6_400
+};
 
 /** 全局 Toast。Provider 挂在 ClientLayout，任意组件 useToast() 触发。 */
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([]);
   const nextId = useRef(1);
+  const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
+
+  const dismiss = useCallback((id: number) => {
+    const timer = timers.current.get(id);
+    if (timer !== undefined) clearTimeout(timer);
+    timers.current.delete(id);
+    setItems((current) => current.filter((item) => item.id !== id));
+  }, []);
 
   const push = useCallback((tone: ToastTone, message: string) => {
     const id = nextId.current++;
     setItems((current) => [...current.slice(-3), { id, tone, message }]);
-    setTimeout(() => {
-      setItems((current) => current.filter((item) => item.id !== id));
-    }, TOAST_MS);
+    const timer = setTimeout(() => dismiss(id), TOAST_DURATION_MS[tone]);
+    timers.current.set(id, timer);
+  }, [dismiss]);
+
+  useEffect(() => () => {
+    for (const timer of timers.current.values()) clearTimeout(timer);
+    timers.current.clear();
   }, []);
 
   const api = useMemo<ToastApi>(() => ({
@@ -63,11 +81,24 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <div className="toast-stack" role="status" aria-live="polite">
+      <div className="toast-stack" data-slot="toast-viewport" aria-label="通知">
         {items.map((item) => (
-          <div className={`toast toast-${item.tone}`} key={item.id}>
-            <Icon name={TONE_ICON[item.tone]} size={15} />
-            <span>{item.message}</span>
+          <div
+            className={`toast toast-${item.tone}`}
+            data-slot="toast"
+            role={item.tone === "danger" ? "alert" : "status"}
+            aria-live={item.tone === "danger" ? "assertive" : "polite"}
+            key={item.id}
+          >
+            <span className="toast-icon" data-slot="toast-icon"><Icon name={TONE_ICON[item.tone]} size={17} /></span>
+            <span className="toast-message" data-slot="toast-message">{item.message}</span>
+            <button
+              type="button"
+              className="toast-dismiss"
+              data-slot="toast-dismiss"
+              aria-label="关闭通知"
+              onClick={() => dismiss(item.id)}
+            >×</button>
           </div>
         ))}
       </div>
@@ -88,4 +119,23 @@ export function useToast(): ToastApi {
     };
   }
   return ctx;
+}
+
+/**
+ * 把既有的异步操作状态接入全局通知层。
+ * 适合逐步迁移仍由父组件持有 message/error state 的页面；不渲染任何占位内容。
+ */
+export function ToastFeedback({ message, tone = "info" }: {
+  message: string | null | undefined;
+  tone?: ToastTone;
+}) {
+  const toast = useToast();
+
+  useEffect(() => {
+    if (message !== null && message !== undefined && message.trim() !== "") {
+      toast.push(tone, message);
+    }
+  }, [message, toast, tone]);
+
+  return null;
 }

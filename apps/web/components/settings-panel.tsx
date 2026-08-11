@@ -12,6 +12,7 @@ import {
   type AuthUser
 } from "../lib/auth";
 import { useI18n } from "../lib/i18n";
+import { useToast } from "./ui/Toast";
 
 function AccountSection() {
   const { t } = useI18n();
@@ -149,10 +150,10 @@ function LanguageSwitch() {
 
 function TokenSection() {
   const { t } = useI18n();
+  const toast = useToast();
   const [token, setToken] = useState("");
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -163,10 +164,9 @@ function TokenSection() {
   async function handleSet() {
     const trimmed = token.trim();
     setSaved(false);
-    setMessage(null);
     if (trimmed === "") {
       sessionStorage.removeItem("hunter-harness-token");
-      setMessage(t.token.removed);
+      toast.info(t.token.removed);
       return;
     }
     setBusy(true);
@@ -179,17 +179,17 @@ function TokenSection() {
         }
       });
       if (!response.ok) {
-        setMessage(response.status === 401 || response.status === 403
+        toast.danger(response.status === 401 || response.status === 403
           ? t.token.rejected
           : t.token.httpError + response.status + ".");
         return;
       }
       sessionStorage.setItem("hunter-harness-token", trimmed);
       setSaved(true);
-      setMessage(t.token.verified);
+      toast.success(t.token.verified);
       window.setTimeout(() => window.location.reload(), 250);
     } catch {
-      setMessage(t.token.unreachable);
+      toast.danger(t.token.unreachable);
     } finally {
       setBusy(false);
     }
@@ -223,7 +223,6 @@ function TokenSection() {
               {busy ? t.token.checking : saved ? t.token.saved : t.token.setButton}
             </button>
           </div>
-          {message === null ? null : <small className="form-message">{message}</small>}
         </div>
       ) : null}
     </div>

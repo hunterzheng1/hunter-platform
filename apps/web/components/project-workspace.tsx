@@ -20,7 +20,7 @@ import { ProjectVersionsPanel } from "./project-versions-panel";
 import { RunsMonitor } from "./runs-monitor";
 import { Icon } from "./ui/icons";
 import { Skeleton } from "./ui/Skeleton";
-import { useToast } from "./ui/Toast";
+import { ToastFeedback, useToast } from "./ui/Toast";
 
 interface WorkspaceData {
   project: ProjectDetailModel;
@@ -575,6 +575,6 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
       <ProjectApiKeysPanel projectId={projectId} />
     </div>
 
-    {error === null || data === null ? null : <div className="project-toast danger">{error}</div>}
+    {data === null ? null : <ToastFeedback tone="danger" message={error} />}
   </section>;
 }

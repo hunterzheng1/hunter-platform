@@ -114,13 +114,32 @@ export const agentSkillConfigSchema = z.object({
   sourcePackagePath: z.string().nullable()
 }).strict();
 
+export const skillSuggestionTargetSchema = z.enum([
+  "examples",
+  "allowed_capabilities",
+  "instructions",
+  "description",
+  "tags"
+]);
+
+export const skillCheckSuggestionSchema = z.object({
+  suggestedContent: z.string(),
+  explanation: z.string(),
+  appliesTo: skillSuggestionTargetSchema.nullable(),
+  generatedAt: z.string().optional(),
+  applicationState: z.enum(["ready", "applied"]).default("ready"),
+  appliedAt: z.string().nullable().default(null)
+}).strip();
+
 export const skillCheckItemSchema = z.object({
   id: z.string(),
   label: z.string(),
   status: checkStatusSchema,
   message: z.string(),
   filePath: z.string().nullable(),
-  fixable: z.boolean()
+  fixable: z.boolean(),
+  // AI 质量检查可在同一次模型响应中带回建议；基础检查与旧快照可省略该字段。
+  suggestion: skillCheckSuggestionSchema.nullable().optional()
 }).strip();
 
 export const skillCheckResultSchema = z.object({
@@ -301,6 +320,8 @@ export type CheckStatus = z.infer<typeof checkStatusSchema>;
 export type SourceFile = z.infer<typeof sourceFileSchema>;
 export type SkillUsageExample = z.infer<typeof skillUsageExampleSchema>;
 export type AgentSkillConfig = z.infer<typeof agentSkillConfigSchema>;
+export type SkillSuggestionTarget = z.infer<typeof skillSuggestionTargetSchema>;
+export type SkillCheckSuggestion = z.infer<typeof skillCheckSuggestionSchema>;
 export type SkillCheckItem = z.infer<typeof skillCheckItemSchema>;
 export type SkillCheckResult = z.infer<typeof skillCheckResultSchema>;
 export type DraftState = z.infer<typeof draftStateSchema>;

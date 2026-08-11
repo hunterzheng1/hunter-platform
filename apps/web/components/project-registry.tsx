@@ -20,6 +20,7 @@ import { Icon } from "./ui/icons";
 import { Modal } from "./ui/Modal";
 import { Pagination } from "./ui/Pagination";
 import { Skeleton } from "./ui/Skeleton";
+import { ToastFeedback } from "./ui/Toast";
 
 function resolveApi(): HunterApi {
   return process.env.NEXT_PUBLIC_HUNTER_HARNESS_DEMO === "true" ? mockApi : browserApi();
@@ -298,7 +299,7 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
       )}
     </div>
 
-    {error === null || projects === null ? null : <div className="notice danger">{error}</div>}
+    {projects === null ? null : <ToastFeedback tone="danger" message={error} />}
 
     <Modal
       open={showCreate}

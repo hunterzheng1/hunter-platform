@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SkillUploadPanel } from "../components/skill-upload-panel";
+import { ToastProvider } from "../components/ui/Toast";
 import { ApiClientError, type HunterApi } from "../lib/api";
 
 afterEach(cleanup);
@@ -21,9 +22,14 @@ const finding = {
 };
 
 describe("SkillUploadPanel", () => {
-  it("separates folder and ZIP selection and immediately shows a package summary", async () => {
+  it("combines folder and ZIP selection in one source picker and immediately shows a package summary", async () => {
     const api = { uploadSkillDraft: vi.fn() } as unknown as HunterApi;
-    render(<SkillUploadPanel api={api} agent="claude-code" onUploaded={() => undefined} />);
+    const { container } = render(<ToastProvider><SkillUploadPanel api={api} agent="claude-code" onUploaded={() => undefined} /></ToastProvider>);
+    const sourcePicker = container.querySelector('[data-slot="skill-upload-source"]');
+    expect(sourcePicker).toBeInTheDocument();
+    expect(within(sourcePicker as HTMLElement).getByLabelText(/选择文件夹|choose folder/i)).toBeInTheDocument();
+    expect(within(sourcePicker as HTMLElement).getByLabelText(/选择 ZIP|choose zip/i)).toHaveAttribute("accept", ".zip");
+    expect(container.querySelectorAll(".upload-choice-button")).toHaveLength(0);
     const skillFile = new File(["---\nname: frontend-ui-beautify\ndescription: UI\n---\n"], "SKILL.md");
     Object.defineProperty(skillFile, "webkitRelativePath", { value: "frontend-ui-beautify/SKILL.md" });
     const script = new File(["Write-Host ok"], "check.ps1");
@@ -35,13 +41,12 @@ describe("SkillUploadPanel", () => {
     expect(await screen.findByText("frontend-ui-beautify")).toBeInTheDocument();
     expect(screen.getByText(/2 个文件|2 files/i)).toBeInTheDocument();
     expect(screen.getByText(/SKILL\.md/)).toBeInTheDocument();
-    expect(screen.getByLabelText(/选择 ZIP|choose zip/i)).toHaveAttribute("accept", ".zip");
   });
 
   it("keeps submission disabled when the selected ZIP cannot be inspected", async () => {
     const uploadSkillDraft = vi.fn();
     const api = { uploadSkillDraft } as unknown as HunterApi;
-    render(<SkillUploadPanel api={api} agent="claude-code" onUploaded={() => undefined} />);
+    render(<ToastProvider><SkillUploadPanel api={api} agent="claude-code" onUploaded={() => undefined} /></ToastProvider>);
 
     fireEvent.change(screen.getByLabelText(/选择 ZIP|choose zip/i), {
       target: { files: [new File(["not-a-zip"], "broken.zip", { type: "application/zip" })] }
@@ -75,7 +80,7 @@ describe("SkillUploadPanel", () => {
       });
     const onUploaded = vi.fn();
     const api = { uploadSkillDraft } as unknown as HunterApi;
-    render(<SkillUploadPanel api={api} agent="claude-code" onUploaded={onUploaded} />);
+    render(<ToastProvider><SkillUploadPanel api={api} agent="claude-code" onUploaded={onUploaded} /></ToastProvider>);
     const skillFile = new File(["---\nname: frontend-ui-beautify\ndescription: UI\n---\n"], "SKILL.md");
     fireEvent.change(screen.getByLabelText(/选择文件夹|choose folder/i), { target: { files: [skillFile] } });
     const submit = screen.getByRole("button", { name: /添加为未发布|add as unpublished/i });
@@ -119,7 +124,7 @@ describe("SkillUploadPanel", () => {
       finishRefresh = resolve;
     }));
     const api = { uploadSkillDraft } as unknown as HunterApi;
-    render(<SkillUploadPanel api={api} agent="claude-code" onUploaded={onUploaded} />);
+    render(<ToastProvider><SkillUploadPanel api={api} agent="claude-code" onUploaded={onUploaded} /></ToastProvider>);
     const skillFile = new File(["---\nname: frontend-ui-beautify\ndescription: UI\n---\n"], "SKILL.md");
 
     fireEvent.change(screen.getByLabelText(/选择文件夹|choose folder/i), { target: { files: [skillFile] } });

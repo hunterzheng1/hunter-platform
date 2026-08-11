@@ -2,11 +2,17 @@
 import "@testing-library/jest-dom/vitest";
 
 import type { ExternalSkill, RegistryTag } from "@hunter-harness/contracts";
+import type { ReactElement } from "react";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ExternalSkillDetail } from "../components/external-skill-detail";
+import { ToastProvider } from "../components/ui/Toast";
 import { ApiClientError, type HunterApi } from "../lib/api";
+
+function renderWithToast(element: ReactElement) {
+  return render(<ToastProvider>{element}</ToastProvider>);
+}
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() })
@@ -97,7 +103,7 @@ afterEach(cleanup);
 
 describe("external skill reader", () => {
   it("默认展示可读概览并按需展开原始 README", async () => {
-    const { container } = render(<ExternalSkillDetail api={api()} skillId={externalSkill.id} />);
+    const { container } = renderWithToast(<ExternalSkillDetail api={api()} skillId={externalSkill.id} />);
 
     expect((await screen.findAllByText("colbymchenry/codegraph")).length).toBeGreaterThan(0);
     expect(container.querySelector('[data-slot="external-skill-title"]')).toHaveTextContent("CodeGraph");
@@ -121,7 +127,7 @@ describe("external skill reader", () => {
   });
 
   it("优先展示已缓存的结构化中文 AI 摘要", async () => {
-    const { container } = render(<ExternalSkillDetail api={{ getExternalSkill: vi.fn(async () => summarizedSkill) } as unknown as HunterApi} skillId={externalSkill.id} />);
+    const { container } = renderWithToast(<ExternalSkillDetail api={{ getExternalSkill: vi.fn(async () => summarizedSkill) } as unknown as HunterApi} skillId={externalSkill.id} />);
 
     expect(await screen.findAllByText("为编码 Agent 提供预索引的代码知识与调用关系。")).toHaveLength(2);
     expect(container.querySelector(".external-skill-hero-copy .lede")).toHaveTextContent("为编码 Agent 提供预索引的代码知识与调用关系。");
@@ -154,7 +160,7 @@ describe("external skill reader", () => {
   it("生成期间持续展示明确进度，完成后自动替换为摘要", async () => {
     let finish: ((skill: ExternalSkill) => void) | undefined;
     const pending = new Promise<ExternalSkill>((resolve) => { finish = resolve; });
-    render(<ExternalSkillDetail api={{
+    renderWithToast(<ExternalSkillDetail api={{
       getExternalSkill: vi.fn(async () => externalSkill),
       generateExternalSkillSummary: vi.fn(() => pending)
     } as unknown as HunterApi} skillId={externalSkill.id} />);
@@ -168,12 +174,13 @@ describe("external skill reader", () => {
 
     finish?.(summarizedSkill);
     expect(await screen.findAllByText("为编码 Agent 提供预索引的代码知识与调用关系。")).toHaveLength(2);
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(document.querySelector('[data-slot="external-summary-progress"]')).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("AI 摘要已生成并缓存");
   });
 
   it("可从详情页生成并立即展示 AI 摘要", async () => {
     const generate = vi.fn(async () => summarizedSkill);
-    render(<ExternalSkillDetail api={{
+    renderWithToast(<ExternalSkillDetail api={{
       getExternalSkill: vi.fn(async () => externalSkill),
       generateExternalSkillSummary: generate
     } as unknown as HunterApi} skillId={externalSkill.id} />);
@@ -184,7 +191,7 @@ describe("external skill reader", () => {
   });
 
   it("摘要解析失败时保留旧摘要，只显示可操作的中文提示", async () => {
-    render(<ExternalSkillDetail api={{
+    renderWithToast(<ExternalSkillDetail api={{
       getExternalSkill: vi.fn(async () => summarizedSkill),
       generateExternalSkillSummary: vi.fn(async () => {
         throw new ApiClientError(502, "AI_PARSE_FAILED", "ai summary response was not valid structured content");
@@ -227,7 +234,7 @@ describe("external skill reader", () => {
       tags: input.tags ?? externalSkill.tags,
       revision: 2
     }));
-    render(<ExternalSkillDetail api={{
+    renderWithToast(<ExternalSkillDetail api={{
       getExternalSkill: vi.fn(async () => externalSkill),
       listTags: vi.fn(async () => tags),
       patchExternalSkill
@@ -261,7 +268,7 @@ describe("external skill reader", () => {
       void label;
       return created;
     });
-    render(<ExternalSkillDetail api={{
+    renderWithToast(<ExternalSkillDetail api={{
       getExternalSkill: vi.fn(async () => externalSkill),
       listTags: vi.fn(async () => []),
       createTag

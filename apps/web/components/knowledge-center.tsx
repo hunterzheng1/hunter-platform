@@ -18,6 +18,7 @@ import { Icon } from "./ui/icons";
 import { PageHeader } from "./ui/PageHeader";
 import { Pagination, usePagination } from "./ui/Pagination";
 import { Spinner } from "./ui/Spinner";
+import { ToastFeedback } from "./ui/Toast";
 
 interface SearchHit {
   document: SemanticDocument;
@@ -179,7 +180,7 @@ function GlobalKnowledgeSearch({
         </button>
       </form>
 
-      {error === null ? null : <p className="api-keys-message">{error}</p>}
+      <ToastFeedback tone="danger" message={error} />
 
       {hits === null || busy ? (
         <div className="skeleton-block" aria-busy="true" aria-label={copy.loading} />

@@ -13,6 +13,7 @@ import { mockApi } from "../lib/mock-api";
 import { apiError, required, Status } from "./skill-shared";
 import { EmptyState } from "./ui/EmptyState";
 import { Icon } from "./ui/icons";
+import { ToastFeedback } from "./ui/Toast";
 
 function resolveApi(): HunterApi {
   return process.env.NEXT_PUBLIC_HUNTER_HARNESS_DEMO === "true" ? mockApi : browserApi();
@@ -207,7 +208,7 @@ export function WorkflowCenter({ api: apiValue }: { api?: HunterApi }) {
               <span>{copy.createdAt} <strong>{new Date(selected.created_at).toLocaleDateString(locale)}</strong></span>
             </div>
 
-            {syncMessage === null ? null : <div className="notice">{syncMessage}</div>}
+            <ToastFeedback tone="info" message={syncMessage} />
 
             {loadingDetail ? <div className="skeleton-block" /> : versions.length === 0 ? null : (
               <div className="workflow-versions">
@@ -236,7 +237,7 @@ export function WorkflowCenter({ api: apiValue }: { api?: HunterApi }) {
         )}
       </div>
 
-      {error === null ? null : <div className="notice danger">{error}</div>}
+      <ToastFeedback tone="danger" message={error} />
     </section>
   );
 }

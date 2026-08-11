@@ -1,11 +1,14 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ExternalSkill } from "@hunter-harness/contracts";
+import type { CreateExternalSkillRequest, ExternalSkill } from "@hunter-harness/contracts";
 
 import { SkillDetail, SkillRegistry } from "../components/registry";
+import { ToastProvider } from "../components/ui/Toast";
 import type { HunterApi } from "../lib/api";
 
 const SKILL_DESCRIPTION = "Evidence based review";
@@ -174,7 +177,10 @@ function api(overrides: Partial<HunterApi> = {}): HunterApi {
   } as unknown as HunterApi;
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  vi.useRealTimers();
+  cleanup();
+});
 
 describe("governed workflow and Skill Center", () => {
   it("loads the canonical registry, exposes governance metadata, and applies compound filters", async () => {
@@ -214,6 +220,60 @@ describe("governed workflow and Skill Center", () => {
     expect(dialog.querySelector('[data-slot="external-skill-import-trust"]')).toHaveTextContent(
       /不托管代码|does not host code/i
     );
+  });
+
+  it("keeps a scoped npm package on the explicitly selected npm source", async () => {
+    const createExternalSkill = vi.fn(async (input: CreateExternalSkillRequest) => ({
+      ...externalSkill,
+      id: "ext_lark_bridge",
+      source: input.source,
+      snapshot: {
+        ...externalSkill.snapshot,
+        name: input.source.ref,
+        version: "0.3.15"
+      }
+    }));
+    render(<SkillRegistry api={api({ createExternalSkill })} />);
+    await screen.findByText("harness-review");
+
+    fireEvent.click(screen.getByRole("button", { name: /引入外部技能|Import external skill/i }));
+    const dialog = await screen.findByRole("dialog");
+    const npmSource = within(dialog).getByRole("radio", { name: /npm 包|npm package/i });
+    expect(npmSource).toBeChecked();
+
+    fireEvent.change(within(dialog).getByLabelText(/来源标识|Source identifier/i), {
+      target: { value: "@hunterzheng/lark-channel-bridge" }
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: /抓取并录入|Fetch and register/i }));
+
+    await waitFor(() => expect(createExternalSkill).toHaveBeenCalledWith({
+      source: { type: "npm", ref: "@hunterzheng/lark-channel-bridge" },
+      curationNote: "",
+      tags: []
+    }));
+  });
+
+  it("uses the selected GitHub source for an owner/repository reference", async () => {
+    const createExternalSkill = vi.fn(async (input: CreateExternalSkillRequest) => ({
+      ...externalSkill,
+      source: input.source
+    }));
+    render(<SkillRegistry api={api({ createExternalSkill })} />);
+    await screen.findByText("harness-review");
+
+    fireEvent.click(screen.getByRole("button", { name: /引入外部技能|Import external skill/i }));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("radio", { name: /GitHub 仓库|GitHub repository/i }));
+    fireEvent.change(within(dialog).getByLabelText(/来源标识|Source identifier/i), {
+      target: { value: "hunterzheng/lark-channel-bridge" }
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: /抓取并录入|Fetch and register/i }));
+
+    await waitFor(() => expect(createExternalSkill).toHaveBeenCalledWith({
+      source: { type: "github", ref: "hunterzheng/lark-channel-bridge" },
+      curationNote: "",
+      tags: []
+    }));
   });
 
   it("shows a readable external skill name, repository reference, and aligned metadata", async () => {
@@ -320,17 +380,54 @@ describe("governed workflow and Skill Center", () => {
     render(<SkillDetail api={client} skillId="harness-review" />);
     expect(await screen.findByRole("heading", { name: "harness-review" })).toBeInTheDocument();
     expect(screen.getAllByText(/1\.1\.0/).length).toBeGreaterThan(0);
-    // source tab 展示 SKILL.md body（frontmatter 剥离后的内容），取代旧 canonical IR JSON 展示
-    expect(await screen.findByText(/Review workflow body/)).toBeInTheDocument();
     expect(screen.getByText("npx @hunter-harness/skill-cli install harness-review --agent claude-code")).toBeInTheDocument();
+    // source tab 展示 SKILL.md body（frontmatter 剥离后的内容），取代旧 canonical IR JSON 展示
+    fireEvent.click(screen.getByRole("tab", { name: /文件内容|files/i }));
+    expect(await screen.findByText(/Review workflow body/)).toBeInTheDocument();
   });
 
-  it("removes a Skill tag locally without creating a proposal", async () => {
+  it("consolidates installation into the title card and removes the redundant overview", async () => {
+    const listTags = vi.fn(async () => [securityTag]);
+    const { container } = render(<SkillDetail api={api({ listTags })} skillId="harness-review" />);
+
+    expect(await screen.findByRole("heading", { name: "harness-review" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /概览|overview/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /文件内容|files/i })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: /检查与发布|checks & publish/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /版本记录|version history/i })).toBeInTheDocument();
+    expect(container.querySelector('[data-slot="local-skill-overview"]')).not.toBeInTheDocument();
+    const install = container.querySelector('[data-slot="skill-hero-install"]');
+    expect(install).toBeInTheDocument();
+    expect(install?.closest("header")).toBe(container.querySelector("header.skill-detail-hero"));
+    expect(within(install as HTMLElement).getByText("npx @hunter-harness/skill-cli install harness-review --agent claude-code")).toBeInTheDocument();
+    expect(screen.queryByText(/个可用 Agent|available agents/i)).not.toBeInTheDocument();
+    expect(listTags).not.toHaveBeenCalled();
+  });
+
+  it("shows the copy notification every time the same action is repeated", async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText }
+    });
+    render(<ToastProvider><SkillDetail api={api()} skillId="harness-review" /></ToastProvider>);
+    await screen.findByRole("heading", { name: "harness-review" });
+
+    const copyButton = screen.getByRole("button", { name: /复制命令|copy command/i });
+    fireEvent.click(copyButton);
+    expect(await screen.findByRole("status")).toHaveTextContent(/安装命令已复制|install command copied/i);
+    fireEvent.click(screen.getByRole("button", { name: /关闭通知|dismiss notification/i }));
+
+    fireEvent.click(copyButton);
+    expect(await screen.findByRole("status")).toHaveTextContent(/安装命令已复制|install command copied/i);
+    expect(writeText).toHaveBeenCalledTimes(2);
+  });
+
+  it("renders registry tags as read-only metadata instead of a non-persistent editor", async () => {
     const bindSkillTag = vi.fn(async () => ({ ...skill, tags: [] }));
     render(<SkillDetail api={api({ bindSkillTag })} skillId="harness-review" />);
-    const remove = await screen.findByRole("button", { name: /security/ });
-    fireEvent.click(remove);
-    await waitFor(() => expect(screen.queryByRole("button", { name: /security/ })).not.toBeInTheDocument());
+    expect(await screen.findByText("security")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /security/ })).not.toBeInTheDocument();
     expect(bindSkillTag).not.toHaveBeenCalled();
   });
 
@@ -383,24 +480,193 @@ describe("governed workflow and Skill Center", () => {
     render(<SkillDetail api={api({ runSkillDraftChecks, getSkillDraft: vi.fn(async () => ({ ...draft, checks: null })) })} skillId="harness-review" />);
     await screen.findByRole("heading", { name: "harness-review" });
     fireEvent.click(screen.getByRole("tab", { name: /检查与发布|checks & publish/i }));
-    fireEvent.click(screen.getByRole("button", { name: /^检查$|^check$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^基础检查$|^Baseline checks$/i }));
     await waitFor(() => expect(runSkillDraftChecks).toHaveBeenCalledWith("harness-review", "claude-code"));
-    expect(await screen.findByText("Entry check")).toBeInTheDocument();
+    fireEvent.click(document.querySelector('[data-slot="required-check-green"]') as HTMLElement);
+    expect(await within(await screen.findByRole("dialog")).findByText("Entry check")).toBeInTheDocument();
   });
 
-  it("runs AI checks via the API and merges with program checks (INT-002)", async () => {
+  it("loads version differences by default and keeps each check category in its own dialog", async () => {
+    const diffSkillDraft = vi.fn(async () => ([{
+      path: "SKILL.md",
+      status: "modified" as const,
+      publishedContent: "# old",
+      draftContent: "# new"
+    }]));
+    const { container } = render(<SkillDetail api={api({
+      diffSkillDraft,
+      getSkillDraft: vi.fn(async () => ({ ...draft, checks: draftChecks, aiChecks: draftAiChecks }))
+    })} skillId="harness-review" />);
+    await screen.findByRole("heading", { name: "harness-review" });
+    fireEvent.click(screen.getByRole("tab", { name: /检查与发布|checks & publish/i }));
+
+    await waitFor(() => expect(diffSkillDraft).toHaveBeenCalledWith("harness-review", "claude-code"));
+    const diff = await waitFor(() => {
+      const value = container.querySelector('[data-slot="default-version-diff"]');
+      expect(value).toBeInTheDocument();
+      return value as HTMLElement;
+    });
+    expect(within(diff).getByText("SKILL.md")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^版本差异$|^Version Diff$/i })).not.toBeInTheDocument();
+    expect(container.querySelector(".check-list-bounded")).not.toBeInTheDocument();
+
+    fireEvent.click(container.querySelector('[data-slot="required-check-green"]') as HTMLElement);
+    let dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Entry check")).toBeInTheDocument();
+    expect(within(dialog).queryByText("Secret scan")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("AI 触发质量")).not.toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: /关闭|close/i }));
+
+    fireEvent.click(container.querySelector('[data-slot="ai-quality-advice"]') as HTMLElement);
+    dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("AI 触发质量")).toBeInTheDocument();
+    expect(within(dialog).queryByText("Entry check")).not.toBeInTheDocument();
+  });
+
+  it("keeps the publish toolbar content-sized and the changed-file tree independently scrollable", async () => {
+    const files = Array.from({ length: 18 }, (_, index) => ({
+      path: `references/section-${String(index + 1).padStart(2, "0")}.md`,
+      status: "modified" as const,
+      publishedContent: `# old ${index + 1}`,
+      draftContent: `# new ${index + 1}`
+    }));
+    const { container } = render(<SkillDetail api={api({
+      diffSkillDraft: vi.fn(async () => files),
+      getSkillDraft: vi.fn(async () => ({ ...draft, checks: draftChecks, aiChecks: draftAiChecks }))
+    })} skillId="harness-review" />);
+    await screen.findByRole("heading", { name: "harness-review" });
+    fireEvent.click(screen.getByRole("tab", { name: /检查与发布|checks & publish/i }));
+
+    const tree = await waitFor(() => {
+      const value = container.querySelector('[data-slot="version-file-tree-scroll"]');
+      expect(value).toBeInTheDocument();
+      return value as HTMLElement;
+    });
+    expect(within(tree).getByRole("button", { name: /section-18\.md/i })).toBeInTheDocument();
+
+    const css = readFileSync(resolve(process.cwd(), "apps/web/app/globals.css"), "utf8");
+    const toolbarRule = css.match(/\.check-workbench-toolbar\s*\{[^}]+\}/s)?.[0] ?? "";
+    const compactUploadRule = css.match(/\.skill-upload-panel-compact\s*\{[^}]+\}/s)?.[0] ?? "";
+    const workbenchRule = css.match(/\.default-version-diff \.version-diff-workbench\s*\{[^}]+\}/s)?.[0] ?? "";
+    const fileTreeRule = css.match(/\.default-version-diff \.version-file-tree\s*\{[^}]+\}/s)?.[0] ?? "";
+    const diffCodeRule = css.match(/\.version-diff-pane pre\s*\{[^}]+\}/s)?.[0] ?? "";
+    const diffLineRule = css.match(/\.diff-line\s*\{[^}]+\}/s)?.[0] ?? "";
+    expect(toolbarRule).toMatch(/align-items:\s*start/);
+    expect(compactUploadRule).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto/);
+    expect(workbenchRule).toMatch(/height:\s*clamp\(/);
+    expect(fileTreeRule).toMatch(/min-height:\s*0/);
+    expect(fileTreeRule).toMatch(/overflow-y:\s*auto/);
+    expect(diffCodeRule).toMatch(/display:\s*block/);
+    expect(diffLineRule).toMatch(/overflow-wrap:\s*anywhere/);
+    expect(diffLineRule).toMatch(/word-break:\s*break-word/);
+  });
+
+  it("discloses the stable AI analysis rules without exposing the current skill payload", async () => {
+    render(<SkillDetail api={api()} skillId="harness-review" />);
+    await screen.findByRole("heading", { name: "harness-review" });
+    fireEvent.click(screen.getByRole("tab", { name: /检查与发布|checks & publish/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /查看 AI 分析规则|View AI analysis rules/i }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent(/触发条件质量/);
+    expect(dialog).toHaveTextContent(/正文质量/);
+    expect(dialog).toHaveTextContent(/使用示例/);
+    expect(dialog).toHaveTextContent(/安全边界/);
+    expect(dialog).toHaveTextContent(/简体中文/);
+    expect(dialog).toHaveTextContent(/技能内容.*待检查数据/);
+    expect(dialog).not.toHaveTextContent("Review workflow body");
+  });
+
+  it("runs AI checks via the API and keeps them separate from baseline checks (INT-002)", async () => {
     const runSkillDraftChecks = vi.fn(async () => draftChecks);
     const runSkillAiChecks = vi.fn(async () => ({ jobId: "test-job", status: "pending" }));
     const getAiJob = vi.fn(async () => ({ jobId: "test-job", status: "completed" as const, result: draftAiChecks, error: null, createdAt: "x", expiresAt: "x" }));
     render(<SkillDetail api={api({ runSkillDraftChecks, runSkillAiChecks, getAiJob, getSkillDraft: vi.fn(async () => ({ ...draft, checks: null, aiChecks: null })) })} skillId="harness-review" />);
     await screen.findByRole("heading", { name: "harness-review" });
     fireEvent.click(screen.getByRole("tab", { name: /检查与发布|checks & publish/i }));
-    fireEvent.click(screen.getByRole("button", { name: /^检查$|^check$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^基础检查$|^Baseline checks$/i }));
     await waitFor(() => expect(runSkillDraftChecks).toHaveBeenCalledWith("harness-review", "claude-code"));
-    fireEvent.click(screen.getByRole("button", { name: /^AI 检查$|^AI check$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^AI 质量建议$|^AI quality advice$/i }));
     await waitFor(() => expect(runSkillAiChecks).toHaveBeenCalledWith("harness-review", "claude-code"));
-    expect(await screen.findByText("AI 触发质量")).toBeInTheDocument();
-    expect(screen.getByText("Entry check")).toBeInTheDocument();
+    fireEvent.click(document.querySelector('[data-slot="ai-quality-advice"]') as HTMLElement);
+    expect(await within(await screen.findByRole("dialog")).findByText("AI 触发质量")).toBeInTheDocument();
+  });
+
+  it("keeps polling an AI quality job beyond the former 12-second client cutoff", async () => {
+    const runSkillAiChecks = vi.fn(async () => ({ jobId: "slow-job", status: "pending" }));
+    const getAiJob = vi.fn(async () => getAiJob.mock.calls.length <= 120
+      ? { jobId: "slow-job", status: "running" as const, result: null, error: null, createdAt: "x", expiresAt: "x" }
+      : { jobId: "slow-job", status: "completed" as const, result: draftAiChecks, error: null, createdAt: "x", expiresAt: "x" });
+    render(<SkillDetail api={api({
+      runSkillAiChecks,
+      getAiJob,
+      getSkillDraft: vi.fn(async () => ({ ...draft, checks: null, aiChecks: null }))
+    })} skillId="harness-review" />);
+    await screen.findByRole("heading", { name: "harness-review" });
+    fireEvent.click(screen.getByRole("tab", { name: /检查与发布|checks & publish/i }));
+
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: /^AI 质量建议$|^AI quality advice$/i }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(130_000); });
+
+    expect(getAiJob.mock.calls.length).toBeGreaterThan(120);
+    vi.useRealTimers();
+    fireEvent.click(document.querySelector('[data-slot="ai-quality-advice"]') as HTMLElement);
+    expect(within(await screen.findByRole("dialog")).getByText("AI 触发质量")).toBeInTheDocument();
+    expect(screen.queryByText(/轮询超时|polling timed out/i)).not.toBeInTheDocument();
+  });
+
+  it("reports AI job failures through the global notification instead of a page-bottom notice", async () => {
+    const runSkillAiChecks = vi.fn(async () => ({ jobId: "failed-job", status: "pending" }));
+    const getAiJob = vi.fn(async () => ({
+      jobId: "failed-job",
+      status: "failed" as const,
+      result: null,
+      error: "模型服务暂不可用",
+      createdAt: "x",
+      expiresAt: "x"
+    }));
+    const { container } = render(<ToastProvider><SkillDetail api={api({
+      runSkillAiChecks,
+      getAiJob,
+      getSkillDraft: vi.fn(async () => ({ ...draft, checks: null, aiChecks: null }))
+    })} skillId="harness-review" /></ToastProvider>);
+    await screen.findByRole("heading", { name: "harness-review" });
+    fireEvent.click(screen.getByRole("tab", { name: /检查与发布|checks & publish/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^AI 质量建议$|^AI quality advice$/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/AI 质量分析失败.*模型服务暂不可用/);
+    expect(alert).toHaveAttribute("data-slot", "toast");
+    expect(container.querySelector(".check-publish-layout > .notice")).toBeNull();
+  });
+
+  it("keeps AI quality findings advisory and hides automatic repair when nothing is fixable", async () => {
+    const { container } = render(<SkillDetail api={api({
+      getSkillDraft: vi.fn(async () => ({
+        ...draft,
+        checks: {
+          items: [{ id: "entry", label: "Entry", status: "green" as const, message: "ok", filePath: null, fixable: true }],
+          summary: { green: 1, yellow: 0, red: 0 },
+          checkedAt: "2026-06-21T00:00:00Z"
+        },
+        aiChecks: {
+          items: [{ id: "AI_STYLE", label: "表达建议", status: "red" as const, message: "可进一步精简", filePath: null, fixable: false }],
+          summary: { green: 0, yellow: 0, red: 1 },
+          checkedAt: "2026-06-21T00:01:00Z"
+        }
+      }))
+    })} skillId="harness-review" />);
+    await screen.findByRole("heading", { name: "harness-review" });
+    fireEvent.click(screen.getByRole("tab", { name: /检查与发布|checks & publish/i }));
+
+    const gateMetric = container.querySelector('[data-slot="required-check-red"]');
+    expect(gateMetric).toBeInTheDocument();
+    expect(within(gateMetric as HTMLElement).getByText("0")).toBeInTheDocument();
+    fireEvent.click(gateMetric?.parentElement?.querySelector('[data-slot="ai-quality-advice"]') as HTMLElement);
+    expect(within(await screen.findByRole("dialog")).getByText("表达建议")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /自动修复|automatic fix/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /AI 质量建议|AI quality advice/i })).toBeInTheDocument();
   });
 
   it("applyFix button triggers fix preview via the API (INT-004)", async () => {
@@ -417,9 +683,11 @@ describe("governed workflow and Skill Center", () => {
     })} skillId="harness-review" />);
     await screen.findByRole("heading", { name: "harness-review" });
     fireEvent.click(screen.getByRole("tab", { name: /检查与发布|checks & publish/i }));
-    fireEvent.click(screen.getByRole("button", { name: /^检查$|^check$/i }));
-    await waitFor(() => expect(screen.getByText("Secret scan")).toBeInTheDocument());
-    const applyFixBtn = await screen.findByRole("button", { name: /应用修复|apply fix/i });
+    fireEvent.click(screen.getByRole("button", { name: /^基础检查$|^Baseline checks$/i }));
+    const yellowMetric = document.querySelector('[data-slot="required-check-yellow"]') as HTMLElement;
+    await waitFor(() => expect(within(yellowMetric).getByText("1")).toBeInTheDocument());
+    fireEvent.click(yellowMetric);
+    const applyFixBtn = await within(await screen.findByRole("dialog")).findByRole("button", { name: /应用修复|apply fix/i });
     fireEvent.click(applyFixBtn);
     await waitFor(() => expect(previewSkillFix).toHaveBeenCalledWith("harness-review", "claude-code", ["c2"]));
   });
@@ -437,9 +705,11 @@ describe("governed workflow and Skill Center", () => {
     })} skillId="harness-review" />);
     await screen.findByRole("heading", { name: "harness-review" });
     fireEvent.click(screen.getByRole("tab", { name: /检查与发布|checks & publish/i }));
-    fireEvent.click(screen.getByRole("button", { name: /^检查$|^check$/i }));
-    await waitFor(() => expect(screen.getByText("Secret scan")).toBeInTheDocument());
-    fireEvent.click(await screen.findByRole("button", { name: /应用修复|apply fix/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^基础检查$|^Baseline checks$/i }));
+    const yellowMetric = document.querySelector('[data-slot="required-check-yellow"]') as HTMLElement;
+    await waitFor(() => expect(within(yellowMetric).getByText("1")).toBeInTheDocument());
+    fireEvent.click(yellowMetric);
+    fireEvent.click(await within(await screen.findByRole("dialog")).findByRole("button", { name: /应用修复|apply fix/i }));
     await waitFor(() => expect(previewSkillFix).toHaveBeenCalled());
     // degraded 项明确展示"建议手动改"（非静默，覆盖 UT-014 web 展示缺口）
     expect(await screen.findByTestId("degraded-fix-notice")).toBeInTheDocument();
@@ -472,7 +742,7 @@ describe("governed workflow and Skill Center", () => {
         tarballHash: "sha256:" + "c".repeat(64)
       }
     }));
-    render(<SkillDetail api={api({ publishSkill })} skillId="harness-review" />);
+    render(<ToastProvider><SkillDetail api={api({ publishSkill })} skillId="harness-review" /></ToastProvider>);
     await screen.findByRole("heading", { name: "harness-review" });
     fireEvent.click(screen.getByRole("tab", { name: /检查与发布|checks & publish/i }));
     fireEvent.click(await screen.findByRole("button", { name: /^发布$|^Publish$/i }));
@@ -483,7 +753,7 @@ describe("governed workflow and Skill Center", () => {
       sourceAgent: "claude-code",
       draftRevision: 1
     })));
-    expect(await screen.findByText("@hunter-harness/harness-review@0.1.0")).toBeInTheDocument();
+    expect(await screen.findByRole("status")).toHaveTextContent(/版本 0\.1\.0 已发布|Version 0\.1\.0 was published/i);
   });
 
   it("AI generate degraded shows aiGenerateFailed notice (T15 #1)", async () => {
@@ -493,7 +763,7 @@ describe("governed workflow and Skill Center", () => {
       degraded: true,
       reason: "AI_TIMEOUT"
     }));
-    render(<SkillDetail api={api({ generateReleaseNote })} skillId="harness-review" />);
+    render(<ToastProvider><SkillDetail api={api({ generateReleaseNote })} skillId="harness-review" /></ToastProvider>);
     await screen.findByRole("heading", { name: "harness-review" });
     fireEvent.click(screen.getByRole("tab", { name: /检查与发布|checks & publish/i }));
     const publishBtn = await screen.findByRole("button", { name: /^发布$|^Publish$/i });
@@ -501,103 +771,156 @@ describe("governed workflow and Skill Center", () => {
     const dialog = await screen.findByRole("dialog");
     fireEvent.click(within(dialog).getByRole("button", { name: /^AI 生成$|^AI generate$/i }));
     await waitFor(() => expect(generateReleaseNote).toHaveBeenCalledWith("harness-review", "claude-code"));
-    expect(await screen.findByText(/AI 生成失败|AI generation failed/i)).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/AI 生成失败|AI generation failed/i);
   });
 
-  it("AI fix suggestions fetch and render (T16 #2)", async () => {
-    const fetchFixSuggestions = vi.fn(async () => ({
-      items: [{
-        checkId: "AI_USAGE_EXAMPLES", action: "suggest" as const, label: "示例补充", affectedPaths: [], riskDelta: null, message: "缺少示例",
-        suggestedContent: '[{"what":"用例","input":"i","output":"o"}]', explanation: "补一个使用示例", appliesTo: "examples" as const, generatedAt: "2026-06-29T00:00:00Z"
-      }],
-      mergedFiles: [],
-      summary: { autoCount: 0, confirmCount: 0, suggestCount: 1, changedFiles: 0, changedLines: 0 }
-    }));
-    render(<SkillDetail api={api({ fetchFixSuggestions })} skillId="harness-review" />);
+  it("AI 质量检查结果直接携带修改建议，不再展示第二个生成入口", async () => {
+    const fetchFixSuggestions = vi.fn();
+    const aiChecks = {
+      items: [
+        { id: "AI_TRIGGER_QUALITY", label: "触发条件质量", status: "green" as const, message: "范围清晰", filePath: "SKILL.md", fixable: false, suggestion: null },
+        { id: "AI_BODY_QUALITY", label: "正文质量", status: "yellow" as const, message: "正文存在重复规则", filePath: "SKILL.md", fixable: true, suggestion: { suggestedContent: '["合并重复规则"]', explanation: "减少重复并保留唯一入口。", appliesTo: "instructions" as const, generatedAt: "2026-06-29T00:00:00Z", applicationState: "ready" as const, appliedAt: null } }
+      ],
+      summary: { green: 1, yellow: 1, red: 0 },
+      checkedAt: "2026-06-29T00:00:00Z"
+    };
+    const { container } = render(<SkillDetail api={api({
+      fetchFixSuggestions,
+      getSkillDraft: vi.fn(async () => ({ ...draft, aiChecks }))
+    })} skillId="harness-review" />);
     await screen.findByRole("heading", { name: "harness-review" });
     fireEvent.click(screen.getByRole("tab", { name: /检查与发布|checks & publish/i }));
-    fireEvent.click(await screen.findByRole("button", { name: /^AI 修复建议$|^AI fix suggestion$/i }));
-    await waitFor(() => expect(fetchFixSuggestions).toHaveBeenCalledWith("harness-review", "claude-code", null));
-    expect(await screen.findByText(/补一个使用示例/)).toBeInTheDocument();
+
+    expect(screen.queryByRole("button", { name: /^生成改进建议$|^Generate improvement advice$/i })).not.toBeInTheDocument();
+    fireEvent.click(container.querySelector('[data-slot="ai-quality-advice"]') as HTMLElement);
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/已通过，无需修改|passed.*no change/i)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole("button", { name: /查看并应用|review and apply/i }));
+    expect(await screen.findByText(/减少重复并保留唯一入口/)).toBeInTheDocument();
+    expect(fetchFixSuggestions).not.toHaveBeenCalled();
   });
 
-  it("adopt suggestion calls applyFixSuggestion (T16 #2)", async () => {
-    const fetchFixSuggestions = vi.fn(async () => ({
+  it("应用一条 AI 建议后保留检查快照，并单独展示本次应用前后的修改", async () => {
+    const readySuggestion = { suggestedContent: "更清晰的描述", explanation: "直接说明技能用途。", appliesTo: "description" as const, generatedAt: "2026-06-29T00:00:00Z", applicationState: "ready" as const, appliedAt: null };
+    const aiChecks = {
+      items: [{ id: "AI_DESC", label: "描述质量", status: "yellow" as const, message: "描述不清", filePath: "SKILL.md", fixable: true, suggestion: readySuggestion }],
+      summary: { green: 0, yellow: 1, red: 0 },
+      checkedAt: "2026-06-29T00:00:00Z"
+    };
+    const updatedAiChecks = {
+      ...aiChecks,
       items: [{
-        checkId: "AI_USAGE_EXAMPLES", action: "suggest" as const, label: "示例补充", affectedPaths: [], riskDelta: null, message: "缺",
-        suggestedContent: '[{"what":"w"}]', explanation: "e", appliesTo: "examples" as const, generatedAt: "t"
-      }],
-      mergedFiles: [],
-      summary: { autoCount: 0, confirmCount: 0, suggestCount: 1, changedFiles: 0, changedLines: 0 }
+        id: "AI_DESC",
+        label: "描述质量",
+        status: "yellow" as const,
+        message: "描述不清",
+        filePath: "SKILL.md",
+        fixable: true,
+        suggestion: { ...readySuggestion, applicationState: "applied" as const, appliedAt: "2026-06-29T00:01:00Z" }
+      }]
+    };
+    const beforeContent = "---\ndescription: 原始描述\n---\n\n原始正文。";
+    const afterContent = "---\ndescription: 更清晰的描述\n---\n\n原始正文。";
+    const suggestionDraft = { ...draft, sourceFiles: [{ path: "SKILL.md", content: beforeContent }], aiChecks };
+    const applyFixSuggestion = vi.fn(async () => ({
+      ...suggestionDraft,
+      sourceFiles: [{ path: "SKILL.md", content: afterContent }],
+      aiChecks: updatedAiChecks,
+      revision: 2
     }));
-    const applyFixSuggestion = vi.fn(async () => ({ ...draft, revision: 2 }));
-    render(<SkillDetail api={api({ fetchFixSuggestions, applyFixSuggestion })} skillId="harness-review" />);
+    const diffSkillDraft = vi.fn(async () => [{ path: "SKILL.md", status: "modified" as const, publishedContent: "description: old", draftContent: "description: 更清晰的描述" }]);
+    const { container } = render(<SkillDetail api={api({
+      applyFixSuggestion,
+      diffSkillDraft,
+      getSkillDraft: vi.fn(async () => suggestionDraft)
+    })} skillId="harness-review" />);
     await screen.findByRole("heading", { name: "harness-review" });
     fireEvent.click(screen.getByRole("tab", { name: /检查与发布|checks & publish/i }));
-    fireEvent.click(await screen.findByRole("button", { name: /^AI 修复建议$|^AI fix suggestion$/i }));
-    await waitFor(() => expect(fetchFixSuggestions).toHaveBeenCalledWith("harness-review", "claude-code", null));
-    fireEvent.click(await screen.findByRole("button", { name: /^采纳$|^Adopt$/i }));
-    await waitFor(() => expect(applyFixSuggestion).toHaveBeenCalledWith("harness-review", "claude-code", { checkId: "AI_USAGE_EXAMPLES", suggestedContent: '[{"what":"w"}]', appliesTo: "examples" }));
+    fireEvent.click(container.querySelector('[data-slot="ai-quality-advice"]') as HTMLElement);
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: /查看并应用|review and apply/i }));
+    const suggestionDialog = await screen.findByRole("dialog");
+    fireEvent.click(within(suggestionDialog).getByRole("button", { name: /直接应用|Apply directly/i }));
+
+    await waitFor(() => expect(applyFixSuggestion).toHaveBeenCalledWith("harness-review", "claude-code", { checkId: "AI_DESC", suggestedContent: "更清晰的描述", appliesTo: "description" }));
+    expect(await within(suggestionDialog).findByText(/已应用|applied/i)).toBeInTheDocument();
+    await waitFor(() => expect(diffSkillDraft.mock.calls.length).toBeGreaterThanOrEqual(2));
+    const diffPanel = container.querySelector('[data-slot="default-version-diff"]') as HTMLElement;
+    expect(within(diffPanel).getByRole("button", { name: /本次修改|this change/i })).toHaveAttribute("aria-pressed", "true");
+    expect(within(diffPanel).getByText(/应用前|before applying/i)).toBeInTheDocument();
+    expect(within(diffPanel).getByText(/应用后|after applying/i)).toBeInTheDocument();
+    expect(within(diffPanel).getByText("description: 原始描述")).toBeInTheDocument();
+    expect(within(diffPanel).getByText("description: 更清晰的描述")).toBeInTheDocument();
+    expect(diffPanel).toHaveAttribute("data-diff-view", "suggestion");
   });
 
-  it("appliesTo=null suggestion renders without adopt button (T16 #2)", async () => {
-    const fetchFixSuggestions = vi.fn(async () => ({
-      items: [{
-        checkId: "AI_X", action: "suggest" as const, label: "只读建议", affectedPaths: [], riskDelta: null, message: "m",
-        suggestedContent: "建议内容", explanation: "只展示不采纳", appliesTo: null, generatedAt: "t"
-      }],
-      mergedFiles: [],
-      summary: { autoCount: 0, confirmCount: 0, suggestCount: 1, changedFiles: 0, changedLines: 0 }
-    }));
-    render(<SkillDetail api={api({ fetchFixSuggestions })} skillId="harness-review" />);
+  it("只读 AI 建议仍可查看和复制，但不会显示直接应用", async () => {
+    const aiChecks = {
+      items: [{ id: "AI_CROSS_AGENT", label: "跨工具兼容", status: "yellow" as const, message: "仍有工具专属描述", filePath: "SKILL.md", fixable: false, suggestion: { suggestedContent: "将工具专属名称改为通用 Agent 表述。", explanation: "该项涉及多处正文，需要人工确认。", appliesTo: null, generatedAt: "2026-06-29T00:00:00Z", applicationState: "ready" as const, appliedAt: null } }],
+      summary: { green: 0, yellow: 1, red: 0 },
+      checkedAt: "2026-06-29T00:00:00Z"
+    };
+    const { container } = render(<SkillDetail api={api({ getSkillDraft: vi.fn(async () => ({ ...draft, aiChecks })) })} skillId="harness-review" />);
     await screen.findByRole("heading", { name: "harness-review" });
     fireEvent.click(screen.getByRole("tab", { name: /检查与发布|checks & publish/i }));
-    fireEvent.click(await screen.findByRole("button", { name: /^AI 修复建议$|^AI fix suggestion$/i }));
-    await waitFor(() => expect(fetchFixSuggestions).toHaveBeenCalledWith("harness-review", "claude-code", null));
-    expect(await screen.findByText(/只展示不采纳/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^采纳$|^Adopt$/i })).not.toBeInTheDocument();
+    fireEvent.click(container.querySelector('[data-slot="ai-quality-advice"]') as HTMLElement);
+    fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: /查看建议|view suggestion/i }));
+    const suggestionDialog = await screen.findByRole("dialog");
+    expect(within(suggestionDialog).getByText(/需要人工确认/)).toBeInTheDocument();
+    expect(within(suggestionDialog).queryByRole("button", { name: /直接应用|Apply directly/i })).not.toBeInTheDocument();
   });
 
-  it("canAdoptSuggestion 空串 suggestedContent 不显示采纳按钮（appliesTo 可写）(UT-020)", async () => {
-    const fetchFixSuggestions = vi.fn(async () => ({
-      items: [{
-        checkId: "AI_DESC", action: "suggest" as const, label: "描述建议", affectedPaths: [], riskDelta: null, message: "描述为空",
-        suggestedContent: "", explanation: "补描述", appliesTo: "description" as const, generatedAt: "t"
-      }],
-      mergedFiles: [],
-      summary: { autoCount: 0, confirmCount: 0, suggestCount: 1, changedFiles: 0, changedLines: 0 }
-    }));
-    render(<SkillDetail api={api({ fetchFixSuggestions })} skillId="harness-review" />);
-    await screen.findByRole("heading", { name: "harness-review" });
-    fireEvent.click(screen.getByRole("tab", { name: /检查与发布|checks & publish/i }));
-    fireEvent.click(await screen.findByRole("button", { name: /^AI 修复建议$|^AI fix suggestion$/i }));
-    await waitFor(() => expect(fetchFixSuggestions).toHaveBeenCalledWith("harness-review", "claude-code", null));
-    expect(await screen.findByText(/补描述/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^采纳$|^Adopt$/i })).not.toBeInTheDocument();
-  });
-
-  it("canAdoptSuggestion 空数组 suggestedContent 不显示采纳按钮（appliesTo=examples）(UT-020)", async () => {
-    const fetchFixSuggestions = vi.fn(async () => ({
-      items: [{
-        checkId: "AI_USAGE_EXAMPLES", action: "suggest" as const, label: "示例建议", affectedPaths: [], riskDelta: null, message: "示例为空",
-        suggestedContent: "[]", explanation: "补示例", appliesTo: "examples" as const, generatedAt: "t"
-      }],
-      mergedFiles: [],
-      summary: { autoCount: 0, confirmCount: 0, suggestCount: 1, changedFiles: 0, changedLines: 0 }
-    }));
-    render(<SkillDetail api={api({ fetchFixSuggestions })} skillId="harness-review" />);
-    await screen.findByRole("heading", { name: "harness-review" });
-    fireEvent.click(screen.getByRole("tab", { name: /检查与发布|checks & publish/i }));
-    fireEvent.click(await screen.findByRole("button", { name: /^AI 修复建议$|^AI fix suggestion$/i }));
-    await waitFor(() => expect(fetchFixSuggestions).toHaveBeenCalledWith("harness-review", "claude-code", null));
-    expect(await screen.findByText(/补示例/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^采纳$|^Adopt$/i })).not.toBeInTheDocument();
-  });
-
-  it("agent filter exposes cursor option (T17)", async () => {
-    render(<SkillRegistry api={api()} />);
+  it("列表只按本地或外部来源筛选，并区分本地、GitHub 与 npm 卡片", async () => {
+    const npmSkill: ExternalSkill = {
+      ...externalSkill,
+      id: "ext_lark_bridge",
+      source: { type: "npm", ref: "@hunterzheng/lark-channel-bridge" },
+      snapshot: {
+        ...externalSkill.snapshot,
+        name: "@hunterzheng/lark-channel-bridge",
+        version: "0.3.15"
+      }
+    };
+    const { container } = render(<SkillRegistry api={api({
+      listExternalSkills: vi.fn(async () => [externalSkill, npmSkill])
+    })} />);
     await screen.findByText("harness-review");
-    expect(screen.getByRole("option", { name: /^Cursor$/i })).toBeInTheDocument();
+    await screen.findByText("@hunterzheng/lark-channel-bridge");
+
+    const toolbar = container.querySelector(".skill-workbench-toolbar") as HTMLElement;
+    expect(within(toolbar).queryByText(/^Agent$/i)).not.toBeInTheDocument();
+    expect(within(toolbar).getAllByRole("combobox")).toHaveLength(2);
+    const sourceSelect = within(toolbar).getByRole("combobox", { name: /^(来源|Source)$/i });
+    expect(within(sourceSelect).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      expect.stringMatching(/全部|All/i),
+      expect.stringMatching(/本地技能|Local skills/i),
+      expect.stringMatching(/外部技能|External skills/i)
+    ]);
+    expect(within(sourceSelect).queryByRole("option", { name: /^npm$/i })).not.toBeInTheDocument();
+    expect(within(sourceSelect).queryByRole("option", { name: /^GitHub$/i })).not.toBeInTheDocument();
+
+    expect(container.querySelector('[data-source-kind="local"]')).toBeInTheDocument();
+    expect(container.querySelector('[data-source-kind="github"]')).toBeInTheDocument();
+    expect(container.querySelector('[data-source-kind="npm"]')).toBeInTheDocument();
+
+    const css = readFileSync(resolve(process.cwd(), "apps/web/app/globals.css"), "utf8");
+    const rootTokens = css.match(/:root\s*\{[^}]+\}/s)?.[0] ?? "";
+    const localColor = rootTokens.match(/--source-local:\s*([^;]+);/)?.[1]?.trim();
+    const githubColor = rootTokens.match(/--source-github:\s*([^;]+);/)?.[1]?.trim();
+    const npmColor = rootTokens.match(/--source-npm:\s*([^;]+);/)?.[1]?.trim();
+    expect(localColor).toBe("#22d3ee");
+    expect(githubColor).toBe("#c084fc");
+    expect(npmColor).toBe("#fb923c");
+    expect(new Set([localColor, githubColor, npmColor]).size).toBe(3);
+    expect(css.match(/\.skill-card-shell\s*\{[^}]+\}/s)?.[0] ?? "").toMatch(/--card-source-accent:\s*var\(--source-local\)/);
+    expect(css.match(/\.skill-card-shell\[data-source-kind="github"\]\s*\{[^}]+\}/s)?.[0] ?? "").toMatch(/--card-source-accent:\s*var\(--source-github\)/);
+    expect(css.match(/\.skill-card-shell\[data-source-kind="npm"\]\s*\{[^}]+\}/s)?.[0] ?? "").toMatch(/--card-source-accent:\s*var\(--source-npm\)/);
+
+    fireEvent.change(sourceSelect, { target: { value: "external" } });
+    expect(screen.queryByText("harness-review")).not.toBeInTheDocument();
+    expect(screen.getAllByText("CodeGraph")).toHaveLength(2);
+    fireEvent.change(sourceSelect, { target: { value: "registry" } });
+    expect(screen.getByText("harness-review")).toBeInTheDocument();
+    expect(screen.queryByText("CodeGraph")).not.toBeInTheDocument();
   });
 
   it("cursor download is wired to the API, not demo-only (T17)", async () => {

@@ -33,7 +33,6 @@ import {
   buildAiCheckPrompt,
   buildExternalSkillSummaryRepairPrompt,
   buildExternalSkillSummaryPrompt,
-  buildFixSuggestionPrompt,
   buildReleaseNotePrompt,
   classifyFile,
   decidePush,
@@ -41,14 +40,12 @@ import {
   externalSkillSummarySourceHash,
   parseAiCheckResult,
   parseExternalSkillSummary,
-  parseFixSuggestionResult,
   parseFrontmatter,
   parseReleaseNote,
   scanSensitiveFiles,
   sha256Bytes,
   uuidV7,
   type FindingOverride,
-  type FixSuggestionParse,
   type LlmClient
 } from "@hunter-harness/core";
 import type { BootstrapBundle } from "./registry/store.js";
@@ -3080,11 +3077,10 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     return send(reply, requestId, result);
   });
 
-  // AI ???????�6.3 ?4???? draft.aiChecks.fixable ???? LLM ??
-  // {suggestedContent,explanation,appliesTo}??? FixPlan??????? persist???? apply-fix-suggestion??
-  // ? aiChecks ? ? FixPlan?LLM ??/???? ? ???? message-only?? 500??????
+  // 兼容旧客户端的建议读取端点。建议已在 ai-checks 的同一次模型响应中生成并持久化，
+  // 这里仅把 draft.aiChecks 快照映射为 FixPlan，不再调用模型。
   app.post("/api/v1/skills/:slug/draft/:agent/fix-suggestions", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository);
+    const { requestId } = await authenticated(request, repository);
     const { slug, agent: agentValue } = request.params as { slug: string; agent: string };
     const agentResult = registryAgentSchema.safeParse(agentValue);
     if (!agentResult.success) {
@@ -3101,45 +3097,31 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
       // ? aiChecks ? ? FixPlan????? ai-checks?????? 422?
       return send(reply, requestId, { statusCode: 200, body: { items: [], mergedFiles: [], summary: emptySummary } });
     }
-    const resolved = await resolveAgentLlmClient(agent);
-    if (resolved === null) {
-      throw new ServerDomainError(422, "AI_NOT_CONFIGURED", "no default ai provider configured or missing secret");
-    }
-    const fixableItems = draft.aiChecks.items.filter((i) => i.fixable && (checkIds === null || checkIds.includes(i.id)));
-    const generatedAt = new Date().toISOString();
-    const entry = findEntryFile(draft.sourceFiles, agent);
-    const meta = parseFrontmatter(entry.content);
-    const items: FixPlanItem[] = [];
-    for (const ci of fixableItems) {
-      const prompt = buildFixSuggestionPrompt({ checkItem: ci, meta, sourceFiles: draft.sourceFiles });
-      let parsed: FixSuggestionParse | null;
-      try {
-        const res = await resolved.client.analyze(prompt);
-        await recordAgentUsage(resolved, res.usage);
-        parsed = parseFixSuggestionResult(res.content);
-      } catch {
-        // LLM ?? ? ?? message-only?? 500?
-        parsed = null;
+    const suggestedItems = draft.aiChecks.items.filter((item) =>
+      item.status !== "green" &&
+      item.suggestion !== null &&
+      item.suggestion !== undefined &&
+      (checkIds === null || checkIds.includes(item.id))
+    );
+    const items: FixPlanItem[] = suggestedItems.map((check) => {
+      const suggestion = check.suggestion;
+      if (suggestion === null || suggestion === undefined) {
+        throw new Error("filtered AI suggestion is unexpectedly missing");
       }
-      const item: FixPlanItem = {
-        checkId: ci.id,
+      return {
+        checkId: check.id,
         action: "suggest",
-        label: ci.label,
-        affectedPaths: [],
+        label: check.label,
+        affectedPaths: check.filePath === null ? [] : [check.filePath],
         riskDelta: null,
-        message: ci.message
+        message: check.message,
+        suggestedContent: suggestion.suggestedContent,
+        explanation: suggestion.explanation,
+        appliesTo: suggestion.appliesTo,
+        generatedAt: suggestion.generatedAt ?? draft.aiChecks?.checkedAt ?? null,
+        applicationState: suggestion.applicationState,
+        appliedAt: suggestion.appliedAt
       };
-      if (parsed !== null) {
-        item.suggestedContent = parsed.suggestedContent;
-        item.explanation = parsed.explanation;
-        item.appliesTo = parsed.appliesTo;
-        item.generatedAt = generatedAt;
-      }
-      items.push(item);
-    }
-    await writeAudit(repository, {
-      actorId: actor.actorId, projectId: null, action: "skill.draft.fix-suggestion.generated",
-      targetId: slug, requestId, details: { slug, agent, count: items.length }
     });
     return send(reply, requestId, {
       statusCode: 200,

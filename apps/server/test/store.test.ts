@@ -990,7 +990,22 @@ describe("RegistryStore AI content generation", () => {
     await store.setDraftAiChecks({
       slug: "harness-x", agent: CC,
       aiChecks: {
-        items: [{ id: "AI_USAGE_EXAMPLES", label: "缺少示例", status: "yellow", message: "建议补充示例", filePath: null, fixable: true }],
+        items: [{
+          id: "AI_DESC",
+          label: "描述质量",
+          status: "yellow",
+          message: "描述不够清晰",
+          filePath: "SKILL.md",
+          fixable: true,
+          suggestion: {
+            suggestedContent: "更清晰的描述",
+            explanation: "直接说明技能用途。",
+            appliesTo: "description",
+            generatedAt: "2026-06-29T00:00:00Z",
+            applicationState: "ready",
+            appliedAt: null
+          }
+        }],
         summary: { green: 0, yellow: 1, red: 0 },
         checkedAt: "2026-06-29T00:00:00Z"
       },
@@ -1015,12 +1030,18 @@ describe("RegistryStore AI content generation", () => {
     await expect(store.setDraftReleaseNote({ slug: "nope", agent: CC, releaseNote: "x", generatedAt: "t" })).rejects.toMatchObject({ code: "DRAFT_NOT_FOUND" });
   });
 
-  it("applyFixSuggestion appliesTo=description writes ir.description + clears aiChecks + revision+1", async () => {
+  it("applyFixSuggestion appliesTo=description writes the draft and preserves the AI review snapshot", async () => {
     const store = await setupDraftWithAiChecks();
     const before = store.getDraft("harness-x", CC);
     const r = await store.applyFixSuggestion({ slug: "harness-x", agent: CC, checkId: "AI_DESC", suggestedContent: "更清晰的描述", appliesTo: "description", actorId: "owner" });
     expect(frontmatterField(r, "description")).toBe("更清晰的描述");
-    expect(r.aiChecks).toBeNull();
+    expect(r.aiChecks?.items).toHaveLength(1);
+    expect(r.aiChecks?.items[0]?.suggestion).toMatchObject({
+      suggestedContent: "更清晰的描述",
+      appliesTo: "description",
+      applicationState: "applied"
+    });
+    expect(r.aiChecks?.items[0]?.suggestion?.appliedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(r.revision).toBe((before?.revision ?? 0) + 1);
   });
 
@@ -1093,16 +1114,19 @@ describe("RegistryStore AI content generation", () => {
     await expect(store.applyFixSuggestion({ slug: "harness-x", agent: CC, checkId: "x", suggestedContent: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", appliesTo: "description", actorId: "owner" })).rejects.toMatchObject({ code: "SENSITIVE_CONTENT_BLOCKED" });
   });
 
-  it("applyFixSuggestion persists + clears aiChecks + revision+1", async () => {
+  it("applyFixSuggestion persists the applied marker without clearing other AI suggestions", async () => {
     const p = new MemoryPersistence();
     const store = await setupDraftWithAiChecks(p);
     const before = store.getDraft("harness-x", CC);
-    const r = await store.applyFixSuggestion({ slug: "harness-x", agent: CC, checkId: "x", suggestedContent: "新描述", appliesTo: "description", actorId: "owner" });
-    expect(r.aiChecks).toBeNull();
+    const r = await store.applyFixSuggestion({ slug: "harness-x", agent: CC, checkId: "AI_DESC", suggestedContent: "新描述", appliesTo: "description", actorId: "owner" });
+    expect(r.aiChecks?.items[0]?.suggestion).toMatchObject({
+      suggestedContent: "新描述",
+      applicationState: "applied"
+    });
     expect(r.revision).toBe((before?.revision ?? 0) + 1);
     const reloaded = newStore(p);
     await reloaded.initialize();
-    expect(reloaded.getDraft("harness-x", CC)?.aiChecks).toBeNull();
+    expect(reloaded.getDraft("harness-x", CC)?.aiChecks?.items[0]?.suggestion?.applicationState).toBe("applied");
     expect(frontmatterField(reloaded.getDraft("harness-x", CC), "description")).toBe("新描述");
   });
 

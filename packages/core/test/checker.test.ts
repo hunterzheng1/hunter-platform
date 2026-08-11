@@ -87,6 +87,19 @@ describe("checkSkill (source-file driven)", () => {
     expect(r.items.find((i) => i.id === "STRUCTURE")?.status).toBe("green");
   });
 
+  it("uses readable Chinese labels and messages instead of machine shorthand", () => {
+    const r = checkSkill(baseInput([
+      skillFile(fm("harness-x", { version: "2.0.0" })),
+      { path: "references/ref.md", content: "ref" },
+      { path: "scripts/run.sh", content: "echo ok" }
+    ], "1.0.0"));
+    for (const item of r.items) {
+      expect(item.label).toMatch(/[\u4e00-\u9fff]/);
+      expect(item.message).toMatch(/[\u4e00-\u9fff]/);
+      expect(item.message).not.toMatch(/(?:entry=|slug=|length=|references=|scripts=|high=|medium=|version=|latest=|\btrue\b|\bfalse\b|\bnone\b)/i);
+    }
+  });
+
   it("summary counts are consistent", () => {
     const r = checkSkill(baseInput([{ path: "../x.md", content: PRIVATE_KEY }], "2.0.0"));
     expect(r.summary.green + r.summary.yellow + r.summary.red).toBe(r.items.length);
