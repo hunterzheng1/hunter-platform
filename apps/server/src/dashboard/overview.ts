@@ -5,6 +5,8 @@ import {
 
 import type { RegistryStore } from "../registry/store.js";
 import type { ServerRepository } from "../repositories/interfaces.js";
+import type { RunStore } from "../runs/store.js";
+import type { SemanticStore } from "../semantic/store.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -58,22 +60,31 @@ function countBy(values: readonly string[]): Array<{ key: string; count: number 
 export async function buildDashboardOverview(input: {
   repository: ServerRepository;
   registry: RegistryStore;
+  runStore: RunStore;
+  semanticStore: SemanticStore;
   actorId: string;
   days: number;
   now?: Date;
 }): Promise<DashboardOverview> {
   const now = input.now ?? new Date();
   const projects = await allProjects(input.repository, input.actorId);
-  const [projectProposals, projectArtifacts, auditEvents] = await Promise.all([
+  const [projectProposals, projectArtifacts, auditEvents, projectRuns, semanticOverviews] = await Promise.all([
     allProjectRows(projects, (projectId, cursor) => input.repository.listProposals({
       actorId: input.actorId, projectId, limit: 100, cursor, status: null
     })),
     allProjectRows(projects, (projectId, cursor) => input.repository.listArtifacts({
       actorId: input.actorId, projectId, limit: 100, cursor
     })),
-    input.repository.listAuditEvents({ actorId: input.actorId, limit: 12 })
+    input.repository.listAuditEvents({ actorId: input.actorId, limit: 12 }),
+    Promise.all(projects.map((project) => input.runStore.listRuns(project.projectId, {
+      limit: 20,
+      cursor: null,
+      status: "running"
+    }))),
+    Promise.all(projects.map((project) => input.semanticStore.overview(project.projectId)))
   ]);
   const skills = input.registry.listSkills();
+  const externalSkills = input.registry.listExternalSkills();
   const families = input.registry.listWorkflowFamilies();
   const skillProposals = input.registry.listProposals();
   const skillArtifacts = input.registry.listArtifacts();
@@ -112,6 +123,40 @@ export async function buildDashboardOverview(input: {
     return artifact.source_proposal_id !== "" && artifact.content_sha256.startsWith("sha256:");
   }).length;
   const generatedAt = now.toISOString();
+  const activeRuns = projectRuns.flatMap((page) => page.items)
+    .sort((left, right) =>
+      (right.lastEventAt ?? right.startedAt ?? right.createdAt)
+        .localeCompare(left.lastEventAt ?? left.startedAt ?? left.createdAt)
+    );
+  const activeRunCount = projectRuns.reduce((total, page) => total + page.total, 0);
+  const knowledgeTotals = semanticOverviews.reduce((totals, item) => ({
+    knowledge: totals.knowledge + item.counts.knowledge,
+    rules: totals.rules + item.counts.rules,
+    changes: totals.changes + item.counts.changes,
+    architecture: totals.architecture + item.counts.architecture,
+    instructions: totals.instructions + item.counts.agent_instructions,
+    relations: totals.relations + item.counts.edges
+  }), { knowledge: 0, rules: 0, changes: 0, architecture: 0, instructions: 0, relations: 0 });
+  const aiUsage = daysBetween(now, input.days).map((point) => ({
+    date: point.date,
+    requests: 0,
+    tokens: 0,
+    cost: 0
+  }));
+  const aiPoints = new Map(aiUsage.map((point) => [point.date, point]));
+  const allAiUsage = input.registry.getUsage();
+  for (const usage of allAiUsage) {
+    const point = aiPoints.get(usage.date);
+    if (point === undefined) continue;
+    point.requests += usage.requests;
+    point.tokens += usage.tokens;
+    point.cost += usage.cost;
+  }
+  const aiTotals = allAiUsage.reduce((totals, usage) => ({
+    requests: totals.requests + usage.requests,
+    tokens: totals.tokens + usage.tokens,
+    cost: totals.cost + usage.cost
+  }), { requests: 0, tokens: 0, cost: 0 });
   const health = [
     {
       key: "review_backlog",
@@ -160,13 +205,39 @@ export async function buildDashboardOverview(input: {
       rejected_proposals: rejectedProposals,
       artifacts: allArtifacts.length,
       project_artifacts: projectArtifacts.length,
-      skill_artifacts: skillArtifacts.length
+      skill_artifacts: skillArtifacts.length,
+      local_skills: skills.length,
+      external_skills: externalSkills.length,
+      active_runs: activeRunCount,
+      knowledge_entries: knowledgeTotals.knowledge,
+      knowledge_relations: knowledgeTotals.relations,
+      ai_requests: aiTotals.requests,
+      ai_tokens: aiTotals.tokens,
+      ai_cost: aiTotals.cost
     },
     trend,
     distributions: {
       skill_categories: countBy(skills.map((skill) => skill.kind ?? "unknown")),
-      workflow_profiles: countBy(families.flatMap((family) => family.required_profiles))
+      workflow_profiles: countBy(families.flatMap((family) => family.required_profiles)),
+      knowledge_categories: [
+        { key: "knowledge", count: knowledgeTotals.knowledge },
+        { key: "rules", count: knowledgeTotals.rules },
+        { key: "architecture", count: knowledgeTotals.architecture },
+        { key: "changes", count: knowledgeTotals.changes },
+        { key: "instructions", count: knowledgeTotals.instructions },
+        { key: "relations", count: knowledgeTotals.relations }
+      ]
     },
+    ai_usage: aiUsage,
+    active_runs: activeRuns.slice(0, 6).map((run) => ({
+      run_id: run.runId,
+      project_id: run.projectId,
+      change_key: run.changeKey,
+      title: run.title,
+      current_phase: run.currentPhase,
+      started_at: run.startedAt,
+      last_event_at: run.lastEventAt
+    })),
     health,
     services: [
       { key: "api", label: "Governance API", status: "operational", detail: "Authenticated overview request completed.", checked_at: generatedAt },

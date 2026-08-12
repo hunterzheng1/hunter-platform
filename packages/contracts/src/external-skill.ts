@@ -32,12 +32,20 @@ export const externalSkillQuickStartStepSchema = z.object({
 }).strict();
 export type ExternalSkillQuickStartStep = z.infer<typeof externalSkillQuickStartStepSchema>;
 
+export const externalSkillCommandCheatsheetItemSchema = z.object({
+  command: z.string().trim().min(1).max(500),
+  description: z.string().trim().min(1).max(300)
+}).strict();
+export type ExternalSkillCommandCheatsheetItem = z.infer<typeof externalSkillCommandCheatsheetItemSchema>;
+
 export const externalSkillSummaryContentSchema = z.object({
   overview: z.string().trim().min(1).max(2_000),
   use_cases: z.array(z.string().trim().min(1).max(300)).min(1).max(6),
   capabilities: z.array(z.string().trim().min(1).max(300)).min(1).max(8),
   /** 结构化快速上手；旧摘要仍可只提供 getting_started。 */
   quick_start: z.array(externalSkillQuickStartStepSchema).max(6).optional(),
+  /** 日常使用命令速查；旧摘要允许缺省并由界面从工作流安全降级。 */
+  command_cheatsheet: z.array(externalSkillCommandCheatsheetItemSchema).max(10).optional(),
   getting_started: z.array(z.string().trim().min(1).max(300)).max(6),
   caveats: z.array(z.string().trim().min(1).max(300)).max(6)
 }).strict();
@@ -45,11 +53,34 @@ export type ExternalSkillSummaryContent = z.infer<typeof externalSkillSummaryCon
 
 export const externalSkillAiSummarySchema = externalSkillSummaryContentSchema.extend({
   source_sha256: sha256Schema,
+  /** 生成摘要时对应的上游版本；旧摘要迁移为 null。 */
+  source_version: z.string().nullable().optional(),
   provider_id: z.string().min(1),
   model: z.string().min(1),
   generated_at: z.iso.datetime()
 }).strict();
 export type ExternalSkillAiSummary = z.infer<typeof externalSkillAiSummarySchema>;
+
+export const externalSkillReleaseNoteSchema = z.object({
+  version: z.string().trim().min(1).max(120),
+  published_at: z.iso.datetime().nullable(),
+  source_url: z.string().nullable(),
+  title: z.string().trim().min(1).max(200).nullable(),
+  /** 仅保存上游明确提供的说明；缺失时写入透明的兜底说明，不推测改动。 */
+  changes: z.array(z.string().trim().min(1).max(300)).min(1).max(12)
+}).strict();
+export type ExternalSkillReleaseNote = z.infer<typeof externalSkillReleaseNoteSchema>;
+
+export const externalSkillUpdateRecordSchema = z.object({
+  from_version: z.string().nullable(),
+  to_version: z.string().nullable(),
+  applied_at: z.iso.datetime(),
+  source_url: z.string().nullable(),
+  changes: z.array(z.string().trim().min(1).max(300)).min(1).max(12),
+  /** 本次跨版本更新包含的逐版本说明；旧记录默认为空。 */
+  releases: z.array(externalSkillReleaseNoteSchema).max(100).default([])
+}).strict();
+export type ExternalSkillUpdateRecord = z.infer<typeof externalSkillUpdateRecordSchema>;
 
 export const externalSkillSchema = z.object({
   id: z.string().regex(/^ext_/),
@@ -57,9 +88,12 @@ export const externalSkillSchema = z.object({
   snapshot: externalSkillSnapshotSchema,
   /** 按上游名称、description 与 README 生成并缓存；旧快照允许缺省。 */
   aiSummary: externalSkillAiSummarySchema.nullable().optional(),
-  curationNote: z.string(),
+  /** @deprecated 仅用于读取旧快照，界面和新写入不再使用。 */
+  curationNote: z.string().default(""),
   tags: z.array(z.string()),
   updateAvailable: z.boolean(),
+  availableVersion: z.string().nullable().default(null),
+  updateHistory: z.array(externalSkillUpdateRecordSchema).max(20).default([]),
   lastCheckedAt: z.string(),
   revision: z.number().int().positive(),
   created_at: z.string(),
@@ -73,9 +107,15 @@ export const generateExternalSkillSummaryRequestSchema = z.object({
 }).strict();
 export type GenerateExternalSkillSummaryRequest = z.infer<typeof generateExternalSkillSummaryRequestSchema>;
 
+export const refreshExternalSkillUpdateHistoryRequestSchema = z.object({
+  applied_at: z.iso.datetime()
+}).strict();
+export type RefreshExternalSkillUpdateHistoryRequest = z.infer<typeof refreshExternalSkillUpdateHistoryRequestSchema>;
+
 export const createExternalSkillRequestSchema = z.object({
   source: externalSkillSourceSchema,
-  curationNote: z.string().default(""),
+  /** @deprecated 旧客户端兼容；新界面不再采集策展笔记。 */
+  curationNote: z.string().optional(),
   tags: z.array(z.string()).default([])
 }).strict();
 export type CreateExternalSkillRequest = z.infer<typeof createExternalSkillRequestSchema>;

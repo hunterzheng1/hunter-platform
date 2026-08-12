@@ -3,6 +3,7 @@ import "@testing-library/jest-dom/vitest";
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AiQuotaUsage, DashboardOverview } from "@hunter-harness/contracts";
 
 import {
   DashboardConsole,
@@ -23,26 +24,63 @@ const projects: ProjectSummary[] = [{
   created_at: "2026-06-20T00:00:00Z"
 }];
 
-const overview = {
+const overview: DashboardOverview = {
   generated_at: "2026-06-22T00:00:00.000Z",
   window: { days: 7, starts_at: "2026-06-16T00:00:00.000Z", ends_at: "2026-06-22T00:00:00.000Z" },
   metrics: {
     projects: 1, workflows: 1, skills: 1, published_skills: 1,
     pending_reviews: 1, approved_proposals: 0, rejected_proposals: 0,
-    artifacts: 1, project_artifacts: 1, skill_artifacts: 0
+    artifacts: 1, project_artifacts: 1, skill_artifacts: 0,
+    local_skills: 1, external_skills: 2, active_runs: 1,
+    knowledge_entries: 12, knowledge_relations: 4,
+    ai_requests: 8, ai_tokens: 3200, ai_cost: 0.12
   },
   trend: Array.from({ length: 7 }, (_, index) => ({ date: `2026-06-${String(16 + index).padStart(2, "0")}`, submitted: index === 6 ? 1 : 0, approved: 0, rejected: 0, pending: index === 6 ? 1 : 0 })),
-  distributions: { skill_categories: [{ key: "workflow", count: 1 }], workflow_profiles: [{ key: "general", count: 1 }] },
+  distributions: {
+    skill_categories: [{ key: "workflow", count: 1 }],
+    workflow_profiles: [{ key: "general", count: 1 }],
+    knowledge_categories: [{ key: "knowledge", count: 12 }, { key: "relations", count: 4 }]
+  },
+  ai_usage: Array.from({ length: 7 }, (_, index) => ({
+    date: `2026-06-${String(16 + index).padStart(2, "0")}`,
+    requests: index === 6 ? 8 : 0,
+    tokens: index === 6 ? 3200 : 0,
+    cost: index === 6 ? 0.12 : 0
+  })),
+  active_runs: [{
+    run_id: "run_active",
+    project_id: "prj_one",
+    change_key: "checkout-flow",
+    title: "优化结算流程",
+    current_phase: "run",
+    started_at: "2026-06-22T07:30:00.000Z",
+    last_event_at: "2026-06-22T08:00:00.000Z"
+  }],
   health: [{ key: "review_backlog", label: "Review backlog", status: "attention" as const, value: "1 pending", detail: "Human review is required before pending proposals can publish." }],
   services: [{ key: "api", label: "Governance API", status: "operational" as const, detail: "Authenticated overview request completed.", checked_at: "2026-06-22T00:00:00.000Z" }],
   activity: [{ event_id: "evt_1", action: "project.resolved", target_id: "prj_one", project_id: "prj_one", actor_id: "actor_owner", created_at: "2026-06-22T00:00:00.000Z" }]
 };
+
+const dashboardAiUsage: AiQuotaUsage[] = [{
+  provider_id: "openai",
+  date: new Date().toISOString().slice(0, 10),
+  model: "gpt-5.6-terra",
+  requests: 8,
+  tokens: 3200,
+  input_tokens: 2400,
+  output_tokens: 800,
+  cache_hit_tokens: 400,
+  cache_create_tokens: 0,
+  cost: 0.02,
+  hourly: [{ hour: new Date().getUTCHours(), requests: 8, tokens: 3200, cost: 0.02 }]
+}];
 
 afterEach(cleanup);
 
 function api(overrides: Partial<HunterApi> = {}): HunterApi {
   return {
     getDashboardOverview: vi.fn(async () => overview),
+    getAiUsage: vi.fn(async () => dashboardAiUsage),
     listProjects: vi.fn(async () => projects),
     listSkills: vi.fn(async () => []),
     listAllProposals: vi.fn(async () => []),
@@ -68,7 +106,16 @@ describe("Web Console", () => {
     expect(screen.getByLabelText(/正在加载总览|Loading overview/i)).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: /总览|Overview/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /最近项目|Recent projects/i })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /版本与能力|Versions and capabilities/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /AI 使用情况|AI usage/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /当天|Today/i })).toHaveAttribute("aria-selected", "true");
+    screen.getByRole("tab", { name: /7 天|7 days/i }).click();
+    expect(screen.getByText("gpt-5.6-terra")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /正在运行|Active runs/i })).toBeInTheDocument();
+    expect(screen.getByText("优化结算流程")).toBeInTheDocument();
+    expect(screen.getAllByText(/知识条目|Knowledge entries/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("12").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("heading", { name: /版本与能力|Versions and capabilities/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /服务与核心检查|Services and core checks/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /变更提交情况|Change activity/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Artifact changes" })).not.toBeInTheDocument();
   });
@@ -76,7 +123,7 @@ describe("Web Console", () => {
   it("renders dashboard and project registry from /api/v1", async () => {
     const dashboard = render(<DashboardConsole api={api()} />);
     expect(await screen.findByRole("heading", { name: /总览|Overview/i })).toBeInTheDocument();
-    expect(screen.getByText(/项目版本与技能包合计|Project versions and skill packages/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/本地 1 · 外部 2|Local 1 · External 2/i).length).toBeGreaterThan(0);
     dashboard.unmount();
     render(<ProjectRegistry api={api()} />);
     expect(await screen.findByRole("heading", { name: "Payments" })).toBeInTheDocument();
@@ -99,6 +146,22 @@ describe("Web Console", () => {
     const list = await screen.findByRole("list", { name: /活动记录|Activity/i });
     expect(within(list).getAllByRole("listitem")).toHaveLength(5);
     expect(screen.getByText(/显示最近 5 条，共 8 条|Showing 5 of 8/i)).toBeInTheDocument();
+  });
+
+  it("renders audit action codes as clear Chinese activity labels", async () => {
+    render(<DashboardConsole api={api({
+      getDashboardOverview: vi.fn(async () => ({
+        ...overview,
+        activity: [
+          { event_id: "evt_archive", action: "change_archive.uploaded", target_id: "archive_demo", project_id: "prj_one", actor_id: "actor_owner", created_at: "2026-06-22T00:00:00.000Z" },
+          { event_id: "evt_summary", action: "external_skill.ai-summary.generated", target_id: "skill_demo", project_id: null, actor_id: "actor_owner", created_at: "2026-06-22T00:01:00.000Z" }
+        ]
+      }))
+    })} />);
+
+    expect(await screen.findByText("项目归档已上传")).toBeInTheDocument();
+    expect(screen.getByText("已生成外部技能摘要")).toBeInTheDocument();
+    expect(screen.queryByText("change_archive.uploaded")).not.toBeInTheDocument();
   });
 
   it("loads projects without workflow N+1 calls and moves a project to the recycle bin", async () => {

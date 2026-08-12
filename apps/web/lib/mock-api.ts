@@ -467,6 +467,8 @@ const MOCK_EXTERNAL_SKILLS: ExternalSkill[] = [
     curationNote: "Useful for research skills that need reliable page extraction.",
     tags: ["research"],
     updateAvailable: true,
+    availableVersion: "1.22.0",
+    updateHistory: [],
     lastCheckedAt: "2026-07-12T00:00:00.000Z",
     revision: 1,
     created_at: "2026-07-01T00:00:00.000Z",
@@ -489,6 +491,8 @@ const MOCK_EXTERNAL_SKILLS: ExternalSkill[] = [
     curationNote: "Keep as upstream reference; do not mirror into the registry.",
     tags: ["skills"],
     updateAvailable: false,
+    availableVersion: null,
+    updateHistory: [],
     lastCheckedAt: "2026-07-12T00:00:00.000Z",
     revision: 1,
     created_at: "2026-07-01T00:00:00.000Z",
@@ -678,7 +682,10 @@ const MOCK_DASHBOARD: DashboardOverview = {
   metrics: {
     projects: 5, workflows: 1, skills: MOCK_SKILLS.length, published_skills: MOCK_SKILLS.length,
     pending_reviews: 3, approved_proposals: 2, rejected_proposals: 1,
-    artifacts: 15, project_artifacts: 3, skill_artifacts: 12
+    artifacts: 15, project_artifacts: 3, skill_artifacts: 12,
+    local_skills: MOCK_SKILLS.length, external_skills: 2, active_runs: 1,
+    knowledge_entries: 18, knowledge_relations: 7,
+    ai_requests: 26, ai_tokens: 18_400, ai_cost: 0.42
   },
   trend: [
     { date: "2026-06-16", submitted: 1, approved: 1, rejected: 0, pending: 0 },
@@ -694,8 +701,27 @@ const MOCK_DASHBOARD: DashboardOverview = {
       { key: "workflow", count: 5 }, { key: "governance", count: 3 },
       { key: "tooling", count: 2 }, { key: "migration", count: 2 }
     ],
-    workflow_profiles: [{ key: "general", count: 1 }]
+    workflow_profiles: [{ key: "general", count: 1 }],
+    knowledge_categories: [
+      { key: "knowledge", count: 18 }, { key: "rules", count: 5 },
+      { key: "architecture", count: 3 }, { key: "changes", count: 7 },
+      { key: "instructions", count: 4 }, { key: "relations", count: 7 }
+    ]
   },
+  ai_usage: [
+    { date: "2026-06-16", requests: 2, tokens: 900, cost: 0.02 },
+    { date: "2026-06-17", requests: 3, tokens: 1_800, cost: 0.04 },
+    { date: "2026-06-18", requests: 4, tokens: 2_400, cost: 0.06 },
+    { date: "2026-06-19", requests: 5, tokens: 3_700, cost: 0.09 },
+    { date: "2026-06-20", requests: 3, tokens: 2_000, cost: 0.05 },
+    { date: "2026-06-21", requests: 4, tokens: 3_100, cost: 0.07 },
+    { date: "2026-06-22", requests: 5, tokens: 4_500, cost: 0.09 }
+  ],
+  active_runs: [{
+    run_id: "run_demo_active", project_id: "prj_demo_1", change_key: "checkout-observability",
+    title: "完善结算链路监控", current_phase: "run",
+    started_at: "2026-06-22T10:20:00.000Z", last_event_at: "2026-06-22T11:52:00.000Z"
+  }],
   health: [
     { key: "review_backlog", label: "Review backlog", status: "attention", value: "3 pending", detail: "Human review is required before pending proposals can publish." },
     { key: "review_outcome", label: "Review outcome", status: "healthy", value: "2/3 approved", detail: "Calculated from recorded review decisions." },
@@ -918,6 +944,17 @@ export class MockApiClient implements HunterApi {
     return demoReadOnly();
   }
 
+  async checkExternalSkill(_id: string): Promise<ExternalSkill> {
+    void _id;
+    return demoReadOnly();
+  }
+
+  async refreshExternalSkillUpdateHistory(_id: string, _appliedAt: string): Promise<ExternalSkill> {
+    void _id;
+    void _appliedAt;
+    return demoReadOnly();
+  }
+
   async generateExternalSkillSummary(_id: string, _revision: number, _force = false): Promise<ExternalSkill> {
     void _id;
     void _revision;
@@ -966,6 +1003,8 @@ export class MockApiClient implements HunterApi {
     return delay(clone(tool));
   }
   async createAgentTool(input: AgentToolMutation): Promise<AgentTool> { void input; return demoReadOnly(); }
+  async inspectAgentToolGithub(): Promise<never> { return demoReadOnly(); }
+  async generateAgentToolPrefill(): Promise<never> { return demoReadOnly(); }
   async listSkillArtifacts() { return delay([]); }
   async downloadSkillArtifact(): Promise<{ blob: Blob; hash: string; filename: string }> { return demoReadOnly(); }
   async createTag(): Promise<RegistryTag> { return demoReadOnly(); }

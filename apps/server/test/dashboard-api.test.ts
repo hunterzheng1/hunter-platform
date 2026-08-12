@@ -6,6 +6,8 @@ import { createServer } from "../src/app.js";
 import { MemoryRepository } from "../src/repositories/memory.js";
 import { MemoryArtifactStorage } from "../src/storage/memory.js";
 import type { BootstrapBundle } from "../src/registry/store.js";
+import { MemoryRunStore } from "../src/runs/memory-store.js";
+import { SemanticMemoryStore } from "../src/semantic/memory-store.js";
 
 // 新模型：bootstrap skill 由 sourceFiles（SKILL.md frontmatter）驱动；canonical Skill IR 已删除。
 function skillMd(opts: { name: string; version: string; description?: string; kind?: string }): string {
@@ -50,15 +52,21 @@ const bundle: BootstrapBundle = {
 describe("/api/v1/dashboard/overview", () => {
   const token = "dashboard-owner-token";
   let repository: MemoryRepository;
+  let runStore: MemoryRunStore;
+  let semanticStore: SemanticMemoryStore;
   let app: Awaited<ReturnType<typeof createServer>>;
 
   beforeEach(async () => {
     repository = new MemoryRepository();
+    runStore = new MemoryRunStore();
+    semanticStore = new SemanticMemoryStore();
     await repository.createActorWithToken({ actorId: "actor_owner", token });
     app = await createServer({
       repository,
       storage: new MemoryArtifactStorage(),
-      bootstrapBundle: bundle
+      bootstrapBundle: bundle,
+      runStore,
+      semanticStore
     });
   });
 
@@ -86,6 +94,24 @@ describe("/api/v1/dashboard/overview", () => {
       }
     });
     expect(project.statusCode).toBe(200);
+    const projectId = project.json().project_id as string;
+    await runStore.ensureRun({
+      runId: "run_dashboard_active",
+      projectId,
+      changeKey: "dashboard-active",
+      title: "Dashboard active branch"
+    });
+    await semanticStore.upsertDocuments([{
+      document_id: "knowledge_dashboard",
+      project_id: projectId,
+      artifact_id: "ingest",
+      kind: "knowledge_entry",
+      source_path: ".harness/knowledge/dashboard.md",
+      title: "Dashboard knowledge",
+      body: "Knowledge shown in the dashboard.",
+      metadata: {},
+      content_sha256: `sha256:${"a".repeat(64)}`
+    }]);
 
     const workflow = await app.inject({
       method: "POST",
@@ -149,13 +175,24 @@ describe("/api/v1/dashboard/overview", () => {
         skills: 1,
         pending_reviews: 0,
         artifacts: 2,
-        published_skills: 1
+        published_skills: 1,
+        local_skills: 1,
+        external_skills: 0,
+        active_runs: 1,
+        knowledge_entries: 1,
+        knowledge_relations: 0,
+        ai_requests: 0,
+        ai_tokens: 0,
+        ai_cost: 0
       }),
       distributions: {
         // kind 从 frontmatter 反范式化到 detail（与 description 同理），dashboard 分类分布按真实 kind
         skill_categories: [{ key: "workflow", count: 1 }],
-        workflow_profiles: [{ key: "general", count: 1 }]
-      }
+        workflow_profiles: [{ key: "general", count: 1 }],
+        knowledge_categories: expect.arrayContaining([{ key: "knowledge", count: 1 }])
+      },
+      active_runs: [expect.objectContaining({ change_key: "dashboard-active", project_id: projectId })],
+      ai_usage: expect.any(Array)
     });
     expect(overview.json().trend).toHaveLength(7);
     expect(overview.json().trend.at(-1)).toEqual(expect.objectContaining({ submitted: 0, pending: 0 }));

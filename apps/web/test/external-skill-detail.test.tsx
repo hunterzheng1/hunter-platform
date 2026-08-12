@@ -81,6 +81,8 @@ const externalSkill: ExternalSkill = {
   curationNote: "适合大型代码库分析",
   tags: ["code-intelligence"],
   updateAvailable: false,
+  availableVersion: null,
+  updateHistory: [],
   lastCheckedAt: "2026-08-10T08:00:00Z",
   revision: 1,
   created_at: "2026-08-10T08:00:00Z",
@@ -121,6 +123,11 @@ const summarizedSkill: ExternalSkill = {
         commands: ["cd <project-path>", "codegraph init --index", "codegraph status"]
       }
     ],
+    command_cheatsheet: [
+      { command: "codegraph status", description: "检查当前项目索引是否就绪。" },
+      { command: "codegraph explore \"<question-about-code>\"", description: "用自然语言查询代码结构和调用关系。" },
+      { command: "codegraph upgrade", description: "检查并升级命令行工具到可用的新版本。" }
+    ],
     caveats: ["代码变更后需要刷新索引"],
     source_sha256: "sha256:" + "a".repeat(64),
     provider_id: "deepseek",
@@ -153,7 +160,9 @@ describe("external skill reader", () => {
     expect(badgeRow).toBeInTheDocument();
     expect(within(badgeRow as HTMLElement).getAllByRole("img")).toHaveLength(3);
     expect(screen.getByRole("heading", { name: "上游仓库地址" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "https://github.com/colbymchenry/codegraph" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "复制地址" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "查看版本记录" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "官方安装命令" })).not.toBeInTheDocument();
   });
 
@@ -196,6 +205,7 @@ describe("external skill reader", () => {
     expect(within(summaryTemplate as HTMLElement).getAllByRole("heading").map((heading) => heading.textContent?.trim())).toEqual([
       "它是什么",
       "典型工作流",
+      "命令速查",
       "核心功能",
       "适用场景",
       "使用前注意"
@@ -219,7 +229,77 @@ describe("external skill reader", () => {
     expect(screen.getByRole("heading", { name: "使用前注意" }).closest("section"))
       .toHaveClass("external-summary-section-wide");
     expect(screen.getByText(/DeepSeek · deepseek-chat/i)).toBeInTheDocument();
+    const commonCommands = container.querySelector('[data-slot="external-summary-common-commands"]');
+    expect(commonCommands).not.toBeNull();
+    expect(commonCommands).toHaveAttribute("data-layout", "cheatsheet");
+    expect(commonCommands?.querySelectorAll('[data-slot="external-command-cheatsheet-item"]')).toHaveLength(3);
+    expect(commonCommands).toHaveTextContent("检查当前项目索引是否就绪。");
+    expect(commonCommands).toHaveTextContent("用自然语言查询代码结构和调用关系。");
+    expect(commonCommands).not.toHaveTextContent("npm install -g @colbymchenry/codegraph");
     expect(screen.queryByText("Fast code intelligence")).not.toBeInTheDocument();
+  });
+
+  it("在典型工作流说明中突出技能名称，便于快速识别调用关系", async () => {
+    const existingSummary = summarizedSkill.aiSummary;
+    if (existingSummary === null || existingSummary === undefined) throw new Error("fixture summary is required");
+    const skillWithReferences: ExternalSkill = {
+      ...summarizedSkill,
+      aiSummary: {
+        ...existingSummary,
+        quick_start: [{
+          title: "选择澄清方式",
+          instruction: "先用 grill-with-docs 澄清工程变更，或用 grill-me 澄清非代码计划。",
+          commands: []
+        }]
+      }
+    };
+    const { container } = renderWithToast(<ExternalSkillDetail api={{
+      getExternalSkill: vi.fn(async () => skillWithReferences)
+    } as unknown as HunterApi} skillId={skillWithReferences.id} />);
+
+    await screen.findByText("选择澄清方式");
+    expect(Array.from(container.querySelectorAll('[data-slot="external-workflow-skill-reference"]')).map((node) => node.textContent))
+      .toEqual(["grill-with-docs", "grill-me"]);
+  });
+
+  it("把典型工作流命令展示为高辨识终端块并支持一键复制", async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    const { container } = renderWithToast(<ExternalSkillDetail api={{
+      getExternalSkill: vi.fn(async () => summarizedSkill)
+    } as unknown as HunterApi} skillId={summarizedSkill.id} />);
+
+    await screen.findByText("全局安装");
+    const workflow = container.querySelector('[data-slot="external-summary-workflow"]');
+    const commandBlocks = workflow?.querySelectorAll('[data-slot="external-workflow-command"]') ?? [];
+    expect(commandBlocks).toHaveLength(2);
+    const first = commandBlocks[0] as HTMLElement;
+    expect(first.querySelectorAll('[data-slot="external-workflow-command-line"]')).toHaveLength(1);
+    expect(first).toHaveTextContent("npm install -g @colbymchenry/codegraph");
+    fireEvent.click(within(first).getByRole("button", { name: "复制命令" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("npm install -g @colbymchenry/codegraph"));
+  });
+
+  it("官方安装命令复用典型工作流的高辨识终端块", async () => {
+    const npmSkill: ExternalSkill = {
+      ...externalSkill,
+      source: { type: "npm", ref: "@hunterzheng/lark-channel-bridge" },
+      snapshot: {
+        ...externalSkill.snapshot,
+        installCommand: "npm install @hunterzheng/lark-channel-bridge",
+        homepage: "https://www.npmjs.com/package/@hunterzheng/lark-channel-bridge"
+      }
+    };
+    const { container } = renderWithToast(<ExternalSkillDetail api={{
+      getExternalSkill: vi.fn(async () => npmSkill)
+    } as unknown as HunterApi} skillId={npmSkill.id} />);
+
+    expect(await screen.findByRole("heading", { name: "官方安装命令" })).toBeInTheDocument();
+    const installBlock = container.querySelector('[data-slot="external-install-command"]');
+    expect(installBlock).toHaveClass("external-workflow-command");
+    expect(installBlock?.querySelector('[data-slot="external-workflow-command-line"]'))
+      .toHaveTextContent("npm install @hunterzheng/lark-channel-bridge");
+    expect(within(installBlock as HTMLElement).getByRole("button", { name: "复制命令" })).toBeInTheDocument();
   });
 
   it("生成期间持续展示明确进度，完成后自动替换为摘要", async () => {
@@ -255,6 +335,25 @@ describe("external skill reader", () => {
     expect(generate).toHaveBeenCalledWith(externalSkill.id, externalSkill.revision, false);
   });
 
+  it("生成请求报错但服务端已保存时自动对账并展示新摘要", async () => {
+    const getExternalSkill = vi.fn()
+      .mockResolvedValueOnce(externalSkill)
+      .mockResolvedValueOnce(summarizedSkill);
+    renderWithToast(<ExternalSkillDetail api={{
+      getExternalSkill,
+      generateExternalSkillSummary: vi.fn(async () => {
+        throw new ApiClientError(0, "NETWORK_ERROR", "response connection closed");
+      })
+    } as unknown as HunterApi} skillId={externalSkill.id} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "生成 AI 摘要" }));
+
+    expect(await screen.findAllByText("为编码 Agent 提供预索引的代码知识与调用关系。")).toHaveLength(2);
+    expect(getExternalSkill).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("status")).toHaveTextContent("AI 摘要已生成并缓存");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("摘要解析失败时保留旧摘要，只显示可操作的中文提示", async () => {
     renderWithToast(<ExternalSkillDetail api={{
       getExternalSkill: vi.fn(async () => summarizedSkill),
@@ -270,7 +369,7 @@ describe("external skill reader", () => {
     expect(screen.queryByText(/AI_PARSE_FAILED|valid structured content/)).not.toBeInTheDocument();
   });
 
-  it("可选择已有标签并与维护备注一起保存", async () => {
+  it("可选择已有标签并保存", async () => {
     const tags: RegistryTag[] = [
       {
         tag_id: "tag_code",
@@ -295,7 +394,6 @@ describe("external skill reader", () => {
     ];
     const patchExternalSkill = vi.fn(async (_id, input) => ({
       ...externalSkill,
-      curationNote: input.curationNote ?? externalSkill.curationNote,
       tags: input.tags ?? externalSkill.tags,
       revision: 2
     }));
@@ -306,15 +404,14 @@ describe("external skill reader", () => {
     } as unknown as HunterApi} skillId={externalSkill.id} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "添加标签：代码评审" }));
-    fireEvent.change(screen.getByLabelText("策展笔记"), { target: { value: "适合大型仓库的代码理解" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存维护信息" }));
+    expect(screen.queryByLabelText("策展笔记")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存标签" }));
 
     await waitFor(() => expect(patchExternalSkill).toHaveBeenCalledWith(externalSkill.id, {
-      curationNote: "适合大型仓库的代码理解",
       tags: ["code-intelligence", "review"],
       revision: 1
     }));
-    expect(await screen.findByText("备注和标签已保存")).toBeInTheDocument();
+    expect(await screen.findByText("技能标签已保存")).toBeInTheDocument();
   });
 
   it("可用中文名称新增标签并自动加入当前技能", async () => {
@@ -345,5 +442,78 @@ describe("external skill reader", () => {
     await waitFor(() => expect(createTag).toHaveBeenCalledTimes(1));
     expect(createTag.mock.calls[0]?.[1]).toBe("知识图谱");
     expect(await screen.findByRole("button", { name: "移除标签：知识图谱" })).toBeInTheDocument();
+  });
+
+  it("已知存在新版本时直接提供更新入口，并保留摘要版本提示", async () => {
+    const checked = {
+      ...summarizedSkill,
+      updateAvailable: true,
+      availableVersion: "v1.6.0",
+      revision: 3
+    } as ExternalSkill;
+    const applied = {
+      ...checked,
+      snapshot: { ...checked.snapshot, version: "v1.6.0" },
+      updateAvailable: false,
+      availableVersion: null,
+      revision: 4
+    } as ExternalSkill;
+    const refreshExternalSkill = vi.fn(async () => applied);
+    renderWithToast(<ExternalSkillDetail api={{
+      getExternalSkill: vi.fn(async () => checked),
+      refreshExternalSkill,
+      deleteExternalSkill: vi.fn(async () => ({ id: externalSkill.id, deleted: true }))
+    } as unknown as HunterApi} skillId={externalSkill.id} />);
+
+    expect(await screen.findByText(/摘要基于.*v1\.5\.0/)).toBeInTheDocument();
+    expect(screen.queryByLabelText("策展笔记")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "立即更新至 v1.6.0" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "立即更新至 v1.6.0" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("v1.5.0");
+    expect(dialog).toHaveTextContent("v1.6.0");
+    fireEvent.click(within(dialog).getByRole("button", { name: "应用更新" }));
+    await waitFor(() => expect(refreshExternalSkill).toHaveBeenCalledWith(externalSkill.id));
+  });
+
+  it("将跨版本更新合并为简洁项目符号，并允许单独刷新说明", async () => {
+    const updated = {
+      ...externalSkill,
+      updateHistory: [{
+        from_version: "0.3.15",
+        to_version: "0.3.17",
+        applied_at: "2026-08-12T09:23:00.000Z",
+        source_url: "https://example.com/releases",
+        changes: ["修复任务重试逻辑", "新增运行状态查询命令"],
+        releases: [
+          { version: "0.3.16", published_at: "2026-08-11T08:00:00.000Z", source_url: null, title: null, changes: ["修复重试逻辑"] },
+          { version: "0.3.17", published_at: "2026-08-12T08:00:00.000Z", source_url: null, title: null, changes: ["新增状态查询命令"] }
+        ]
+      }]
+    } as ExternalSkill;
+    const refreshed = {
+      ...updated,
+      revision: updated.revision + 1,
+      updateHistory: [{
+        ...updated.updateHistory[0],
+        changes: ["修复任务重试逻辑", "新增运行状态查询命令", "改善运行状态展示"]
+      }]
+    } as ExternalSkill;
+    const refreshExternalSkillUpdateHistory = vi.fn(async () => refreshed);
+    renderWithToast(<ExternalSkillDetail api={{
+      getExternalSkill: vi.fn(async () => updated),
+      refreshExternalSkillUpdateHistory
+    } as unknown as HunterApi} skillId={updated.id} />);
+
+    const history = await screen.findByTestId("external-skill-update-history");
+    expect(within(history).getByText("修复任务重试逻辑")).toBeInTheDocument();
+    expect(within(history).getByText("新增运行状态查询命令")).toBeInTheDocument();
+    expect(within(history).queryByText(/^0\.3\.1[67]：/)).not.toBeInTheDocument();
+    expect(history.querySelectorAll(".external-update-release")).toHaveLength(0);
+    fireEvent.click(within(history).getByRole("button", { name: "刷新说明" }));
+    await waitFor(() => expect(refreshExternalSkillUpdateHistory)
+      .toHaveBeenCalledWith(updated.id, "2026-08-12T09:23:00.000Z"));
+    expect(await within(history).findByText("改善运行状态展示")).toBeInTheDocument();
+    expect(await screen.findByText("更新说明已刷新")).toBeInTheDocument();
   });
 });

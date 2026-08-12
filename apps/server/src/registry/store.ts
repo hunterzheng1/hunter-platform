@@ -26,6 +26,7 @@ import {
   workflowFamilyVersionSchema,
   SKILL_ERROR_CODE,
   type AgentTool,
+  type AgentToolGithubInspection,
   type AgentToolMutation,
   type AiConfigState,
   type AiProviderApiFormat,
@@ -36,7 +37,9 @@ import {
   type DraftState,
   type ExternalSkillAiSummary,
   type ExternalSkill,
+  type ExternalSkillReleaseNote,
   type ExternalSkillSource,
+  type ExternalSkillSnapshot,
   type FixPlan,
   type NpmReleaseRecord,
   type PublishSkillResponse,
@@ -90,11 +93,49 @@ import { z } from "zod";
 import { ServerDomainError, type TransactionRepository } from "../repositories/interfaces.js";
 import type { ArtifactStorage } from "../storage/interface.js";
 import type { RegistryPersistence } from "./persistence.js";
+
+const OFFICIAL_MODEL_PRICING: Record<string, Record<string, Pick<ProviderModel, "input_cost" | "output_cost" | "cache_hit_cost" | "cache_create_cost">>> = {
+  "api.openai.com": {
+    "gpt-5.6-sol": { input_cost: 5, output_cost: 30, cache_hit_cost: 0.5, cache_create_cost: 6.25 },
+    "gpt-5.6-terra": { input_cost: 2.5, output_cost: 15, cache_hit_cost: 0.25, cache_create_cost: 3.125 },
+    "gpt-5.6-luna": { input_cost: 1, output_cost: 6, cache_hit_cost: 0.1, cache_create_cost: 1.25 }
+  },
+  "api.deepseek.com": {
+    "deepseek-v4-flash": { input_cost: 0.14, output_cost: 0.28, cache_hit_cost: 0.0028, cache_create_cost: 0 },
+    "deepseek-v4-pro": { input_cost: 0.435, output_cost: 0.87, cache_hit_cost: 0.003625, cache_create_cost: 0 }
+  },
+  "api.moonshot.ai": {
+    "kimi-k2.6": { input_cost: 0.95, output_cost: 4, cache_hit_cost: 0.16, cache_create_cost: 0 }
+  },
+  "generativelanguage.googleapis.com": {
+    "gemini-3.6-flash": { input_cost: 1.5, output_cost: 7.5, cache_hit_cost: 0.15, cache_create_cost: 0 },
+    "gemini-3.1-pro-preview": { input_cost: 2, output_cost: 12, cache_hit_cost: 0.2, cache_create_cost: 0 }
+  }
+};
+
+function applyOfficialModelPricing(provider: AiProviderConfig): boolean {
+  let host: string;
+  try { host = new URL(provider.base_url).host; } catch { return false; }
+  const prices = OFFICIAL_MODEL_PRICING[host];
+  if (prices === undefined) return false;
+  let changed = false;
+  for (const model of provider.models) {
+    const price = prices[model.request_model];
+    if (price === undefined) continue;
+    const hasCustomPricing = model.input_cost > 0 || model.output_cost > 0 || model.cache_hit_cost > 0 || model.cache_create_cost > 0;
+    if (hasCustomPricing) continue;
+    for (const key of ["input_cost", "output_cost", "cache_hit_cost", "cache_create_cost"] as const) {
+      if (model[key] !== price[key]) { model[key] = price[key]; changed = true; }
+    }
+  }
+  return changed;
+}
 import type { NpmPublishAttemptResult, SkillNpmPackageInput, WorkflowFamilyNpmPackageInput } from "../npm/publisher.js";
 import { layoutWorkflowFamilyNpmFiles, skillNpmPackageInput, workflowFamilyNpmPackageInput } from "../npm/publisher.js";
 import type { NpmPublishConfig } from "../npm/config.js";
 import {
   ExternalFetchError,
+  fetchGithubRepositoryProfile,
   fetchExternalSnapshot,
   type ExternalFetcherDeps
 } from "../external/fetchers.js";
@@ -148,6 +189,67 @@ interface ProposalState extends RegistrySkillProposal {
 
 function id(prefix: string): string {
   return prefix + randomUUID().replaceAll("-", "");
+}
+
+function describeExternalSkillChanges(before: ExternalSkillSnapshot, after: ExternalSkillSnapshot): string[] {
+  const changes: string[] = [];
+  if (before.version !== after.version) {
+    changes.push(`版本由 ${before.version ?? "未标注"} 更新为 ${after.version ?? "未标注"}`);
+  }
+  if (before.readme !== after.readme) changes.push("上游说明文档已更新");
+  if (before.description !== after.description) changes.push("技能简介已更新");
+  if (before.installCommand !== after.installCommand) changes.push("安装方式已更新");
+  if (before.license !== after.license) changes.push("许可证信息已更新");
+  if (before.homepage !== after.homepage) changes.push("上游主页地址已更新");
+  return changes.length > 0 ? changes : ["上游元数据已刷新"];
+}
+
+function normalizedReleaseVersion(version: string): string {
+  return version.trim().replace(/^v(?=\d)/i, "");
+}
+
+function releaseIsWithinUpdate(version: string, fromVersion: string | null, toVersion: string | null): boolean {
+  if (fromVersion === null || toVersion === null) return version === toVersion;
+  const current = normalizedReleaseVersion(version);
+  const from = normalizedReleaseVersion(fromVersion);
+  const to = normalizedReleaseVersion(toVersion);
+  const semverLike = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
+  if (!semverLike.test(current) || !semverLike.test(from) || !semverLike.test(to)) return false;
+  return compareSemver(current, from) > 0 && compareSemver(current, to) <= 0;
+}
+
+function selectExternalSkillReleases(
+  releases: ExternalSkillReleaseNote[],
+  fromVersion: string | null,
+  toVersion: string | null
+): ExternalSkillReleaseNote[] {
+  if (fromVersion === toVersion) return [];
+  const fromIndex = releases.findIndex((release) => normalizedReleaseVersion(release.version) === normalizedReleaseVersion(fromVersion ?? ""));
+  const toIndex = releases.findIndex((release) => normalizedReleaseVersion(release.version) === normalizedReleaseVersion(toVersion ?? ""));
+  if (fromIndex >= 0 && toIndex > fromIndex) return releases.slice(fromIndex + 1, toIndex + 1);
+  const selected = releases.filter((release) => releaseIsWithinUpdate(release.version, fromVersion, toVersion));
+  if (selected.length > 0) return selected;
+  if (toVersion === null) return [];
+  const exact = releases.find((release) => normalizedReleaseVersion(release.version) === normalizedReleaseVersion(toVersion));
+  return [exact ?? {
+    version: toVersion,
+    published_at: null,
+    source_url: null,
+    title: null,
+    changes: ["上游未提供该版本的发布说明"]
+  }];
+}
+
+function externalSkillSnapshotHash(snapshot: ExternalSkillSnapshot): string {
+  return sha256Bytes(canonicalJson({
+    name: snapshot.name,
+    description: snapshot.description,
+    version: snapshot.version,
+    license: snapshot.license,
+    homepage: snapshot.homepage,
+    releaseUrl: snapshot.releaseUrl,
+    readme: snapshot.readme
+  }));
 }
 
 // 返回给定 version 序列中的最大 semver；空序列返回 null（per-agent latestVersion 计算基础）
@@ -763,6 +865,10 @@ export class RegistryStore {
       };
       const aiCfg = aiConfigStateSchema.safeParse(normalizedAiCfg);
       this.aiConfig = aiCfg.success ? aiCfg.data : { defaultProvider: null, providers: [], usage: [], codex: { selected_model: null, enabled: false } };
+      let officialPricingUpdated = false;
+      for (const provider of this.aiConfig.providers) {
+        if (applyOfficialModelPricing(provider)) officialPricingUpdated = true;
+      }
       // COM-001：旧全局 aiUsage {requests,tokens} 迁移到默认 provider 当日条目（仅当 usage 为空且 defaultProvider 存在；已有 usage 不重复迁移）
       const usageRaw = value.aiUsage as { requests?: number; tokens?: number } | undefined;
       const legacyRequests = typeof usageRaw?.requests === "number" ? usageRaw.requests : 0;
@@ -782,7 +888,7 @@ export class RegistryStore {
         });
       }
       this.normalizeActiveModelSource();
-      if (repairedDraftCatalog) await this.persist();
+      if (repairedDraftCatalog || officialPricingUpdated) await this.persist();
       return;
     }
     if (bundle === undefined) return;
@@ -888,6 +994,30 @@ export class RegistryStore {
 
   setExternalFetcherDeps(deps: ExternalFetcherDeps): void {
     this.externalFetcherDeps = deps;
+  }
+
+  async inspectAgentToolGithub(githubUrl: string): Promise<AgentToolGithubInspection> {
+    try {
+      const profile = await fetchGithubRepositoryProfile(githubUrl, this.externalFetcherDeps);
+      return {
+        source: { type: "github", ref: githubUrl.trim() },
+        suggested: {
+          source: { type: "github", ref: githubUrl.trim() },
+          slug: registrySlugSchema.parse(profile.repo.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")),
+          displayName: profile.displayName,
+          description: profile.description,
+          category: "framework",
+          status: "active",
+          homepage: profile.homepage,
+          packageName: null,
+          installCommand: null,
+          tags: profile.topics.map((topic) => topic.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")).filter(Boolean),
+          relatedWorkflowFamilies: []
+        }
+      };
+    } catch (error) {
+      this.rethrowExternalFetch(error);
+    }
   }
 
   private migrateSkillState(raw: unknown): SkillState {
@@ -2174,7 +2304,9 @@ export class RegistryStore {
     const cacheCreateTokens = input.cache_create_tokens ?? 0;
     const tokens = input.tokens ?? (inputTokens + outputTokens);
     this.checkQuota({ provider_id: input.provider_id, requests: input.requests, tokens });
-    const today = new Date().toISOString().slice(0, 10);
+    const recordedAt = new Date();
+    const today = recordedAt.toISOString().slice(0, 10);
+    const hour = recordedAt.getUTCHours();
     const provider = this.aiConfig.providers.find((p) => p.provider_id === input.provider_id);
     const modelCfg = model !== "" ? provider?.models.find((m) => m.request_model === model) : undefined;
     if (model !== "" && modelCfg === undefined) {
@@ -2200,7 +2332,8 @@ export class RegistryStore {
         output_tokens: outputTokens,
         cache_hit_tokens: cacheHitTokens,
         cache_create_tokens: cacheCreateTokens,
-        cost
+        cost,
+        hourly: [{ hour, requests: input.requests, tokens, cost }]
       });
     } else {
       entry.requests += input.requests;
@@ -2210,6 +2343,16 @@ export class RegistryStore {
       entry.cache_hit_tokens += cacheHitTokens;
       entry.cache_create_tokens += cacheCreateTokens;
       entry.cost += cost;
+      entry.hourly ??= [];
+      const hourly = entry.hourly.find((item) => item.hour === hour);
+      if (hourly === undefined) {
+        entry.hourly.push({ hour, requests: input.requests, tokens, cost });
+        entry.hourly.sort((left, right) => left.hour - right.hour);
+      } else {
+        hourly.requests += input.requests;
+        hourly.tokens += tokens;
+        hourly.cost += cost;
+      }
     }
     await this.persist();
   }
@@ -2783,7 +2926,6 @@ export class RegistryStore {
         || item.snapshot.name.toLowerCase().includes(search)
         || item.snapshot.description.toLowerCase().includes(search)
         || item.source.ref.toLowerCase().includes(search)
-        || item.curationNote.toLowerCase().includes(search)
         || item.tags.some((tag) => tag.toLowerCase().includes(search)))
       .sort((left, right) => left.snapshot.name.localeCompare(right.snapshot.name));
   }
@@ -2867,6 +3009,8 @@ export class RegistryStore {
         curationNote: input.curationNote ?? "",
         tags: [...(input.tags ?? [])].sort(),
         updateAvailable: false,
+        availableVersion: null,
+        updateHistory: [],
         lastCheckedAt: now,
         revision: 1,
         created_at: now,
@@ -2985,15 +3129,38 @@ export class RegistryStore {
           { id, expected_revision: observed.revision, current_revision: existing.revision }
         );
       }
-      const versionChanged = fetched.snapshot.version !== existing.snapshot.version;
+      const sourceChanged = externalSkillSnapshotHash(fetched.snapshot) !== externalSkillSnapshotHash(existing.snapshot);
       const now = fetched.snapshot.fetchedAt;
-      const sourceHash = externalSkillSummarySourceHash(fetched.snapshot);
+      const releases = selectExternalSkillReleases(
+        fetched.releases,
+        existing.snapshot.version,
+        fetched.snapshot.version
+      );
+      const hydratedHistory = existing.updateHistory.map((record) => record.releases.length > 0 ? record : {
+        ...record,
+        releases: selectExternalSkillReleases(fetched.releases, record.from_version, record.to_version)
+      });
+      const updateHistory = sourceChanged ? [{
+        from_version: existing.snapshot.version,
+        to_version: fetched.snapshot.version,
+        applied_at: now,
+        source_url: fetched.snapshot.releaseUrl ?? fetched.snapshot.homepage,
+        changes: describeExternalSkillChanges(existing.snapshot, fetched.snapshot),
+        releases
+      }, ...hydratedHistory].slice(0, 20) : hydratedHistory;
       const next = externalSkillSchema.parse({
         ...existing,
         snapshot: fetched.snapshot,
-        aiSummary: existing.aiSummary?.source_sha256 === sourceHash ? existing.aiSummary : null,
+        aiSummary: existing.aiSummary === null || existing.aiSummary === undefined
+          ? null
+          : {
+              ...existing.aiSummary,
+              source_version: existing.aiSummary.source_version ?? existing.snapshot.version
+            },
         curationNote: existing.curationNote,
-        updateAvailable: versionChanged ? true : existing.updateAvailable,
+        updateAvailable: false,
+        availableVersion: null,
+        updateHistory,
         lastCheckedAt: now,
         revision: existing.revision + 1,
         updated_at: now
@@ -3004,12 +3171,107 @@ export class RegistryStore {
     });
   }
 
+  async checkExternalSkill(id: string): Promise<ExternalSkill> {
+    const observed = this.getExternalSkill(id);
+    let fetched: Awaited<ReturnType<typeof fetchExternalSnapshot>>;
+    try {
+      fetched = await fetchExternalSnapshot(observed.source, this.externalFetcherDeps);
+    } catch (error) {
+      this.rethrowExternalFetch(error);
+    }
+    return this.withRegistryMutation(async () => {
+      const existing = this.externalSkills.get(id);
+      if (existing === undefined) {
+        throw new ServerDomainError(404, "EXTERNAL_SKILL_NOT_FOUND", "external skill not found", { id });
+      }
+      if (existing.revision !== observed.revision) {
+        throw new ServerDomainError(409, "EXTERNAL_SKILL_CHANGED", "external skill changed while its upstream source was being read");
+      }
+      const updateAvailable = externalSkillSnapshotHash(fetched.snapshot) !== externalSkillSnapshotHash(existing.snapshot);
+      const next = externalSkillSchema.parse({
+        ...existing,
+        updateAvailable,
+        availableVersion: updateAvailable ? fetched.snapshot.version : null,
+        lastCheckedAt: fetched.snapshot.fetchedAt,
+        revision: existing.revision + 1,
+        updated_at: fetched.snapshot.fetchedAt
+      });
+      this.externalSkills.set(next.id, next);
+      await this.persist();
+      return structuredClone(next);
+    });
+  }
+
+  async refreshExternalSkillUpdateHistory(id: string, appliedAt: string): Promise<ExternalSkill> {
+    const observed = this.getExternalSkill(id);
+    const target = observed.updateHistory.find((record) => record.applied_at === appliedAt);
+    if (target === undefined) {
+      throw new ServerDomainError(404, "EXTERNAL_SKILL_UPDATE_NOT_FOUND", "external skill update record not found", { id, applied_at: appliedAt });
+    }
+    let fetched: Awaited<ReturnType<typeof fetchExternalSnapshot>>;
+    try {
+      fetched = await fetchExternalSnapshot(observed.source, this.externalFetcherDeps);
+    } catch (error) {
+      this.rethrowExternalFetch(error);
+    }
+    return this.withRegistryMutation(async () => {
+      const existing = this.externalSkills.get(id);
+      if (existing === undefined) {
+        throw new ServerDomainError(404, "EXTERNAL_SKILL_NOT_FOUND", "external skill not found", { id });
+      }
+      if (existing.revision !== observed.revision) {
+        throw new ServerDomainError(409, "EXTERNAL_SKILL_CHANGED", "external skill changed while its upstream source was being read");
+      }
+      const releases = selectExternalSkillReleases(fetched.releases, target.from_version, target.to_version);
+      const now = fetched.snapshot.fetchedAt;
+      const next = externalSkillSchema.parse({
+        ...existing,
+        updateHistory: existing.updateHistory.map((record) => record.applied_at === appliedAt ? { ...record, releases } : record),
+        revision: existing.revision + 1,
+        updated_at: now
+      });
+      this.externalSkills.set(next.id, next);
+      await this.persist();
+      return structuredClone(next);
+    });
+  }
+
+  async updateExternalSkillHistorySummary(
+    id: string,
+    appliedAt: string,
+    changes: string[],
+    expectedRevision: number
+  ): Promise<ExternalSkill> {
+    return this.withRegistryMutation(async () => {
+      const existing = this.externalSkills.get(id);
+      if (existing === undefined) {
+        throw new ServerDomainError(404, "EXTERNAL_SKILL_NOT_FOUND", "external skill not found", { id });
+      }
+      if (existing.revision !== expectedRevision) {
+        throw new ServerDomainError(409, "EXTERNAL_SKILL_CHANGED", "external skill changed while update notes were generated");
+      }
+      if (!existing.updateHistory.some((record) => record.applied_at === appliedAt)) {
+        throw new ServerDomainError(404, "EXTERNAL_SKILL_UPDATE_NOT_FOUND", "external skill update record not found", { id, applied_at: appliedAt });
+      }
+      const now = new Date().toISOString();
+      const next = externalSkillSchema.parse({
+        ...existing,
+        updateHistory: existing.updateHistory.map((record) => record.applied_at === appliedAt ? { ...record, changes } : record),
+        revision: existing.revision + 1,
+        updated_at: now
+      });
+      this.externalSkills.set(id, next);
+      await this.persist();
+      return structuredClone(next);
+    });
+  }
+
   async refreshAllExternalSkills(): Promise<{ refreshed: number; failed: number }> {
     let refreshed = 0;
     let failed = 0;
     for (const id of [...this.externalSkills.keys()]) {
       try {
-        await this.refreshExternalSkill(id);
+        await this.checkExternalSkill(id);
         refreshed += 1;
       } catch {
         failed += 1;

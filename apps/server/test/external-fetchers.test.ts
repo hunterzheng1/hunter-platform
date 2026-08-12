@@ -102,6 +102,38 @@ describe("external skill fetchers", () => {
     });
   });
 
+  it("uses linked GitHub release notes to enrich npm version history", async () => {
+    const fetched = await fetchExternalSnapshot({ type: "npm", ref: "@acme/widget" }, {
+      now: () => "2026-07-12T00:00:00.000Z",
+      fetch: async (input) => {
+        const url = String(input);
+        if (url.includes("registry.npmjs.org")) {
+          return new Response(JSON.stringify({
+            name: "@acme/widget",
+            "dist-tags": { latest: "1.2.0" },
+            repository: { type: "git", url: "git+https://github.com/acme/widget.git" },
+            versions: {
+              "1.1.0": { name: "@acme/widget", version: "1.1.0", description: "Widget" },
+              "1.2.0": { name: "@acme/widget", version: "1.2.0", description: "Widget" }
+            }
+          }), { status: 200 });
+        }
+        if (url.endsWith("/repos/acme/widget/releases?per_page=100")) {
+          return new Response(JSON.stringify([
+            { tag_name: "v1.2.0", name: "Reliable refresh", body: "- Fix frozen refresh state\n- Preserve summaries", html_url: "https://github.com/acme/widget/releases/tag/v1.2.0", published_at: "2026-03-01T00:00:00.000Z" },
+            { tag_name: "v1.1.0", name: "First update", body: "- Add batch mode", html_url: "https://github.com/acme/widget/releases/tag/v1.1.0", published_at: "2026-02-01T00:00:00.000Z" }
+          ]), { status: 200 });
+        }
+        return new Response("not found", { status: 404 });
+      }
+    });
+
+    expect(fetched.releases).toEqual([
+      expect.objectContaining({ version: "1.1.0", title: "First update", changes: ["Add batch mode"] }),
+      expect.objectContaining({ version: "1.2.0", title: "Reliable refresh", changes: ["Fix frozen refresh state", "Preserve summaries"] })
+    ]);
+  });
+
   it("fetches github metadata snapshot via injected fetch", async () => {
     const calls: string[] = [];
     const snapshot = await fetchGithubSnapshot("acme", "widget", {
@@ -122,11 +154,11 @@ describe("external skill fetchers", () => {
             license: { spdx_id: "Apache-2.0" }
           }), { status: 200 });
         }
-        if (url.endsWith("/releases/latest")) {
-          return new Response(JSON.stringify({
+        if (url.endsWith("/releases?per_page=100")) {
+          return new Response(JSON.stringify([{
             tag_name: "v2.0.0",
             html_url: "https://github.com/acme/widget/releases/tag/v2.0.0"
-          }), { status: 200 });
+          }]), { status: 200 });
         }
         if (url.endsWith("/readme")) {
           return new Response(JSON.stringify({
@@ -139,7 +171,7 @@ describe("external skill fetchers", () => {
     });
     expect(calls).toEqual([
       "https://api.github.com/repos/acme/widget",
-      "https://api.github.com/repos/acme/widget/releases/latest",
+      "https://api.github.com/repos/acme/widget/releases?per_page=100",
       "https://api.github.com/repos/acme/widget/readme"
     ]);
     expect(snapshot).toMatchObject({

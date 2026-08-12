@@ -78,11 +78,12 @@ export function SkillRegistry({ api: apiValue }: { api?: HunterApi }) {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [deleteModal, setDeleteModal] = useState<RegistrySkillDetail | null>(null);
+  const [externalDeleteModal, setExternalDeleteModal] = useState<ExternalSkill | null>(null);
+  const [checkingAll, setCheckingAll] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [importSourceType, setImportSourceType] = useState<ExternalSkillSourceType>("npm");
   const [importRef, setImportRef] = useState("");
-  const [importNote, setImportNote] = useState("");
   const [importing, setImporting] = useState(false);
 
   async function refresh(): Promise<void> {
@@ -149,7 +150,7 @@ export function SkillRegistry({ api: apiValue }: { api?: HunterApi }) {
     if (sourceFilter === "registry") return false;
     if (sourceFilter === "" && status !== "") return false;
     const skill = item.skill;
-    return (needle === "" || `${skill.snapshot.name} ${skill.source.ref} ${externalSkillDescription(skill)} ${skill.snapshot.description} ${skill.curationNote}`.toLowerCase().includes(needle)) &&
+    return (needle === "" || `${skill.snapshot.name} ${skill.source.ref} ${externalSkillDescription(skill)} ${skill.snapshot.description}`.toLowerCase().includes(needle)) &&
       (selectedTags.length === 0 || selectedTags.every((tag) => skill.tags.includes(tag)));
   });
   const pageSize = 12;
@@ -236,7 +237,6 @@ export function SkillRegistry({ api: apiValue }: { api?: HunterApi }) {
     try {
       const created = await required(api, "createExternalSkill")({
         source: { type: importSourceType, ref: raw },
-        curationNote: importNote,
         tags: []
       });
       await refresh();
@@ -244,7 +244,6 @@ export function SkillRegistry({ api: apiValue }: { api?: HunterApi }) {
       setImportOpen(false);
       setImportSourceType("npm");
       setImportRef("");
-      setImportNote("");
     } catch (reason) {
       setError(apiError(reason, t));
     } finally {
@@ -270,6 +269,41 @@ export function SkillRegistry({ api: apiValue }: { api?: HunterApi }) {
     setDeleteModal(null);
   }
 
+  async function checkAllExternalSkills(): Promise<void> {
+    if (checkingAll || externalSkills.length === 0) return;
+    setCheckingAll(true);
+    setError(null);
+    try {
+      const check = required(api, "checkExternalSkill");
+      const checked: ExternalSkill[] = [];
+      for (let index = 0; index < externalSkills.length; index += 4) {
+        const batch = externalSkills.slice(index, index + 4);
+        checked.push(...await Promise.all(batch.map((skill) => check(skill.id))));
+      }
+      setExternalSkills(checked);
+      const available = checked.filter((skill) => skill.updateAvailable).length;
+      setMessage(available === 0
+        ? t.skills.externalAlreadyLatest
+        : t.skills.externalUpdatesFound.replace("{count}", String(available)));
+    } catch (reason) {
+      setError(apiError(reason, t));
+    } finally {
+      setCheckingAll(false);
+    }
+  }
+
+  async function confirmExternalDelete(): Promise<void> {
+    if (externalDeleteModal === null) return;
+    try {
+      await required(api, "deleteExternalSkill")(externalDeleteModal.id);
+      setMessage(t.skills.externalDeleted.replace("{name}", externalSkillDisplayName(externalDeleteModal)));
+      setExternalDeleteModal(null);
+      await refresh();
+    } catch (reason) {
+      setError(apiError(reason, t));
+    }
+  }
+
   if (error !== null && skills === null) return <Empty>{error}</Empty>;
   return (
     <section className="stack governance-page page-module-v2 skill-registry-workbench" data-slot="skill-registry-workbench">
@@ -278,6 +312,12 @@ export function SkillRegistry({ api: apiValue }: { api?: HunterApi }) {
         title={t.skills.title}
         lede={t.skills.description}
         actions={<>
+          {externalSkills.length > 0 ? (
+            <button type="button" className="secondary" disabled={checkingAll} onClick={() => void checkAllExternalSkills()}>
+              {checkingAll ? <Spinner size={14} label={t.skills.externalCheckingAll} /> : <Icon name="refresh" size={14} />}
+              {checkingAll ? t.skills.externalCheckingAll : t.skills.externalCheckAll}
+            </button>
+          ) : null}
           <button type="button" className="secondary" onClick={() => setImportOpen(true)}>
             <Icon name="download" size={14} />
             {t.skills.importExternal}
@@ -332,7 +372,7 @@ export function SkillRegistry({ api: apiValue }: { api?: HunterApi }) {
               const sourceName = externalSkillSourceName(skill);
               return (
                 <div
-                  className={`skill-card-shell external-skill-card-shell skill-card-source-${skill.source.type} has-drag-handle${draggedCatalogKey === item.catalogKey ? " is-dragging" : ""}${dragOverCatalogKey === item.catalogKey ? " is-drop-target" : ""}`}
+                  className={`skill-card-shell external-skill-card-shell skill-card-source-${skill.source.type} has-card-action has-drag-handle${draggedCatalogKey === item.catalogKey ? " is-dragging" : ""}${dragOverCatalogKey === item.catalogKey ? " is-drop-target" : ""}`}
                   data-slot="external-skill-row"
                   data-catalog-card="true"
                   data-card-kind="external"
@@ -365,7 +405,7 @@ export function SkillRegistry({ api: apiValue }: { api?: HunterApi }) {
                     </div>
                     <p className="skill-card-description" title={description}>{description}</p>
                     <div className="skill-card-tags">
-                        {skill.updateAvailable ? <span className="tag">{t.skills.updateAvailableBadge}</span> : null}
+                        {skill.updateAvailable ? <span className="tag update-attention">{t.skills.externalUpdateTo.replace("{version}", skill.availableVersion ?? "—")}</span> : null}
                         {skill.tags.slice(0, 3).map((tag) => <span className="tag" key={tag}>{tagLabelBySlug.get(tag) ?? tag}</span>)}
                         {skill.tags.length > 3 ? <span className="tag skill-card-tag-more">+{skill.tags.length - 3}</span> : null}
                     </div>
@@ -375,6 +415,14 @@ export function SkillRegistry({ api: apiValue }: { api?: HunterApi }) {
                       <div><dt>{t.skills.updated}</dt><dd>{skill.updated_at.slice(0, 10)}</dd></div>
                     </dl>
                   </Link>
+                  <button
+                    type="button"
+                    className="skill-card-delete"
+                    data-slot="external-skill-delete"
+                    aria-label={`${t.common.delete} ${displayName}`}
+                    title={t.common.delete}
+                    onClick={(event) => { event.preventDefault(); event.stopPropagation(); setExternalDeleteModal(skill); }}
+                  ><Icon name="trash" size={14} /></button>
                 </div>
               );
             }
@@ -549,16 +597,6 @@ export function SkillRegistry({ api: apiValue }: { api?: HunterApi }) {
               required
             />
           </label>
-          <label className="form-field external-skill-import-field" htmlFor="external-skill-note">
-            <span className="form-label">{t.skills.importExternalNoteOptional}</span>
-            <textarea
-              id="external-skill-note"
-              value={importNote}
-              onChange={(event) => setImportNote(event.target.value)}
-              placeholder={t.skills.importExternalNotePlaceholder}
-              rows={4}
-            />
-          </label>
           <div
             id="external-skill-import-trust"
             className="external-skill-import-trust"
@@ -568,6 +606,18 @@ export function SkillRegistry({ api: apiValue }: { api?: HunterApi }) {
             <p>{t.skills.importExternalTrust}</p>
           </div>
         </form>
+      </Modal>
+      <Modal
+        open={externalDeleteModal !== null}
+        onClose={() => setExternalDeleteModal(null)}
+        title={t.common.delete}
+        closeLabel={t.common.cancel}
+        footer={<>
+          <button type="button" className="secondary" onClick={() => setExternalDeleteModal(null)}>{t.common.cancel}</button>
+          <button type="button" className="danger" onClick={() => void confirmExternalDelete()}>{t.common.delete}</button>
+        </>}
+      >
+        <p>{externalDeleteModal === null ? "" : t.skills.deleteConfirm.replace("{name}", externalSkillDisplayName(externalDeleteModal))}</p>
       </Modal>
     </section>
   );

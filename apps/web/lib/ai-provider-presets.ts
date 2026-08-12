@@ -18,19 +18,28 @@ export interface AiProviderPreset {
   baseUrl: string;
   apiFormat: "openai";
   accent: string;
+  pricingLabel: string;
+  pricingUrl: string;
   models: readonly AiProviderPresetModel[];
 }
 
-function model(id: string, displayModel: string, requestModel: string): AiProviderPresetModel {
+function model(
+  id: string,
+  displayModel: string,
+  requestModel: string,
+  inputCost: number,
+  outputCost: number,
+  cacheHitCost: number,
+  cacheCreateCost = 0
+): AiProviderPresetModel {
   return {
     id,
     displayModel,
     requestModel,
-    // 厂商价格变化频繁，预设不写死价格；用户可在高级设置中按实际账单维护。
-    inputCost: 0,
-    outputCost: 0,
-    cacheHitCost: 0,
-    cacheCreateCost: 0
+    inputCost,
+    outputCost,
+    cacheHitCost,
+    cacheCreateCost
   };
 }
 
@@ -49,10 +58,12 @@ export const AI_PROVIDER_PRESETS = [
     baseUrl: "https://api.openai.com/v1",
     apiFormat: "openai",
     accent: "#10a37f",
+    pricingLabel: "官方标准价格 · 2026-08",
+    pricingUrl: "https://openai.com/api/pricing/",
     models: [
-      model("gpt-5.6-sol", "GPT-5.6 Sol", "gpt-5.6-sol"),
-      model("gpt-5.6-terra", "GPT-5.6 Terra", "gpt-5.6-terra"),
-      model("gpt-5.6-luna", "GPT-5.6 Luna", "gpt-5.6-luna")
+      model("gpt-5.6-sol", "GPT-5.6 Sol", "gpt-5.6-sol", 5, 30, 0.5, 6.25),
+      model("gpt-5.6-terra", "GPT-5.6 Terra", "gpt-5.6-terra", 2.5, 15, 0.25, 3.125),
+      model("gpt-5.6-luna", "GPT-5.6 Luna", "gpt-5.6-luna", 1, 6, 0.1, 1.25)
     ]
   },
   {
@@ -65,9 +76,11 @@ export const AI_PROVIDER_PRESETS = [
     baseUrl: "https://api.deepseek.com",
     apiFormat: "openai",
     accent: "#4d6bfe",
+    pricingLabel: "官方标准价格 · 2026-08",
+    pricingUrl: "https://api-docs.deepseek.com/quick_start/pricing/",
     models: [
-      model("deepseek-v4-flash", "DeepSeek V4 Flash", "deepseek-v4-flash"),
-      model("deepseek-v4-pro", "DeepSeek V4 Pro", "deepseek-v4-pro")
+      model("deepseek-v4-flash", "DeepSeek V4 Flash", "deepseek-v4-flash", 0.14, 0.28, 0.0028),
+      model("deepseek-v4-pro", "DeepSeek V4 Pro", "deepseek-v4-pro", 0.435, 0.87, 0.003625)
     ]
   },
   {
@@ -80,26 +93,26 @@ export const AI_PROVIDER_PRESETS = [
     baseUrl: "https://openrouter.ai/api/v1",
     apiFormat: "openai",
     accent: "#7c5cff",
+    pricingLabel: "按最终路由模型动态计价",
+    pricingUrl: "https://openrouter.ai/models",
     models: [
-      model("openrouter-auto", "OpenRouter 自动选择", "openrouter/auto"),
-      model("openai-latest", "OpenAI 最新旗舰", "~openai/gpt-latest")
+      model("openrouter-auto", "OpenRouter 自动选择", "openrouter/auto", 0, 0, 0)
     ]
   },
   {
     id: "kimi",
     label: "Kimi",
     initials: "KM",
-    description: "Moonshot 官方兼容接口，适合中文与长文本任务。",
+    description: "Moonshot 官方兼容接口，使用最新 Kimi K2.6 处理中文、代码与长文本任务。",
     note: "Kimi / Moonshot 官方接口",
     website: "https://platform.kimi.ai",
     baseUrl: "https://api.moonshot.ai/v1",
     apiFormat: "openai",
     accent: "#6f5cff",
+    pricingLabel: "官方标准价格 · 2026-08",
+    pricingUrl: "https://platform.kimi.ai/",
     models: [
-      model("kimi-k3", "Kimi K3", "kimi-k3"),
-      model("kimi-k2.7-code", "Kimi K2.7 Code", "kimi-k2.7-code"),
-      model("kimi-k2.7-code-highspeed", "Kimi K2.7 Code 高速版", "kimi-k2.7-code-highspeed"),
-      model("kimi-k2.6", "Kimi K2.6", "kimi-k2.6")
+      model("kimi-k2.6", "Kimi K2.6", "kimi-k2.6", 0.95, 4, 0.16)
     ]
   },
   {
@@ -112,10 +125,11 @@ export const AI_PROVIDER_PRESETS = [
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     apiFormat: "openai",
     accent: "#4285f4",
+    pricingLabel: "官方标准价格 · 2026-08",
+    pricingUrl: "https://ai.google.dev/gemini-api/docs/pricing",
     models: [
-      model("gemini-3.6-flash", "Gemini 3.6 Flash", "gemini-3.6-flash"),
-      model("gemini-3.5-flash", "Gemini 3.5 Flash", "gemini-3.5-flash"),
-      model("gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite", "gemini-3.5-flash-lite")
+      model("gemini-3.6-flash", "Gemini 3.6 Flash", "gemini-3.6-flash", 1.5, 7.5, 0.15),
+      model("gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview", "gemini-3.1-pro-preview", 2, 12, 0.2)
     ]
   }
 ] as const satisfies readonly AiProviderPreset[];

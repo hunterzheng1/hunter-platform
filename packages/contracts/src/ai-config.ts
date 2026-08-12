@@ -63,7 +63,13 @@ export const aiQuotaUsageSchema = z.object({
   output_tokens: z.number().int().nonnegative().default(0),
   cache_hit_tokens: z.number().int().nonnegative().default(0),
   cache_create_tokens: z.number().int().nonnegative().default(0),
-  cost: z.number().nonnegative().default(0)
+  cost: z.number().nonnegative().default(0),
+  hourly: z.array(z.object({
+    hour: z.number().int().min(0).max(23),
+    requests: z.number().int().nonnegative(),
+    tokens: z.number().int().nonnegative(),
+    cost: z.number().nonnegative()
+  }).strict()).optional()
 }).strict();
 
 export const aiConfigStateSchema = z.object({

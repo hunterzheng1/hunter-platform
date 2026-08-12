@@ -1,6 +1,6 @@
 "use client";
 
-import type { ExternalSkill, ExternalSkillQuickStartStep, RegistryTag } from "@hunter-harness/contracts";
+import type { ExternalSkill, ExternalSkillCommandCheatsheetItem, ExternalSkillQuickStartStep, ExternalSkillUpdateRecord, RegistryTag } from "@hunter-harness/contracts";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -18,12 +18,42 @@ import { useI18n } from "../lib/i18n";
 import { mockApi } from "../lib/mock-api";
 import { Empty, Status, apiError, required, MarkdownDocument } from "./skill-shared";
 import { Icon } from "./ui/icons";
+import { Modal } from "./ui/Modal";
 import { ToastFeedback } from "./ui/Toast";
 
 function useApi(value?: HunterApi): HunterApi {
   return useMemo(() => value ?? (
     process.env.NEXT_PUBLIC_HUNTER_HARNESS_DEMO === "true" ? mockApi : browserApi()
   ), [value]);
+}
+
+function ShellCommandBlock({
+  commands,
+  commandLabel,
+  copyLabel,
+  onCopy,
+  dataSlot = "external-workflow-command"
+}: {
+  commands: string[];
+  commandLabel: string;
+  copyLabel: string;
+  onCopy: (commands: string[]) => void;
+  dataSlot?: string;
+}) {
+  return (
+    <div className="external-workflow-command" data-slot={dataSlot}>
+      <div className="external-workflow-command-head" data-slot="external-workflow-command-header">
+        <span>{commandLabel}</span>
+        <button data-slot="external-workflow-command-copy" type="button" aria-label={copyLabel} title={copyLabel} onClick={() => onCopy(commands)}>
+          <Icon name="copy" size={13} />
+          {copyLabel}
+        </button>
+      </div>
+      <pre><code>{commands.map((command, commandIndex) => (
+        <span data-slot="external-workflow-command-line" key={`${commandIndex}-${command}`}>{command}</span>
+      ))}</code></pre>
+    </div>
+  );
 }
 
 function SummaryList({
@@ -50,6 +80,15 @@ function SummaryList({
   );
 }
 
+const SKILL_REFERENCE_PART = /([a-z0-9]+(?:-[a-z0-9]+)+)/giu;
+const SKILL_REFERENCE = /^[a-z0-9]+(?:-[a-z0-9]+)+$/iu;
+
+function HighlightedWorkflowInstruction({ children }: { children: string }) {
+  return <>{children.split(SKILL_REFERENCE_PART).map((part, index) => SKILL_REFERENCE.test(part)
+    ? <code className="external-workflow-skill-reference" data-slot="external-workflow-skill-reference" key={`${part}-${index}`}>{part}</code>
+    : part)}</>;
+}
+
 function QuickStartWorkflow({
   steps,
   legacyItems,
@@ -57,7 +96,10 @@ function QuickStartWorkflow({
   hint,
   missing,
   startLabel,
-  stepCountLabel
+  stepCountLabel,
+  commandLabel,
+  copyLabel,
+  onCopy
 }: {
   steps: ExternalSkillQuickStartStep[];
   legacyItems: string[];
@@ -66,6 +108,9 @@ function QuickStartWorkflow({
   missing: string;
   startLabel: string;
   stepCountLabel: string;
+  commandLabel: string;
+  copyLabel: string;
+  onCopy: (commands: string[]) => void;
 }) {
   const items = steps.length > 0
     ? steps
@@ -101,9 +146,9 @@ function QuickStartWorkflow({
               <span className="external-workflow-index" aria-hidden="true">{index + 1}</span>
               <div className="external-workflow-copy">
                 <strong>{step.title}</strong>
-                <p>{step.instruction}</p>
+                <p><HighlightedWorkflowInstruction>{step.instruction}</HighlightedWorkflowInstruction></p>
                 {step.commands.length === 0 ? null : (
-                  <pre><code>{step.commands.join("\n")}</code></pre>
+                  <ShellCommandBlock commands={step.commands} commandLabel={commandLabel} copyLabel={copyLabel} onCopy={onCopy} />
                 )}
               </div>
             </li>
@@ -112,6 +157,58 @@ function QuickStartWorkflow({
       )}
     </section>
   );
+}
+
+function CommonCommands({
+  items,
+  title,
+  hint,
+  copyLabel,
+  onCopy
+}: {
+  items: ExternalSkillCommandCheatsheetItem[];
+  title: string;
+  hint: string;
+  copyLabel: string;
+  onCopy: (commands: string[]) => void;
+}) {
+  if (items.length === 0) return null;
+  return <section className="external-summary-section external-summary-common-commands external-summary-section-wide" data-slot="external-summary-common-commands" data-layout="cheatsheet">
+    <header className="external-common-commands-copy">
+      <h3><Icon name="zap" size={15} /> {title}</h3>
+      <p>{hint}</p>
+    </header>
+    <div className="external-command-cheatsheet" data-slot="external-command-cheatsheet">
+      {items.map((item) => <article data-slot="external-command-cheatsheet-item" key={item.command}>
+        <div>
+          <code><span aria-hidden="true">$</span>{item.command}</code>
+          <p>{item.description}</p>
+        </div>
+        <button data-slot="external-command-cheatsheet-copy" type="button" aria-label={`${copyLabel}：${item.command}`} title={copyLabel} onClick={() => onCopy([item.command])}>
+          <Icon name="copy" size={13} /> <span>{copyLabel}</span>
+        </button>
+      </article>)}
+    </div>
+  </section>;
+}
+
+function isOperationalCommand(command: string): boolean {
+  const normalized = command.trim().toLowerCase();
+  if (/^(?:cd|pushd|popd)\b/.test(normalized)) return false;
+  if (/^(?:curl|wget|irm|iwr)\b/.test(normalized)) return false;
+  if (/^(?:npm|pnpm|yarn|bun)\s+(?:i|install|add)\b/.test(normalized)) return false;
+  if (/\b(?:install|setup)\b/.test(normalized)) return false;
+  return true;
+}
+
+function legacyCommandCheatsheet(steps: ExternalSkillQuickStartStep[]): ExternalSkillCommandCheatsheetItem[] {
+  const seen = new Set<string>();
+  return steps.flatMap((step) => step.commands
+    .filter((command) => isOperationalCommand(command) && !seen.has(command))
+    .map((command) => {
+      seen.add(command);
+      return { command, description: `${step.title}：${step.instruction}` };
+    })).slice(0, 10);
 }
 
 function tagSlugFromLabel(label: string): string {
@@ -127,12 +224,15 @@ function tagSlugFromLabel(label: string): string {
   return `tag-${(hash >>> 0).toString(36)}`;
 }
 
+function mergedUpdateLines(record: ExternalSkillUpdateRecord): string[] {
+  return [...new Set(record.changes.map((change) => change.replace(/^[-*•]\s*/, "").trim()).filter(Boolean))].slice(0, 8);
+}
+
 export function ExternalSkillDetail({ api: apiValue, skillId }: { api?: HunterApi; skillId: string }) {
   const { t } = useI18n();
   const api = useApi(apiValue);
   const router = useRouter();
   const [skill, setSkill] = useState<ExternalSkill | null>(null);
-  const [note, setNote] = useState("");
   const [availableTags, setAvailableTags] = useState<RegistryTag[]>([]);
   const [tagSlugs, setTagSlugs] = useState<string[]>([]);
   const [newTagLabel, setNewTagLabel] = useState("");
@@ -140,7 +240,9 @@ export function ExternalSkillDetail({ api: apiValue, skillId }: { api?: HunterAp
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [summaryGenerating, setSummaryGenerating] = useState(false);
+  const [refreshingHistory, setRefreshingHistory] = useState<string | null>(null);
   const [showReadme, setShowReadme] = useState(false);
+  const [updateConfirmOpen, setUpdateConfirmOpen] = useState(false);
 
   async function refresh(): Promise<void> {
     try {
@@ -149,7 +251,6 @@ export function ExternalSkillDetail({ api: apiValue, skillId }: { api?: HunterAp
         api.listTags === undefined ? Promise.resolve([]) : api.listTags().catch(() => [])
       ]);
       setSkill(next);
-      setNote(next.curationNote);
       setTagSlugs(next.tags);
       setAvailableTags(tags);
       setError(null);
@@ -160,20 +261,18 @@ export function ExternalSkillDetail({ api: apiValue, skillId }: { api?: HunterAp
 
   useEffect(() => { void refresh(); }, [api, skillId]);
 
-  async function saveCuration(): Promise<void> {
+  async function saveTags(): Promise<void> {
     if (skill === null || busy) return;
     setBusy(true);
     setError(null);
     try {
       const next = await required(api, "patchExternalSkill")(skill.id, {
-        curationNote: note,
         tags: [...new Set(tagSlugs)].sort(),
         revision: skill.revision
       });
       setSkill(next);
-      setNote(next.curationNote);
       setTagSlugs(next.tags);
-      setMessage(t.skills.externalCurationSaved);
+      setMessage(t.skills.externalTagsSaved);
     } catch (reason) {
       setError(apiError(reason, t));
     } finally {
@@ -181,18 +280,53 @@ export function ExternalSkillDetail({ api: apiValue, skillId }: { api?: HunterAp
     }
   }
 
-  async function refreshUpstream(): Promise<void> {
+  async function checkUpstream(): Promise<void> {
     if (skill === null || busy) return;
     setBusy(true);
     try {
-      const next = await required(api, "refreshExternalSkill")(skill.id);
+      const next = await required(api, "checkExternalSkill")(skill.id);
       setSkill(next);
-      setNote(next.curationNote);
       setTagSlugs(next.tags);
-      setMessage(t.skills.externalRefreshed);
+      if (next.updateAvailable) setUpdateConfirmOpen(true);
+      else setMessage(t.skills.externalAlreadyLatest);
     } catch (reason) {
       setError(apiError(reason, t));
     } finally {
+      setBusy(false);
+    }
+  }
+
+  async function applyUpstream(): Promise<void> {
+    if (skill === null || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const next = await required(api, "refreshExternalSkill")(skill.id);
+      setSkill(next);
+      setTagSlugs(next.tags);
+      setUpdateConfirmOpen(false);
+      setMessage(t.skills.externalUpdateApplied.replace("{version}", next.snapshot.version ?? "—"));
+    } catch (reason) {
+      setError(apiError(reason, t));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refreshUpdateHistory(appliedAt: string): Promise<void> {
+    if (skill === null || busy) return;
+    setBusy(true);
+    setRefreshingHistory(appliedAt);
+    setError(null);
+    try {
+      const next = await required(api, "refreshExternalSkillUpdateHistory")(skill.id, appliedAt);
+      setSkill(next);
+      setTagSlugs(next.tags);
+      setMessage(t.skills.externalUpdateNotesRefreshed);
+    } catch (reason) {
+      setError(apiError(reason, t));
+    } finally {
+      setRefreshingHistory(null);
       setBusy(false);
     }
   }
@@ -233,6 +367,7 @@ export function ExternalSkillDetail({ api: apiValue, skillId }: { api?: HunterAp
     setBusy(true);
     setSummaryGenerating(true);
     setError(null);
+    setMessage(null);
     try {
       const next = await required(api, "generateExternalSkillSummary")(
         skill.id,
@@ -242,25 +377,23 @@ export function ExternalSkillDetail({ api: apiValue, skillId }: { api?: HunterAp
       setSkill(next);
       setMessage(t.skills.externalSummaryGenerated);
     } catch (reason) {
+      try {
+        const reconciled = await required(api, "getExternalSkill")(skill.id);
+        const previousGeneratedAt = skill.aiSummary?.generated_at ?? null;
+        const reconciledGeneratedAt = reconciled.aiSummary?.generated_at ?? null;
+        if (reconciledGeneratedAt !== null && reconciledGeneratedAt !== previousGeneratedAt) {
+          setSkill(reconciled);
+          setTagSlugs(reconciled.tags);
+          setError(null);
+          setMessage(t.skills.externalSummaryGenerated);
+          return;
+        }
+      } catch {
+        // 原请求失败后只做一次只读对账；对账本身失败时保留原始错误。
+      }
       setError(apiError(reason, t));
     } finally {
       setSummaryGenerating(false);
-      setBusy(false);
-    }
-  }
-
-  async function acknowledgeUpdate(): Promise<void> {
-    if (skill === null || busy) return;
-    setBusy(true);
-    try {
-      const next = await required(api, "patchExternalSkill")(skill.id, {
-        acknowledgeUpdate: true,
-        revision: skill.revision
-      });
-      setSkill(next);
-    } catch (reason) {
-      setError(apiError(reason, t));
-    } finally {
       setBusy(false);
     }
   }
@@ -270,6 +403,15 @@ export function ExternalSkillDetail({ api: apiValue, skillId }: { api?: HunterAp
     try {
       await navigator.clipboard.writeText(skill.snapshot.installCommand);
       setMessage(t.skills.externalCopied);
+    } catch {
+      setError(apiError(new Error("clipboard unavailable"), t));
+    }
+  }
+
+  async function copyWorkflowCommands(commands: string[]): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(commands.join("\n"));
+      setMessage(t.skills.externalSummaryCommandCopied);
     } catch {
       setError(apiError(new Error("clipboard unavailable"), t));
     }
@@ -298,6 +440,9 @@ export function ExternalSkillDetail({ api: apiValue, skillId }: { api?: HunterAp
   const repositoryUrl = externalSkillRepositoryUrl(skill);
   const isGithubSource = skill.source.type === "github";
   const summary = skill.aiSummary ?? null;
+  const commandCheatsheet = summary === null
+    ? []
+    : summary.command_cheatsheet ?? legacyCommandCheatsheet(summary.quick_start ?? []);
   const tagBySlug = new Map(availableTags.map((tag) => [tag.slug, tag]));
   const selectedTags = tagSlugs.map((slug) => ({ slug, label: tagBySlug.get(slug)?.label ?? slug }));
   const addableTags = availableTags.filter((tag) => tag.active && !tagSlugs.includes(tag.slug));
@@ -317,12 +462,25 @@ export function ExternalSkillDetail({ api: apiValue, skillId }: { api?: HunterAp
             <p className="lede">{description || t.skills.externalDetailTitle}</p>
           </div>
         </div>
-        <div className="external-skill-hero-badges">
-          <Status value="governed" />
-          <span className="tag">{t.skills.externalBadge}</span>
-          <span className="tag">{sourceName}</span>
-          <span className="meta-pill meta-pill-version">{skill.snapshot.version ?? "—"}</span>
-          {skill.updateAvailable ? <span className="tag">{t.skills.updateAvailableBadge}</span> : null}
+        <div className="external-skill-hero-side" data-slot="external-skill-upstream-controls">
+          <div className="external-skill-hero-badges">
+            <Status value="governed" />
+            <span className="tag">{sourceName}</span>
+            <span className="meta-pill meta-pill-version">{skill.snapshot.version ?? "—"}</span>
+            {skill.updateAvailable ? <span className="tag update-attention"><Icon name="warning" size={13} /> {t.skills.externalUpdateTo.replace("{version}", skill.availableVersion ?? t.skills.externalChanged)}</span> : null}
+          </div>
+          <div className="external-skill-hero-actions">
+            {skill.updateAvailable ? (
+              <button data-slot="external-skill-update-now" type="button" className="primary update-now" disabled={busy} onClick={() => setUpdateConfirmOpen(true)}>
+                <Icon name="download" size={14} />
+                {t.skills.externalUpdateNow.replace("{version}", skill.availableVersion ?? t.skills.externalChanged)}
+              </button>
+            ) : (
+              <button type="button" className="secondary" disabled={busy} onClick={() => void checkUpstream()}><Icon name="refresh" size={14} />{t.skills.externalCheckUpdates}</button>
+            )}
+            {repositoryUrl === null ? null : <a className="secondary" href={repositoryUrl} target="_blank" rel="noreferrer"><Icon name="folder" size={14} />{t.skills.externalOpenRepository}</a>}
+            <button type="button" className="danger icon-button" aria-label={t.skills.externalDelete} title={t.skills.externalDelete} disabled={busy} onClick={() => void remove()}><Icon name="trash" size={14} /></button>
+          </div>
         </div>
       </header>
 
@@ -349,12 +507,6 @@ export function ExternalSkillDetail({ api: apiValue, skillId }: { api?: HunterAp
                     ? t.skills.externalSummaryGenerate
                     : t.skills.externalSummaryRegenerate}
               </button>
-              {repositoryUrl === null ? null : (
-                <a className="secondary external-open-repository" href={repositoryUrl} target="_blank" rel="noreferrer">
-                  <Icon name="folder" size={14} />
-                  {t.skills.externalOpenRepository}
-                </a>
-              )}
             </div>
           </header>
           {summaryGenerating ? (
@@ -393,6 +545,16 @@ export function ExternalSkillDetail({ api: apiValue, skillId }: { api?: HunterAp
                   missing={t.skills.externalSummaryGettingStartedMissing}
                   startLabel={t.skills.externalSummaryWorkflowStart}
                   stepCountLabel={t.skills.externalSummaryWorkflowSteps}
+                  commandLabel={t.skills.externalSummaryWorkflowCommand}
+                  copyLabel={t.skills.externalSummaryCopyCommand}
+                  onCopy={(commands) => void copyWorkflowCommands(commands)}
+                />
+                <CommonCommands
+                  items={commandCheatsheet}
+                  title={t.skills.externalSummaryCommonCommands}
+                  hint={t.skills.externalSummaryCommonCommandsHint}
+                  copyLabel={t.skills.externalSummaryCopyCommand}
+                  onCopy={(commands) => void copyWorkflowCommands(commands)}
                 />
                 <SummaryList title={t.skills.externalSummaryCapabilities} items={summary.capabilities} icon="zap" />
                 <SummaryList title={t.skills.externalSummaryUseCases} items={summary.use_cases} icon="tasks" />
@@ -401,7 +563,7 @@ export function ExternalSkillDetail({ api: apiValue, skillId }: { api?: HunterAp
                 )}
               </div>
               <p className="external-summary-provenance">
-                <span>{t.skills.externalSummarySource}</span>
+                <span>{t.skills.externalSummaryVersion.replace("{version}", summary.source_version ?? skill.snapshot.version ?? "—")}</span>
                 <strong>{summary.provider_id} · {summary.model}</strong>
                 <time dateTime={summary.generated_at}>{summary.generated_at.slice(0, 16).replace("T", " ")}</time>
               </p>
@@ -435,12 +597,24 @@ export function ExternalSkillDetail({ api: apiValue, skillId }: { api?: HunterAp
         <aside className="external-skill-detail-rail">
           <section className="panel panel-themed external-skill-rail-card external-install-card">
             <div className="panel-title"><h2>{isGithubSource ? t.skills.externalSourceAddress : t.skills.externalInstallCommand}</h2></div>
-            <pre className="external-install-command"><code>{skill.snapshot.installCommand}</code></pre>
+            {isGithubSource && repositoryUrl !== null ? (
+              <a data-slot="external-skill-source-address" className="external-source-address" href={repositoryUrl} target="_blank" rel="noreferrer">
+                <Icon name="folder" size={14} />
+                <span>{repositoryUrl}</span>
+              </a>
+            ) : (
+              <ShellCommandBlock
+                commands={[skill.snapshot.installCommand]}
+                commandLabel={t.skills.externalSummaryWorkflowCommand}
+                copyLabel={t.skills.externalSummaryCopyCommand}
+                onCopy={() => void copyInstall()}
+                dataSlot="external-install-command"
+              />
+            )}
             <div className="external-install-actions">
-              <button type="button" className="primary" onClick={() => void copyInstall()}>
-                <Icon name="copy" size={14} />
-                {isGithubSource ? t.skills.externalCopyAddress : t.skills.externalCopyInstall}
-              </button>
+              {isGithubSource ? <button type="button" className="primary" onClick={() => void copyInstall()}>
+                <Icon name="copy" size={14} />{t.skills.externalCopyAddress}
+              </button> : null}
               {skill.snapshot.releaseUrl ? (
                 <a className="secondary" href={skill.snapshot.releaseUrl} target="_blank" rel="noreferrer">{t.skills.externalReleaseLink}</a>
               ) : null}
@@ -458,27 +632,48 @@ export function ExternalSkillDetail({ api: apiValue, skillId }: { api?: HunterAp
             </dl>
           </section>
 
-          <section className="panel panel-themed external-skill-rail-card external-curation-card">
-            <div className="panel-title"><h2>{t.skills.externalCuration}</h2></div>
-            <section className="external-tag-editor" aria-labelledby="external-tag-editor-title">
-              <div className="external-tag-editor-heading">
-                <strong id="external-tag-editor-title">{t.skills.externalTagsTitle}</strong>
-                <span>{t.skills.externalTagsHint}</span>
+          {(skill.updateHistory ?? []).length === 0 ? null : <section className="panel panel-themed external-skill-rail-card external-update-history" data-slot="external-skill-update-history" data-testid="external-skill-update-history">
+            <div className="panel-title"><h2>{t.skills.externalUpdateHistory}</h2></div>
+            <ol>{(skill.updateHistory ?? []).slice(0, 5).map((record) => <li key={`${record.applied_at}-${record.to_version}`}>
+              <div className="external-update-transition">
+                <div><strong>{record.from_version ?? "—"} → {record.to_version ?? "—"}</strong><time dateTime={record.applied_at}>{record.applied_at.slice(0, 16).replace("T", " ")}</time></div>
+                <button
+                  data-slot="external-update-notes-refresh"
+                  type="button"
+                  className="secondary external-update-refresh"
+                  disabled={busy}
+                  aria-label={t.skills.externalRefreshUpdateNotes}
+                  onClick={() => void refreshUpdateHistory(record.applied_at)}
+                >
+                  <Icon name={refreshingHistory === record.applied_at ? "loading" : "refresh"} size={12} />
+                  {refreshingHistory === record.applied_at ? t.skills.externalRefreshingUpdateNotes : t.skills.externalRefreshUpdateNotes}
+                </button>
               </div>
-              <div className="external-tag-options">
-                {selectedTags.length === 0 ? <span className="external-tags-empty">{t.skills.externalTagsEmpty}</span> : selectedTags.map((tag) => (
-                  <button
-                    key={tag.slug}
-                    type="button"
-                    className="external-tag-option selected"
-                    aria-pressed="true"
-                    aria-label={t.skills.externalRemoveTagAction.replace("{label}", tag.label)}
-                    disabled={busy}
-                    onClick={() => toggleTag(tag.slug)}
-                  >
-                    {tag.label}<span aria-hidden="true">×</span>
-                  </button>
-                ))}
+              <ul className="external-update-summary" data-slot="external-update-summary">{mergedUpdateLines(record).map((change) => <li key={change}>{change}</li>)}</ul>
+              {record.source_url === null ? null : <a className="external-update-source" data-slot="external-update-source" href={record.source_url} target="_blank" rel="noreferrer">{t.skills.externalUpdateSource}</a>}
+            </li>)}</ol>
+          </section>}
+
+          <section className="panel panel-themed external-skill-rail-card external-tags-card" data-slot="external-skill-tags">
+            <div className="panel-title external-tags-title"><div><h2>{t.skills.externalTagsTitle}</h2><p>{t.skills.externalTagsHint}</p></div></div>
+            <section className="external-tag-editor" aria-labelledby="external-tag-editor-title">
+              <div className="external-tag-group">
+                <strong id="external-tag-editor-title">{t.skills.externalSelectedTags}</strong>
+                <div className="external-tag-options">
+                  {selectedTags.length === 0 ? <span className="external-tags-empty">{t.skills.externalTagsEmpty}</span> : selectedTags.map((tag) => (
+                    <button
+                      key={tag.slug}
+                      type="button"
+                      className="external-tag-option selected"
+                      aria-pressed="true"
+                      aria-label={t.skills.externalRemoveTagAction.replace("{label}", tag.label)}
+                      disabled={busy}
+                      onClick={() => toggleTag(tag.slug)}
+                    >
+                      {tag.label}<span aria-hidden="true">×</span>
+                    </button>
+                  ))}
+                </div>
               </div>
               {addableTags.length === 0 ? null : (
                 <div className="external-tag-library">
@@ -521,19 +716,8 @@ export function ExternalSkillDetail({ api: apiValue, skillId }: { api?: HunterAp
                 </div>
               </label>
             </section>
-            <label className="external-curation-field">
-              <span>{t.skills.importExternalNote}</span>
-              <textarea value={note} onChange={(event) => setNote(event.target.value)} rows={4} />
-            </label>
-            <div className="external-curation-actions">
-              <button type="button" disabled={busy} onClick={() => void saveCuration()}>{t.skills.externalSaveCuration}</button>
-              <button type="button" className="secondary" disabled={busy} onClick={() => void refreshUpstream()}>{t.skills.externalRefresh}</button>
-              {skill.updateAvailable ? (
-                <button type="button" className="secondary span-full" disabled={busy} onClick={() => void acknowledgeUpdate()}>
-                  {t.skills.externalAcknowledgeUpdate}
-                </button>
-              ) : null}
-              <button type="button" className="danger span-full" disabled={busy} onClick={() => void remove()}>{t.skills.externalDelete}</button>
+            <div className="external-curation-actions external-tags-actions" data-slot="external-skill-tags-actions">
+              <button type="button" className="primary" disabled={busy} onClick={() => void saveTags()}>{t.skills.externalSaveTags}</button>
             </div>
           </section>
         </aside>
@@ -541,6 +725,13 @@ export function ExternalSkillDetail({ api: apiValue, skillId }: { api?: HunterAp
 
       <ToastFeedback tone="success" message={message} />
       <ToastFeedback tone="danger" message={error} />
+      <Modal open={updateConfirmOpen} onClose={() => setUpdateConfirmOpen(false)} title={t.skills.externalUpdateAvailableTitle} closeLabel={t.common.cancel}>
+        <div className="external-update-confirm" data-slot="external-skill-update-confirmation">
+          <p>{t.skills.externalUpdateAvailableBody}</p>
+          <div className="external-version-transition"><span>{skill.snapshot.version ?? "—"}</span><strong>→</strong><span>{skill.availableVersion ?? t.skills.externalChanged}</span></div>
+          <div className="modal-actions"><button type="button" className="secondary" onClick={() => setUpdateConfirmOpen(false)}>{t.common.cancel}</button><button type="button" className="primary" disabled={busy} onClick={() => void applyUpstream()}>{t.skills.externalApplyUpdate}</button></div>
+        </div>
+      </Modal>
     </section>
   );
 }

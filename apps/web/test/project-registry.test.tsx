@@ -77,10 +77,11 @@ describe("project-list helpers", () => {
     expect(paginateProjects(items, 99, 6).pageItems).toEqual(items.slice(12));
   });
 
-  it("matches display name or project id", () => {
+  it("only matches the user-facing project name", () => {
     const item = project({ project_id: "agent-harness", display_name: "Agent Harness" });
     expect(projectMatchesQuery(item, "agent")).toBe(true);
     expect(projectMatchesQuery(item, "harness")).toBe(true);
+    expect(projectMatchesQuery(item, "agent-harness")).toBe(false);
     expect(projectMatchesQuery(item, "nope")).toBe(false);
   });
 });
@@ -88,17 +89,28 @@ describe("project-list helpers", () => {
 describe("ProjectRegistry list UX", () => {
   it("keeps project ids out of the visible catalog and labels search by project name", async () => {
     const hiddenId = "prj_internal_8f62a9";
+    const internalVersion = "pv_cb80b916df224661afb2ae7923387101";
     const api = {
       listProjects: vi.fn(async (state: "active" | "archived" = "active") => state === "active"
-        ? [project({ project_id: hiddenId, display_name: "支付网关" })]
+        ? [project({ project_id: hiddenId, display_name: "支付网关", latest_project_version: internalVersion, current_file_count: 14 })]
         : []),
-      listProjectRuns: vi.fn(async () => ({ items: [], total: 0, next_cursor: null }))
+      listProjectRuns: vi.fn(async () => ({ items: [], total: 3, next_cursor: null })),
+      getProjectSemanticOverview: vi.fn(async () => ({
+        project_id: hiddenId,
+        artifact_id: "art_test",
+        counts: { documents: 18, knowledge: 10, rules: 2, changes: 3, architecture: 1, agent_instructions: 2, edges: 8 }
+      }))
     } as unknown as HunterApi;
 
     render(<ProjectRegistry api={api} />);
 
     expect(await screen.findByRole("heading", { name: "支付网关" })).toBeInTheDocument();
     expect(screen.queryByText(hiddenId)).toBeNull();
+    expect(screen.queryByText(internalVersion)).toBeNull();
+    expect(screen.getByText("已有远端版本")).toBeInTheDocument();
+    expect(screen.getAllByText("项目文件").length).toBeGreaterThan(0);
+    expect(await screen.findByText("3 个分支")).toBeInTheDocument();
+    expect(await screen.findByText("10 条知识")).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: /搜索项目|Search projects/i }))
       .toHaveAttribute("placeholder", "按项目名称搜索");
     expect(document.querySelector('[data-slot="project-card-grid"]'))
@@ -183,7 +195,7 @@ describe("ProjectRegistry list UX", () => {
     expect(screen.getAllByText(/第 2\s*\/\s*2 页|Page 2\s*\/\s*2/i).length).toBeGreaterThan(0);
   });
 
-  it("hides the pager on a single page and shows version badges", async () => {
+  it("hides the pager on a single page and shows readable version states", async () => {
     const items = [
       project({ project_id: "a", display_name: "Alpha", latest_project_version: "v2.4.1", updated_at: "2026-07-17T12:00:00Z" }),
       project({ project_id: "b", display_name: "Beta", latest_project_version: null, updated_at: "2026-07-16T12:00:00Z" })
@@ -196,13 +208,14 @@ describe("ProjectRegistry list UX", () => {
     } as unknown as HunterApi;
 
     render(<ProjectRegistry api={api} />);
-    expect(await screen.findByText("v2.4.1")).toBeInTheDocument();
+    expect(await screen.findByText(/已有远端版本|Remote version available/i)).toBeInTheDocument();
+    expect(screen.queryByText("v2.4.1")).toBeNull();
     expect(screen.getByText(/等待首次同步|Awaiting first sync/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /下一页|Next/i })).toBeNull();
     expect(document.querySelector(".project-registry-toolbar > span")?.textContent).toMatch(/2/);
   });
 
-  it("filters by project id and closes the confirm dialog with Escape", async () => {
+  it("filters by project name and closes the confirm dialog with Escape", async () => {
     const items = [
       project({ project_id: "agent-harness", display_name: "Agent Harness", updated_at: "2026-07-17T12:00:00Z" }),
       project({ project_id: "skill-registry", display_name: "Skill Registry", updated_at: "2026-07-16T12:00:00Z" })
@@ -218,7 +231,7 @@ describe("ProjectRegistry list UX", () => {
     expect(await screen.findByRole("heading", { name: "Agent Harness" })).toBeInTheDocument();
 
     fireEvent.change(screen.getByRole("textbox", { name: /搜索项目|Search projects/i }), {
-      target: { value: "skill-reg" }
+      target: { value: "Skill Registry" }
     });
     expect(screen.getByRole("heading", { name: "Skill Registry" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Agent Harness" })).toBeNull();

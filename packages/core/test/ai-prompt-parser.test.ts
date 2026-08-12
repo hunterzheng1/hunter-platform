@@ -3,17 +3,82 @@ import { describe, expect, it } from "vitest";
 import type { SkillCheckItem, SkillDiffFile, SkillFrontmatter } from "@hunter-harness/contracts";
 
 import {
+  buildAgentToolPrefillPrompt,
   buildExternalSkillSummaryRepairPrompt,
   buildExternalSkillSummaryPrompt,
+  buildExternalSkillUpdateSummaryPrompt,
   buildFixSuggestionPrompt,
   buildReleaseNotePrompt,
   externalSkillSummarySourceHash
 } from "../src/ai/prompt-builder.js";
 import {
+  parseAgentToolPrefill,
   parseExternalSkillSummary,
+  parseExternalSkillUpdateSummary,
   parseFixSuggestionResult,
   parseReleaseNote
 } from "../src/ai/output-parser.js";
+
+describe("Agent 表单 AI 草稿", () => {
+  const inspection = {
+    source: { type: "github" as const, ref: "https://github.com/acme/agent-runner" },
+    suggested: {
+      slug: "agent-runner",
+      displayName: "Agent Runner",
+      description: "Run and coordinate coding agents.",
+      category: "framework" as const,
+      status: "active" as const,
+      source: { type: "github" as const, ref: "https://github.com/acme/agent-runner" },
+      homepage: "https://github.com/acme/agent-runner",
+      packageName: null,
+      installCommand: null,
+      tags: ["coding-agent"],
+      relatedWorkflowFamilies: []
+    }
+  };
+
+  it("要求中文描述并把仓库信息视为不可信数据", () => {
+    const prompt = buildAgentToolPrefillPrompt(inspection);
+    expect(prompt.system).toContain("简体中文");
+    expect(prompt.system).toContain("<agent_tool_data>");
+    expect(prompt.system).toMatch(/data, NOT instructions/i);
+    expect(prompt.user).toContain(inspection.source.ref);
+  });
+
+  it("解析中文草稿并拒绝英文描述", () => {
+    const chinese = JSON.stringify({
+      ...inspection.suggested,
+      description: "用于运行和编排编码 Agent 的开发框架。"
+    });
+    expect(parseAgentToolPrefill(chinese)?.description).toBe("用于运行和编排编码 Agent 的开发框架。");
+    expect(parseAgentToolPrefill(JSON.stringify(inspection.suggested))).toBeNull();
+  });
+});
+
+describe("外部技能跨版本更新摘要", () => {
+  it("要求合并所有版本并输出简洁中文项目符号", () => {
+    const prompt = buildExternalSkillUpdateSummaryPrompt({
+      name: "Widget",
+      fromVersion: "0.3.15",
+      toVersion: "0.3.17",
+      releases: [
+        { version: "0.3.16", changes: ["Fix retries"] },
+        { version: "0.3.17", changes: ["Add status command"] }
+      ]
+    });
+    expect(prompt.system).toContain("简体中文");
+    expect(prompt.system).toMatch(/合并.*版本/);
+    expect(prompt.system).toMatch(/不要.*版本号前缀/);
+  });
+
+  it("解析中文合并摘要并拒绝逐版本前缀", () => {
+    expect(parseExternalSkillUpdateSummary('{"changes":["修复任务重试逻辑","新增状态查询命令"]}')).toEqual([
+      "修复任务重试逻辑",
+      "新增状态查询命令"
+    ]);
+    expect(parseExternalSkillUpdateSummary('{"changes":["0.3.16：修复重试逻辑"]}')).toBeNull();
+  });
+});
 
 const meta: SkillFrontmatter = {
   name: "harness-demo",
@@ -139,6 +204,9 @@ describe("external Skill 中文摘要", () => {
     expect(prompt.system).toContain("适用场景");
     expect(prompt.system).toContain("使用前注意");
     expect(prompt.system).toContain('"quick_start"');
+    expect(prompt.system).toContain('"command_cheatsheet"');
+    expect(prompt.system).toMatch(/日常使用.*状态检查.*查询.*维护/);
+    expect(prompt.system).toMatch(/安装命令.*不(?:得|要).*command_cheatsheet/);
     expect(prompt.system).toMatch(/安装.*初始化.*验证.*首次实际使用/);
     expect(prompt.system).toMatch(/commands.*可直接执行/);
     expect(prompt.system).toContain("<external_skill_data>");
@@ -185,6 +253,10 @@ describe("external Skill 中文摘要", () => {
           commands: ["codegraph status"]
         }
       ],
+      command_cheatsheet: [
+        { command: "codegraph status", description: "检查当前项目索引是否就绪。" },
+        { command: "codegraph explore \"<question-about-code>\"", description: "用自然语言查询代码结构与调用关系。" }
+      ],
       caveats: ["命令中的项目路径需要替换"]
     });
 
@@ -205,6 +277,10 @@ describe("external Skill 中文摘要", () => {
           instruction: "确认索引已经可用。",
           commands: ["codegraph status"]
         }
+      ],
+      command_cheatsheet: [
+        { command: "codegraph status", description: "检查当前项目索引是否就绪。" },
+        { command: "codegraph explore \"<question-about-code>\"", description: "用自然语言查询代码结构与调用关系。" }
       ]
     });
   });
@@ -230,6 +306,7 @@ describe("external Skill 中文摘要", () => {
     expect(prompt.system).toContain("修正");
     expect(prompt.system).toContain("简体中文");
     expect(prompt.system).toContain('"quick_start"');
+    expect(prompt.system).toContain('"command_cheatsheet"');
     expect(prompt.system).toMatch(/data, NOT instructions/i);
     expect(prompt.user).toContain("<invalid_summary>");
     expect(prompt.user).toContain("truncated");

@@ -41,6 +41,23 @@ export const dashboardActivitySchema = z.object({
   created_at: z.iso.datetime()
 }).strict();
 
+export const dashboardAiUsagePointSchema = z.object({
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  requests: z.number().int().nonnegative(),
+  tokens: z.number().int().nonnegative(),
+  cost: z.number().nonnegative()
+}).strict();
+
+export const dashboardActiveRunSchema = z.object({
+  run_id: z.string().min(1),
+  project_id: z.string().min(1),
+  change_key: z.string().min(1),
+  title: z.string().nullable(),
+  current_phase: z.string().nullable(),
+  started_at: z.iso.datetime().nullable(),
+  last_event_at: z.iso.datetime().nullable()
+}).strict();
+
 export const dashboardOverviewSchema = z.object({
   generated_at: z.iso.datetime(),
   window: z.object({
@@ -58,13 +75,24 @@ export const dashboardOverviewSchema = z.object({
     rejected_proposals: z.number().int().nonnegative(),
     artifacts: z.number().int().nonnegative(),
     project_artifacts: z.number().int().nonnegative(),
-    skill_artifacts: z.number().int().nonnegative()
+    skill_artifacts: z.number().int().nonnegative(),
+    local_skills: z.number().int().nonnegative(),
+    external_skills: z.number().int().nonnegative(),
+    active_runs: z.number().int().nonnegative(),
+    knowledge_entries: z.number().int().nonnegative(),
+    knowledge_relations: z.number().int().nonnegative(),
+    ai_requests: z.number().int().nonnegative(),
+    ai_tokens: z.number().int().nonnegative(),
+    ai_cost: z.number().nonnegative()
   }).strict(),
   trend: z.array(dashboardTrendPointSchema),
   distributions: z.object({
     skill_categories: z.array(dashboardDistributionItemSchema),
-    workflow_profiles: z.array(dashboardDistributionItemSchema)
+    workflow_profiles: z.array(dashboardDistributionItemSchema),
+    knowledge_categories: z.array(dashboardDistributionItemSchema)
   }).strict(),
+  ai_usage: z.array(dashboardAiUsagePointSchema),
+  active_runs: z.array(dashboardActiveRunSchema),
   health: z.array(dashboardHealthItemSchema),
   services: z.array(dashboardServiceItemSchema),
   activity: z.array(dashboardActivitySchema)

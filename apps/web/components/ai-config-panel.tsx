@@ -1161,10 +1161,18 @@ function ProviderDetail(props: ProviderDetailProps) {
                     <button type="button" className="icon-action danger" onClick={() => removeModel(model.id)} title={t.common.delete} aria-label={t.common.delete}><Icon name="close" size={14} /></button>
                   </div>
                   <div className="pricing-grid">
-                    <label className="pricing-cell">{t.aiConfig.inputCost}<input type="number" min={0} step={0.01} value={model.inputCost} onChange={(event) => setModel(model.id, (current) => ({ ...current, inputCost: Number(event.target.value) }))} /><span>$/M</span></label>
-                    <label className="pricing-cell">{t.aiConfig.outputCost}<input type="number" min={0} step={0.01} value={model.outputCost} onChange={(event) => setModel(model.id, (current) => ({ ...current, outputCost: Number(event.target.value) }))} /><span>$/M</span></label>
-                    <label className="pricing-cell">{t.aiConfig.cacheHitCost}<input type="number" min={0} step={0.01} value={model.cacheHitCost} onChange={(event) => setModel(model.id, (current) => ({ ...current, cacheHitCost: Number(event.target.value) }))} /><span>$/M</span></label>
-                    <label className="pricing-cell">{t.aiConfig.cacheCreateCost}<input type="number" min={0} step={0.01} value={model.cacheCreateCost} onChange={(event) => setModel(model.id, (current) => ({ ...current, cacheCreateCost: Number(event.target.value) }))} /><span>$/M</span></label>
+                    {preset === null ? <>
+                      <label className="pricing-cell">{t.aiConfig.inputCost}<input type="number" min={0} step={0.01} value={model.inputCost} onChange={(event) => setModel(model.id, (current) => ({ ...current, inputCost: Number(event.target.value) }))} /><span>$/M</span></label>
+                      <label className="pricing-cell">{t.aiConfig.outputCost}<input type="number" min={0} step={0.01} value={model.outputCost} onChange={(event) => setModel(model.id, (current) => ({ ...current, outputCost: Number(event.target.value) }))} /><span>$/M</span></label>
+                      <label className="pricing-cell">{t.aiConfig.cacheHitCost}<input type="number" min={0} step={0.01} value={model.cacheHitCost} onChange={(event) => setModel(model.id, (current) => ({ ...current, cacheHitCost: Number(event.target.value) }))} /><span>$/M</span></label>
+                      <label className="pricing-cell">{t.aiConfig.cacheCreateCost}<input type="number" min={0} step={0.01} value={model.cacheCreateCost} onChange={(event) => setModel(model.id, (current) => ({ ...current, cacheCreateCost: Number(event.target.value) }))} /><span>$/M</span></label>
+                    </> : <div className="official-pricing-summary">
+                      <div><span>{t.aiConfig.inputCost}</span><strong>${model.inputCost}/M</strong></div>
+                      <div><span>{t.aiConfig.outputCost}</span><strong>${model.outputCost}/M</strong></div>
+                      <div><span>{t.aiConfig.cacheHitCost}</span><strong>{model.cacheHitCost === 0 ? t.aiConfig.dynamicPricing : `$${model.cacheHitCost}/M`}</strong></div>
+                      {model.cacheCreateCost > 0 ? <div><span>{t.aiConfig.cacheCreateCost}</span><strong>${model.cacheCreateCost}/M</strong></div> : null}
+                      <a href={preset.pricingUrl} target="_blank" rel="noreferrer">{preset.pricingLabel}</a>
+                    </div>}
                   </div>
                 </div>
               ))}

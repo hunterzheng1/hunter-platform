@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 
 import type {
   AgentTool,
+  AgentToolGithubInspection,
   AgentToolCategory,
   AgentToolMutation,
   AgentToolSource,
@@ -74,15 +75,27 @@ export function AgentToolCenter({ api: apiValue }: { api?: HunterApi }) {
   const api = useMemo(() => apiValue ?? resolveApi(), [apiValue]);
   const zh = lang === "zh";
   const copy = zh ? {
-    eyebrow: "Agent Tools",
-    title: "Agent 工具",
-    description: "登记可独立运行的 Agent Harness、运行时、编排器与开发环境，并保留精确来源路径。",
-    register: "登记工具",
-    search: "搜索 Agent 工具",
+    eyebrow: "Agent 能力",
+    title: "Agent",
+    description: "集中管理可独立运行的 Harness、运行时、编排器和开发环境，快速查看来源与接入方式。",
+    register: "添加 Agent",
+    search: "搜索 Agent",
     allCategories: "全部分类",
     allSources: "全部来源",
-    empty: "暂无匹配的 Agent 工具",
-    dialogTitle: "登记 Agent 工具",
+    empty: "暂无匹配的 Agent",
+    dialogTitle: "添加 Agent",
+    githubTitle: "从 GitHub 添加",
+    githubDescription: "粘贴仓库地址，平台会读取名称、简介和标签；确认前仍可调整。",
+    githubUrl: "GitHub 仓库地址",
+    inspect: "读取仓库信息",
+    inspecting: "读取中…",
+    manual: "手动填写",
+    backToGithub: "返回 GitHub 导入",
+    recognized: "已读取仓库信息",
+    aiFill: "AI 智能填写",
+    aiFilling: "AI 正在整理…",
+    aiHint: "根据仓库信息生成中文描述、分类和标签。生成后仍可修改，也可以直接确认添加。",
+    aiFilled: "AI 草稿已生成，请检查后确认。",
     displayName: "显示名称",
     slug: "标识",
     descriptionField: "描述",
@@ -97,22 +110,34 @@ export function AgentToolCenter({ api: apiValue }: { api?: HunterApi }) {
     related: "关联工作流",
     commaHint: "多个值用英文逗号分隔",
     cancel: "取消",
-    save: "保存登记",
-    saving: "保存中…",
-    saved: "Agent 工具已登记。",
-    tools: "个工具",
-    exactSource: "精确来源",
+    save: "确认添加",
+    saving: "添加中…",
+    saved: "Agent 已添加。",
+    tools: "个 Agent",
+    exactSource: "来源",
     relatedShort: "工作流"
   } : {
-    eyebrow: "Agent Tools",
-    title: "Agent Tools",
-    description: "Register runnable agent harnesses, runtimes, orchestrators and development environments while preserving exact source paths.",
-    register: "Register tool",
-    search: "Search Agent Tools",
+    eyebrow: "Agent catalog",
+    title: "Agents",
+    description: "Manage runnable harnesses, runtimes, orchestrators and agent development environments in one catalog.",
+    register: "Add Agent",
+    search: "Search Agents",
     allCategories: "All categories",
     allSources: "All sources",
-    empty: "No matching Agent Tools",
-    dialogTitle: "Register Agent Tool",
+    empty: "No matching Agents",
+    dialogTitle: "Add Agent",
+    githubTitle: "Add from GitHub",
+    githubDescription: "Paste a repository URL to prefill its name, description and tags. You can review everything before saving.",
+    githubUrl: "GitHub repository",
+    inspect: "Inspect repository",
+    inspecting: "Inspecting…",
+    manual: "Enter manually",
+    backToGithub: "Back to GitHub import",
+    recognized: "Repository details loaded",
+    aiFill: "Fill with AI",
+    aiFilling: "AI is drafting…",
+    aiHint: "Generate a Chinese description, category and tags from the repository. You can edit every field before saving.",
+    aiFilled: "AI draft generated. Review it before saving.",
     displayName: "Display name",
     slug: "Slug",
     descriptionField: "Description",
@@ -127,11 +152,11 @@ export function AgentToolCenter({ api: apiValue }: { api?: HunterApi }) {
     related: "Related workflows",
     commaHint: "Separate multiple values with commas",
     cancel: "Cancel",
-    save: "Save registration",
-    saving: "Saving…",
-    saved: "Agent Tool registered.",
-    tools: "tools",
-    exactSource: "Exact source",
+    save: "Add Agent",
+    saving: "Adding…",
+    saved: "Agent added.",
+    tools: "Agents",
+    exactSource: "Source",
     relatedShort: "Workflows"
   };
   const categoryLabels: Record<AgentToolCategory, string> = zh ? {
@@ -139,7 +164,7 @@ export function AgentToolCenter({ api: apiValue }: { api?: HunterApi }) {
     runtime: "运行时",
     orchestrator: "编排器",
     ade: "Agent 开发环境",
-    cli: "命令行工具",
+    cli: "命令行",
     framework: "框架"
   } : {
     harness: "Harness",
@@ -149,6 +174,15 @@ export function AgentToolCenter({ api: apiValue }: { api?: HunterApi }) {
     cli: "CLI",
     framework: "Framework"
   };
+  const statusLabels: Record<AgentToolStatus, string> = zh ? {
+    active: "可用",
+    experimental: "试用",
+    archived: "已停用"
+  } : {
+    active: "Active",
+    experimental: "Experimental",
+    archived: "Archived"
+  };
 
   const [tools, setTools] = useState<AgentTool[] | null>(null);
   const [query, setQuery] = useState("");
@@ -156,6 +190,11 @@ export function AgentToolCenter({ api: apiValue }: { api?: HunterApi }) {
   const [sourceType, setSourceType] = useState<AgentToolSource["type"] | "all">("all");
   const [registerOpen, setRegisterOpen] = useState(false);
   const [form, setForm] = useState<ToolFormState>(EMPTY_FORM);
+  const [registrationMode, setRegistrationMode] = useState<"github" | "details">("github");
+  const [githubUrl, setGithubUrl] = useState("");
+  const [inspecting, setInspecting] = useState(false);
+  const [inspection, setInspection] = useState<AgentToolGithubInspection | null>(null);
+  const [aiFilling, setAiFilling] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -189,6 +228,79 @@ export function AgentToolCenter({ api: apiValue }: { api?: HunterApi }) {
     setForm((current) => ({ ...current, [key]: value }));
   }
 
+  function applyInspection(inspection: AgentToolGithubInspection): void {
+    const suggested = inspection.suggested;
+    setForm({
+      displayName: suggested.displayName,
+      slug: suggested.slug,
+      description: suggested.description,
+      category: suggested.category,
+      status: suggested.status,
+      sourceType: inspection.source.type,
+      sourceRef: inspection.source.ref,
+      homepage: suggested.homepage ?? "",
+      packageName: suggested.packageName ?? "",
+      installCommand: suggested.installCommand ?? "",
+      tags: suggested.tags.join(", "),
+      relatedWorkflowFamilies: suggested.relatedWorkflowFamilies.join(", ")
+    });
+    setRegistrationMode("details");
+  }
+
+  function applyMutation(suggested: AgentToolMutation): void {
+    setForm({
+      displayName: suggested.displayName,
+      slug: suggested.slug,
+      description: suggested.description,
+      category: suggested.category,
+      status: suggested.status,
+      sourceType: suggested.source.type,
+      sourceRef: suggested.source.ref,
+      homepage: suggested.homepage ?? "",
+      packageName: suggested.packageName ?? "",
+      installCommand: suggested.installCommand ?? "",
+      tags: suggested.tags.join(", "),
+      relatedWorkflowFamilies: suggested.relatedWorkflowFamilies.join(", ")
+    });
+  }
+
+  async function inspectGithub(): Promise<void> {
+    if (inspecting || githubUrl.trim() === "") return;
+    setInspecting(true);
+    setError(null);
+    try {
+      const result = await required(api, "inspectAgentToolGithub")(githubUrl.trim());
+      setInspection(result);
+      applyInspection(result);
+    } catch (reason) {
+      setError(apiError(reason, t));
+    } finally {
+      setInspecting(false);
+    }
+  }
+
+  async function fillWithAi(): Promise<void> {
+    if (inspection === null || aiFilling) return;
+    setAiFilling(true);
+    setError(null);
+    try {
+      applyMutation(await required(api, "generateAgentToolPrefill")(inspection));
+      toast.success(copy.aiFilled);
+    } catch (reason) {
+      setError(apiError(reason, t));
+    } finally {
+      setAiFilling(false);
+    }
+  }
+
+  function closeRegistration(): void {
+    setRegisterOpen(false);
+    setRegistrationMode("github");
+    setGithubUrl("");
+    setInspection(null);
+    setForm(EMPTY_FORM);
+  }
+
   async function submitRegistration(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     if (saving) return;
@@ -210,8 +322,7 @@ export function AgentToolCenter({ api: apiValue }: { api?: HunterApi }) {
     try {
       const created = await required(api, "createAgentTool")(input);
       setTools((current) => [created, ...(current ?? []).filter((tool) => tool.slug !== created.slug)]);
-      setRegisterOpen(false);
-      setForm(EMPTY_FORM);
+      closeRegistration();
       toast.success(copy.saved);
       void refreshTools();
     } catch (reason) {
@@ -223,7 +334,7 @@ export function AgentToolCenter({ api: apiValue }: { api?: HunterApi }) {
 
   return (
     <section className="stack page-module-v2 agent-tool-page">
-      <header className="project-registry-hero agent-tool-hero">
+      <header className="project-registry-hero agent-tool-hero" data-slot="agent-header">
         <div>
           <p className="eyebrow">{copy.eyebrow}</p>
           <h1>{copy.title}</h1>
@@ -235,7 +346,7 @@ export function AgentToolCenter({ api: apiValue }: { api?: HunterApi }) {
         </button>
       </header>
 
-      <div className="agent-tool-toolbar">
+      <div className="agent-tool-toolbar" data-slot="agent-filters">
         <label className="agent-tool-search">
           <Icon name="search" size={16} />
           <input
@@ -245,7 +356,7 @@ export function AgentToolCenter({ api: apiValue }: { api?: HunterApi }) {
             placeholder={copy.search}
           />
         </label>
-        <select aria-label={zh ? "工具类型筛选" : "Filter by tool type"} value={category} onChange={(event) => setCategory(event.target.value as AgentToolCategory | "all")}>
+        <select aria-label={zh ? "类型筛选" : "Filter by category"} value={category} onChange={(event) => setCategory(event.target.value as AgentToolCategory | "all")}>
           <option value="all">{copy.allCategories}</option>
           {CATEGORIES.map((item) => <option value={item} key={item}>{categoryLabels[item]}</option>)}
         </select>
@@ -263,14 +374,14 @@ export function AgentToolCenter({ api: apiValue }: { api?: HunterApi }) {
           {filtered.map((tool) => {
             const href = sourceHref(tool);
             return (
-              <article className="agent-tool-card" key={tool.tool_id}>
+              <article className="agent-tool-card" data-slot="agent-card" key={tool.tool_id}>
                 <header>
                   <span className={`agent-tool-mark agent-tool-mark-${tool.category}`}><Icon name="agent" size={18} /></span>
                   <div>
                     <h2>{tool.displayName}</h2>
                     <code>{tool.slug}</code>
                   </div>
-                  <span className={`agent-tool-status agent-tool-status-${tool.status}`}>{tool.status}</span>
+                  <span className={`agent-tool-status agent-tool-status-${tool.status}`}>{statusLabels[tool.status]}</span>
                 </header>
                 <p>{tool.description}</p>
                 <div className="agent-tool-source">
@@ -294,20 +405,53 @@ export function AgentToolCenter({ api: apiValue }: { api?: HunterApi }) {
 
       <Modal
         open={registerOpen}
-        onClose={() => setRegisterOpen(false)}
+        onClose={closeRegistration}
         title={copy.dialogTitle}
         closeLabel={zh ? "关闭" : "Close"}
         wide
         footer={(
           <>
-            <button type="button" className="secondary" onClick={() => setRegisterOpen(false)}>{copy.cancel}</button>
-            <button type="submit" form="agent-tool-registration" className="primary" disabled={saving}>
-              {saving ? copy.saving : copy.save}
-            </button>
+            <button type="button" className="secondary" onClick={closeRegistration}>{copy.cancel}</button>
+            {registrationMode === "details" ? (
+              <button type="submit" form="agent-tool-registration" className="primary" disabled={saving}>
+                {saving ? copy.saving : copy.save}
+              </button>
+            ) : null}
           </>
         )}
       >
-        <form id="agent-tool-registration" className="agent-tool-form" onSubmit={(event) => void submitRegistration(event)}>
+        {registrationMode === "github" ? (
+          <div className="agent-import-start" data-slot="agent-github-import">
+            <div className="agent-import-intro">
+              <span className="agent-import-icon"><Icon name="folder" size={20} /></span>
+              <div><strong>{copy.githubTitle}</strong><p>{copy.githubDescription}</p></div>
+            </div>
+            <label className="agent-import-url">
+              <span>{copy.githubUrl}</span>
+              <div>
+                <input aria-label={copy.githubUrl} type="url" value={githubUrl} onChange={(event) => setGithubUrl(event.target.value)} placeholder="https://github.com/owner/repository" />
+                <button type="button" className="primary" disabled={inspecting || githubUrl.trim() === ""} onClick={() => void inspectGithub()}>
+                  {inspecting ? copy.inspecting : copy.inspect}
+                </button>
+              </div>
+            </label>
+            <button type="button" className="agent-import-manual" onClick={() => setRegistrationMode("details")}>{copy.manual}</button>
+          </div>
+        ) : (
+        <form id="agent-tool-registration" className="agent-tool-form" data-slot="agent-details-form" onSubmit={(event) => void submitRegistration(event)}>
+          <div className="agent-import-detail-head span-2">
+            <span><Icon name="check" size={15} /> {form.sourceRef ? copy.recognized : copy.manual}</span>
+            <button type="button" onClick={() => setRegistrationMode("github")}>{copy.backToGithub}</button>
+          </div>
+          {inspection === null ? null : (
+            <div className="agent-ai-prefill span-2" data-slot="agent-ai-prefill">
+              <span className="agent-ai-prefill-icon"><Icon name="sparkles" size={17} /></span>
+              <div><strong>{copy.aiFill}</strong><p>{copy.aiHint}</p></div>
+              <button type="button" className="secondary" data-slot="agent-ai-prefill-action" disabled={aiFilling} onClick={() => void fillWithAi()}>
+                <Icon name="sparkles" size={14} /> {aiFilling ? copy.aiFilling : copy.aiFill}
+              </button>
+            </div>
+          )}
           <label>
             <span>{copy.displayName}</span>
             <input aria-label={copy.displayName} required value={form.displayName} onChange={(event) => updateForm("displayName", event.target.value)} />
@@ -329,7 +473,7 @@ export function AgentToolCenter({ api: apiValue }: { api?: HunterApi }) {
           <label>
             <span>{copy.status}</span>
             <select aria-label={copy.status} value={form.status} onChange={(event) => updateForm("status", event.target.value as AgentToolStatus)}>
-              {STATUSES.map((item) => <option value={item} key={item}>{item}</option>)}
+              {STATUSES.map((item) => <option value={item} key={item}>{statusLabels[item]}</option>)}
             </select>
           </label>
           <label>
@@ -364,7 +508,7 @@ export function AgentToolCenter({ api: apiValue }: { api?: HunterApi }) {
             <input aria-label={copy.related} value={form.relatedWorkflowFamilies} onChange={(event) => updateForm("relatedWorkflowFamilies", event.target.value)} placeholder="harness, review-loop" />
             <small>{copy.commaHint}</small>
           </label>
-        </form>
+        </form>)}
       </Modal>
 
       <ToastFeedback tone="danger" message={error} />

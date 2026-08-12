@@ -73,6 +73,8 @@ const externalSkill: ExternalSkill = {
   curationNote: "适合大型代码库分析",
   tags: ["code-intelligence"],
   updateAvailable: false,
+  availableVersion: null,
+  updateHistory: [],
   lastCheckedAt: "2026-08-10T08:00:00Z",
   revision: 1,
   created_at: "2026-08-10T08:00:00Z",
@@ -216,7 +218,7 @@ describe("governed workflow and Skill Center", () => {
       "placeholder",
       expect.stringMatching(/package|github/i)
     );
-    expect(within(dialog).getByLabelText(/策展笔记（可选）|Curator note \(optional\)/i)).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText(/策展笔记|Curator note/i)).not.toBeInTheDocument();
     expect(dialog.querySelector('[data-slot="external-skill-import-trust"]')).toHaveTextContent(
       /不托管代码|does not host code/i
     );
@@ -248,7 +250,6 @@ describe("governed workflow and Skill Center", () => {
 
     await waitFor(() => expect(createExternalSkill).toHaveBeenCalledWith({
       source: { type: "npm", ref: "@hunterzheng/lark-channel-bridge" },
-      curationNote: "",
       tags: []
     }));
   });
@@ -271,7 +272,6 @@ describe("governed workflow and Skill Center", () => {
 
     await waitFor(() => expect(createExternalSkill).toHaveBeenCalledWith({
       source: { type: "github", ref: "hunterzheng/lark-channel-bridge" },
-      curationNote: "",
       tags: []
     }));
   });
@@ -304,6 +304,27 @@ describe("governed workflow and Skill Center", () => {
     expect(row?.querySelector('[data-slot="skill-card"]')).toHaveClass("external-skill-card");
     expect(row?.querySelector('[data-slot="external-skill-metadata"]')).toHaveTextContent(/v1\.5\.0/);
     expect(row?.querySelector('[data-slot="external-skill-metadata"]')).toHaveTextContent(/GitHub/i);
+  });
+
+  it("checks all external skills and exposes card-level delete actions", async () => {
+    const checkExternalSkill = vi.fn(async () => ({
+      ...externalSkill,
+      updateAvailable: true,
+      availableVersion: "v1.6.0",
+      revision: 2
+    } as ExternalSkill));
+    const deleteExternalSkill = vi.fn(async () => ({ id: externalSkill.id, deleted: true }));
+    const { container } = render(<SkillRegistry api={api({
+      listExternalSkills: vi.fn(async () => [externalSkill]),
+      checkExternalSkill,
+      deleteExternalSkill
+    })} />);
+    await screen.findByText("CodeGraph");
+
+    fireEvent.click(screen.getByRole("button", { name: "检查全部上游" }));
+    await waitFor(() => expect(checkExternalSkill).toHaveBeenCalledWith(externalSkill.id));
+    expect(await screen.findByText("可更新至 v1.6.0")).toBeInTheDocument();
+    expect(container.querySelector('[data-card-kind="external"] [data-slot="external-skill-delete"]')).toBeInTheDocument();
   });
 
   it("uses a dense card grid and keeps twelve skills on one page", async () => {

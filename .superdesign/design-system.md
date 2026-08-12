@@ -4,12 +4,15 @@
 
 Hunter Platform is a governance console for projects managed by Hunter Harness. The overview must answer, in order: whether the platform needs attention, what projects and runs are active, how much governed knowledge/version data exists, and what changed recently.
 
+The skill center manages local and external skills. External skill detail and catalog pages must make upstream freshness, the currently summarized version, available updates, update history, installation steps, tags, and destructive actions immediately understandable without exposing internal IDs.
+
 ## Visual direction
 
 - Keep the existing dark product-console identity and 240 px sidebar.
 - Use the existing Geist/CJK font stack and existing CSS variables only.
 - Indigo is the interaction/accent color. Green means completed/healthy, amber means needs attention, red means failed/unavailable, violet identifies skills/knowledge.
 - Favor compact, data-dense cards with quiet borders. Avoid glassmorphism, decorative gradients, oversized headings, 3D, heavy animation and redundant charts.
+- External sources retain their semantic colors: GitHub violet and npm amber. Update-available is an amber attention state; current/latest is green. Destructive actions remain visually secondary until intentional hover or focus.
 - The dashboard should normally fit within two 1080p screens at desktop widths. Target roughly 1,350–1,650 px of content height below the app shell.
 
 ## Information architecture
@@ -19,6 +22,15 @@ Hunter Platform is a governance console for projects managed by Hunter Harness. 
 3. Primary analysis row: seven-day proposal trend plus a compact operational/governance summary. Do not use a chart without a decision purpose.
 4. Work row: recent projects and recent activity. Lists show at most 4–6 rows by default; extra items are accessible through a link or internal compact scroll area.
 5. Secondary registry/health information is summarized rather than occupying three full-height columns.
+
+## External skill interaction rules
+
+- Separate read-only「检查更新」from mutating「应用更新」. Checking never removes the cached summary or rewrites the active snapshot.
+- A refresh control first checks upstream. When no update exists, show a compact success toast. When an update exists, open a confirmation dialog with current/latest versions and a concise, factual change summary.
+- Keep the existing AI summary visible while an update is pending or immediately after applying it. Clearly label the source version used to generate that summary and offer regeneration for the new version.
+- Display update history as a compact bounded list with version transition, timestamp, source link and deterministic notes; AI may summarize available release notes/diffs but must not invent changes.
+- Place the remove action in the detail header overflow/destructive area and on catalog cards as a compact icon with confirmation. Do not show curation-note controls.
+- Classic workflow commands use high-contrast monospace blocks, preserved line breaks, horizontal scrolling for long commands, and copy affordances. Explanatory prose remains visually separate from commands.
 
 ## Layout rules
 

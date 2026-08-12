@@ -9,8 +9,7 @@ export function projectUpdatedAtMs(project: ProjectSummary): number {
 export function projectMatchesQuery(project: ProjectSummary, needle: string): boolean {
   if (needle === "") return true;
   const q = needle.toLowerCase();
-  return project.display_name.toLowerCase().includes(q)
-    || project.project_id.toLowerCase().includes(q);
+  return project.display_name.toLowerCase().includes(q);
 }
 
 /** Newest update first; display_name tie-break for stable ordering. */

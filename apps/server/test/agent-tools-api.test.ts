@@ -1,5 +1,9 @@
 import type { AgentToolMutation } from "@hunter-harness/contracts";
-import { uuidV7 } from "@hunter-harness/core";
+import { promises as fs } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
+import { uuidV7, type LlmClient } from "@hunter-harness/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createServer } from "../src/app.js";
@@ -117,6 +121,109 @@ describe("agent tools registry API", () => {
     });
     expect(detail.statusCode).toBe(200);
     expect(detail.json().displayName).toBe("Pi Coding Agent");
+  });
+
+  it("inspects a GitHub repository and suggests an Agent registration", async () => {
+    await app.close();
+    const repository = new MemoryRepository();
+    await repository.createActorWithToken({ actorId: "actor_owner", token });
+    const externalFetch = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/repos/acme/agent-runner")) {
+        return new Response(JSON.stringify({
+          full_name: "acme/agent-runner",
+          name: "agent-runner",
+          description: "Run and coordinate coding agents.",
+          html_url: "https://github.com/acme/agent-runner",
+          homepage: "https://agent-runner.example",
+          default_branch: "main",
+          topics: ["coding-agent", "orchestration"]
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response("[]", { status: url.includes("/releases") ? 200 : 404 });
+    }) as typeof fetch;
+    app = await createServer({
+      repository,
+      storage: new MemoryArtifactStorage(),
+      externalFetch
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/agent-tools/import/inspect",
+      headers: { authorization: `Bearer ${token}`, "x-request-id": uuidV7() },
+      payload: { schema_version: 1, github_url: "https://github.com/acme/agent-runner" }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      source: { type: "github", ref: "https://github.com/acme/agent-runner" },
+      suggested: {
+        slug: "agent-runner",
+        displayName: "agent-runner",
+        description: "Run and coordinate coding agents.",
+        category: "framework",
+        homepage: "https://agent-runner.example",
+        tags: ["coding-agent", "orchestration"]
+      }
+    });
+  });
+
+  it("uses the configured AI source to produce an editable Chinese registration draft", async () => {
+    await app.close();
+    const repository = new MemoryRepository();
+    await repository.createActorWithToken({ actorId: "actor_owner", token });
+    const secretFile = path.join(os.tmpdir(), `hh-agent-prefill-${uuidV7()}.json`);
+    await fs.writeFile(secretFile, JSON.stringify({ deepseek: { apiKey: "sk-test" } }), "utf8");
+    const analyze = vi.fn(async () => ({
+      content: JSON.stringify({
+        ...agentToolStoreInput("pi-coding-agent"),
+        description: "用于运行和协调编码 Agent 的开发框架。"
+      }),
+      usage: { requests: 1, input_tokens: 20, output_tokens: 10 }
+    }));
+    app = await createServer({
+      repository,
+      storage: new MemoryArtifactStorage(),
+      config: { aiSecretFile: secretFile },
+      aiLlmClientFactory: () => ({ analyze } satisfies LlmClient)
+    });
+
+    const provider = await app.inject({
+      method: "POST",
+      url: "/api/v1/ai-config/providers",
+      headers: headers(),
+      payload: {
+        schema_version: 1,
+        provider_id: "deepseek",
+        label: "DeepSeek",
+        base_url: "https://api.deepseek.com",
+        model: "deepseek-chat",
+        enabled: true,
+        api_key_env: "secret-file",
+        is_default: true
+      }
+    });
+    expect(provider.statusCode).toBe(201);
+
+    const inspection = {
+      source: agentToolStoreInput("pi-coding-agent").source,
+      suggested: agentToolStoreInput("pi-coding-agent")
+    };
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/agent-tools/import/ai-prefill",
+      headers: { authorization: `Bearer ${token}`, "x-request-id": uuidV7() },
+      payload: { schema_version: 1, inspection }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      description: "用于运行和协调编码 Agent 的开发框架。",
+      source: inspection.source
+    });
+    expect(analyze).toHaveBeenCalledOnce();
+    await fs.rm(secretFile, { force: true });
   });
 
   it("rejects duplicate Agent Tool slugs", async () => {

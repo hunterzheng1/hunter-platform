@@ -52,8 +52,26 @@ export const agentToolMutationSchema = z.object({
   relatedWorkflowFamilies: z.array(registrySlugSchema).default([])
 }).strict();
 
+export const inspectAgentToolGithubRequestSchema = z.object({
+  schema_version: z.literal(1),
+  github_url: z.string().trim().min(1).max(1000)
+}).strict();
+
+export const agentToolGithubInspectionSchema = z.object({
+  source: agentToolSourceSchema,
+  suggested: agentToolMutationSchema
+}).strict();
+
+export const generateAgentToolPrefillRequestSchema = z.object({
+  schema_version: z.literal(1),
+  inspection: agentToolGithubInspectionSchema
+}).strict();
+
 export type AgentToolCategory = z.infer<typeof agentToolCategorySchema>;
 export type AgentToolStatus = z.infer<typeof agentToolStatusSchema>;
 export type AgentToolSource = z.infer<typeof agentToolSourceSchema>;
 export type AgentTool = z.infer<typeof agentToolSchema>;
 export type AgentToolMutation = z.infer<typeof agentToolMutationSchema>;
+export type InspectAgentToolGithubRequest = z.infer<typeof inspectAgentToolGithubRequestSchema>;
+export type AgentToolGithubInspection = z.infer<typeof agentToolGithubInspectionSchema>;
+export type GenerateAgentToolPrefillRequest = z.infer<typeof generateAgentToolPrefillRequestSchema>;

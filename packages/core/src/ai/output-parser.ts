@@ -1,9 +1,39 @@
 import {
+  agentToolMutationSchema,
   externalSkillSummaryContentSchema,
   skillCheckResultSchema,
+  type AgentToolMutation,
   type ExternalSkillSummaryContent,
   type SkillCheckResult
 } from "@hunter-harness/contracts";
+
+export function parseAgentToolPrefill(raw: string): AgentToolMutation | null {
+  try {
+    const text = stripMarkdownFence(raw);
+    const jsonText = extractJsonObject(text);
+    if (jsonText === null) return null;
+    const result = agentToolMutationSchema.safeParse(JSON.parse(jsonText));
+    if (!result.success || !/[\u3400-\u9fff]/u.test(result.data.description)) return null;
+    return result.data;
+  } catch {
+    return null;
+  }
+}
+
+export function parseExternalSkillUpdateSummary(raw: string): string[] | null {
+  try {
+    const text = stripMarkdownFence(raw);
+    const jsonText = extractJsonObject(text);
+    if (jsonText === null) return null;
+    const parsed = JSON.parse(jsonText) as { changes?: unknown };
+    if (!Array.isArray(parsed.changes) || parsed.changes.length < 1 || parsed.changes.length > 8) return null;
+    const changes = parsed.changes.map((item) => typeof item === "string" ? item.trim() : "");
+    if (changes.some((item) => item.length === 0 || item.length > 300 || !/[\u3400-\u9fff]/u.test(item) || /^v?\d+\.\d+/i.test(item))) return null;
+    return [...new Set(changes)];
+  } catch {
+    return null;
+  }
+}
 
 // 解析 LLM 输出为 SkillCheckResult；失败降级为 AI_PARSE_FAILED yellow（不抛错，保证 draft 可继续）
 export function parseAiCheckResult(raw: string): SkillCheckResult {
@@ -135,11 +165,16 @@ export function parseExternalSkillSummary(raw: string): ExternalSkillSummaryCont
       pickSummaryValue(source, ["quick_start", "quickStart", "workflow", "典型工作流"]),
       6
     );
+    const commandCheatsheet = normalizedCommandCheatsheet(
+      pickSummaryValue(source, ["command_cheatsheet", "commandCheatsheet", "commands", "常用指令", "命令速查"]),
+      10
+    );
     const result = externalSkillSummaryContentSchema.safeParse({
       overview: normalizedSummaryText(pickSummaryValue(source, ["overview", "what_it_is", "whatIsIt", "是什么"])),
       use_cases: normalizedSummaryList(pickSummaryValue(source, ["use_cases", "useCases", "use_case", "scenarios", "适用场景"]), 6),
       capabilities: normalizedSummaryList(pickSummaryValue(source, ["capabilities", "core_capabilities", "coreCapabilities", "features", "核心功能"]), 8),
       ...(quickStart.length === 0 ? {} : { quick_start: quickStart }),
+      ...(commandCheatsheet.length === 0 ? {} : { command_cheatsheet: commandCheatsheet }),
       getting_started: normalizedSummaryList(pickSummaryValue(source, ["getting_started", "gettingStarted", "快速开始"]), 6),
       caveats: normalizedSummaryList(pickSummaryValue(source, ["caveats", "limitations", "warnings", "使用前注意", "注意事项"]), 6)
     });
@@ -217,6 +252,26 @@ function normalizedCommandList(value: unknown, limit: number): string[] {
     .map((item) => item.replace(/^\$\s+/, "").replace(/^`+|`+$/g, "").trim())
     .filter((item) => item.length > 0);
   return [...new Set(commands)].slice(0, limit);
+}
+
+function normalizedCommandCheatsheet(value: unknown, limit: number): Array<{
+  command: string;
+  description: string;
+}> {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const items: Array<{ command: string; description: string }> = [];
+  for (const item of value) {
+    if (!isRecord(item)) continue;
+    const commands = normalizedCommandList(pickSummaryValue(item, ["command", "cmd", "命令"]), 1);
+    const description = normalizedSummaryText(pickSummaryValue(item, ["description", "purpose", "usage", "说明", "用途"]));
+    const command = commands[0];
+    if (command === undefined || typeof description !== "string" || description.length === 0 || seen.has(command)) continue;
+    seen.add(command);
+    items.push({ command, description });
+    if (items.length >= limit) break;
+  }
+  return items;
 }
 
 // #2 appliesTo 白名单（与 contracts/src/fix.ts fixPlanItemSchema.appliesTo 对齐）

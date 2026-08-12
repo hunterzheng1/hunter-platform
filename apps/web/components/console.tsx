@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
-import type { DashboardOverview } from "@hunter-harness/contracts";
+import type { AiQuotaUsage, DashboardOverview } from "@hunter-harness/contracts";
 
 import {
   browserApi,
@@ -11,7 +11,7 @@ import {
 } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import { mockApi } from "../lib/mock-api";
-import { apiError, Status } from "./skill-shared";
+import { apiError } from "./skill-shared";
 import { Icon, type IconName } from "./ui/icons";
 import { Skeleton } from "./ui/Skeleton";
 
@@ -30,16 +30,19 @@ export function DashboardConsole({ api: propApi }: { api?: HunterApi }) {
   const api = useMemo(() => propApi ?? resolveApi(), [propApi]);
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [aiUsage, setAiUsage] = useState<AiQuotaUsage[]>([]);
+  const [aiRange, setAiRange] = useState<"today" | "7d" | "all">("today");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
     setError(null);
-    void Promise.all([api.getDashboardOverview(7), api.listProjects()])
-      .then(([nextOverview, nextProjects]) => {
+    void Promise.all([api.getDashboardOverview(7), api.listProjects(), api.getAiUsage?.() ?? Promise.resolve([])])
+      .then(([nextOverview, nextProjects, nextAiUsage]) => {
         if (!active) return;
         setOverview(nextOverview);
         setProjects(nextProjects);
+        setAiUsage(nextAiUsage);
       })
       .catch((reason: unknown) => {
         if (active) setError(apiError(reason, t));
@@ -69,21 +72,17 @@ export function DashboardConsole({ api: propApi }: { api?: HunterApi }) {
   }
 
   const locale = lang === "zh" ? "zh-CN" : "en-US";
-  const coreHealth = overview.health.filter((item) => item.key !== "review_backlog" && item.key !== "review_outcome");
-  const serviceIssues = overview.services.filter((item) => item.status !== "operational");
-  const healthIssues = coreHealth.filter((item) => item.status !== "healthy");
-  const attention = serviceIssues.length > 0 || healthIssues.length > 0;
-  const healthyServices = overview.services.length - serviceIssues.length;
-  const healthyChecks = coreHealth.length - healthIssues.length;
   const versionedProjects = Math.min(
     projects.filter((project) => project.latest_project_version != null).length,
     overview.metrics.projects
   );
   const recentActivity = overview.activity.slice(0, 5);
-  const artifactParts = overview.metrics.project_artifacts + overview.metrics.skill_artifacts;
-  const projectArtifactShare = artifactParts === 0 ? 0 : (overview.metrics.project_artifacts / artifactParts) * 100;
-  const skillArtifactShare = artifactParts === 0 ? 0 : 100 - projectArtifactShare;
   const projectNames = new Map(projects.map((project) => [project.project_id, project.display_name]));
+  const number = new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 });
+  const filteredAiUsage = filterAiUsage(aiUsage, aiRange);
+  const selectedAiTotals = sumAiUsage(filteredAiUsage);
+  const allAiTotals = sumAiUsage(aiUsage);
+  const totalSkills = overview.metrics.local_skills + overview.metrics.external_skills;
   const metricCards = [
     {
       label: t.dashboard.registeredProjects,
@@ -93,18 +92,34 @@ export function DashboardConsole({ api: propApi }: { api?: HunterApi }) {
       icon: "projects" as const
     },
     {
-      label: t.dashboard.projectVersions,
-      value: overview.metrics.project_artifacts,
-      detail: t.dashboard.projectVersionsHint,
-      href: "/projects",
-      icon: "version" as const
-    },
-    {
-      label: t.dashboard.publishedSkills,
-      value: overview.metrics.published_skills,
-      detail: t.dashboard.publishedSkillsHint.replace("{count}", String(overview.metrics.skills)),
+      label: t.dashboard.allSkills,
+      value: totalSkills,
+      detail: t.dashboard.skillSourceSummary
+        .replace("{local}", String(overview.metrics.local_skills))
+        .replace("{external}", String(overview.metrics.external_skills)),
       href: "/skills",
       icon: "skill" as const
+    },
+    {
+      label: t.dashboard.activeBranches,
+      value: overview.metrics.active_runs,
+      detail: t.dashboard.activeBranchesHint,
+      href: "/projects",
+      icon: "activity" as const
+    },
+    {
+      label: t.dashboard.knowledgeEntries,
+      value: overview.metrics.knowledge_entries,
+      detail: t.dashboard.knowledgeRelationsHint.replace("{count}", String(overview.metrics.knowledge_relations)),
+      href: "/knowledge",
+      icon: "knowledge" as const
+    },
+    {
+      label: t.dashboard.aiRequests,
+      value: number.format(aiUsage.length === 0 ? overview.metrics.ai_requests : allAiTotals.requests),
+      detail: t.dashboard.aiTokensHint.replace("{count}", number.format(aiUsage.length === 0 ? overview.metrics.ai_tokens : allAiTotals.tokens)),
+      href: "/ai-config",
+      icon: "ai" as const
     },
     {
       label: t.dashboard.workflows,
@@ -114,26 +129,19 @@ export function DashboardConsole({ api: propApi }: { api?: HunterApi }) {
       icon: "workflow" as const
     }
   ];
-  const action = attention
-    ? { title: t.dashboard.attentionTitle, hint: t.dashboard.attentionHint }
-    : projects.length === 0
-      ? { title: t.dashboard.connectProjectTitle, hint: t.dashboard.connectProjectHint }
-      : overview.metrics.project_artifacts === 0
-        ? { title: t.dashboard.addVersionTitle, hint: t.dashboard.addVersionHint }
-        : { title: t.dashboard.platformReady, hint: t.dashboard.platformReadyHint };
 
   return (
     <section className="stack governance-page page-module-v2 dashboard-stack dashboard-v2">
       <header className="dashboard-hero">
         <div className="dashboard-hero-copy">
           <p className="eyebrow">{t.dashboard.eyebrow}</p>
-          <div className="dashboard-heading"><h1>{t.dashboard.title}</h1><Status value={attention ? "attention" : "clear"} /></div>
+          <div className="dashboard-heading"><h1>{t.dashboard.title}</h1></div>
           <p>{t.dashboard.subtitle}</p>
         </div>
         <div className="dashboard-freshness">
           <span>{t.dashboard.dataUpdated}</span>
           <strong>{new Date(overview.generated_at).toLocaleString(locale)}</strong>
-          <small>{attention ? t.dashboard.statusAttentionSummary : t.dashboard.statusClearSummary}</small>
+          <small>{t.dashboard.dashboardWindow.replace("{days}", String(overview.window.days))}</small>
         </div>
       </header>
 
@@ -147,56 +155,56 @@ export function DashboardConsole({ api: propApi }: { api?: HunterApi }) {
         ))}
       </div>
 
-      <div className="dashboard-main-grid rise-in" style={{ animationDelay: "60ms" }}>
-        <section className="panel dashboard-assets-panel">
+      <div className="dashboard-insight-grid rise-in" style={{ animationDelay: "60ms" }}>
+        <section className="panel dashboard-ai-panel">
           <div className="panel-title dashboard-panel-title">
-            <div><p className="eyebrow">{t.dashboard.serverAssets}</p><h2>{t.dashboard.versionsAndCapabilities}</h2></div>
-            <span>{t.dashboard.managedAssetsSummary}</span>
-          </div>
-          <div className="dashboard-assets-body">
-            <div className="dashboard-artifact-total">
-              <span>{t.dashboard.artifactPackages}</span>
-              <strong>{overview.metrics.artifacts}</strong>
-              <small>{t.dashboard.artifactTotalHint}</small>
-            </div>
-            <div className="dashboard-asset-composition">
-              <div className="dashboard-asset-bar" aria-label={t.dashboard.assetComposition}>
-                <span className="project" style={{ width: `${projectArtifactShare}%` }} />
-                <span className="skill" style={{ width: `${skillArtifactShare}%` }} />
+            <div><p className="eyebrow">{t.dashboard.aiUsageHint}</p><h2>{t.dashboard.aiUsage}</h2></div>
+            <div className="dashboard-ai-actions">
+              <div className="dashboard-range-tabs" role="tablist" aria-label={t.dashboard.aiUsage}>
+                {(["today", "7d", "all"] as const).map((range) => <button key={range} type="button" role="tab" aria-selected={aiRange === range} className={aiRange === range ? "active" : ""} onClick={() => setAiRange(range)}>{range === "today" ? t.dashboard.rangeToday : range === "7d" ? t.dashboard.rangeSevenDays : t.dashboard.rangeAll}</button>)}
               </div>
-              <div className="dashboard-asset-legend">
-                <div><i className="project" /><span>{t.dashboard.projectArtifacts}</span><strong>{overview.metrics.project_artifacts}</strong></div>
-                <div><i className="skill" /><span>{t.dashboard.skillArtifacts}</span><strong>{overview.metrics.skill_artifacts}</strong></div>
-              </div>
-              <div className="dashboard-capability-row">
-                <Link href="/skills"><span>{t.dashboard.skillCoverage}</span><strong>{overview.metrics.published_skills}/{overview.metrics.skills}</strong><small>{t.dashboard.publishedCoverage}</small></Link>
-                <Link href="/workflows"><span>{t.dashboard.workflowCoverage}</span><strong>{overview.metrics.workflows}</strong><small>{t.dashboard.workflowsHint}</small></Link>
-              </div>
+              <Link href="/ai-config">{t.dashboard.viewAiConfig}</Link>
             </div>
           </div>
-          <SkillComposition items={overview.distributions.skill_categories} />
+          <div className="dashboard-ai-summary">
+            <div><span>{t.dashboard.aiRequests}</span><strong>{number.format(selectedAiTotals.requests)}</strong></div>
+            <div><span>{t.dashboard.aiTokens}</span><strong>{number.format(selectedAiTotals.tokens)}</strong></div>
+            <div><span>{t.dashboard.estimatedCost}</span><strong>${selectedAiTotals.cost.toFixed(2)}</strong></div>
+          </div>
+          <AiUsageChart records={filteredAiUsage} range={aiRange} locale={locale} />
+          <AiModelUsage records={filteredAiUsage} />
         </section>
-        <section className="panel dashboard-status-panel">
-          <div className="panel-title dashboard-panel-title"><div><p className="eyebrow">{t.dashboard.platformHealth}</p><h2>{t.dashboard.serviceHealth}</h2></div><Status value={attention ? "attention" : "clear"} /></div>
-          <div className="dashboard-status-summary">
-            <div><span>{t.dashboard.servicesOnline}</span><strong>{healthyServices}/{overview.services.length}</strong><small>{serviceIssues.length === 0 ? t.dashboard.statusNormal : t.dashboard.statusIssue}</small></div>
-            <div><span>{t.dashboard.coreChecks}</span><strong>{healthyChecks}/{coreHealth.length}</strong><small>{healthIssues.length === 0 ? t.dashboard.statusNormal : t.dashboard.statusIssue}</small></div>
-            <div><span>{t.dashboard.projectVersionCoverage}</span><strong>{versionedProjects}/{overview.metrics.projects}</strong><small>{t.dashboard.remoteVersions}</small></div>
-          </div>
-          <div className="dashboard-service-list">
-            {overview.services.map((service) => <div key={service.key}><span className={`service-dot ${service.status}`} aria-hidden="true" /><strong>{localizeDashboardLabel(service.label, lang)}</strong><Status value={service.status} /></div>)}
-          </div>
+        <section className="panel dashboard-runs-panel">
+          <div className="panel-title dashboard-panel-title"><div><p className="eyebrow">{t.dashboard.liveWork}</p><h2>{t.dashboard.activeRuns}</h2></div><span>{t.dashboard.activeRunCount.replace("{count}", String(overview.metrics.active_runs))}</span></div>
+          {overview.active_runs.length === 0 ? <Empty>{t.dashboard.noActiveRuns}</Empty> : <ul className="dashboard-run-list">
+            {overview.active_runs.slice(0, 4).map((run) => <li key={run.run_id}>
+              <Link href={`/projects/${run.project_id}`}>
+                <span className="dashboard-run-pulse" aria-hidden="true" />
+                <div><strong>{run.title?.trim() || run.change_key}</strong><small>{projectNames.get(run.project_id) ?? t.dashboard.projectScope} · {run.current_phase === null ? t.dashboard.preparing : statusLabel(run.current_phase, t)}</small></div>
+                <time dateTime={run.last_event_at ?? run.started_at ?? undefined}>{formatRelativeTime(run.last_event_at ?? run.started_at, lang)}</time>
+              </Link>
+            </li>)}
+          </ul>}
         </section>
       </div>
 
-      <div className="dashboard-work-grid rise-in" style={{ animationDelay: "120ms" }}>
+      <div className="dashboard-overview-grid rise-in" style={{ animationDelay: "120ms" }}>
+        <section className="panel dashboard-work-panel dashboard-resources-panel">
+          <div className="panel-title dashboard-panel-title"><div><p className="eyebrow">{t.dashboard.contentOverview}</p><h2>{t.dashboard.platformContent}</h2></div></div>
+          <div className="dashboard-resource-groups">
+            <Link href="/skills"><span>{t.dashboard.allSkills}</span><strong>{totalSkills}</strong><small>{t.dashboard.skillSourceSummary.replace("{local}", String(overview.metrics.local_skills)).replace("{external}", String(overview.metrics.external_skills))} · {t.dashboard.publishedCount.replace("{count}", String(overview.metrics.published_skills))}</small></Link>
+            <Link href="/knowledge"><span>{t.dashboard.knowledgeEntries}</span><strong>{overview.metrics.knowledge_entries}</strong><small>{t.dashboard.knowledgeRelationsHint.replace("{count}", String(overview.metrics.knowledge_relations))}</small></Link>
+          </div>
+          <KnowledgeComposition items={overview.distributions.knowledge_categories} />
+        </section>
+
         <section className="panel dashboard-work-panel dashboard-project-panel">
           <div className="panel-title dashboard-panel-title">
             <div><p className="eyebrow">{t.dashboard.projectsPanelEyebrow}</p><h2>{t.dashboard.recentProjects}</h2></div>
             <Link href="/projects">{t.dashboard.viewAll}</Link>
           </div>
           {projects.length === 0 ? <Empty>{t.dashboard.noProjects}</Empty> : <ul className="dashboard-project-list">
-            {projects.slice(0, 4).map((project) => (
+            {projects.slice(0, 3).map((project) => (
               <li key={project.project_id}><Link href={`/projects/${project.project_id}`}>
                 <span className="dashboard-project-mark" aria-hidden="true">{project.display_name.slice(0, 1).toUpperCase()}</span>
                 <div><strong>{project.display_name}</strong><small>{project.latest_project_version === null ? t.dashboard.noVersion : t.dashboard.remoteVersionAvailable}{project.current_file_count === undefined ? "" : ` · ${t.dashboard.currentFiles.replace("{count}", String(project.current_file_count))}`}</small></div>
@@ -214,43 +222,21 @@ export function DashboardConsole({ api: propApi }: { api?: HunterApi }) {
           {recentActivity.length === 0 ? <Empty>{t.dashboard.noActivity}</Empty> : <ol className="activity-list dashboard-activity-list" aria-label={t.dashboard.recentActivity}>
             {recentActivity.map((event) => <li key={event.event_id} title={event.target_id}>
               <DashboardIcon name="activity" />
-              <div><strong>{actionLabel(event.action, t)}</strong><p>{event.project_id === null ? t.dashboard.registryScope : projectNames.get(event.project_id) ?? t.dashboard.projectScope}</p></div>
+              <div><strong>{actionLabel(event.action, t, lang)}</strong><p>{event.project_id === null ? t.dashboard.registryScope : projectNames.get(event.project_id) ?? t.dashboard.projectScope}</p></div>
               <time dateTime={event.created_at}>{new Date(event.created_at).toLocaleString(locale)}</time>
             </li>)}
           </ol>}
         </section>
       </div>
 
-      <section className="dashboard-actions">
-        <div>
-          <p className="eyebrow">{t.dashboard.nextAction}</p>
-          <strong>{action.title}</strong>
-          <span>{action.hint}</span>
-        </div>
-        <div className="dashboard-action-links">
-          <Link href="/projects">{t.dashboard.openRegistry}</Link>
-          <Link href="/knowledge">{t.dashboard.browseKnowledge}</Link>
-          <Link href="/workflows">{t.dashboard.maintainWorkflows}</Link>
-          <Link href="/skills">{t.dashboard.browseSkills}</Link>
-        </div>
-      </section>
+      <nav className="dashboard-quick-links" aria-label={t.dashboard.quickNavigation}>
+        <Link href="/projects"><DashboardIcon name="projects" />{t.dashboard.openRegistry}</Link>
+        <Link href="/knowledge"><DashboardIcon name="knowledge" />{t.dashboard.browseKnowledge}</Link>
+        <Link href="/skills"><DashboardIcon name="skill" />{t.dashboard.browseSkills}</Link>
+        <Link href="/ai-config"><DashboardIcon name="ai" />{t.dashboard.viewAiConfig}</Link>
+      </nav>
     </section>
   );
-}
-
-function localizeDashboardLabel(label: string, lang: "zh" | "en"): string {
-  if (lang !== "zh") return label;
-  const map: Record<string, string> = {
-    "Review backlog": "待处理审核",
-    "Review outcome": "审核结果",
-    "Artifact traceability": "版本可追溯",
-    "Audit evidence": "操作记录",
-    "Governance API": "治理接口",
-    "Project repository": "项目数据",
-    "Skill registry": "技能库",
-    "Audit log": "操作日志"
-  };
-  return map[label] ?? label;
 }
 
 // 把枚举值（role / kind / 分类 key 等）映射到当前语言文案，查不到时做可读化兜底
@@ -260,37 +246,136 @@ function statusLabel(value: string, t: ReturnType<typeof useI18n>["t"]): string 
 }
 
 // 活动流 action（如 skill.proposal.created）→ 当前语言文案
-function actionLabel(action: string, t: ReturnType<typeof useI18n>["t"]): string {
+function actionLabel(action: string, t: ReturnType<typeof useI18n>["t"], lang: "zh" | "en"): string {
   const map = t.dashboard.activityActions as Record<string, string>;
-  return map[action] ?? action;
+  if (map[action] !== undefined) return map[action];
+  return lang === "zh" ? t.dashboard.otherActivity : action.replaceAll("_", " ").replaceAll(".", " · ");
 }
 
-function DashboardIcon({ name }: { name: "projects" | "version" | "workflow" | "skill" | "activity" }) {
+function DashboardIcon({ name }: { name: "projects" | "workflow" | "skill" | "activity" | "knowledge" | "ai" }) {
   const map: Record<typeof name, IconName> = {
     projects: "folder",
-    version: "package",
     workflow: "workflow",
     skill: "sparkles",
-    activity: "activity"
+    activity: "activity",
+    knowledge: "brain",
+    ai: "zap"
   };
   return <Icon name={map[name]} size={22} className="dashboard-icon" />;
 }
 
-function SkillComposition({ items }: { items: DashboardOverview["distributions"]["skill_categories"] }) {
+function KnowledgeComposition({ items }: { items: DashboardOverview["distributions"]["knowledge_categories"] }) {
   const { t } = useI18n();
   const total = items.reduce((sum, item) => sum + item.count, 0);
-  const palette = ["var(--accent)", "var(--skill)", "var(--success)", "var(--review)"];
+  const visible = items.filter((item) => item.count > 0);
+  const palette = ["var(--accent)", "var(--success)", "var(--skill)", "var(--review)", "var(--warning)", "var(--muted)"];
   return <div className="dashboard-skill-composition">
-    <span>{t.dashboard.skillCategories}</span>
-    {total === 0 ? <small>{t.dashboard.noSkillCategories}</small> : <>
-      <div className="dashboard-composition-bar" aria-label={t.dashboard.skillCategories}>
-        {items.map((item, index) => <i key={item.key} style={{ width: `${(item.count / total) * 100}%`, background: palette[index % palette.length] }} />)}
+    <span>{t.dashboard.knowledgeComposition}</span>
+    {total === 0 ? <small>{t.dashboard.noKnowledge}</small> : <>
+      <div className="dashboard-composition-bar" aria-label={t.dashboard.knowledgeComposition}>
+        {visible.map((item, index) => <i key={item.key} style={{ width: `${(item.count / total) * 100}%`, background: palette[index % palette.length] }} />)}
       </div>
       <div className="dashboard-composition-legend">
-        {items.slice(0, 4).map((item, index) => <span key={item.key}><i style={{ background: palette[index % palette.length] }} />{statusLabel(item.key, t)} <b>{item.count}</b></span>)}
+        {visible.map((item, index) => <span key={item.key}><i style={{ background: palette[index % palette.length] }} />{statusLabel(item.key, t)} <b>{item.count}</b></span>)}
       </div>
     </>}
   </div>;
+}
+
+function filterAiUsage(records: AiQuotaUsage[], range: "today" | "7d" | "all"): AiQuotaUsage[] {
+  if (range === "all") return records;
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+  if (range === "today") return records.filter((record) => record.date === today);
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 6)).toISOString().slice(0, 10);
+  return records.filter((record) => record.date >= start && record.date <= today);
+}
+
+function sumAiUsage(records: AiQuotaUsage[]): { requests: number; tokens: number; cost: number } {
+  return records.reduce((total, record) => ({
+    requests: total.requests + record.requests,
+    tokens: total.tokens + record.tokens,
+    cost: total.cost + record.cost
+  }), { requests: 0, tokens: 0, cost: 0 });
+}
+
+function AiUsageChart({ records, range, locale }: { records: AiQuotaUsage[]; range: "today" | "7d" | "all"; locale: string }) {
+  const { t } = useI18n();
+  const rangeLabel = range === "today" ? t.dashboard.rangeToday : range === "7d" ? t.dashboard.rangeSevenDays : t.dashboard.rangeAll;
+  const items = range === "today" ? Array.from({ length: 24 }, (_, hour) => ({
+    key: String(hour),
+    label: hour % 4 === 0 ? `${String(hour).padStart(2, "0")}:00` : "",
+    requests: records.reduce((total, record) => total + (record.hourly?.find((item) => item.hour === hour)?.requests ?? 0), 0)
+  })) : aggregateDailyUsage(records, range === "7d" ? 7 : 14, locale);
+  const max = Math.max(1, ...items.map((item) => item.requests));
+  const width = 720;
+  const height = 126;
+  const points = items.map((item, index) => {
+    const x = items.length <= 1 ? width / 2 : (index / (items.length - 1)) * width;
+    const y = height - (item.requests / max) * 92 - 14;
+    return `${x},${y}`;
+  }).join(" ");
+  return <div className="dashboard-ai-chart dashboard-ai-line-chart" role="img" aria-label={`${t.dashboard.aiUsage} · ${rangeLabel}`}>
+    {records.length === 0 ? <span className="dashboard-ai-empty">{t.dashboard.noAiUsage}</span> : <>
+      <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" aria-hidden="true">
+        <defs><linearGradient id="aiUsageArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="var(--accent)" stopOpacity=".36"/><stop offset="1" stopColor="var(--accent)" stopOpacity="0"/></linearGradient></defs>
+        <polyline className="dashboard-ai-area" points={`0,${height} ${points} ${width},${height}`} />
+        <polyline className="dashboard-ai-line" points={points} />
+      </svg>
+      <div className="dashboard-ai-axis">{items.filter((item) => item.label !== "").map((item) => <span key={item.key}>{item.label}</span>)}</div>
+      {range === "today" ? <small>{t.dashboard.hourlyUtc}</small> : null}
+    </>}
+  </div>;
+}
+
+function aggregateDailyUsage(records: AiQuotaUsage[], maxPoints: number, locale: string): Array<{ key: string; label: string; requests: number }> {
+  const byDate = new Map<string, number>();
+  for (const record of records) byDate.set(record.date, (byDate.get(record.date) ?? 0) + record.requests);
+  const dates = [...byDate.keys()].sort();
+  if (dates.length === 0) return [];
+  const chunkSize = Math.max(1, Math.ceil(dates.length / maxPoints));
+  return Array.from({ length: Math.ceil(dates.length / chunkSize) }, (_, index) => {
+    const group = dates.slice(index * chunkSize, (index + 1) * chunkSize);
+    const date = group[group.length - 1] ?? dates[0] ?? "";
+    return {
+      key: `${group[0]}-${date}`,
+      label: new Date(`${date}T00:00:00Z`).toLocaleDateString(locale, { month: "numeric", day: "numeric" }),
+      requests: group.reduce((total, item) => total + (byDate.get(item) ?? 0), 0)
+    };
+  });
+}
+
+function AiModelUsage({ records }: { records: AiQuotaUsage[] }) {
+  const { t } = useI18n();
+  const palette = ["#7f9cff", "#4dd6a4", "#c38cff", "#ffb45f", "#51c8e8", "#ff7597"];
+  const models = [...records.reduce((map, record) => {
+    const key = record.model || record.provider_id;
+    const current = map.get(key) ?? { model: key, requests: 0, tokens: 0, cost: 0 };
+    current.requests += record.requests;
+    current.tokens += record.tokens;
+    current.cost += record.cost;
+    map.set(key, current);
+    return map;
+  }, new Map<string, { model: string; requests: number; tokens: number; cost: number }>()).values()]
+    .sort((left, right) => right.requests - left.requests);
+  const total = Math.max(1, models.reduce((sum, model) => sum + model.requests, 0));
+  if (models.length === 0) return null;
+  return <div className="dashboard-model-usage">
+    <span>{t.dashboard.usageByModel}</span>
+    <div className="dashboard-model-strip">{models.map((model, index) => <i key={model.model} style={{ width: `${(model.requests / total) * 100}%`, background: palette[index % palette.length] }} />)}</div>
+    <div className="dashboard-model-legend">{models.slice(0, 6).map((model, index) => <div key={model.model}><i style={{ background: palette[index % palette.length] }} /><strong>{model.model}</strong><span>{model.requests} · {new Intl.NumberFormat().format(model.tokens)} Token</span><b>${model.cost.toFixed(2)}</b></div>)}</div>
+  </div>;
+}
+
+function formatRelativeTime(value: string | null, lang: "zh" | "en"): string {
+  if (value === null) return lang === "zh" ? "刚刚开始" : "Just started";
+  const minutes = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60_000));
+  if (minutes < 1) return lang === "zh" ? "刚刚" : "Now";
+  if (minutes < 60) return lang === "zh" ? `${minutes} 分钟前` : `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return lang === "zh" ? `${hours} 小时前` : `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return lang === "zh" ? `${days} 天前` : `${days}d ago`;
 }
 
 export function AuthTokenForm() {

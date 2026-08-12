@@ -1,6 +1,7 @@
 import {
   canonicalJson,
   type AgentTool,
+  type AgentToolGithubInspection,
   type AgentToolMutation,
   type AiProviderApiFormat,
   type AiProviderConfig,
@@ -350,6 +351,8 @@ export interface HunterApi {
   createExternalSkill?(input: CreateExternalSkillRequest): Promise<ExternalSkill>;
   patchExternalSkill?(id: string, input: PatchExternalSkillRequest): Promise<ExternalSkill>;
   refreshExternalSkill?(id: string): Promise<ExternalSkill>;
+  checkExternalSkill?(id: string): Promise<ExternalSkill>;
+  refreshExternalSkillUpdateHistory?(id: string, appliedAt: string): Promise<ExternalSkill>;
   generateExternalSkillSummary?(id: string, revision: number, force?: boolean): Promise<ExternalSkill>;
   deleteExternalSkill?(id: string): Promise<{ id: string; deleted: boolean }>;
   listSkillArtifacts?(): Promise<RegistryArtifact[]>;
@@ -365,6 +368,8 @@ export interface HunterApi {
   listWorkflowFamilies?(): Promise<WorkflowFamily[]>;
   listAgentTools?(): Promise<AgentTool[]>;
   createAgentTool?(input: AgentToolMutation): Promise<AgentTool>;
+  inspectAgentToolGithub?(githubUrl: string): Promise<AgentToolGithubInspection>;
+  generateAgentToolPrefill?(inspection: AgentToolGithubInspection): Promise<AgentToolMutation>;
   getAgentTool?(slug: string): Promise<AgentTool>;
   createWorkflowFamily?(input: WorkflowFamilyMutation): Promise<WorkflowFamily>;
   inspectWorkflowFamilySource?(source: WorkflowFamilySource): Promise<WorkflowFamilySourceInspection>;
@@ -837,6 +842,16 @@ export class HttpHunterApi implements HunterApi {
     return this.request("POST", "/api/v1/external-skills/" + encodeURIComponent(id) + "/refresh");
   }
 
+  async checkExternalSkill(id: string): Promise<ExternalSkill> {
+    return this.request("POST", "/api/v1/external-skills/" + encodeURIComponent(id) + "/check-upstream");
+  }
+
+  async refreshExternalSkillUpdateHistory(id: string, appliedAt: string): Promise<ExternalSkill> {
+    return this.request("POST", "/api/v1/external-skills/" + encodeURIComponent(id) + "/update-history/refresh", {
+      applied_at: appliedAt
+    });
+  }
+
   async generateExternalSkillSummary(id: string, revision: number, force = false): Promise<ExternalSkill> {
     return this.request("POST", "/api/v1/external-skills/" + encodeURIComponent(id) + "/summary", {
       revision,
@@ -926,6 +941,20 @@ export class HttpHunterApi implements HunterApi {
 
   async createAgentTool(input: AgentToolMutation): Promise<AgentTool> {
     return this.request("POST", "/api/v1/agent-tools", { schema_version: 1, ...input });
+  }
+
+  async inspectAgentToolGithub(githubUrl: string): Promise<AgentToolGithubInspection> {
+    return this.request("POST", "/api/v1/agent-tools/import/inspect", {
+      schema_version: 1,
+      github_url: githubUrl
+    });
+  }
+
+  async generateAgentToolPrefill(inspection: AgentToolGithubInspection): Promise<AgentToolMutation> {
+    return this.request("POST", "/api/v1/agent-tools/import/ai-prefill", {
+      schema_version: 1,
+      inspection: { source: inspection.source, suggested: inspection.suggested }
+    });
   }
 
   async getAgentTool(slug: string): Promise<AgentTool> {

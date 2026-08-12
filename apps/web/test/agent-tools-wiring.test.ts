@@ -8,10 +8,12 @@ describe("Agent Tools route wiring", () => {
     const pagePath = resolve("apps/web/app/agent-tools/page.tsx");
     const centerPath = resolve("apps/web/components/agent-tool-center.tsx");
     const navPath = resolve("apps/web/components/client-layout.tsx");
+    const i18nPath = resolve("apps/web/lib/i18n.tsx");
 
     expect(existsSync(pagePath)).toBe(true);
     expect(existsSync(centerPath)).toBe(true);
     expect(readFileSync(navPath, "utf8")).toContain('href: "/agent-tools"');
+    expect(readFileSync(i18nPath, "utf8")).toContain('agentTools: "Agent"');
     expect(readFileSync(pagePath, "utf8")).toContain("AgentToolCenter");
   });
 });

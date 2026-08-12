@@ -295,6 +295,11 @@ describe("AI quota + per-provider per-day usage (簇 B-2)", () => {
     expect(u?.requests).toBe(80);
     expect(u?.tokens).toBe(300);
     expect(u?.date).toBe(today());
+    expect(u?.hourly).toEqual([expect.objectContaining({
+      hour: new Date().getUTCHours(),
+      requests: 80,
+      tokens: 300
+    })]);
   });
 
   it("QUOTA-002 超 requests 限 → 429 QUOTA_EXCEEDED 不累加 (UT-011)", async () => {

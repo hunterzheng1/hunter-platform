@@ -2,6 +2,8 @@ import { Buffer } from "node:buffer";
 
 import {
   agentToolMutationSchema,
+  generateAgentToolPrefillRequestSchema,
+  inspectAgentToolGithubRequestSchema,
   aiProviderReorderRequestSchema,
   canonicalJson,
   fileOperationSchema,
@@ -23,10 +25,12 @@ import {
   bindProjectWorkflowFamilyRequestSchema,
   createExternalSkillRequestSchema,
   generateExternalSkillSummaryRequestSchema,
+  refreshExternalSkillUpdateHistoryRequestSchema,
   patchExternalSkillRequestSchema,
   SKILL_ERROR_CODE,
   type AiProviderConfig,
   type CodexConnectionState,
+  type ExternalSkill,
   type RegistryAgent,
   type FileOperation,
   type FixPlanItem,
@@ -34,15 +38,19 @@ import {
 } from "@hunter-harness/contracts";
 import {
   buildAiCheckPrompt,
+  buildAgentToolPrefillPrompt,
   buildExternalSkillSummaryRepairPrompt,
   buildExternalSkillSummaryPrompt,
+  buildExternalSkillUpdateSummaryPrompt,
   buildReleaseNotePrompt,
   classifyFile,
   decidePush,
   findEntryFile,
   externalSkillSummarySourceHash,
   parseAiCheckResult,
+  parseAgentToolPrefill,
   parseExternalSkillSummary,
+  parseExternalSkillUpdateSummary,
   parseFrontmatter,
   parseReleaseNote,
   scanSensitiveFiles,
@@ -734,6 +742,47 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
       cache_create_tokens: usage?.cache_create_tokens ?? 0
     });
   };
+  const summarizeExternalSkillUpdate = async (
+    skill: ExternalSkill,
+    appliedAt: string,
+    required: boolean
+  ): Promise<ExternalSkill> => {
+    const record = skill.updateHistory.find((item) => item.applied_at === appliedAt);
+    if (record === undefined || record.releases.length === 0) return skill;
+    const resolved = await resolveAgentLlmClient("generic");
+    if (resolved === null) {
+      if (required) throw new ServerDomainError(422, "AI_NOT_CONFIGURED", "no API provider or Codex account is available");
+      return skill;
+    }
+    const prompt = buildExternalSkillUpdateSummaryPrompt({
+      name: skill.snapshot.name,
+      fromVersion: record.from_version,
+      toVersion: record.to_version,
+      releases: record.releases.map((release) => ({ version: release.version, changes: release.changes }))
+    });
+    checkAgentQuota(resolved);
+    let response: Awaited<ReturnType<LlmClient["analyze"]>>;
+    try {
+      response = await resolved.client.analyze(prompt);
+    } catch {
+      throw new ServerDomainError(502, "AI_GENERATION_FAILED", "external skill update summary generation failed");
+    }
+    await recordAgentUsage(resolved, response.usage);
+    let changes = parseExternalSkillUpdateSummary(response.content);
+    if (changes === null) {
+      checkAgentQuota(resolved);
+      const repaired = await resolved.client.analyze({
+        system: prompt.system + "\n上一次响应不符合结构要求。请只返回合法 JSON，并移除所有版本号前缀。",
+        user: [prompt.user, "<invalid_response>", response.content.slice(0, 12_000), "</invalid_response>"].join("\n")
+      });
+      await recordAgentUsage(resolved, repaired.usage);
+      changes = parseExternalSkillUpdateSummary(repaired.content);
+    }
+    if (changes === null) {
+      throw new ServerDomainError(502, "AI_PARSE_FAILED", "external skill update summary was not valid Chinese content");
+    }
+    return registry.updateExternalSkillHistorySummary(skill.id, appliedAt, changes, skill.revision);
+  };
   const app = Fastify({
     logger: options.logger ?? false,
     bodyLimit: config.maxProposalBytes
@@ -1020,6 +1069,8 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     const overview = await buildDashboardOverview({
       repository,
       registry,
+      runStore,
+      semanticStore,
       actorId: actor.actorId,
       days: query.days
     });
@@ -2285,6 +2336,56 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
       })
     );
     return send(reply, requestId, result);
+  });
+
+  app.post("/api/v1/agent-tools/import/inspect", async (request, reply) => {
+    const { requestId } = await authenticated(request, repository);
+    const body = inspectAgentToolGithubRequestSchema.parse(request.body);
+    const inspection = await registry.inspectAgentToolGithub(body.github_url);
+    reply.header("X-Request-Id", requestId);
+    return { ...inspection, request_id: requestId };
+  });
+
+  app.post("/api/v1/agent-tools/import/ai-prefill", async (request, reply) => {
+    const { requestId } = await authenticated(request, repository);
+    const body = generateAgentToolPrefillRequestSchema.parse(request.body);
+    const resolved = await resolveAgentLlmClient("generic");
+    if (resolved === null) {
+      throw new ServerDomainError(422, "AI_NOT_CONFIGURED", "no API provider or Codex account is available");
+    }
+    checkAgentQuota(resolved);
+    const prompt = buildAgentToolPrefillPrompt(body.inspection);
+    let response: Awaited<ReturnType<LlmClient["analyze"]>>;
+    try {
+      response = await resolved.client.analyze(prompt);
+    } catch {
+      throw new ServerDomainError(502, "AI_GENERATION_FAILED", "agent registration draft generation failed");
+    }
+    await recordAgentUsage(resolved, response.usage);
+    let draft = parseAgentToolPrefill(response.content);
+    if (draft === null) {
+      checkAgentQuota(resolved);
+      let repaired: Awaited<ReturnType<LlmClient["analyze"]>>;
+      try {
+        repaired = await resolved.client.analyze({
+          system: prompt.system + "\n上一次响应不符合结构或中文描述要求。请严格修正，只返回合法 JSON。",
+          user: [prompt.user, "<invalid_response>", response.content.slice(0, 12_000), "</invalid_response>"].join("\n")
+        });
+      } catch {
+        throw new ServerDomainError(502, "AI_GENERATION_FAILED", "agent registration draft repair failed");
+      }
+      await recordAgentUsage(resolved, repaired.usage);
+      draft = parseAgentToolPrefill(repaired.content);
+    }
+    if (draft === null) {
+      throw new ServerDomainError(502, "AI_PARSE_FAILED", "agent registration draft was not valid structured Chinese content");
+    }
+    reply.header("X-Request-Id", requestId);
+    return {
+      ...draft,
+      // 来源由仓库读取结果确定，不允许模型改写或跳转到其他地址。
+      source: body.inspection.source
+    };
   });
 
   app.get("/api/v1/agent-tools/:slug", async (request, reply) => {
@@ -3735,7 +3836,11 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     const { actor, requestId } = await authenticated(request, repository);
     const body = createExternalSkillRequestSchema.parse(request.body);
     const result = await mutation(request, repository, actor, requestId, async () => {
-      const skill = await registry.createExternalSkill(body);
+      const skill = await registry.createExternalSkill({
+        source: body.source,
+        tags: body.tags,
+        ...(body.curationNote === undefined ? {} : { curationNote: body.curationNote })
+      });
       await writeAudit(repository, {
         actorId: actor.actorId,
         projectId: null,
@@ -3779,7 +3884,13 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     const { id } = request.params as { id: string };
     const result = await mutation(request, repository, actor, requestId, async () => {
       const before = registry.getExternalSkill(id);
-      const skill = await registry.refreshExternalSkill(id);
+      let skill = await registry.refreshExternalSkill(id);
+      const latestUpdate = skill.updateHistory.find((record) =>
+        !before.updateHistory.some((previous) => previous.applied_at === record.applied_at)
+      );
+      if (latestUpdate !== undefined) {
+        skill = await summarizeExternalSkillUpdate(skill, latestUpdate.applied_at, false);
+      }
       await writeAudit(repository, {
         actorId: actor.actorId,
         projectId: null,
@@ -3791,6 +3902,44 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
           version: skill.snapshot.version,
           update_available: skill.updateAvailable
         }
+      });
+      return { statusCode: 200, body: skill };
+    });
+    return send(reply, requestId, result);
+  });
+
+  app.post("/api/v1/external-skills/:id/check-upstream", async (request, reply) => {
+    const { actor, requestId } = await authenticated(request, repository);
+    const { id } = request.params as { id: string };
+    const result = await mutation(request, repository, actor, requestId, async () => {
+      const skill = await registry.checkExternalSkill(id);
+      await writeAudit(repository, {
+        actorId: actor.actorId,
+        projectId: null,
+        action: "external_skill.upstream.checked",
+        targetId: skill.id,
+        requestId,
+        details: { update_available: skill.updateAvailable, available_version: skill.availableVersion }
+      });
+      return { statusCode: 200, body: skill };
+    });
+    return send(reply, requestId, result);
+  });
+
+  app.post("/api/v1/external-skills/:id/update-history/refresh", async (request, reply) => {
+    const { actor, requestId } = await authenticated(request, repository);
+    const { id } = request.params as { id: string };
+    const body = refreshExternalSkillUpdateHistoryRequestSchema.parse(request.body);
+    const result = await mutation(request, repository, actor, requestId, async () => {
+      const refreshed = await registry.refreshExternalSkillUpdateHistory(id, body.applied_at);
+      const skill = await summarizeExternalSkillUpdate(refreshed, body.applied_at, true);
+      await writeAudit(repository, {
+        actorId: actor.actorId,
+        projectId: null,
+        action: "external_skill.update_history.refreshed",
+        targetId: skill.id,
+        requestId,
+        details: { applied_at: body.applied_at }
       });
       return { statusCode: 200, body: skill };
     });
@@ -3853,6 +4002,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
         summary: {
           ...content,
           source_sha256: sourceHash,
+          source_version: before.snapshot.version,
           provider_id: resolvedBackendId(resolved),
           model: resolved.model,
           generated_at: new Date().toISOString()

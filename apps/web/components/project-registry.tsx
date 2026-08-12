@@ -30,6 +30,7 @@ interface ProjectRunPreview {
   state: "ready" | "error";
   latest: RunSummary | null;
   total: number;
+  knowledgeCount: number | null;
 }
 
 function runTitle(run: RunSummary): string {
@@ -80,8 +81,9 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
   const copy = lang === "zh" ? {
     eyebrow: "项目工作区", title: "项目", description: "集中查看项目文件、知识状态与版本记录。",
     active: "当前项目", trash: "回收站", search: "搜索项目", searchPlaceholder: "按项目名称搜索",
-    files: "受管文件", versioned: "已有版本", recentlyUpdated: "近 7 天更新",
-    firstSync: "等待首次同步", fileUnit: "个文件", updated: "更新于",
+    files: "项目文件", branches: "开发分支", knowledge: "知识库", versioned: "已有版本", recentlyUpdated: "近 7 天更新",
+    remoteVersion: "已有远端版本", firstSync: "等待首次同步", fileUnit: "个文件", updated: "更新于",
+    branchCount: (n: number) => `${n} 个分支`, knowledgeCount: (n: number) => `${n} 条知识`,
     archive: "移到回收站", restore: "恢复", purge: "永久删除", emptyTrash: "清空回收站",
     noProjects: "还没有项目。运行 npx hunter-harness 完成首次同步后会显示在这里。", noTrash: "回收站是空的。",
     noMatch: "没有符合搜索条件的项目。", trashHint: "项目会在回收站保留 30 天，到期后自动清理。",
@@ -104,8 +106,9 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
   } : {
     eyebrow: "Project workspace", title: "Projects", description: "View project files, knowledge health, and version history in one place.",
     active: "Active projects", trash: "Recycle bin", search: "Search projects", searchPlaceholder: "Search by project name",
-    files: "Managed files", versioned: "With versions", recentlyUpdated: "Updated in 7 days",
-    firstSync: "Awaiting first sync", fileUnit: "files", updated: "Updated",
+    files: "Project files", branches: "Development branches", knowledge: "Knowledge base", versioned: "With versions", recentlyUpdated: "Updated in 7 days",
+    remoteVersion: "Remote version available", firstSync: "Awaiting first sync", fileUnit: "files", updated: "Updated",
+    branchCount: (n: number) => `${n} branches`, knowledgeCount: (n: number) => `${n} knowledge entries`,
     archive: "Move to recycle bin", restore: "Restore", purge: "Delete permanently", emptyTrash: "Empty recycle bin",
     noProjects: "No projects yet. Run npx hunter-harness to complete the first sync.", noTrash: "The recycle bin is empty.",
     noMatch: "No projects match your search.", trashHint: "Projects remain in the recycle bin for 30 days, then are removed automatically.",
@@ -187,6 +190,7 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
 
   useEffect(() => {
     const listRuns = api.listProjectRuns?.bind(api);
+    const getOverview = api.getProjectSemanticOverview?.bind(api);
     if (projects === null || view !== "active" || listRuns === undefined || visibleProjectKey === "") return;
     const missingIds = pageItems
       .map((project) => project.project_id)
@@ -197,10 +201,20 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
     for (const projectId of missingIds) pendingRunRequests.current.add(projectId);
     void Promise.all(missingIds.map(async (projectId): Promise<[string, ProjectRunPreview]> => {
       try {
-        const result = await listRuns(projectId, { limit: 1, cursor: null });
-        return [projectId, { state: "ready", latest: result.items[0] ?? null, total: result.total }];
+        const [runsResult, overviewResult] = await Promise.allSettled([
+          listRuns(projectId, { limit: 1, cursor: null }),
+          getOverview === undefined ? Promise.resolve(null) : getOverview(projectId)
+        ]);
+        const runs = runsResult.status === "fulfilled" ? runsResult.value : null;
+        const overview = overviewResult.status === "fulfilled" ? overviewResult.value : null;
+        return [projectId, {
+          state: runs === null ? "error" : "ready",
+          latest: runs?.items[0] ?? null,
+          total: runs?.total ?? 0,
+          knowledgeCount: overview?.counts.knowledge ?? null
+        }];
       } catch {
-        return [projectId, { state: "error", latest: null, total: 0 }];
+        return [projectId, { state: "error", latest: null, total: 0, knowledgeCount: null }];
       } finally {
         pendingRunRequests.current.delete(projectId);
       }
@@ -351,7 +365,7 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
             <div className="project-card-title">
               <div>
                 <h2>{project.display_name}</h2>
-                <span className={hasVersion ? "synced" : "waiting"}>{hasVersion ? version : copy.firstSync}</span>
+                <span className={hasVersion ? "synced" : "waiting"}>{hasVersion ? copy.remoteVersion : copy.firstSync}</span>
               </div>
             </div>
             {view === "active" ? <button
@@ -364,6 +378,8 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
           </header>
           <dl className="project-card-meta" data-slot="project-card-meta">
             <div><dt><Icon name="file" size={13} /> {copy.files}</dt><dd>{project.current_file_count ?? 0} {copy.fileUnit}</dd></div>
+            <div><dt><Icon name="workflow" size={13} /> {copy.branches}</dt><dd>{copy.branchCount(preview?.total ?? 0)}</dd></div>
+            <div><dt><Icon name="brain" size={13} /> {copy.knowledge}</dt><dd>{preview?.knowledgeCount === null || preview?.knowledgeCount === undefined ? "—" : copy.knowledgeCount(preview.knowledgeCount)}</dd></div>
             <div><dt><Icon name="clock" size={13} /> {copy.updated}</dt><dd><time dateTime={project.updated_at ?? project.created_at}>{formatProjectDateTime(project.updated_at ?? project.created_at, lang)}</time></dd></div>
           </dl>
           {view === "active" ? <section className="project-run-preview" data-slot="project-run-preview" aria-label={`${project.display_name} · ${copy.latestRun}`}>
