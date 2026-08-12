@@ -549,7 +549,7 @@ describe("AI multi-model + reorder + migration (簇 D, 任务 2-6)", () => {
     expect(provider?.sort_order).toBe(0);
     // 触发 persist 后 schemaVersion 升 4
     await store.setDefault("deepseek");
-    expect((p.snapshot as { schemaVersion: number }).schemaVersion).toBe(4);
+    expect((p.snapshot as { schemaVersion: number }).schemaVersion).toBe(5);
   });
 
   it("D-02 schemaVersion 3 多 provider 迁移", async () => {

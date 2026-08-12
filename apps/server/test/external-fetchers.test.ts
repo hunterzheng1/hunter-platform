@@ -6,7 +6,8 @@ import {
   fetchGithubSnapshot,
   fetchNpmSnapshot,
   normalizeGithubRef,
-  normalizeNpmRef
+  normalizeNpmRef,
+  readExternalJson
 } from "../src/external/fetchers.js";
 
 describe("external skill source normalization", () => {
@@ -31,6 +32,42 @@ describe("external skill source normalization", () => {
 });
 
 describe("external skill fetchers", () => {
+  it("stops a source request that ignores AbortSignal after the configured deadline", async () => {
+    await expect(fetchNpmSnapshot("@acme/never", {
+      timeoutMs: 20,
+      fetch: async () => new Promise<Response>(() => undefined)
+    })).rejects.toMatchObject({
+      code: "EXTERNAL_FETCH_TIMEOUT",
+      statusCode: 504
+    });
+  });
+
+  it("applies one absolute deadline to a slowly streaming response body", async () => {
+    const encoder = new TextEncoder();
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const response = new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        let emitted = 0;
+        timer = setInterval(() => {
+          controller.enqueue(encoder.encode(emitted === 0 ? "[" : emitted < 20 ? "0," : "0]"));
+          emitted += 1;
+          if (emitted > 20) {
+            clearInterval(timer);
+            controller.close();
+          }
+        }, 10);
+      },
+      cancel() {
+        if (timer !== undefined) clearInterval(timer);
+      }
+    }));
+
+    await expect(readExternalJson(response, 1024, 20)).rejects.toMatchObject({
+      code: "EXTERNAL_FETCH_TIMEOUT",
+      statusCode: 504
+    });
+  });
+
   it("fetches npm metadata snapshot via injected fetch", async () => {
     const snapshot = await fetchNpmSnapshot("@acme/widget", {
       now: () => "2026-07-12T00:00:00.000Z",
@@ -38,11 +75,17 @@ describe("external skill fetchers", () => {
         expect(String(input)).toBe("https://registry.npmjs.org/%40acme%2Fwidget");
         return new Response(JSON.stringify({
           name: "@acme/widget",
-          description: "A widget",
-          license: "MIT",
-          homepage: "https://example.com",
           readme: "# Widget\n",
-          "dist-tags": { latest: "1.2.3" }
+          "dist-tags": { latest: "1.2.3" },
+          versions: {
+            "1.2.3": {
+              name: "@acme/widget",
+              description: "A widget",
+              license: "MIT",
+              homepage: "https://example.com",
+              version: "1.2.3"
+            }
+          }
         }), { status: 200 });
       }
     });

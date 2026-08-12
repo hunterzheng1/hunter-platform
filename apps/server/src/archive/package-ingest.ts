@@ -17,6 +17,7 @@ import type {
 import { ServerDomainError } from "../repositories/interfaces.js";
 import { buildSemanticIndex, isSemanticSourcePath } from "../semantic/indexer.js";
 import type { SemanticStore } from "../semantic/store.js";
+import { SEMANTIC_INDEX_SCHEMA_VERSION } from "../semantic/store.js";
 import type { ArtifactStorage } from "../storage/interface.js";
 import { archiveRootPrefix } from "./change-archive.js";
 
@@ -697,7 +698,7 @@ export async function loadSemanticSnapshotFiles(input: {
   return Object.fromEntries(values);
 }
 
-async function rebuildStableSemanticSnapshot(input: {
+export async function rebuildStableSemanticSnapshot(input: {
   actorId: string;
   projectId: string;
   repository: ServerRepository;
@@ -893,7 +894,9 @@ export async function ingestArchivePackage(input: {
       if (wasReady) {
         const latest = await input.repository.getLatestArtifact(input.actorId, input.projectId);
         if (latest !== null &&
-            await input.semanticStore.latestArtifactId(input.projectId) === latest.artifactId) {
+            await input.semanticStore.latestArtifactId(input.projectId) === latest.artifactId &&
+            await input.semanticStore.indexSchemaVersion(input.projectId) ===
+              SEMANTIC_INDEX_SCHEMA_VERSION) {
           return receipt(persisted.record);
         }
         persisted.record = await input.repository.updateChangeArchivePackage({

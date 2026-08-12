@@ -7,8 +7,10 @@ import {
   workflowBundleManifestSchema,
   workflowFamilyBundleArtifactSchema,
   workflowFamilyDraftStateSchema,
+  workflowFamilyDraftSummarySchema,
   workflowFamilySchema,
   workflowFamilyVersionSchema,
+  workflowFamilyVersionSummarySchema,
   SKILL_ERROR_CODE,
   type SkillCheckItem,
   type SkillCheckResult,
@@ -17,15 +19,23 @@ import {
   type WorkflowBundleManifest,
   type WorkflowFamily,
   type WorkflowFamilyDraftState,
+  type WorkflowFamilyDraftSummary,
   type WorkflowFamilyMutation,
-  type WorkflowFamilyVersion
+  type WorkflowFamilyVersion,
+  type WorkflowFamilyVersionSummary
 } from "@hunter-harness/contracts";
-import { bumpPatch, compareSemver, computeDiff, scanSensitiveFiles, sha256Bytes } from "@hunter-harness/core";
+import {
+  bumpPatch,
+  compareSemver,
+  computeDiff,
+  normalizeManagedPath,
+  scanSensitiveFiles,
+  sha256Bytes,
+  type SensitiveFinding
+} from "@hunter-harness/core";
 
-import { ServerDomainError } from "../repositories/interfaces.js";
+import { ServerDomainError, type TransactionRepository } from "../repositories/interfaces.js";
 import type { ArtifactStorage } from "../storage/interface.js";
-
-const DANGEROUS_PATH = /(^|[/\\])\.\.([/\\]|$)|^\/|^\\|^[a-zA-Z]:/i;
 
 export interface WorkflowFamilyState {
   detail: WorkflowFamily;
@@ -36,7 +46,7 @@ export interface WorkflowFamilyStoreDeps {
   storage: ArtifactStorage;
   families: Map<string, WorkflowFamilyState>;
   drafts: Map<string, WorkflowFamilyDraftState>;
-  persist: () => Promise<void>;
+  persist: (tx?: TransactionRepository) => Promise<void>;
   compilerVersion: () => string;
 }
 
@@ -52,6 +62,43 @@ function buildBundleManifest(profile: string, sourceFiles: SourceFile[]): Workfl
     schema_version: 1,
     profile,
     files
+  });
+}
+
+export function summarizeWorkflowFamilyDraft(
+  draft: WorkflowFamilyDraftState
+): WorkflowFamilyDraftSummary {
+  return workflowFamilyDraftSummarySchema.parse({
+    family_slug: draft.family_slug,
+    profiles: draft.profiles.map((entry) => ({
+      profile: entry.profile,
+      file_count: entry.sourceFiles.length
+    })),
+    required_profiles: draft.required_profiles,
+    draftVersion: draft.draftVersion,
+    checks: draft.checks,
+    releaseNote: draft.releaseNote,
+    revision: draft.revision,
+    created_at: draft.created_at,
+    updated_at: draft.updated_at
+  });
+}
+
+export function summarizeWorkflowFamilyVersion(
+  version: WorkflowFamilyVersion
+): WorkflowFamilyVersionSummary {
+  return workflowFamilyVersionSummarySchema.parse({
+    family_slug: version.family_slug,
+    version: version.version,
+    profiles: version.profiles.map((entry) => ({
+      profile: entry.profile,
+      bundle_manifest: entry.bundle_manifest,
+      artifact_id: entry.artifact_id,
+      file_count: entry.sourceFiles.length
+    })),
+    artifacts: version.artifacts,
+    changeNote: version.changeNote,
+    created_at: version.created_at
   });
 }
 
@@ -73,6 +120,91 @@ function verifyBundleManifest(manifest: WorkflowBundleManifest, sourceFiles: Sou
   }
 }
 
+export function validateAndIndexSourceFiles(sourceFiles: SourceFile[]): Record<string, string> {
+  const files = Object.create(null) as Record<string, string>;
+  const seen = new Map<string, string>();
+  for (const file of sourceFiles) {
+    let normalized: string;
+    try {
+      normalized = normalizeManagedPath(file.path);
+    } catch (error) {
+      throw new ServerDomainError(
+        422,
+        SKILL_ERROR_CODE.VALIDATION_FAILED,
+        `unsafe file path: ${file.path}`,
+        { reason: error instanceof Error ? error.message : "invalid path" }
+      );
+    }
+    if (normalized !== file.path) {
+      throw new ServerDomainError(
+        422,
+        SKILL_ERROR_CODE.VALIDATION_FAILED,
+        `file path must be canonical: ${file.path}`,
+        { canonical_path: normalized }
+      );
+    }
+    const folded = normalized.toLocaleLowerCase("en-US");
+    const existing = seen.get(folded);
+    if (existing !== undefined) {
+      throw new ServerDomainError(
+        422,
+        SKILL_ERROR_CODE.VALIDATION_FAILED,
+        `duplicate or case-colliding file path: ${file.path}`,
+        { existing_path: existing }
+      );
+    }
+    seen.set(folded, normalized);
+    files[normalized] = file.content;
+  }
+  return files;
+}
+
+export function trustedWorkflowFindingAllowed(finding: SensitiveFinding): boolean {
+  const agentRoot = "(?:(?:general|java)/)?(?:claude-code|codebuddy|codex|cursor)";
+  if (finding.rule_id === "HH_WINDOWS_ABSOLUTE_PATH") {
+    return new RegExp(
+      `^${agentRoot}/(?:contracts/fixtures/managed-execution\\.json|harness-test/(?:checklist|reference)\\.md|protocols/powershell-protocol\\.md)$`
+    ).test(finding.path);
+  }
+  if (finding.rule_id === "HH_PASSWORD_VALUE") {
+    return new RegExp(
+      `^${agentRoot}/(?:harness-test/scripts/runtime-helpers\\.mjs|protocols/sensitive-info-protocol\\.md)$`
+    ).test(finding.path);
+  }
+  if (finding.rule_id === "HH_AUTHORIZATION_BEARER" || finding.rule_id === "HH_DATABASE_URL") {
+    return new RegExp(`^${agentRoot}/protocols/sensitive-info-protocol\\.md$`).test(finding.path);
+  }
+  return false;
+}
+
+function validatedDraftProfile(
+  profile: string,
+  sourceFiles: SourceFile[],
+  allowTrustedSourceFindings = false
+): WorkflowFamilyDraftState["profiles"][number] {
+  if (sourceFiles.length === 0) {
+    throw new ServerDomainError(422, "WORKFLOW_BUNDLE_EMPTY", "profile bundle must contain at least one file", {
+      profile
+    });
+  }
+  const findings = scanSensitiveFiles(validateAndIndexSourceFiles(sourceFiles));
+  const disallowed = findings.findings.filter((finding) =>
+    finding.disposition === "blocked" &&
+    (!allowTrustedSourceFindings || !trustedWorkflowFindingAllowed(finding))
+  );
+  if (disallowed.length > 0) {
+    throw new ServerDomainError(422, "SENSITIVE_CONTENT_BLOCKED", "workflow bundle contains sensitive content", {
+      profile,
+      finding_count: disallowed.length
+    });
+  }
+  return {
+    profile,
+    sourceFiles,
+    bundle_manifest: buildBundleManifest(profile, sourceFiles)
+  };
+}
+
 export class WorkflowFamilyStore {
   constructor(private readonly deps: WorkflowFamilyStoreDeps) {}
 
@@ -80,23 +212,147 @@ export class WorkflowFamilyStore {
     if (this.deps.families.has(input.slug)) {
       throw new ServerDomainError(409, "WORKFLOW_FAMILY_EXISTS", "workflow family already exists", { slug: input.slug });
     }
+    const detail = this.buildFamily(input, new Date().toISOString());
+    this.deps.families.set(input.slug, { detail, versions: [] });
+    return structuredClone(detail);
+  }
+
+  async importFamilyDraft(input: {
+    family: WorkflowFamilyMutation;
+    profiles: Array<{ profile: string; files: SourceFile[] }>;
+    draftVersion?: string;
+    sourceDigest?: string;
+    allowTrustedSourceFindings?: boolean;
+    tx?: TransactionRepository;
+  }): Promise<{ family: WorkflowFamily; draft: WorkflowFamilyDraftState }> {
+    if (this.deps.families.has(input.family.slug)) {
+      throw new ServerDomainError(409, "WORKFLOW_FAMILY_EXISTS", "workflow family already exists", {
+        slug: input.family.slug
+      });
+    }
+    const profilesByName = new Map<string, SourceFile[]>();
+    for (const entry of input.profiles) {
+      if (profilesByName.has(entry.profile)) {
+        throw new ServerDomainError(422, "WORKFLOW_PROFILE_DUPLICATE", "workflow source contains a duplicate profile", {
+          profile: entry.profile
+        });
+      }
+      profilesByName.set(entry.profile, entry.files);
+    }
+    const expected = new Set(input.family.required_profiles);
+    const unexpected = [...profilesByName.keys()].find((profile) => !expected.has(profile));
+    if (unexpected !== undefined) {
+      throw new ServerDomainError(422, "WORKFLOW_PROFILE_INVALID", "workflow source contains an unexpected profile", {
+        profile: unexpected
+      });
+    }
+    const missing = input.family.required_profiles.find((profile) => !profilesByName.has(profile));
+    if (missing !== undefined) {
+      throw new ServerDomainError(422, "WORKFLOW_PROFILE_MISSING", "workflow source is missing a required profile", {
+        profile: missing
+      });
+    }
+
+    // Validate every profile before mutating either map so a later failure cannot
+    // leave an orphan family or partially staged draft behind.
+    const profiles = input.family.required_profiles.map((profile) =>
+      validatedDraftProfile(
+        profile,
+        profilesByName.get(profile) ?? [],
+        input.allowTrustedSourceFindings ?? false
+      )
+    );
     const now = new Date().toISOString();
-    const detail = workflowFamilySchema.parse({
-      family_id: this.id("wff_"),
-      slug: input.slug,
-      displayName: input.displayName,
-      description: input.description,
-      tags: input.tags ?? [],
-      latest_version: null,
-      required_profiles: input.required_profiles,
+    const family = this.buildFamily(input.family, now);
+    const draft = workflowFamilyDraftStateSchema.parse({
+      family_slug: family.slug,
+      ...(input.sourceDigest === undefined ? {} : { source_digest: input.sourceDigest }),
+      profiles,
+      required_profiles: family.required_profiles,
+      draftVersion: input.draftVersion ?? "0.1.0",
+      checks: null,
+      releaseNote: null,
       revision: 1,
-      npmReleases: [],
-      ...(input.source === undefined ? {} : { source: input.source }),
       created_at: now,
       updated_at: now
     });
-    this.deps.families.set(input.slug, { detail, versions: [] });
-    return structuredClone(detail);
+
+    this.deps.families.set(family.slug, { detail: family, versions: [] });
+    this.deps.drafts.set(family.slug, draft);
+    try {
+      await this.deps.persist(input.tx);
+    } catch (error) {
+      this.deps.drafts.delete(family.slug);
+      this.deps.families.delete(family.slug);
+      throw error;
+    }
+    return { family: structuredClone(family), draft: structuredClone(draft) };
+  }
+
+  async replaceFamilyDraftProfiles(input: {
+    slug: string;
+    profiles: Array<{ profile: string; files: SourceFile[] }>;
+    draftVersion?: string;
+    sourceDigest?: string;
+    allowTrustedSourceFindings?: boolean;
+    tx?: TransactionRepository;
+  }): Promise<WorkflowFamilyDraftState> {
+    const family = this.ensureFamily(input.slug);
+    const profilesByName = new Map<string, SourceFile[]>();
+    for (const entry of input.profiles) {
+      if (profilesByName.has(entry.profile)) {
+        throw new ServerDomainError(422, "WORKFLOW_PROFILE_DUPLICATE", "workflow source contains a duplicate profile", {
+          profile: entry.profile
+        });
+      }
+      profilesByName.set(entry.profile, entry.files);
+    }
+    const expected = new Set(family.detail.required_profiles);
+    const unexpected = [...profilesByName.keys()].find((profile) => !expected.has(profile));
+    if (unexpected !== undefined) {
+      throw new ServerDomainError(422, "WORKFLOW_PROFILE_INVALID", "workflow source contains an unexpected profile", {
+        profile: unexpected
+      });
+    }
+    const missing = family.detail.required_profiles.find((profile) => !profilesByName.has(profile));
+    if (missing !== undefined) {
+      throw new ServerDomainError(422, "WORKFLOW_PROFILE_MISSING", "workflow source is missing a required profile", {
+        profile: missing
+      });
+    }
+
+    const profiles = family.detail.required_profiles.map((profile) =>
+      validatedDraftProfile(
+        profile,
+        profilesByName.get(profile) ?? [],
+        input.allowTrustedSourceFindings ?? false
+      )
+    );
+    const existingDraft = this.deps.drafts.get(input.slug);
+    const now = new Date().toISOString();
+    const draft = workflowFamilyDraftStateSchema.parse({
+      family_slug: input.slug,
+      ...(input.sourceDigest === undefined ? {} : { source_digest: input.sourceDigest }),
+      profiles,
+      required_profiles: family.detail.required_profiles,
+      draftVersion: input.draftVersion
+        ?? existingDraft?.draftVersion
+        ?? (family.detail.latest_version === null ? "0.1.0" : bumpPatch(family.detail.latest_version)),
+      checks: null,
+      releaseNote: existingDraft?.releaseNote ?? null,
+      revision: existingDraft === undefined ? 1 : existingDraft.revision + 1,
+      created_at: existingDraft?.created_at ?? now,
+      updated_at: now
+    });
+    this.deps.drafts.set(input.slug, draft);
+    try {
+      await this.deps.persist(input.tx);
+    } catch (error) {
+      if (existingDraft === undefined) this.deps.drafts.delete(input.slug);
+      else this.deps.drafts.set(input.slug, existingDraft);
+      throw error;
+    }
+    return structuredClone(draft);
   }
 
   listFamilies(): WorkflowFamily[] {
@@ -124,6 +380,7 @@ export class WorkflowFamilyStore {
     profile: string;
     files: SourceFile[];
     actorId: string;
+    draftVersion?: string;
   }): Promise<WorkflowFamilyDraftState> {
     const family = this.ensureFamily(input.slug);
     if (!family.detail.required_profiles.includes(input.profile)) {
@@ -132,30 +389,17 @@ export class WorkflowFamilyStore {
         profile: input.profile
       });
     }
-    const unsafe = input.files.find((file) => DANGEROUS_PATH.test(file.path));
-    if (unsafe !== undefined) {
-      throw new ServerDomainError(422, SKILL_ERROR_CODE.VALIDATION_FAILED, "unsafe file path: " + unsafe.path);
-    }
-    if (input.files.length === 0) {
-      throw new ServerDomainError(422, "WORKFLOW_BUNDLE_EMPTY", "profile bundle must contain at least one file");
-    }
-    const fileMap: Record<string, string> = {};
-    for (const file of input.files) fileMap[file.path] = file.content;
-    const findings = scanSensitiveFiles(fileMap);
-    if (findings.blocked) {
-      throw new ServerDomainError(422, "SENSITIVE_CONTENT_BLOCKED", "workflow bundle contains sensitive content", {
-        finding_count: findings.findings.length
-      });
-    }
-    const bundleManifest = buildBundleManifest(input.profile, input.files);
+    const profileDraft = validatedDraftProfile(input.profile, input.files);
     const latest = family.detail.latest_version;
     const existingDraft = this.deps.drafts.get(input.slug);
-    const draftVersion = latest === null ? "0.1.0" : bumpPatch(latest);
+    const draftVersion = input.draftVersion
+      ?? existingDraft?.draftVersion
+      ?? (latest === null ? "0.1.0" : bumpPatch(latest));
     const now = new Date().toISOString();
     const otherProfiles = (existingDraft?.profiles ?? []).filter((entry) => entry.profile !== input.profile);
     const draft = workflowFamilyDraftStateSchema.parse({
       family_slug: input.slug,
-      profiles: [...otherProfiles, { profile: input.profile, sourceFiles: input.files, bundle_manifest: bundleManifest }],
+      profiles: [...otherProfiles, profileDraft],
       required_profiles: family.detail.required_profiles,
       draftVersion,
       checks: null,
@@ -175,6 +419,10 @@ export class WorkflowFamilyStore {
       throw new ServerDomainError(404, SKILL_ERROR_CODE.DRAFT_NOT_FOUND, "workflow family draft not found", { slug });
     }
     return structuredClone(draft);
+  }
+
+  getFamilyDraftSummary(slug: string): WorkflowFamilyDraftSummary {
+    return summarizeWorkflowFamilyDraft(this.getFamilyDraft(slug));
   }
 
   async discardFamilyDraft(slug: string, revision: number): Promise<void> {
@@ -265,6 +513,7 @@ export class WorkflowFamilyStore {
     version: string;
     releaseNote?: string | null;
     actorId: string;
+    tx?: TransactionRepository;
   }): Promise<WorkflowFamilyVersion> {
     const draft = this.deps.drafts.get(slug);
     if (draft === undefined) {
@@ -288,6 +537,22 @@ export class WorkflowFamilyStore {
     }
     for (const entry of draft.profiles) {
       verifyBundleManifest(entry.bundle_manifest, entry.sourceFiles);
+    }
+    if (draft.checks === null) {
+      throw new ServerDomainError(
+        422,
+        "WORKFLOW_CHECKS_REQUIRED",
+        "workflow family draft checks must run before publish",
+        { slug }
+      );
+    }
+    if (draft.checks.summary.red > 0) {
+      throw new ServerDomainError(
+        422,
+        "WORKFLOW_CHECKS_BLOCKED",
+        "workflow family draft has blocking check failures",
+        { slug, red: draft.checks.summary.red }
+      );
     }
     const createdAt = new Date().toISOString();
     const artifacts = [];
@@ -317,6 +582,7 @@ export class WorkflowFamilyStore {
     const version = workflowFamilyVersionSchema.parse({
       family_slug: slug,
       version: input.version,
+      ...(draft.source_digest === undefined ? {} : { source_digest: draft.source_digest }),
       profiles: versionProfiles,
       artifacts,
       changeNote: input.releaseNote ?? null,
@@ -330,13 +596,24 @@ export class WorkflowFamilyStore {
       updated_at: createdAt
     });
     this.deps.drafts.delete(slug);
-    await this.deps.persist();
+    await this.deps.persist(input.tx);
     return structuredClone(version);
   }
 
   listFamilyVersions(slug: string): WorkflowFamilyVersion[] {
     const state = this.ensureFamily(slug);
     return structuredClone(state.versions).sort((a, b) => compareSemver(b.version, a.version));
+  }
+
+  latestPublishedSourceDigest(slug: string): string | null {
+    const state = this.ensureFamily(slug);
+    const latest = state.detail.latest_version;
+    if (latest === null) return null;
+    return state.versions.find((version) => version.version === latest)?.source_digest ?? null;
+  }
+
+  listFamilyVersionSummaries(slug: string): WorkflowFamilyVersionSummary[] {
+    return this.listFamilyVersions(slug).map(summarizeWorkflowFamilyVersion);
   }
 
   async getProfileArtifactBytes(slug: string, profile: string, version?: string): Promise<Uint8Array> {
@@ -390,6 +667,23 @@ export class WorkflowFamilyStore {
       compiler_version: this.deps.compilerVersion()
     }, null, 2) + "\n", "utf8"));
     return zip.toBuffer();
+  }
+
+  private buildFamily(input: WorkflowFamilyMutation, now: string): WorkflowFamily {
+    return workflowFamilySchema.parse({
+      family_id: this.id("wff_"),
+      slug: input.slug,
+      displayName: input.displayName,
+      description: input.description,
+      tags: input.tags ?? [],
+      latest_version: null,
+      required_profiles: input.required_profiles,
+      revision: 1,
+      npmReleases: [],
+      ...(input.source === undefined ? {} : { source: input.source }),
+      created_at: now,
+      updated_at: now
+    });
   }
 
   private id(prefix: string): string {

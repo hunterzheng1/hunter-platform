@@ -8,8 +8,10 @@ import type {
 
 import {
   INGEST_ARTIFACT_ID,
+  SEMANTIC_INDEX_SCHEMA_VERSION,
   overviewFromDocuments,
   type SemanticGenerationGuard,
+  type SemanticSearchOptions,
   type SemanticStore
 } from "./store.js";
 
@@ -17,6 +19,7 @@ export class SemanticMemoryStore implements SemanticStore {
   private readonly documents = new Map<string, SemanticDocument>();
   private readonly edges = new Map<string, SemanticEdge>();
   private readonly latestArtifactByProject = new Map<string, string>();
+  private readonly schemaVersionByProject = new Map<string, number>();
 
   async rebuild(
     build: SemanticIndexBuild,
@@ -44,6 +47,7 @@ export class SemanticMemoryStore implements SemanticStore {
       this.edges.set(edge.edge_id, edge);
     }
     this.latestArtifactByProject.set(build.project_id, build.artifact_id);
+    this.schemaVersionByProject.set(build.project_id, SEMANTIC_INDEX_SCHEMA_VERSION);
     return true;
   }
 
@@ -57,6 +61,8 @@ export class SemanticMemoryStore implements SemanticStore {
     const documents = await this.listByKinds(projectId, [
       "knowledge_entry",
       "knowledge_markdown",
+      "change_document",
+      "architecture_document",
       "rule",
       "archive_record",
       "agent_instruction"
@@ -78,6 +84,34 @@ export class SemanticMemoryStore implements SemanticStore {
       .filter((document) => document.project_id === projectId && allowed.has(document.kind))
       .filter((document) => document.metadata.status !== "deprecated")
       .sort((left, right) => left.source_path.localeCompare(right.source_path));
+  }
+
+  async listByKindsPage(
+    projectId: string,
+    kinds: readonly SemanticDocumentKind[],
+    options: { limit: number; offset: number; order?: "asc" | "desc" | "change-history" }
+  ): Promise<{ items: SemanticDocument[]; total: number }> {
+    const all = await this.listByKinds(projectId, kinds);
+    if (options.order === "change-history") {
+      all.sort((left, right) => {
+        const leftArchive = /^\.harness\/archive\/([^/]+)\//u.exec(left.source_path)?.[1] ?? left.source_path;
+        const rightArchive = /^\.harness\/archive\/([^/]+)\//u.exec(right.source_path)?.[1] ?? right.source_path;
+        return rightArchive.localeCompare(leftArchive)
+          || Number(right.kind === "archive_record") - Number(left.kind === "archive_record")
+          || left.source_path.localeCompare(right.source_path)
+          || left.document_id.localeCompare(right.document_id);
+      });
+    } else {
+      const direction = options.order === "desc" ? -1 : 1;
+      all.sort((left, right) => direction * (
+        left.source_path.localeCompare(right.source_path)
+        || left.document_id.localeCompare(right.document_id)
+      ));
+    }
+    return {
+      items: all.slice(options.offset, options.offset + options.limit),
+      total: all.length
+    };
   }
 
   async getDocument(projectId: string, documentId: string): Promise<SemanticDocument | null> {
@@ -118,23 +152,52 @@ export class SemanticMemoryStore implements SemanticStore {
       if (edge.project_id === projectId) this.edges.delete(edgeId);
     }
     this.latestArtifactByProject.delete(projectId);
+    this.schemaVersionByProject.delete(projectId);
   }
 
   async latestArtifactId(projectId: string): Promise<string | null> {
     return this.latestArtifactByProject.get(projectId) ?? null;
   }
 
-  async search(query: string, projectId?: string): Promise<SemanticDocument[]> {
+  async indexSchemaVersion(projectId: string): Promise<number | null> {
+    return this.schemaVersionByProject.get(projectId) ?? null;
+  }
+
+  async search(
+    query: string,
+    projectScope?: string | readonly string[],
+    options: SemanticSearchOptions = {}
+  ): Promise<SemanticDocument[]> {
     const needle = query.trim().toLowerCase();
     if (needle === "") return [];
-    return [...this.documents.values()]
-      .filter((document) => projectId === undefined || document.project_id === projectId)
+    const allowedProjects = projectScope === undefined
+      ? null
+      : new Set(typeof projectScope === "string" ? [projectScope] : projectScope);
+    if (allowedProjects?.size === 0) return [];
+    const allowedKinds = options.kinds === undefined ? null : new Set(options.kinds);
+    if (allowedKinds?.size === 0) return [];
+    let documents = [...this.documents.values()]
+      .filter((document) => allowedProjects === null || allowedProjects.has(document.project_id))
+      .filter((document) => allowedKinds === null || allowedKinds.has(document.kind))
       .filter((document) => document.metadata.status !== "deprecated")
       .filter((document) =>
         document.title.toLowerCase().includes(needle) ||
         document.body.toLowerCase().includes(needle) ||
         document.source_path.toLowerCase().includes(needle)
-      )
-      .sort((left, right) => left.title.localeCompare(right.title));
+      );
+    if (options.currentSchemaOnly === true) {
+      const versions = new Map<string, number | null>();
+      for (const projectId of new Set(documents.map((document) => document.project_id))) {
+        versions.set(projectId, await this.indexSchemaVersion(projectId));
+      }
+      documents = documents.filter((document) => {
+        const version = versions.get(document.project_id) ?? null;
+        return version === SEMANTIC_INDEX_SCHEMA_VERSION ||
+          (version === null && document.artifact_id === INGEST_ARTIFACT_ID);
+      });
+    }
+    return documents
+      .sort((left, right) => left.title.localeCompare(right.title))
+      .slice(0, options.limit ?? 100);
   }
 }

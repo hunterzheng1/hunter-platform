@@ -16,6 +16,8 @@ describe("OpenAPI v1 contract", () => {
     expect(Object.keys(document.paths).sort()).toEqual([
       "/api/v1/artifacts/{artifact_id}/blobs/{content_sha256}",
       "/api/v1/artifacts/{artifact_id}/manifest",
+      "/api/v1/agent-tools",
+      "/api/v1/agent-tools/{slug}",
       "/api/v1/dashboard/overview",
       "/api/v1/external-skills",
       "/api/v1/external-skills/{id}",
@@ -32,6 +34,7 @@ describe("OpenAPI v1 contract", () => {
       "/api/v1/projects/{project_id}/semantic/overview",
       "/api/v1/projects/{project_id}/semantic/knowledge",
       "/api/v1/projects/{project_id}/semantic/rules",
+      "/api/v1/projects/{project_id}/semantic/architecture",
       "/api/v1/projects/{project_id}/semantic/search",
       "/api/v1/projects/{project_id}/semantic/changes",
       "/api/v1/projects/{project_id}/semantic/graph",
@@ -73,6 +76,8 @@ describe("OpenAPI v1 contract", () => {
       "/api/v1/tags/{tag_id}",
       "/api/v1/tags/{tag_id}/merge",
       "/api/v1/workflow-families",
+      "/api/v1/workflow-families/import",
+      "/api/v1/workflow-families/import/inspect",
       "/api/v1/workflow-families/{slug}",
       "/api/v1/workflow-families/{slug}/draft",
       "/api/v1/workflow-families/{slug}/draft/checks",
@@ -80,6 +85,7 @@ describe("OpenAPI v1 contract", () => {
       "/api/v1/workflow-families/{slug}/draft/profiles/{profile}",
       "/api/v1/workflow-families/{slug}/publish",
       "/api/v1/workflow-families/{slug}/npm-release",
+      "/api/v1/workflow-families/{slug}/sync",
       "/api/v1/workflow-families/{slug}/versions",
       "/api/v1/workflow-families/{slug}/artifacts/{profile}/download",
       "/api/v1/ai-config/providers",
@@ -111,6 +117,87 @@ describe("OpenAPI v1 contract", () => {
     expect(document.paths["/api/v1/system/npm-publishing/credential"]?.put?.responses).toHaveProperty("503");
     expect(document.components.schemas.NpmPublishingCredentialReplaceRequest?.properties?.token?.writeOnly).toBe(true);
     expect(document.components.schemas.NpmPublishingCredentialStatus?.properties).not.toHaveProperty("token");
+  });
+
+  it("keeps Agent Tool and workflow source-import contracts strict and idempotent", async () => {
+    interface SchemaNode {
+      $ref?: string;
+      additionalProperties?: boolean;
+      maxLength?: number;
+      pattern?: string;
+      required?: string[];
+      items?: SchemaNode;
+      properties?: Record<string, SchemaNode>;
+    }
+    const document = parseYaml(await readFile(
+      new URL("../openapi/hunter-harness-v1.yaml", import.meta.url),
+      "utf8"
+    )) as {
+      paths: Record<string, Record<string, {
+        parameters?: Array<{ $ref?: string }>;
+        responses?: Record<string, unknown>;
+      }>>;
+      components: { schemas: Record<string, SchemaNode> };
+    };
+
+    expect(document.components.schemas.AgentToolSource).toMatchObject({
+      additionalProperties: false,
+      properties: { ref: { maxLength: 1000 } }
+    });
+    expect(document.components.schemas.CreateAgentToolRequest?.additionalProperties).toBe(false);
+    expect(document.components.schemas.WorkflowFamilySource?.additionalProperties).toBe(false);
+    const slugPattern = new RegExp(document.components.schemas.RegistrySlug?.pattern ?? "a^");
+    expect(["../java", "General", "two_words", ""].every((value) => !slugPattern.test(value))).toBe(true);
+    expect(["general", "java-21"].every((value) => slugPattern.test(value))).toBe(true);
+    expect(document.components.schemas.CreateAgentToolRequest?.properties?.slug?.$ref)
+      .toBe("#/components/schemas/RegistrySlug");
+    expect(document.components.schemas.AgentTool?.properties?.tags?.items?.$ref)
+      .toBe("#/components/schemas/RegistrySlug");
+    expect(document.components.schemas.WorkflowFamilySourceInspection?.required).toContain("source_digest");
+    expect(document.components.schemas.WorkflowFamilySourceInspection?.properties?.profiles?.items?.properties?.profile?.$ref)
+      .toBe("#/components/schemas/RegistrySlug");
+    expect(document.components.schemas.ImportWorkflowFamilySourceRequest?.required).toContain("source_digest");
+    expect(document.components.schemas.ImportWorkflowFamilySourceRequest?.properties)
+      .not.toHaveProperty("required_profiles");
+
+    const importResult = document.components.schemas.WorkflowFamilySourceImportResult;
+    expect(importResult?.additionalProperties).toBe(false);
+    expect(importResult?.properties?.family?.additionalProperties).toBe(false);
+    expect(importResult?.properties?.draft?.additionalProperties).toBe(false);
+    expect(importResult?.properties?.family?.properties?.required_profiles?.items?.$ref)
+      .toBe("#/components/schemas/RegistrySlug");
+    expect(importResult?.properties?.draft?.properties?.required_profiles?.items?.$ref)
+      .toBe("#/components/schemas/RegistrySlug");
+    const draftProfile = importResult?.properties?.draft?.properties?.profiles?.items;
+    expect(draftProfile?.required).toEqual(["profile", "file_count"]);
+    expect(draftProfile?.properties).not.toHaveProperty("sourceFiles");
+    expect(importResult?.required).toContain("request_id");
+
+    const versionSummary = document.components.schemas.WorkflowFamilyVersionSummary;
+    expect(versionSummary?.additionalProperties).toBe(false);
+    expect(versionSummary?.properties?.profiles?.items?.properties).not.toHaveProperty("sourceFiles");
+    expect(versionSummary?.properties?.profiles?.items?.required).toContain("file_count");
+
+    const sync = document.paths["/api/v1/workflow-families/{slug}/sync"]?.post;
+    expect(sync?.parameters).toContainEqual({ $ref: "#/components/parameters/IdempotencyKey" });
+    expect(sync?.responses).toHaveProperty("504");
+    const syncSuccess = sync?.responses?.["200"] as {
+      content?: { "application/json"?: { schema?: { $ref?: string } } };
+    } | undefined;
+    const syncConflict = sync?.responses?.["409"] as { description?: string } | undefined;
+    expect(syncSuccess?.content?.["application/json"]?.schema?.$ref)
+      .toBe("#/components/schemas/WorkflowFamilySyncResult");
+    expect(document.components.schemas.WorkflowFamilySyncResult).toMatchObject({
+      additionalProperties: false,
+      required: ["updated", "request_id"]
+    });
+    expect(syncConflict?.description).toContain("WORKFLOW_SOURCE_VERSION_CONFLICT");
+    expect(syncConflict?.description).toContain("WORKFLOW_FAMILY_CHANGED");
+    const importConflict = document.paths["/api/v1/workflow-families/import"]?.post
+      ?.responses?.["409"] as { description?: string } | undefined;
+    expect(importConflict?.description).toContain("WORKFLOW_SOURCE_CHANGED");
+    expect(document.paths["/api/v1/workflow-families/import/inspect"]?.post?.responses).toHaveProperty("504");
+    expect(document.paths["/api/v1/workflow-families/import"]?.post?.responses).toHaveProperty("504");
   });
 
   it("documents unified publish, review errors, and deprecated compatibility routes", async () => {

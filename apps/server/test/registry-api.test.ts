@@ -310,6 +310,12 @@ describe("/api/v1 Skill Registry and direct workflow metadata", () => {
     });
     await appWithNpm.inject({
       method: "POST",
+      url: "/api/v1/workflow-families/harness/draft/checks",
+      headers: headers(),
+      payload: {}
+    });
+    await appWithNpm.inject({
+      method: "POST",
       url: "/api/v1/workflow-families/harness/publish",
       headers: headers(),
       payload: { version: "1.0.0" }

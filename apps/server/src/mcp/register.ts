@@ -13,6 +13,8 @@ export function registerSemanticMcpRoutes(
   deps: {
     repository: ServerRepository;
     semanticStore: SemanticStore;
+    ensureProjectCurrent?: (actorId: string, projectId: string) => Promise<void>;
+    scheduleProjectsCurrent?: (actorId: string, projectIds: readonly string[]) => void;
   }
 ): void {
   const methodNotAllowed = async (_request: FastifyRequest, reply: FastifyReply) => {
@@ -31,7 +33,15 @@ export function registerSemanticMcpRoutes(
     const mcpServer = createSemanticMcpServer({
       semanticStore: deps.semanticStore,
       repository: deps.repository,
-      actorId: actor.actorId
+      actorId: actor.actorId,
+      ...(deps.ensureProjectCurrent === undefined
+        ? {}
+        : { ensureProjectCurrent: (projectId: string) =>
+          deps.ensureProjectCurrent?.(actor.actorId, projectId) ?? Promise.resolve() }),
+      ...(deps.scheduleProjectsCurrent === undefined
+        ? {}
+        : { scheduleProjectsCurrent: (projectIds: readonly string[]) =>
+          deps.scheduleProjectsCurrent?.(actor.actorId, projectIds) })
     });
     // Stateless Streamable HTTP: omit sessionIdGenerator so each request is independent.
     const transport = new StreamableHTTPServerTransport({});

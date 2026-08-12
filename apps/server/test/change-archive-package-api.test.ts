@@ -35,6 +35,27 @@ class TrackingSemanticStore extends SemanticMemoryStore {
   }
 }
 
+class LegacySemanticStore extends TrackingSemanticStore {
+  private legacy = false;
+
+  markLegacy(): void {
+    this.legacy = true;
+  }
+
+  override async indexSchemaVersion(projectId: string): Promise<number | null> {
+    return this.legacy ? 1 : super.indexSchemaVersion(projectId);
+  }
+
+  override async rebuild(
+    build: Parameters<SemanticMemoryStore["rebuild"]>[0],
+    guard?: Parameters<SemanticMemoryStore["rebuild"]>[1]
+  ): Promise<boolean> {
+    const rebuilt = await super.rebuild(build, guard);
+    if (rebuilt) this.legacy = false;
+    return rebuilt;
+  }
+}
+
 class MissingBlobStorage extends MemoryArtifactStorage {
   missingHash: string | null = null;
 
@@ -447,6 +468,88 @@ describe("change archive package API", () => {
     expect(search.json().items).toEqual(expect.arrayContaining([
       expect.objectContaining({ project_id: projectId })
     ]));
+
+    const changes = await app.inject({
+      method: "GET",
+      url: `/api/v1/projects/${projectId}/semantic/changes`,
+      headers: headers("application/json")
+    });
+    expect(changes.statusCode).toBe(200);
+    expect(changes.json().items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "archive_record",
+        metadata: expect.objectContaining({
+          archive_id: response.json().archive_id,
+          archive_status: "durable",
+          knowledge_status: "ready",
+          package_sha256: packageHash
+        })
+      })
+    ]));
+  });
+
+  it("rebuilds a ready same-package archive when the semantic index schema is stale", async () => {
+    await app.close();
+    const legacyStore = new LegacySemanticStore();
+    semanticStore = legacyStore;
+    app = await createServer({ repository, storage, semanticStore });
+    const projectId = await resolveProject();
+    const changeKey = "chg-semantic-schema-upgrade";
+    const zip = archiveZip(changeKey, [
+      {
+        path: "reports/final/summary-data.json",
+        role: "summary",
+        content: JSON.stringify(cliSummary(changeKey))
+      },
+      {
+        path: "spec/design.md",
+        role: "spec",
+        content: "# 旧设计文档\n"
+      }
+    ]);
+    const upload = () => app.inject({
+      method: "PUT",
+      url: `/api/v1/projects/${projectId}/changes/${changeKey}/archive-package`,
+      headers: headers(),
+      payload: zip
+    });
+
+    expect((await upload()).statusCode).toBe(201);
+    const [changeDocument] = await legacyStore.listByKinds(projectId, ["change_document"]);
+    expect(changeDocument).toBeDefined();
+    if (changeDocument === undefined) throw new Error("change document was not indexed");
+    await legacyStore.upsertDocuments([{ ...changeDocument, kind: "knowledge_markdown" }]);
+    legacyStore.markLegacy();
+    const rebuildsBeforeGlobalSearch = legacyStore.rebuildCalls;
+
+    const read = await app.inject({
+      method: "GET",
+      url: `/api/v1/semantic/search?q=${encodeURIComponent("旧设计文档")}`,
+      headers: headers("application/json")
+    });
+    expect(read.statusCode).toBe(200);
+    expect(read.json().items).toEqual([]);
+    for (let attempt = 0;
+      attempt < 20 && legacyStore.rebuildCalls === rebuildsBeforeGlobalSearch;
+      attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(legacyStore.rebuildCalls).toBe(rebuildsBeforeGlobalSearch + 1);
+    expect(await legacyStore.listByKinds(projectId, ["knowledge_markdown"])).toEqual([]);
+
+    const [freshChangeDocument] = await legacyStore.listByKinds(projectId, ["change_document"]);
+    if (freshChangeDocument === undefined) throw new Error("change document was not rebuilt");
+    await legacyStore.upsertDocuments([{ ...freshChangeDocument, kind: "knowledge_markdown" }]);
+    legacyStore.markLegacy();
+    const rebuildsBeforeRetry = legacyStore.rebuildCalls;
+
+    const retried = await upload();
+    expect(retried.statusCode).toBe(201);
+    expect(legacyStore.rebuildCalls).toBe(rebuildsBeforeRetry + 1);
+    expect(await legacyStore.indexSchemaVersion(projectId)).toBe(2);
+    expect(await legacyStore.listByKinds(projectId, ["knowledge_markdown"])).toEqual([]);
+    expect(await legacyStore.listByKinds(projectId, ["change_document"]))
+      .toEqual([expect.objectContaining({ source_path: expect.stringContaining("/spec/design.md") })]);
   });
 
   it("rejects traversal, diagnostics, and undeclared files before storing the package", async () => {

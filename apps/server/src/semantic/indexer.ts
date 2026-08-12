@@ -46,9 +46,13 @@ function isArchiveSummaryPath(path: string): boolean {
   return /^\.harness\/archive\/[^/]+\/reports\/final\/summary-data\.json$/u.test(path);
 }
 
-function isArchiveKnowledgeMarkdownPath(path: string): boolean {
+function isArchiveChangeMarkdownPath(path: string): boolean {
   return /^\.harness\/archive\/[^/]+\/(?:spec|plans)\/(?:[^/]+\/)*[^/]+\.md$/u.test(path) ||
     /^\.harness\/archive\/[^/]+\/archive-meta\.md$/u.test(path);
+}
+
+function isCodebaseMapPath(path: string): boolean {
+  return /^\.harness\/codebase\/(?:map\/(?:[^/]+\/)*[^/]+\.md|map-summary\.md|map-manifest\.json)$/u.test(path);
 }
 
 function isAgentInstructionPath(path: string): boolean {
@@ -58,7 +62,8 @@ function isAgentInstructionPath(path: string): boolean {
 export function isSemanticSourcePath(path: string): boolean {
   return isKnowledgeIngestEntryPath(path) ||
     isKnowledgeMarkdownPath(path) ||
-    isArchiveKnowledgeMarkdownPath(path) ||
+    isArchiveChangeMarkdownPath(path) ||
+    isCodebaseMapPath(path) ||
     isRulePath(path) ||
     isArchiveSummaryPath(path) ||
     isAgentInstructionPath(path);
@@ -67,6 +72,8 @@ export function isSemanticSourcePath(path: string): boolean {
 /** Documents whose bodies may contain markdown/wiki links worth resolving. */
 const LINK_SOURCE_KINDS = new Set<SemanticDocument["kind"]>([
   "knowledge_markdown",
+  "change_document",
+  "architecture_document",
   "rule",
   "agent_instruction"
 ]);
@@ -198,6 +205,160 @@ function collectArchiveRelatedPaths(document: SemanticDocument): string[] {
       ...collectPathCandidates(parsedBody.files)
     ];
   return [...new Set([...fromMetadata, ...fromBody])];
+}
+
+function headingFromMarkdown(content: string, fallback: string): string {
+  return content.match(/^#\s+(.+)$/mu)?.[1]?.trim() ?? fallback;
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim() !== "")
+    : [];
+}
+
+function readableText(value: unknown): string | null {
+  if (typeof value === "string" && value.trim() !== "") return value.trim();
+  const record = objectValue(value);
+  for (const key of ["text", "summary", "overview", "message", "note", "decision", "title"]) {
+    const candidate = record[key];
+    if (typeof candidate === "string" && candidate.trim() !== "") return candidate.trim();
+  }
+  return null;
+}
+
+function readableItems(value: unknown, limit = 6): string[] {
+  if (!Array.isArray(value)) return [];
+  const items: string[] = [];
+  for (const item of value) {
+    const text = readableText(item);
+    if (text !== null && !items.includes(text)) items.push(text);
+    if (items.length >= limit) break;
+  }
+  return items;
+}
+
+function renderArchiveSummary(summary: Record<string, unknown>, title: string): string {
+  const diff = objectValue(summary.diffStat);
+  const verification = objectValue(summary.verification);
+  const unit = objectValue(verification.unitTests);
+  const api = objectValue(verification.apiTests);
+  const reasons = stringList(summary.finalStatusReasons);
+  const completion = readableText(summary.summary);
+  const timeline = readableItems(summary.timeline, 5);
+  const review = readableText(summary.reviewSummary);
+  const maintenance = [
+    ...stringList(summary.maintenanceNotes),
+    ...readableItems(summary.maintenanceNotes)
+  ].filter((value, index, all) => all.indexOf(value) === index).slice(0, 6);
+  const lines = [
+    `# ${title}`,
+    "",
+    "## 变更结果",
+    "",
+    `- 目标：${String(summary.businessGoal ?? "未填写")}`,
+    `- 最终状态：${String(summary.finalStatus ?? "未知")}`,
+    `- 发布候选：${summary.releaseEligible === true ? "可发布" : "仅归档或仍需确认"}`,
+    `- 文件变化：${Number(diff.filesChanged ?? 0)} 个文件，新增 ${Number(diff.additions ?? 0)} 行，删除 ${Number(diff.deletions ?? 0)} 行`,
+    "",
+    "## 验证结果",
+    "",
+    `- 单元测试：${Number(unit.run ?? 0)} 项，失败 ${Number(unit.failures ?? 0)}，错误 ${Number(unit.errors ?? 0)}`,
+    `- API 测试：通过 ${Number(api.passed ?? 0)} / ${Number(api.total ?? 0)}，失败 ${Number(api.failed ?? 0)}`
+  ];
+  const completedItems = [completion, ...timeline].filter(
+    (item): item is string => item !== null
+  );
+  if (completedItems.length > 0) {
+    lines.push("", "## 完成内容", "", ...completedItems.map((item) => `- ${item}`));
+  }
+  if (review !== null) {
+    lines.push("", "## 评审结论", "", review);
+  }
+  if (maintenance.length > 0) {
+    lines.push("", "## 后续维护", "", ...maintenance.map((item) => `- ${item}`));
+  }
+  if (reasons.length > 0) {
+    lines.push("", "## 需要注意", "", ...reasons.map((reason) => `- ${reason}`));
+  }
+  const finalCommit = summary.finalCommit ?? summary.final_commit;
+  const baseCommit = summary.baseCommit ?? summary.base_commit;
+  if (finalCommit !== undefined || baseCommit !== undefined) {
+    lines.push(
+      "",
+      "## 版本范围",
+      "",
+      `- 起点：${String(baseCommit ?? "未知")}`,
+      `- 终点：${String(finalCommit ?? "未知")}`
+    );
+  }
+  return lines.join("\n") + "\n";
+}
+
+function architectureDocument(
+  input: BuildSemanticIndexInput,
+  sourcePath: string,
+  content: string
+): SemanticDocument | null {
+  const basename = sourcePath.split("/").pop() ?? sourcePath;
+  if (sourcePath.endsWith("map-manifest.json")) {
+    try {
+      const manifest = JSON.parse(content) as Record<string, unknown>;
+      const warnings = stringList(manifest.warnings);
+      const body = [
+        "# 项目架构地图元数据",
+        "",
+        `- 生成时间：${String(manifest.generated_at ?? "未知")}`,
+        `- 对应提交：${String(manifest.last_mapped_commit ?? "未知")}`,
+        `- 扫描模式：${String(manifest.mode ?? "未知")}`,
+        "",
+        "## 生成提示",
+        "",
+        ...(warnings.length > 0 ? warnings.map((warning) => `- ${warning}`) : ["- 无"])
+      ].join("\n") + "\n";
+      return {
+        document_id: documentId(input.projectId, sourcePath),
+        project_id: input.projectId,
+        artifact_id: input.artifactId,
+        kind: "architecture_document",
+        source_path: sourcePath,
+        title: "项目架构地图元数据",
+        body,
+        metadata: {
+          map_role: "manifest",
+          generated_at: manifest.generated_at ?? null,
+          last_mapped_commit: manifest.last_mapped_commit ?? null,
+          mode: manifest.mode ?? null,
+          warnings,
+          stale_policy: manifest.stale_policy ?? null,
+          documents: manifest.documents ?? []
+        },
+        content_sha256: sha256Bytes(content)
+      };
+    } catch {
+      return null;
+    }
+  }
+  const role = basename === "map-summary.md"
+    ? "summary"
+    : basename.replace(/\.md$/iu, "").toLowerCase();
+  return {
+    document_id: documentId(input.projectId, sourcePath),
+    project_id: input.projectId,
+    artifact_id: input.artifactId,
+    kind: "architecture_document",
+    source_path: sourcePath,
+    title: headingFromMarkdown(content, basename),
+    body: content,
+    metadata: { map_role: role },
+    content_sha256: sha256Bytes(content)
+  };
 }
 
 function orderedPair(left: SemanticDocument, right: SemanticDocument): [SemanticDocument, SemanticDocument] {
@@ -340,14 +501,23 @@ export function buildSemanticIndex(input: BuildSemanticIndexInput): SemanticInde
       continue;
     }
 
-    if (isArchiveKnowledgeMarkdownPath(sourcePath)) {
+    if (isCodebaseMapPath(sourcePath)) {
+      const doc = architectureDocument(input, sourcePath, content);
+      if (doc !== null) {
+        documents.push(doc);
+        bySourcePath.set(sourcePath, doc);
+      }
+      continue;
+    }
+
+    if (isArchiveChangeMarkdownPath(sourcePath)) {
       const segments = sourcePath.split("/");
       const heading = content.match(/^#\s+(.+)$/mu)?.[1]?.trim();
       const doc: SemanticDocument = {
         document_id: documentId(input.projectId, sourcePath),
         project_id: input.projectId,
         artifact_id: input.artifactId,
-        kind: "knowledge_markdown",
+        kind: "change_document",
         source_path: sourcePath,
         title: heading ?? segments[segments.length - 1] ?? sourcePath,
         body: content,
@@ -371,6 +541,8 @@ export function buildSemanticIndex(input: BuildSemanticIndexInput): SemanticInde
       try {
         const summary = JSON.parse(content) as Record<string, unknown>;
         const title = String(summary.changeName ?? sourcePath.split("/")[2] ?? "archive");
+        const diff = objectValue(summary.diffStat);
+        const sourceFiles = stringList(summary.sourceFiles);
         const doc: SemanticDocument = {
           document_id: documentId(input.projectId, sourcePath),
           project_id: input.projectId,
@@ -378,10 +550,23 @@ export function buildSemanticIndex(input: BuildSemanticIndexInput): SemanticInde
           kind: "archive_record",
           source_path: sourcePath,
           title,
-          body: JSON.stringify(summary, null, 2),
+          body: renderArchiveSummary(summary, title),
           metadata: {
+            source_archive: sourcePath.split("/")[2] ?? null,
             final_status: summary.finalStatus ?? null,
-            final_commit: summary.finalCommit ?? summary.final_commit ?? null
+            final_commit: summary.finalCommit ?? summary.final_commit ?? null,
+            base_commit: summary.baseCommit ?? summary.base_commit ?? null,
+            business_goal: summary.businessGoal ?? null,
+            final_status_reasons: summary.finalStatusReasons ?? [],
+            files_changed: diff.filesChanged ?? 0,
+            additions: diff.additions ?? 0,
+            deletions: diff.deletions ?? 0,
+            verification: summary.verification ?? {},
+            scenario_coverage: summary.scenarioCoverage ?? {},
+            review_summary: summary.reviewSummary ?? {},
+            release_eligible: summary.releaseEligible ?? false,
+            archive_durability: summary.archiveDurability ?? null,
+            sourceFiles
           },
           content_sha256: sha256Bytes(content)
         };

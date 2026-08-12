@@ -27,6 +27,25 @@ function makeKnowledge(count: number): SemanticDocument[] {
   });
 }
 
+function makeArchivedChange(id: string, title: string): SemanticDocument {
+  return {
+    document_id: `sem_change_${id}`,
+    project_id: "prj_one",
+    artifact_id: "art_one",
+    kind: "archive_record",
+    source_path: `.harness/archive/${id}/reports/final/summary-data.json`,
+    title: id,
+    body: `# ${title}\n\n## 变更结果\n\n- 状态：OK`,
+    metadata: {
+      source_archive: id,
+      business_goal: title,
+      archive_status: "durable",
+      knowledge_status: "ready"
+    },
+    content_sha256: "sha256:" + "e".repeat(64)
+  };
+}
+
 describe("ProjectSemanticPanels", () => {
   it("opens on the searchable knowledge library and loads only a focused graph on demand", async () => {
     const knowledgeList = makeKnowledge(1);
@@ -46,7 +65,19 @@ describe("ProjectSemanticPanels", () => {
       indexed_documents: 1
     }));
     const listProjectSemanticRules = vi.fn(async () => []);
-    const listProjectSemanticChanges = vi.fn(async () => []);
+    const listProjectSemanticChanges = vi.fn(async () => ({ items: [], total: 0, next_cursor: null }));
+    const architecture: SemanticDocument = {
+      document_id: "sem_architecture",
+      project_id: "prj_one",
+      artifact_id: "art_one",
+      kind: "architecture_document",
+      source_path: ".harness/codebase/map/ARCHITECTURE.md",
+      title: "系统架构",
+      body: "# 系统架构\n\n模块之间通过稳定接口协作。",
+      metadata: { map_role: "architecture" },
+      content_sha256: "sha256:" + "b".repeat(64)
+    };
+    const listProjectSemanticArchitecture = vi.fn(async () => [architecture]);
     const api = {
       getProjectSemanticOverview: vi.fn(async () => ({
         project_id: "prj_one",
@@ -56,6 +87,7 @@ describe("ProjectSemanticPanels", () => {
       listProjectSemanticKnowledge: vi.fn(async () => ({ items: [knowledge], total: 1, next_cursor: null })),
       listProjectSemanticRules,
       listProjectSemanticChanges,
+      listProjectSemanticArchitecture,
       getProjectSemanticGraph,
       searchSemanticDocuments: vi.fn(async () => [{ document: knowledge, project_id: "prj_one" }])
     } as unknown as HunterApi;
@@ -64,13 +96,18 @@ describe("ProjectSemanticPanels", () => {
     expect(await screen.findByRole("heading", { name: "Architecture boundary" })).toBeInTheDocument();
     expect(listProjectSemanticRules).not.toHaveBeenCalled();
     expect(listProjectSemanticChanges).not.toHaveBeenCalled();
+    expect(listProjectSemanticArchitecture).not.toHaveBeenCalled();
     expect(getProjectSemanticGraph).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("tab", { name: "项目规则" }));
     await waitFor(() => expect(listProjectSemanticRules).toHaveBeenCalledOnce());
     expect(listProjectSemanticChanges).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("tab", { name: "变更总结" }));
+    fireEvent.click(screen.getByRole("tab", { name: "项目架构" }));
+    await waitFor(() => expect(listProjectSemanticArchitecture).toHaveBeenCalledOnce());
+    expect((await screen.findAllByRole("heading", { name: "系统架构" })).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("tab", { name: "变更记录" }));
     await waitFor(() => expect(listProjectSemanticChanges).toHaveBeenCalledOnce());
 
     fireEvent.click(screen.getByRole("tab", { name: "知识关系" }));
@@ -88,7 +125,7 @@ describe("ProjectSemanticPanels", () => {
       })),
       listProjectSemanticKnowledge: vi.fn(async () => ({ items: knowledge, total: knowledge.length, next_cursor: null })),
       listProjectSemanticRules: vi.fn(async () => []),
-      listProjectSemanticChanges: vi.fn(async () => []),
+      listProjectSemanticChanges: vi.fn(async () => ({ items: [], total: 0, next_cursor: null })),
       getProjectSemanticGraph: vi.fn(),
       searchSemanticDocuments: vi.fn(async () => [])
     } as unknown as HunterApi;
@@ -184,7 +221,7 @@ describe("ProjectSemanticPanels", () => {
       })),
       listProjectSemanticKnowledge: vi.fn(async () => ({ items: knowledge, total: knowledge.length, next_cursor: null })),
       listProjectSemanticRules: vi.fn(async () => []),
-      listProjectSemanticChanges: vi.fn(async () => []),
+      listProjectSemanticChanges: vi.fn(async () => ({ items: [], total: 0, next_cursor: null })),
       getProjectSemanticGraph,
       searchSemanticDocuments: vi.fn(async () => [])
     } as unknown as HunterApi;
@@ -248,7 +285,7 @@ describe("ProjectSemanticPanels", () => {
       })),
       listProjectSemanticKnowledge: vi.fn(async () => ({ items: knowledge, total: knowledge.length, next_cursor: null })),
       listProjectSemanticRules: vi.fn(async () => []),
-      listProjectSemanticChanges: vi.fn(async () => []),
+      listProjectSemanticChanges: vi.fn(async () => ({ items: [], total: 0, next_cursor: null })),
       getProjectSemanticGraph,
       searchSemanticDocuments: vi.fn(async () => [])
     } as unknown as HunterApi;
@@ -277,15 +314,120 @@ describe("ProjectSemanticPanels", () => {
       })),
       listProjectSemanticKnowledge: vi.fn(async () => ({ items: [], total: 0, next_cursor: null })),
       listProjectSemanticRules: vi.fn(async () => []),
-      listProjectSemanticChanges: vi.fn(async () => []),
+      listProjectSemanticChanges: vi.fn(async () => ({ items: [], total: 0, next_cursor: null })),
       getProjectSemanticGraph: vi.fn(async () => ({ nodes: [], edges: [], focus_document_id: null, relation_status: "no_relations", indexed_documents: 0 })),
       searchSemanticDocuments: vi.fn(async () => [])
     } as unknown as HunterApi;
 
     render(<ProjectSemanticPanels api={api} projectId="prj_one" />);
 
-    expect(await screen.findByText("还没有项目知识")).toBeInTheDocument();
-    expect(screen.getByText(/通过 Hunter Harness 上传项目内容后，平台会自动整理知识/)).toBeInTheDocument();
+    expect(await screen.findByText("还没有知识条目")).toBeInTheDocument();
+    expect(screen.getByText(/知识库只展示明确提交到知识入库流程的内容/)).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/\bingest\b|\bpush\b|purge|投影|语义库/i);
+  });
+
+  it("groups archived plans under one readable change record and shows remote durability", async () => {
+    const summary: SemanticDocument = {
+      document_id: "sem_summary",
+      project_id: "prj_one",
+      artifact_id: "art_one",
+      kind: "archive_record",
+      source_path: ".harness/archive/readable-change/reports/final/summary-data.json",
+      title: "readable-change",
+      body: "# 可读的归档总结\n\n## 变更结果\n\n- 目标：让变更记录便于快速阅读。\n- 最终状态：OK\n",
+      metadata: {
+        source_archive: "readable-change",
+        business_goal: "让变更记录便于快速阅读。",
+        final_status: "OK",
+        files_changed: 6,
+        additions: 42,
+        deletions: 8,
+        archive_status: "durable",
+        knowledge_status: "ready",
+        archive_uploaded_at: "2026-08-12T10:00:00.000Z"
+      },
+      content_sha256: "sha256:" + "c".repeat(64)
+    };
+    const plan: SemanticDocument = {
+      document_id: "sem_plan",
+      project_id: "prj_one",
+      artifact_id: "art_one",
+      kind: "change_document",
+      source_path: ".harness/archive/readable-change/plans/implementation.md",
+      title: "实施计划",
+      body: "# 实施计划\n\n按三个步骤完成。",
+      metadata: { source_archive: "readable-change", archive_role: "plan" },
+      content_sha256: "sha256:" + "d".repeat(64)
+    };
+    const api = {
+      getProjectSemanticOverview: vi.fn(async () => ({
+        project_id: "prj_one",
+        artifact_id: "art_one",
+        counts: { documents: 2, knowledge: 0, rules: 0, changes: 2, architecture: 0, agent_instructions: 0, edges: 0 }
+      })),
+      listProjectSemanticKnowledge: vi.fn(async () => ({ items: [], total: 0, next_cursor: null })),
+      listProjectSemanticRules: vi.fn(async () => []),
+      listProjectSemanticArchitecture: vi.fn(async () => []),
+      listProjectSemanticChanges: vi.fn(async () => ({ items: [summary, plan], total: 2, next_cursor: null })),
+      getProjectSemanticGraph: vi.fn(),
+      searchSemanticDocuments: vi.fn(async () => [])
+    } as unknown as HunterApi;
+
+    render(<ProjectSemanticPanels api={api} projectId="prj_one" />);
+    await screen.findByText("还没有知识条目");
+    fireEvent.click(screen.getByRole("tab", { name: "变更记录" }));
+
+    expect(await screen.findByRole("heading", { name: "可读的归档总结" })).toBeInTheDocument();
+    expect(screen.getByText("远端归档已保存")).toBeInTheDocument();
+    expect(screen.getByText("知识索引已就绪")).toBeInTheDocument();
+    expect(screen.getByText("6 个文件")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /实施计划/ })).toBeInTheDocument();
+    expect(screen.queryByText(/archive_id|package_sha256/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /实施计划/ }));
+    expect(await screen.findByRole("heading", { name: "实施计划" })).toBeInTheDocument();
+    expect(screen.getByText("按三个步骤完成。")).toBeInTheDocument();
+  });
+
+  it("loads later change-history pages without hiding older records", async () => {
+    const latest = makeArchivedChange("latest-change", "最近一次变更");
+    const older = makeArchivedChange("older-change", "更早的变更");
+    const listProjectSemanticChanges = vi.fn(async (
+      _projectId: string,
+      options?: { limit?: number; cursor?: string | null }
+    ) => options?.cursor === "next-page"
+      ? { items: [older], total: 2, next_cursor: null }
+      : { items: [latest], total: 2, next_cursor: "next-page" });
+    const api = {
+      getProjectSemanticOverview: vi.fn(async () => ({
+        project_id: "prj_one",
+        artifact_id: "art_one",
+        counts: { documents: 2, knowledge: 0, rules: 0, changes: 2, architecture: 0, agent_instructions: 0, edges: 0 }
+      })),
+      listProjectSemanticKnowledge: vi.fn(async () => ({ items: [], total: 0, next_cursor: null })),
+      listProjectSemanticRules: vi.fn(async () => []),
+      listProjectSemanticArchitecture: vi.fn(async () => []),
+      listProjectSemanticChanges,
+      getProjectSemanticGraph: vi.fn(),
+      searchSemanticDocuments: vi.fn(async () => [])
+    } as unknown as HunterApi;
+
+    render(<ProjectSemanticPanels api={api} projectId="prj_one" />);
+    await screen.findByText("还没有知识条目");
+    fireEvent.click(screen.getByRole("tab", { name: "变更记录" }));
+
+    expect(await screen.findByRole("heading", { name: "最近一次变更" })).toBeInTheDocument();
+    expect(screen.getByText("已加载 1 / 2 份文档")).toBeInTheDocument();
+    expect(screen.queryByText("更早的变更")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "加载更多变更" }));
+
+    await waitFor(() => expect(listProjectSemanticChanges).toHaveBeenCalledWith("prj_one", {
+      limit: 50,
+      cursor: "next-page"
+    }));
+    expect(await screen.findByText("更早的变更")).toBeInTheDocument();
+    expect(screen.getByText("已加载 2 / 2 份文档")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "加载更多变更" })).not.toBeInTheDocument();
   });
 });

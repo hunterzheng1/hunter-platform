@@ -1,7 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { uuidV7 } from "@hunter-harness/core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createServer } from "../src/app.js";
 import { createSemanticMcpServer } from "../src/mcp/semantic-server.js";
@@ -67,7 +67,8 @@ describe("semantic MCP", () => {
         ".harness/archive/2026-06-30-sample/reports/final/summary-data.json": JSON.stringify({
           changeName: "sample",
           finalStatus: "OK"
-        })
+        }),
+        ".harness/archive/2026-06-30-sample/plans/plan.md": "# internal-plan-only\n"
       }
     }));
     app = await createServer({
@@ -90,10 +91,31 @@ describe("semantic MCP", () => {
   });
 
   it("exposes four read-only tools through an SDK client", async () => {
+    await repository.createActorWithToken({ actorId: "actor_other", token: "other-token" });
+    const other = await repository.resolveProject({
+      actorId: "actor_other",
+      localProjectKey: uuidV7(),
+      displayName: "Other MCP tenant",
+      requestedProjectId: null
+    });
+    await semanticStore.rebuild(buildSemanticIndex({
+      projectId: other.project.projectId,
+      artifactId: "art_other_mcp",
+      files: { ".harness/knowledge/entries/active/private.md": "# secret-b-only\n" }
+    }));
+    const secondAccessible = await repository.resolveProject({
+      actorId: "actor_owner",
+      localProjectKey: uuidV7(),
+      displayName: "Second accessible MCP project",
+      requestedProjectId: null
+    });
+    const searchSpy = vi.spyOn(semanticStore, "search");
+    const scheduleProjectsCurrent = vi.fn();
     const mcpServer = createSemanticMcpServer({
       semanticStore,
       repository,
-      actorId: "actor_owner"
+      actorId: "actor_owner",
+      scheduleProjectsCurrent
     });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "semantic-mcp-test", version: "1.0.0" });
@@ -115,6 +137,41 @@ describe("semantic MCP", () => {
     expect(search.isError).toBeFalsy();
     const searchText = (search.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
     expect(searchText).toContain("Reuse LlmClient");
+
+    searchSpy.mockClear();
+    const crossTenantSearch = await client.callTool({
+      name: "search_knowledge",
+      arguments: { query: "secret-b-only" }
+    });
+    const crossTenantText = (crossTenantSearch.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
+    expect(JSON.parse(crossTenantText).items).toEqual([]);
+    expect(searchSpy).toHaveBeenCalledTimes(1);
+    expect(searchSpy).toHaveBeenCalledWith(
+      "secret-b-only",
+      expect.arrayContaining([projectId, secondAccessible.project.projectId]),
+      {
+        limit: 100,
+        currentSchemaOnly: true,
+        kinds: ["knowledge_entry", "knowledge_markdown"]
+      }
+    );
+    expect(scheduleProjectsCurrent).toHaveBeenCalledWith(
+      expect.arrayContaining([projectId, secondAccessible.project.projectId])
+    );
+
+    const scopedPlanSearch = await client.callTool({
+      name: "search_knowledge",
+      arguments: { query: "internal-plan-only", project: projectId }
+    });
+    const scopedPlanText = (scopedPlanSearch.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
+    expect(JSON.parse(scopedPlanText).items).toEqual([]);
+
+    const globalPlanSearch = await client.callTool({
+      name: "search_knowledge",
+      arguments: { query: "internal-plan-only" }
+    });
+    const globalPlanText = (globalPlanSearch.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
+    expect(JSON.parse(globalPlanText).items).toEqual([]);
 
     const filteredSearch = await client.callTool({
       name: "search_knowledge",

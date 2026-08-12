@@ -55,6 +55,7 @@ export class MemoryRepository implements ServerRepository {
   private readonly auditEvents: AuditEvent[] = [];
   private npmPublishingCredential: NpmPublishingCredentialRecord | null = null;
   private readonly idempotencyLocks = new Map<string, Promise<void>>();
+  private transactionTail: Promise<void> = Promise.resolve();
   private counters = {
     project: 0,
     session: 0,
@@ -697,6 +698,20 @@ export class MemoryRepository implements ServerRepository {
     return structuredClone(record);
   }
 
+  async getChangeArchivePackages(
+    actorId: string,
+    projectId: string,
+    changeKeys: readonly string[]
+  ): Promise<ChangeArchivePackageRecord[]> {
+    this.requireOwnedProject(actorId, projectId);
+    const records: ChangeArchivePackageRecord[] = [];
+    for (const changeKey of new Set(changeKeys)) {
+      const record = this.archivePackages.get(projectId + "\0" + changeKey);
+      if (record !== undefined) records.push(structuredClone(record));
+    }
+    return records;
+  }
+
   async updateChangeArchivePackage(input: {
     actorId: string;
     projectId: string;
@@ -1027,11 +1042,51 @@ export class MemoryRepository implements ServerRepository {
     return stored;
   }
 
-  // memory 无真事务语义：no-op 壳，串行执行 fn 并警告（PG fallback 用）。
-  // tx 传 this——MemoryRepository 即 ServerRepository 视图（in-memory 写无回滚）。
+  // TransactionRepository 使用隔离的写集，成功时一次合并；失败时直接丢弃。
+  // 这样事务回滚不会抹掉同时完成的非事务 audit/idempotency 写入。
   async withTransaction<T>(fn: (tx: TransactionRepository) => Promise<T>): Promise<T> {
-    console.warn("[memory] withTransaction no-op");
-    return fn(this);
+    const previous = this.transactionTail;
+    let release: (() => void) | undefined;
+    this.transactionTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    let registryState = structuredClone(this.registryState);
+    let registryChanged = false;
+    const auditEvents: AuditEvent[] = [];
+    const idempotency = new Map<string, IdempotencyRecord>();
+    const tx: TransactionRepository = {
+      appendAudit: async (event) => {
+        const stored: AuditEvent = {
+          ...event,
+          eventId: "evt_" + String(++this.counters.event).padStart(8, "0"),
+          createdAt: new Date().toISOString()
+        };
+        auditEvents.push(stored);
+        return structuredClone(stored);
+      },
+      saveRegistryState: async (snapshot) => {
+        registryState = structuredClone(snapshot);
+        registryChanged = true;
+      },
+      loadRegistryState: async () => structuredClone(registryState),
+      getIdempotency: async (input) => {
+        const key = this.idempotencyKey(input);
+        return structuredClone(idempotency.get(key) ?? this.idempotency.get(key) ?? null);
+      },
+      putIdempotency: async (record) => {
+        idempotency.set(this.idempotencyKey(record), structuredClone(record));
+      }
+    };
+    try {
+      const result = await fn(tx);
+      if (registryChanged) this.registryState = registryState;
+      this.auditEvents.push(...auditEvents);
+      for (const [key, record] of idempotency) this.idempotency.set(key, record);
+      return result;
+    } finally {
+      release?.();
+    }
   }
 
   // memory 模式 registry 真相在 RegistryStore 内存 Map（不走 DB）；

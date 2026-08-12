@@ -531,11 +531,13 @@ describe("workflow family end-to-end (API-001~008, INT-001~002, INT-004)", () =>
 
   it("version sequence after re-publish (INT-004)", async () => {
     await uploadProfile(bundleFiles);
+    await app.inject({ method: "POST", url: "/api/v1/workflow-families/harness/draft/checks", payload: {}, headers: headers() });
     await app.inject({ method: "POST", url: "/api/v1/workflow-families/harness/publish", payload: { version: "1.0.0" }, headers: headers() });
     await uploadProfile([
       { path: ".harness-build.json", content: '{"profile":"general","rev":2}\n' },
       bundleFiles[1] ?? { path: "manifests/claude-code.json", content: '{"schema_version":1}\n' }
     ]);
+    await app.inject({ method: "POST", url: "/api/v1/workflow-families/harness/draft/checks", payload: {}, headers: headers() });
     await app.inject({ method: "POST", url: "/api/v1/workflow-families/harness/publish", payload: { version: "1.0.1" }, headers: headers() });
     const verRes = await app.inject({ method: "GET", url: "/api/v1/workflow-families/harness/versions", headers: headers() });
     expect(verRes.json().items.map((v: { version: string }) => v.version)).toEqual(["1.0.1", "1.0.0"]);

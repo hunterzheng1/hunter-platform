@@ -11,10 +11,23 @@ import type {
  * `rebuild` (push-triggered full replace) must not delete them.
  */
 export const INGEST_ARTIFACT_ID = "ingest";
+/** Bump whenever source classification or document rendering changes incompatibly. */
+export const SEMANTIC_INDEX_SCHEMA_VERSION = 2;
 
 export interface SemanticGenerationGuard {
   expectedArtifactId: string;
   isCurrent(): Promise<boolean>;
+}
+
+export interface SemanticSearchOptions {
+  limit?: number;
+  currentSchemaOnly?: boolean;
+  kinds?: readonly SemanticDocumentKind[];
+}
+
+export interface SemanticDocumentPage {
+  items: SemanticDocument[];
+  total: number;
 }
 
 export interface SemanticStore {
@@ -27,6 +40,11 @@ export interface SemanticStore {
   upsertDocuments(documents: readonly SemanticDocument[]): Promise<void>;
   overview(projectId: string): Promise<SemanticOverview>;
   listByKinds(projectId: string, kinds: readonly SemanticDocumentKind[]): Promise<SemanticDocument[]>;
+  listByKindsPage(
+    projectId: string,
+    kinds: readonly SemanticDocumentKind[],
+    options: { limit: number; offset: number; order?: "asc" | "desc" | "change-history" }
+  ): Promise<SemanticDocumentPage>;
   getDocument(projectId: string, documentId: string): Promise<SemanticDocument | null>;
   listEdges(projectId: string): Promise<SemanticEdge[]>;
   graph(projectId: string, focusDocumentId?: string): Promise<{
@@ -34,8 +52,13 @@ export interface SemanticStore {
     edges: SemanticEdge[];
   }>;
   deleteProject(projectId: string): Promise<void>;
-  search(query: string, projectId?: string): Promise<SemanticDocument[]>;
+  search(
+    query: string,
+    projectScope?: string | readonly string[],
+    options?: SemanticSearchOptions
+  ): Promise<SemanticDocument[]>;
   latestArtifactId(projectId: string): Promise<string | null>;
+  indexSchemaVersion(projectId: string): Promise<number | null>;
 }
 
 export function overviewFromDocuments(
@@ -53,7 +76,8 @@ export function overviewFromDocuments(
       documents: documents.length,
       knowledge: kindCount("knowledge_entry") + kindCount("knowledge_markdown"),
       rules: kindCount("rule"),
-      changes: kindCount("archive_record"),
+      changes: kindCount("archive_record") + kindCount("change_document"),
+      architecture: kindCount("architecture_document"),
       agent_instructions: kindCount("agent_instruction"),
       edges: edges.length
     }

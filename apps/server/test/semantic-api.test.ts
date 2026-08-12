@@ -1,5 +1,5 @@
 import { uuidV7 } from "@hunter-harness/core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createServer } from "../src/app.js";
 import { MemoryRepository } from "../src/repositories/memory.js";
@@ -65,7 +65,9 @@ describe("/api/v1 semantic query routes", () => {
         ".harness/archive/2026-06-30-sample/reports/final/summary-data.json": JSON.stringify({
           changeName: "sample",
           finalStatus: "OK"
-        })
+        }),
+        ".harness/archive/2026-06-30-sample/spec/sample-design.md": "# 示例设计\n",
+        ".harness/codebase/map/ARCHITECTURE.md": "# 项目架构\n"
       }
     }));
     app = await createServer({
@@ -96,10 +98,11 @@ describe("/api/v1 semantic query routes", () => {
       project_id: projectId,
       artifact_id: "art_semantic1",
       counts: {
-        documents: 4,
+        documents: 6,
         knowledge: 1,
         rules: 1,
-        changes: 1,
+        changes: 2,
+        architecture: 1,
         agent_instructions: 1
       }
     });
@@ -128,6 +131,19 @@ describe("/api/v1 semantic query routes", () => {
     });
     expect(changes.statusCode).toBe(200);
     expect(changes.json().items[0].title).toBe("sample");
+    expect(changes.json().items).toHaveLength(2);
+
+    const architecture = await app.inject({
+      method: "GET",
+      url: `/api/v1/projects/${projectId}/semantic/architecture`,
+      headers: headers()
+    });
+    expect(architecture.statusCode).toBe(200);
+    expect(architecture.json().items).toHaveLength(1);
+    expect(architecture.json().items[0]).toMatchObject({
+      kind: "architecture_document",
+      title: "项目架构"
+    });
 
     const graph = await app.inject({
       method: "GET",
@@ -139,7 +155,7 @@ describe("/api/v1 semantic query routes", () => {
       nodes: [],
       edges: [],
       relation_status: "no_relations",
-      indexed_documents: 4
+      indexed_documents: 6
     });
 
     const knowledgeDocumentId = knowledge.json().items[0].document_id as string;
@@ -163,6 +179,151 @@ describe("/api/v1 semantic query routes", () => {
     expect(search.statusCode).toBe(200);
     expect(search.json().items).toHaveLength(1);
     expect(search.json().items[0].project_id).toBe(projectId);
+  });
+
+  it("never returns another actor's documents from global semantic search", async () => {
+    const otherToken = "semantic-other-token";
+    await repository.createActorWithToken({ actorId: "actor_other", token: otherToken });
+    const other = await repository.resolveProject({
+      actorId: "actor_other",
+      localProjectKey: uuidV7(),
+      displayName: "Other tenant",
+      requestedProjectId: null
+    });
+    await semanticStore.rebuild(buildSemanticIndex({
+      projectId: other.project.projectId,
+      artifactId: "art_other1",
+      files: {
+        ".harness/knowledge/entries/active/private.md": "# secret-b-only\n\nprivate tenant body\n"
+      }
+    }));
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/semantic/search?q=secret-b-only",
+      headers: headers()
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().items).toEqual([]);
+  });
+
+  it("hides unversioned legacy archive documents but keeps explicit ingest knowledge", async () => {
+    await semanticStore.deleteProject(projectId);
+    await semanticStore.upsertDocuments([
+      {
+        document_id: "doc_legacy_archive",
+        project_id: projectId,
+        artifact_id: "art_legacy",
+        kind: "knowledge_markdown",
+        source_path: ".harness/archive/old/plans/legacy.md",
+        title: "legacy-hidden-needle",
+        body: "legacy-hidden-needle",
+        metadata: {},
+        content_sha256: "sha256:" + "1".repeat(64)
+      },
+      {
+        document_id: "doc_ingest_knowledge",
+        project_id: projectId,
+        artifact_id: "ingest",
+        kind: "knowledge_entry",
+        source_path: ".harness/knowledge/entries/active/current.md",
+        title: "ingest-visible-needle",
+        body: "ingest-visible-needle",
+        metadata: {},
+        content_sha256: "sha256:" + "2".repeat(64)
+      }
+    ]);
+
+    const legacy = await app.inject({
+      method: "GET",
+      url: "/api/v1/semantic/search?q=legacy-hidden-needle",
+      headers: headers()
+    });
+    const ingest = await app.inject({
+      method: "GET",
+      url: "/api/v1/semantic/search?q=ingest-visible-needle",
+      headers: headers()
+    });
+
+    expect(legacy.statusCode).toBe(200);
+    expect(legacy.json().items).toEqual([]);
+    expect(ingest.statusCode).toBe(200);
+    expect(ingest.json().items).toHaveLength(1);
+    expect(ingest.json().items[0]).toMatchObject({
+      project_id: projectId,
+      document: {
+        document_id: "doc_ingest_knowledge",
+        title: "ingest-visible-needle"
+      }
+    });
+  });
+
+  it("runs one allowlisted store query for global search", async () => {
+    const second = await repository.resolveProject({
+      actorId: "actor_owner",
+      localProjectKey: uuidV7(),
+      displayName: "Second accessible project",
+      requestedProjectId: null
+    });
+    await semanticStore.rebuild(buildSemanticIndex({
+      projectId: second.project.projectId,
+      artifactId: "art_semantic2",
+      files: { ".harness/knowledge/entries/active/second.md": "# LlmClient second\n" }
+    }));
+    const search = vi.spyOn(semanticStore, "search");
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/semantic/search?q=LlmClient",
+      headers: headers()
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().items.length).toBeGreaterThanOrEqual(1);
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(search).toHaveBeenCalledWith(
+      "LlmClient",
+      expect.arrayContaining([projectId, second.project.projectId]),
+      { limit: 100, currentSchemaOnly: true }
+    );
+  });
+
+  it("paginates change history and batch-loads archive metadata", async () => {
+    await semanticStore.upsertDocuments(Array.from({ length: 5 }, (_, index) => ({
+      document_id: `doc_change_page_${index}`,
+      project_id: projectId,
+      artifact_id: "art_semantic1",
+      kind: "archive_record" as const,
+      source_path: `.harness/archive/change-${index}/reports/final/summary-data.json`,
+      title: `change-${index}`,
+      body: `change-${index}`,
+      metadata: { source_archive: `change-${index}` },
+      content_sha256: "sha256:" + String(index + 1).repeat(64)
+    })));
+    const batch = vi.spyOn(repository, "getChangeArchivePackages");
+
+    const first = await app.inject({
+      method: "GET",
+      url: `/api/v1/projects/${projectId}/semantic/changes?limit=2`,
+      headers: headers()
+    });
+
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toMatchObject({ total: 7 });
+    expect(first.json().items).toHaveLength(2);
+    expect(first.json().items[0].title).toBe("change-4");
+    expect(first.json().next_cursor).toEqual(expect.any(String));
+    expect(batch).toHaveBeenCalledTimes(1);
+    expect(batch.mock.calls[0]?.[2].length).toBeLessThanOrEqual(2);
+
+    const second = await app.inject({
+      method: "GET",
+      url: `/api/v1/projects/${projectId}/semantic/changes?limit=2&cursor=${encodeURIComponent(first.json().next_cursor)}`,
+      headers: headers()
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.json().items).toHaveLength(2);
+    expect(batch).toHaveBeenCalledTimes(2);
   });
 
   it("rejects empty search query", async () => {

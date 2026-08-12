@@ -89,11 +89,11 @@ describe("ProjectWorkspace", () => {
       getProjectSemanticOverview: vi.fn(async () => ({
         project_id: "prj_one",
         artifact_id: null,
-        counts: { documents: 0, knowledge: 0, rules: 0, changes: 0, agent_instructions: 0, edges: 0 }
+        counts: { documents: 0, knowledge: 0, rules: 0, changes: 0, architecture: 0, agent_instructions: 0, edges: 0 }
       })),
       listProjectSemanticKnowledge,
       listProjectSemanticRules: vi.fn(async () => []),
-      listProjectSemanticChanges: vi.fn(async () => []),
+      listProjectSemanticChanges: vi.fn(async () => ({ items: [], total: 0, next_cursor: null })),
       getKnowledgeProjectionStatus: vi.fn(async () => ({ pending_count: 0, pending_capped: false })),
       getProjectSemanticGraph: vi.fn(async () => ({
         nodes: [], edges: [], focus_document_id: null, relation_status: "no_relations" as const, indexed_documents: 0
@@ -108,12 +108,12 @@ describe("ProjectWorkspace", () => {
     );
 
     fireEvent.click(await screen.findByRole("tab", { name: "项目知识" }));
-    expect(await screen.findByText("还没有项目知识")).toBeInTheDocument();
+    expect(await screen.findByText("还没有知识条目")).toBeInTheDocument();
     expect(listProjectSemanticKnowledge).toHaveBeenCalledOnce();
 
     fireEvent.click(screen.getByRole("tab", { name: "文件" }));
     fireEvent.click(screen.getByRole("tab", { name: "项目知识" }));
-    expect(screen.getByText("还没有项目知识")).toBeInTheDocument();
+    expect(screen.getByText("还没有知识条目")).toBeInTheDocument();
     expect(listProjectSemanticKnowledge).toHaveBeenCalledOnce();
   });
 

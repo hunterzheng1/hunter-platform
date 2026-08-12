@@ -1106,6 +1106,22 @@ export class PostgresRepository implements ServerRepository {
     return changeArchivePackageFrom(result.rows[0] ?? {});
   }
 
+  async getChangeArchivePackages(
+    actorId: string,
+    projectId: string,
+    changeKeys: readonly string[]
+  ): Promise<ChangeArchivePackageRecord[]> {
+    await this.ownedProject(actorId, projectId);
+    const uniqueKeys = [...new Set(changeKeys)];
+    if (uniqueKeys.length === 0) return [];
+    const result = await this.pool.query(
+      `SELECT * FROM change_archive_packages
+       WHERE project_id = $1 AND change_key = ANY($2::text[])`,
+      [projectId, uniqueKeys]
+    );
+    return result.rows.map((row) => changeArchivePackageFrom(row));
+  }
+
   async updateChangeArchivePackage(input: {
     actorId: string;
     projectId: string;

@@ -9,8 +9,10 @@ import type { Pool } from "pg";
 
 import {
   INGEST_ARTIFACT_ID,
+  SEMANTIC_INDEX_SCHEMA_VERSION,
   overviewFromDocuments,
   type SemanticGenerationGuard,
+  type SemanticSearchOptions,
   type SemanticStore
 } from "./store.js";
 
@@ -102,12 +104,13 @@ export class PgSemanticStore implements SemanticStore {
         );
       }
       await client.query(
-        `INSERT INTO semantic_generations(project_id, artifact_id, updated_at)
-         VALUES ($1, $2, now())
+        `INSERT INTO semantic_generations(project_id, artifact_id, schema_version, updated_at)
+         VALUES ($1, $2, $3, now())
          ON CONFLICT (project_id) DO UPDATE SET
            artifact_id = EXCLUDED.artifact_id,
+           schema_version = EXCLUDED.schema_version,
            updated_at = EXCLUDED.updated_at`,
-        [build.project_id, build.artifact_id]
+        [build.project_id, build.artifact_id, SEMANTIC_INDEX_SCHEMA_VERSION]
       );
       await client.query("COMMIT");
       return true;
@@ -147,6 +150,8 @@ export class PgSemanticStore implements SemanticStore {
     const documents = await this.listByKinds(projectId, [
       "knowledge_entry",
       "knowledge_markdown",
+      "change_document",
+      "architecture_document",
       "rule",
       "archive_record",
       "agent_instruction"
@@ -173,6 +178,44 @@ export class PgSemanticStore implements SemanticStore {
       [projectId, [...kinds]]
     );
     return result.rows.map((row) => documentFromRow(row as Record<string, unknown>));
+  }
+
+  async listByKindsPage(
+    projectId: string,
+    kinds: readonly SemanticDocumentKind[],
+    options: { limit: number; offset: number; order?: "asc" | "desc" | "change-history" }
+  ): Promise<{ items: SemanticDocument[]; total: number }> {
+    if (kinds.length === 0) return { items: [], total: 0 };
+    const order = options.order === "desc" ? "DESC" : "ASC";
+    const orderClause = options.order === "change-history"
+      ? `split_part(source_path, '/', 3) DESC,
+         CASE WHEN kind = 'archive_record' THEN 0 ELSE 1 END ASC,
+         source_path ASC, document_id ASC`
+      : `source_path ${order}, document_id ${order}`;
+    const [page, count] = await Promise.all([
+      this.pool.query(
+        `SELECT document_id, project_id, artifact_id, kind, source_path, title, body,
+                metadata, content_sha256
+         FROM semantic_documents
+         WHERE project_id = $1 AND kind = ANY($2::text[])
+           AND COALESCE(metadata->>'status', '') <> 'deprecated'
+         ORDER BY ${orderClause}
+         LIMIT $3 OFFSET $4`,
+        [projectId, [...kinds], options.limit, options.offset]
+      ),
+      this.pool.query(
+        `SELECT COUNT(*)::integer AS total
+         FROM semantic_documents
+         WHERE project_id = $1 AND kind = ANY($2::text[])
+           AND COALESCE(metadata->>'status', '') <> 'deprecated'`,
+        [projectId, [...kinds]]
+      )
+    ]);
+    const countRow = count.rows[0] as { total?: number | string } | undefined;
+    return {
+      items: page.rows.map((row) => documentFromRow(row as Record<string, unknown>)),
+      total: Number(countRow?.total ?? 0)
+    };
   }
 
   async getDocument(projectId: string, documentId: string): Promise<SemanticDocument | null> {
@@ -254,28 +297,61 @@ export class PgSemanticStore implements SemanticStore {
     return row?.artifact_id ?? null;
   }
 
-  async search(query: string, projectId?: string): Promise<SemanticDocument[]> {
+  async indexSchemaVersion(projectId: string): Promise<number | null> {
+    const result = await this.pool.query(
+      `SELECT schema_version FROM semantic_generations WHERE project_id = $1`,
+      [projectId]
+    );
+    const row = result.rows[0] as { schema_version?: number | string } | undefined;
+    if (row?.schema_version === undefined) return null;
+    const value = Number(row.schema_version);
+    return Number.isInteger(value) ? value : null;
+  }
+
+  async search(
+    query: string,
+    projectScope?: string | readonly string[],
+    options: SemanticSearchOptions = {}
+  ): Promise<SemanticDocument[]> {
     const needle = query.trim();
     if (needle === "") return [];
-    const result = projectId === undefined
-      ? await this.pool.query(
-        `SELECT document_id, project_id, artifact_id, kind, source_path, title, body, metadata, content_sha256
-         FROM semantic_documents
-         WHERE search_vector @@ plainto_tsquery('simple', $1)
-           AND COALESCE(metadata->>'status', '') <> 'deprecated'
-         ORDER BY title ASC
-         LIMIT 100`,
-        [needle]
-      )
-      : await this.pool.query(
-        `SELECT document_id, project_id, artifact_id, kind, source_path, title, body, metadata, content_sha256
-         FROM semantic_documents
-         WHERE project_id = $2 AND search_vector @@ plainto_tsquery('simple', $1)
-           AND COALESCE(metadata->>'status', '') <> 'deprecated'
-         ORDER BY title ASC
-         LIMIT 100`,
-        [needle, projectId]
-      );
+    if (Array.isArray(projectScope) && projectScope.length === 0) return [];
+    if (options.kinds !== undefined && options.kinds.length === 0) return [];
+    const parameters: unknown[] = [needle];
+    const filters = [
+      "d.search_vector @@ plainto_tsquery('simple', $1)",
+      "COALESCE(d.metadata->>'status', '') <> 'deprecated'"
+    ];
+    if (typeof projectScope === "string") {
+      parameters.push(projectScope);
+      filters.push(`d.project_id = $${parameters.length}`);
+    } else if (projectScope !== undefined) {
+      parameters.push([...projectScope]);
+      filters.push(`d.project_id = ANY($${parameters.length}::text[])`);
+    }
+    if (options.kinds !== undefined) {
+      parameters.push([...options.kinds]);
+      filters.push(`d.kind = ANY($${parameters.length}::text[])`);
+    }
+    const generationJoin = options.currentSchemaOnly === true
+      ? "LEFT JOIN semantic_generations g ON g.project_id = d.project_id"
+      : "";
+    if (options.currentSchemaOnly === true) {
+      parameters.push(SEMANTIC_INDEX_SCHEMA_VERSION);
+      filters.push(`(g.schema_version = $${parameters.length} OR ` +
+        `(g.schema_version IS NULL AND d.artifact_id = '${INGEST_ARTIFACT_ID}'))`);
+    }
+    parameters.push(Math.max(1, Math.min(options.limit ?? 100, 100)));
+    const result = await this.pool.query(
+      `SELECT d.document_id, d.project_id, d.artifact_id, d.kind, d.source_path,
+              d.title, d.body, d.metadata, d.content_sha256
+       FROM semantic_documents d
+       ${generationJoin}
+       WHERE ${filters.join(" AND ")}
+       ORDER BY d.title ASC
+       LIMIT $${parameters.length}`,
+      parameters
+    );
     return result.rows.map((row) => documentFromRow(row as Record<string, unknown>));
   }
 }

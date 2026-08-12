@@ -47,8 +47,11 @@ class MemoryPersistence implements RegistryPersistence {
   async save(snapshot: unknown): Promise<void> { this.snapshot = snapshot; }
 }
 
-function newStore(persistence?: RegistryPersistence): RegistryStore {
-  return new RegistryStore(new MemoryArtifactStorage(), persistence);
+function newStore(
+  persistence?: RegistryPersistence,
+  storage: MemoryArtifactStorage = new MemoryArtifactStorage()
+): RegistryStore {
+  return new RegistryStore(storage, persistence);
 }
 
 // 多数 publish 用例的前置：建单 agent 草稿并发布
@@ -567,7 +570,7 @@ describe("RegistryStore persist nested drafts (UT-031)", () => {
     await store.upsertDraft({ slug: "harness-x", agent: CURSOR, sourceFiles: files, draftVersion: "0.2.0" });
     await store.persist();
     const snap = p.snapshot as { schemaVersion: number; drafts: Array<[string, Array<[string, unknown]>]> };
-    expect(snap.schemaVersion).toBe(4);
+    expect(snap.schemaVersion).toBe(5);
     const entry = snap.drafts.find(([s]) => s === "harness-x");
     expect(entry).toBeDefined();
     const inner = entry?.[1] ?? [];
@@ -1213,6 +1216,7 @@ describe("RegistryStore workflow family boundary + persistence (UT-021, UT-030~0
     await store.uploadWorkflowFamilyProfileDraft({
       slug: "harness", profile: "general", files: generalFiles, actorId: "owner"
     });
+    await store.runWorkflowFamilyChecks({ slug: "harness", checkedAt: "2026-07-12T00:00:00Z" });
     await store.publishWorkflowFamily("harness", { version: "1.0.0", actorId: "owner" });
     const snap = p.snapshot as { workflowFamilies: unknown[]; workflowFamilyDrafts: unknown[] };
     expect(Array.isArray(snap.workflowFamilies)).toBe(true);
@@ -1221,7 +1225,8 @@ describe("RegistryStore workflow family boundary + persistence (UT-021, UT-030~0
 
   it("workflow family survives reload round-trip", async () => {
     const p = new MemoryPersistence();
-    let store = newStore(p);
+    const storage = new MemoryArtifactStorage();
+    let store = newStore(p, storage);
     store.createWorkflowFamily({
       slug: "harness",
       displayName: "Harness",
@@ -1232,11 +1237,67 @@ describe("RegistryStore workflow family boundary + persistence (UT-021, UT-030~0
     await store.uploadWorkflowFamilyProfileDraft({
       slug: "harness", profile: "general", files: generalFiles, actorId: "owner"
     });
+    await store.runWorkflowFamilyChecks({ slug: "harness", checkedAt: "2026-07-12T00:00:00Z" });
     await store.publishWorkflowFamily("harness", { version: "1.0.0", actorId: "owner" });
-    store = newStore(p);
+    store = newStore(p, storage);
     await store.initialize();
     const family = store.getWorkflowFamily("harness");
     expect(family.latest_version).toBe("1.0.0");
     expect(store.listWorkflowFamilyVersions("harness").map((v) => v.version)).toEqual(["1.0.0"]);
+  });
+
+  it("keeps workflow draft and published source blobs referenced for CAS cleanup", async () => {
+    const store = newStore();
+    store.createWorkflowFamily({
+      slug: "harness",
+      displayName: "Harness",
+      description: "Default harness workflow family",
+      tags: [],
+      required_profiles: ["general"]
+    });
+    await store.uploadWorkflowFamilyProfileDraft({
+      slug: "harness", profile: "general", files: generalFiles, actorId: "owner"
+    });
+    await store.runWorkflowFamilyChecks({ slug: "harness", checkedAt: "2026-07-12T00:00:00Z" });
+    await store.publishWorkflowFamily("harness", { version: "1.0.0", actorId: "owner" });
+
+    const nextFiles = [...generalFiles, { path: "README.md", content: "# next\n" }];
+    await store.uploadWorkflowFamilyProfileDraft({
+      slug: "harness", profile: "general", files: nextFiles, actorId: "owner"
+    });
+    await store.persist();
+
+    const versionHash = sha256Bytes(Buffer.from(JSON.stringify(generalFiles), "utf8"));
+    const draftHash = sha256Bytes(Buffer.from(JSON.stringify(nextFiles), "utf8"));
+    const referenced = store.referencedBlobHashes();
+    expect(referenced.has(versionHash)).toBe(true);
+    expect(referenced.has(draftHash)).toBe(true);
+  });
+});
+
+describe("RegistryStore external source mutation isolation", () => {
+  it("does not hold the global registry writer while a remote source request times out", async () => {
+    const store = newStore();
+    store.setExternalFetcherDeps({
+      timeoutMs: 20,
+      fetch: async () => new Promise<Response>(() => undefined)
+    });
+
+    const creation = store.createExternalSkill({ source: { type: "npm", ref: "@acme/never" } });
+    await Promise.resolve();
+    const ordinaryMutation = store.withRegistryMutation(async () => {
+      const tag = store.createTag({ slug: "available", label: "Available" });
+      await store.persist();
+      return tag.slug;
+    });
+
+    const timeout = (value: string) => new Promise<string>((resolve) => {
+      setTimeout(() => resolve(value), 100);
+    });
+    await expect(Promise.race([ordinaryMutation, timeout("blocked")])).resolves.toBe("available");
+    await expect(Promise.race([
+      creation.then(() => "resolved", (error: unknown) => error),
+      timeout("not-timed-out")
+    ])).resolves.toMatchObject({ code: "EXTERNAL_FETCH_TIMEOUT", status: 504 });
   });
 });

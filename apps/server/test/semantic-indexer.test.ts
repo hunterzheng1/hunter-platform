@@ -259,6 +259,71 @@ describe("semantic indexer", () => {
     }));
   });
 
+  it("keeps archived design documents out of knowledge and indexes codebase maps as architecture", () => {
+    const build = buildSemanticIndex({
+      projectId: "prj_categories",
+      artifactId: "art_categories01",
+      files: {
+        ".harness/archive/2026-08-12-sample/spec/sample-design.md": "# 示例设计\n\n设计正文。\n",
+        ".harness/codebase/map/ARCHITECTURE.md": "# 项目架构\n\n架构正文。\n",
+        ".harness/codebase/map-summary.md": "# Codebase Map Summary\n\n项目概览。\n",
+        ".harness/codebase/map-manifest.json": JSON.stringify({
+          schema_version: 1,
+          generated_at: "2026-08-12 10:00:00",
+          last_mapped_commit: "abc123",
+          warnings: ["索引服务不可用，已降级扫描"]
+        })
+      }
+    });
+
+    expect(build.documents.find((document) => document.source_path.endsWith("sample-design.md"))).toMatchObject({
+      kind: "change_document",
+      metadata: { archive_role: "spec" }
+    });
+    expect(build.documents.filter((document) => document.kind === "architecture_document")).toHaveLength(3);
+    expect(build.documents.filter((document) => document.kind === "knowledge_markdown")).toHaveLength(0);
+  });
+
+  it("projects archive summaries into a readable change overview", () => {
+    const build = buildSemanticIndex({
+      projectId: "prj_summary",
+      artifactId: "art_summary01",
+      files: {
+        ".harness/archive/2026-08-12-sample/reports/final/summary-data.json": JSON.stringify({
+          changeName: "sample",
+          businessGoal: "完成项目绑定",
+          finalStatus: "WARN",
+          finalStatusReasons: ["场景映射证据不完整"],
+          summary: { text: "已完成绑定并补齐服务端展示。" },
+          timeline: [{ type: "decision", summary: "采用远端持久化作为最终状态。" }],
+          reviewSummary: { summary: "评审通过，保留一个非阻断提醒。" },
+          maintenanceNotes: ["后续仅需按周期刷新架构地图。"],
+          diffStat: { filesChanged: 3, additions: 20, deletions: 4 },
+          verification: {
+            unitTests: { run: 117, failures: 0, errors: 0 },
+            apiTests: { total: 7, passed: 7, failed: 0 }
+          },
+          releaseEligible: false,
+          sourceFiles: ["apps/server/src/app.ts"]
+        })
+      }
+    });
+
+    const summary = build.documents.find((document) => document.kind === "archive_record");
+    expect(summary?.body).toContain("## 变更结果");
+    expect(summary?.body).toContain("完成项目绑定");
+    expect(summary?.body).toContain("已完成绑定并补齐服务端展示");
+    expect(summary?.body).toContain("采用远端持久化作为最终状态");
+    expect(summary?.body).toContain("评审通过，保留一个非阻断提醒");
+    expect(summary?.body).toContain("后续仅需按周期刷新架构地图");
+    expect(summary?.body).not.toMatch(/^\s*\{/u);
+    expect(summary?.metadata).toMatchObject({
+      business_goal: "完成项目绑定",
+      files_changed: 3,
+      sourceFiles: ["apps/server/src/app.ts"]
+    });
+  });
+
   it("emits references_path edges for knowledge entry sourceFiles regardless of file order", async () => {
     const entry = await readFile(join(fixtureRoot, "knowledge-ingest-entry.json"), "utf8");
     const parsedEntry = JSON.parse(entry) as { scope: { sourceFiles: string[] } };

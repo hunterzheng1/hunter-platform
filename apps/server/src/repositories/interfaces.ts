@@ -286,6 +286,11 @@ export interface ServerRepository extends TransactionRepository {
     projectId: string,
     changeKey: string
   ): Promise<ChangeArchivePackageRecord>;
+  getChangeArchivePackages(
+    actorId: string,
+    projectId: string,
+    changeKeys: readonly string[]
+  ): Promise<ChangeArchivePackageRecord[]>;
   updateChangeArchivePackage(input: {
     actorId: string;
     projectId: string;

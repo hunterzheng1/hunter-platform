@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 
 import {
+  agentToolMutationSchema,
   aiProviderReorderRequestSchema,
   canonicalJson,
   fileOperationSchema,
@@ -10,6 +11,8 @@ import {
   publishSkillRequestSchema,
   publishUnifiedSkillRequestSchema,
   publishWorkflowFamilyRequestSchema,
+  importWorkflowFamilySourceRequestSchema,
+  inspectWorkflowFamilySourceRequestSchema,
   registryAgentSchema,
   registrySlugSchema,
   sensitiveReviewSubmissionSchema,
@@ -81,7 +84,8 @@ import {
 import {
   archivePackageReceipt,
   ingestArchivePackage,
-  loadSemanticSnapshotFiles
+  loadSemanticSnapshotFiles,
+  rebuildStableSemanticSnapshot
 } from "./archive/package-ingest.js";
 import { defaultServerConfig, type ServerConfig } from "./config.js";
 import { buildDashboardOverview } from "./dashboard/overview.js";
@@ -104,7 +108,8 @@ import type {
   IdempotencyRecord,
   ProjectKeyScope,
   ProjectRecord,
-  ServerRepository
+  ServerRepository,
+  TransactionRepository
 } from "./repositories/interfaces.js";
 import { PROJECT_KEY_SCOPES, ServerDomainError } from "./repositories/interfaces.js";
 import type { ArtifactStorage } from "./storage/interface.js";
@@ -118,7 +123,10 @@ import { MemoryRunStore } from "./runs/memory-store.js";
 import { registerRunRoutes } from "./runs/routes.js";
 import type { RunStore } from "./runs/store.js";
 import { SemanticMemoryStore } from "./semantic/memory-store.js";
-import type { SemanticStore } from "./semantic/store.js";
+import {
+  SEMANTIC_INDEX_SCHEMA_VERSION,
+  type SemanticStore
+} from "./semantic/store.js";
 import { registerSemanticMcpRoutes } from "./mcp/register.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -150,6 +158,8 @@ export interface CreateServerOptions {
   npmCredentialVerifier?: (token: string, scope: string) => Promise<{ username: string }>;
   /** External Skill ?? fetch ??????? */
   externalFetch?: typeof fetch;
+  /** Per-request deadline for external registry/GitHub source reads. */
+  externalFetchTimeoutMs?: number;
 }
 
 interface MutationResult {
@@ -443,9 +453,10 @@ async function mutation(
   repository: ServerRepository,
   actor: Actor,
   requestId: string,
-  action: () => Promise<MutationResult>,
+  action: (tx: TransactionRepository) => Promise<MutationResult>,
   bodyHashOverride?: string,
-  lockInputOverride?: MutationLockInput
+  lockInputOverride?: MutationLockInput,
+  transactional = false
 ): Promise<MutationResult> {
   const idempotency = request.headers["idempotency-key"];
   if (typeof idempotency !== "string" || !z.uuid().safeParse(idempotency).success) {
@@ -470,32 +481,117 @@ async function mutation(
   const lockInput = lockInputOverride ?? idempotencyInput;
   const lock = await repository.acquireIdempotencyLock(lockInput);
   try {
-    const existing = await repository.getIdempotency(idempotencyInput);
-    if (existing !== null) {
-      if (existing.bodyHash !== bodyHash) {
-        throw new ServerDomainError(
-          409,
-          "IDEMPOTENCY_KEY_REUSED",
-          "idempotency key was reused with a different request"
-        );
+    const execute = async (tx: TransactionRepository): Promise<MutationResult> => {
+      const existing = await tx.getIdempotency(idempotencyInput);
+      if (existing !== null) {
+        if (existing.bodyHash !== bodyHash) {
+          throw new ServerDomainError(
+            409,
+            "IDEMPOTENCY_KEY_REUSED",
+            "idempotency key was reused with a different request"
+          );
+        }
+        return {
+          statusCode: existing.statusCode,
+          body: existing.response as Record<string, unknown>
+        };
       }
-      return {
-        statusCode: existing.statusCode,
-        body: existing.response as Record<string, unknown>
+      const result = await action(tx);
+      const response = { ...result.body, request_id: requestId };
+      const record: IdempotencyRecord = {
+        ...idempotencyInput,
+        bodyHash,
+        statusCode: result.statusCode,
+        response
       };
-    }
-    const result = await action();
-    const response = { ...result.body, request_id: requestId };
-    const record: IdempotencyRecord = {
-      ...idempotencyInput,
-      bodyHash,
-      statusCode: result.statusCode,
-      response
+      await tx.putIdempotency(record);
+      return { statusCode: result.statusCode, body: response };
     };
-    await repository.putIdempotency(record);
-    return { statusCode: result.statusCode, body: response };
+    return transactional
+      ? await repository.withTransaction(execute)
+      : await execute(repository);
   } finally {
     await lock.release();
+  }
+}
+
+async function transactionalMutation(
+  request: FastifyRequest,
+  repository: ServerRepository,
+  actor: Actor,
+  requestId: string,
+  action: (tx: TransactionRepository) => Promise<MutationResult>
+): Promise<MutationResult> {
+  return mutation(request, repository, actor, requestId, action, undefined, undefined, true);
+}
+
+async function preparedTransactionalMutation<Prepared>(
+  request: FastifyRequest,
+  repository: ServerRepository,
+  actor: Actor,
+  requestId: string,
+  prepare: () => Promise<Prepared>,
+  action: (prepared: Prepared, tx: TransactionRepository) => Promise<MutationResult>,
+  commitScope: (commit: () => Promise<MutationResult>) => Promise<MutationResult>
+): Promise<MutationResult> {
+  const idempotency = request.headers["idempotency-key"];
+  if (typeof idempotency !== "string" || !z.uuid().safeParse(idempotency).success) {
+    throw new ServerDomainError(
+      400,
+      "VALIDATION_FAILED",
+      "Idempotency-Key is required and must be a UUID"
+    );
+  }
+  const idempotencyInput = {
+    actorId: actor.actorId,
+    method: request.method.toUpperCase(),
+    path: mutationResourcePath(request),
+    key: idempotency
+  };
+  const bodyHash = mutationBodyHash(request.body);
+  const replay = (existing: IdempotencyRecord): MutationResult => {
+    if (existing.bodyHash !== bodyHash) {
+      throw new ServerDomainError(
+        409,
+        "IDEMPOTENCY_KEY_REUSED",
+        "idempotency key was reused with a different request"
+      );
+    }
+    return {
+      statusCode: existing.statusCode,
+      body: existing.response as Record<string, unknown>
+    };
+  };
+
+  const replayLock = await repository.acquireIdempotencyLock(idempotencyInput);
+  try {
+    const existing = await repository.getIdempotency(idempotencyInput);
+    if (existing !== null) return replay(existing);
+  } finally {
+    await replayLock.release();
+  }
+
+  const prepared = await prepare();
+  const commitLock = await repository.acquireIdempotencyLock(idempotencyInput);
+  try {
+    const existing = await repository.getIdempotency(idempotencyInput);
+    if (existing !== null) return replay(existing);
+    return commitScope(() => repository.withTransaction(async (tx) => {
+      const committed = await tx.getIdempotency(idempotencyInput);
+      if (committed !== null) return replay(committed);
+
+      const result = await action(prepared, tx);
+      const response = { ...result.body, request_id: requestId };
+      await tx.putIdempotency({
+        ...idempotencyInput,
+        bodyHash,
+        statusCode: result.statusCode,
+        response
+      });
+      return { statusCode: result.statusCode, body: response };
+    }));
+  } finally {
+    await commitLock.release();
   }
 }
 
@@ -545,7 +641,8 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   await registry.initialize(options.bootstrapBundle);
   registry.setExternalFetcherDeps({
     ...(options.externalFetch !== undefined ? { fetch: options.externalFetch } : {}),
-    githubToken: config.githubToken
+    githubToken: config.githubToken,
+    ...(options.externalFetchTimeoutMs === undefined ? {} : { timeoutMs: options.externalFetchTimeoutMs })
   });
   // AiJobStore ???�3.2??PG ??? PgAiJobStore ???????? MemoryAiJobStore ??? fallback?
   const aiJobStore = options.aiJobStore ?? new MemoryAiJobStore();
@@ -655,6 +752,68 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     preservePath: true,
     limits: { fileSize: config.maxFileBytes, files: config.maxUploadFiles }
   });
+
+  const semanticRefreshes = new Map<string, Promise<void>>();
+  const ensureSemanticIndexCurrent = async (actorId: string, projectId: string): Promise<void> => {
+    const latest = await repository.getLatestArtifact(actorId, projectId);
+    if (latest === null) return;
+    if (await semanticStore.latestArtifactId(projectId) === latest.artifactId &&
+        await semanticStore.indexSchemaVersion(projectId) === SEMANTIC_INDEX_SCHEMA_VERSION) {
+      return;
+    }
+    const active = semanticRefreshes.get(projectId);
+    if (active !== undefined) return active;
+    const refresh = rebuildStableSemanticSnapshot({
+      actorId,
+      projectId,
+      repository,
+      storage,
+      semanticStore
+    }).then(() => undefined).finally(() => {
+      if (semanticRefreshes.get(projectId) === refresh) semanticRefreshes.delete(projectId);
+    });
+    semanticRefreshes.set(projectId, refresh);
+    return refresh;
+  };
+  const queuedSemanticRefreshes = new Map<string, string>();
+  let activeSemanticRefreshes = 0;
+  const drainSemanticRefreshQueue = (): void => {
+    while (activeSemanticRefreshes < 2 && queuedSemanticRefreshes.size > 0) {
+      const next = queuedSemanticRefreshes.entries().next().value as
+        | [string, string]
+        | undefined;
+      if (next === undefined) return;
+      const [projectId, actorId] = next;
+      queuedSemanticRefreshes.delete(projectId);
+      activeSemanticRefreshes += 1;
+      void ensureSemanticIndexCurrent(actorId, projectId)
+        .catch((error: unknown) => {
+          app.log.warn({ error, projectId }, "background semantic index refresh failed");
+        })
+        .finally(() => {
+          activeSemanticRefreshes -= 1;
+          drainSemanticRefreshQueue();
+        });
+    }
+  };
+  const scheduleSemanticIndexesCurrent = (actorId: string, projectIds: readonly string[]): void => {
+    for (const projectId of projectIds) {
+      if (!semanticRefreshes.has(projectId) && !queuedSemanticRefreshes.has(projectId)) {
+        queuedSemanticRefreshes.set(projectId, actorId);
+      }
+    }
+    drainSemanticRefreshQueue();
+  };
+  const accessibleSemanticProjectIds = async (actorId: string): Promise<string[]> => {
+    const projectIds: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const page = await repository.listProjects({ actorId, limit: 100, cursor });
+      projectIds.push(...page.items.map((project) => project.projectId));
+      cursor = page.nextCursor;
+    } while (cursor !== null);
+    return projectIds;
+  };
 
   app.setErrorHandler((error, request, reply) => {
     let status = 500;
@@ -2010,15 +2169,17 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   app.post("/api/v1/tags", async (request, reply) => {
     const { actor, requestId } = await authenticated(request, repository);
     const body = tagCreateSchema.parse(request.body);
-    const result = await mutation(request, repository, actor, requestId, async () => {
-      const tag = registry.createTag(body);
-      await registry.persist();
-      await writeAudit(repository, {
-        actorId: actor.actorId, projectId: null, action: "tag.created",
-        targetId: tag.tag_id, requestId, details: { slug: tag.slug }
-      });
-      return { statusCode: 201, body: tag };
-    });
+    const result = await registry.withRegistryMutation(() =>
+      mutation(request, repository, actor, requestId, async () => {
+        const tag = registry.createTag(body);
+        await registry.persist();
+        await writeAudit(repository, {
+          actorId: actor.actorId, projectId: null, action: "tag.created",
+          targetId: tag.tag_id, requestId, details: { slug: tag.slug }
+        });
+        return { statusCode: 201, body: tag };
+      })
+    );
     return send(reply, requestId, result);
   });
 
@@ -2026,15 +2187,17 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     const { actor, requestId } = await authenticated(request, repository);
     const { tagId } = request.params as { tagId: string };
     const body = tagUpdateSchema.parse(request.body);
-    const result = await mutation(request, repository, actor, requestId, async () => {
-      const tag = registry.updateTag(tagId, body);
-      await registry.persist();
-      await writeAudit(repository, {
-        actorId: actor.actorId, projectId: null, action: "tag.updated",
-        targetId: tagId, requestId, details: { revision: tag.revision }
-      });
-      return { statusCode: 200, body: tag };
-    });
+    const result = await registry.withRegistryMutation(() =>
+      mutation(request, repository, actor, requestId, async () => {
+        const tag = registry.updateTag(tagId, body);
+        await registry.persist();
+        await writeAudit(repository, {
+          actorId: actor.actorId, projectId: null, action: "tag.updated",
+          targetId: tagId, requestId, details: { revision: tag.revision }
+        });
+        return { statusCode: 200, body: tag };
+      })
+    );
     return send(reply, requestId, result);
   });
 
@@ -2042,15 +2205,17 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     const { actor, requestId } = await authenticated(request, repository);
     const { tagId } = request.params as { tagId: string };
     const body = tagMergeSchema.parse(request.body);
-    const result = await mutation(request, repository, actor, requestId, async () => {
-      const source = registry.mergeTag(tagId, body.target_tag_id, body.revision);
-      await registry.persist();
-      await writeAudit(repository, {
-        actorId: actor.actorId, projectId: null, action: "tag.merged",
-        targetId: tagId, requestId, details: { target_tag_id: body.target_tag_id }
-      });
-      return { statusCode: 200, body: { ...source, merged_into: body.target_tag_id } };
-    });
+    const result = await registry.withRegistryMutation(() =>
+      mutation(request, repository, actor, requestId, async () => {
+        const source = registry.mergeTag(tagId, body.target_tag_id, body.revision);
+        await registry.persist();
+        await writeAudit(repository, {
+          actorId: actor.actorId, projectId: null, action: "tag.merged",
+          targetId: tagId, requestId, details: { target_tag_id: body.target_tag_id }
+        });
+        return { statusCode: 200, body: { ...source, merged_into: body.target_tag_id } };
+      })
+    );
     return send(reply, requestId, result);
   });
 
@@ -2061,16 +2226,18 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
       handler: async (request, reply) => {
         const { actor, requestId } = await authenticated(request, repository);
         const { slug, tagId } = request.params as { slug: string; tagId: string };
-        const result = await mutation(request, repository, actor, requestId, async () => {
-          const skill = registry.bindTag(slug, tagId, method === "DELETE");
-          await registry.persist();
-          await writeAudit(repository, {
-            actorId: actor.actorId, projectId: null,
-            action: method === "DELETE" ? "skill.tag.removed" : "skill.tag.bound",
-            targetId: skill.skill_id, requestId, details: { tag_id: tagId }
-          });
-          return { statusCode: 200, body: skill };
-        });
+        const result = await registry.withRegistryMutation(() =>
+          mutation(request, repository, actor, requestId, async () => {
+            const skill = registry.bindTag(slug, tagId, method === "DELETE");
+            await registry.persist();
+            await writeAudit(repository, {
+              actorId: actor.actorId, projectId: null,
+              action: method === "DELETE" ? "skill.tag.removed" : "skill.tag.bound",
+              targetId: skill.skill_id, requestId, details: { tag_id: tagId }
+            });
+            return { statusCode: 200, body: skill };
+          })
+        );
         return send(reply, requestId, result);
       }
     });
@@ -2082,36 +2249,138 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     return { items: registry.listWorkflowFamilies(), request_id: requestId };
   });
 
+  app.get("/api/v1/agent-tools", async (request, reply) => {
+    const { requestId } = await authenticated(request, repository);
+    reply.header("X-Request-Id", requestId);
+    return { items: registry.listAgentTools(), request_id: requestId };
+  });
+
+  app.post("/api/v1/agent-tools", async (request, reply) => {
+    const { actor, requestId } = await authenticated(request, repository);
+    const body = agentToolMutationSchema.extend({ schema_version: z.literal(1) }).strict().parse(request.body);
+    const result = await registry.withFeatureMutation(() =>
+      transactionalMutation(request, repository, actor, requestId, async (tx) => {
+        const tool = await registry.createAgentTool({
+        slug: body.slug,
+        displayName: body.displayName,
+        description: body.description,
+        category: body.category,
+        status: body.status,
+        source: body.source,
+        homepage: body.homepage ?? null,
+        packageName: body.packageName ?? null,
+        installCommand: body.installCommand ?? null,
+        tags: body.tags,
+          relatedWorkflowFamilies: body.relatedWorkflowFamilies
+        }, tx);
+        await writeAudit(tx, {
+          actorId: actor.actorId,
+          projectId: null,
+          action: "agent-tool.created",
+          targetId: tool.tool_id,
+          requestId,
+          details: { slug: tool.slug, category: tool.category, source: tool.source }
+        });
+        return { statusCode: 201, body: tool };
+      })
+    );
+    return send(reply, requestId, result);
+  });
+
+  app.get("/api/v1/agent-tools/:slug", async (request, reply) => {
+    const { requestId } = await authenticated(request, repository);
+    const { slug } = request.params as { slug: string };
+    reply.header("X-Request-Id", requestId);
+    return { ...registry.getAgentTool(slug), request_id: requestId };
+  });
+
+  app.post("/api/v1/workflow-families/import/inspect", async (request, reply) => {
+    const { requestId } = await authenticated(request, repository);
+    const body = inspectWorkflowFamilySourceRequestSchema.parse(request.body);
+    const inspection = await registry.inspectWorkflowFamilySource(body.source);
+    reply.header("X-Request-Id", requestId);
+    return { ...inspection, request_id: requestId };
+  });
+
+  app.post("/api/v1/workflow-families/import", async (request, reply) => {
+    const { actor, requestId } = await authenticated(request, repository);
+    const body = importWorkflowFamilySourceRequestSchema.parse(request.body);
+    const result = await preparedTransactionalMutation(
+      request,
+      repository,
+      actor,
+      requestId,
+      () => registry.prepareWorkflowFamilySourceImport(body),
+      async (prepared, tx) => {
+        const imported = await registry.commitWorkflowFamilySourceImport(prepared, tx);
+        await writeAudit(tx, {
+          actorId: actor.actorId,
+          projectId: null,
+          action: "workflow.family.imported",
+          targetId: imported.family.family_id,
+          requestId,
+          details: {
+            slug: imported.family.slug,
+            source: imported.family.source,
+            profiles: imported.family.required_profiles
+          }
+        });
+        return { statusCode: 201, body: imported };
+      },
+      (commit) => registry.withFeatureMutation(commit)
+    );
+    return send(reply, requestId, result);
+  });
+
   app.post("/api/v1/workflow-families", async (request, reply) => {
     const { actor, requestId } = await authenticated(request, repository);
     const body = workflowFamilyMutationSchema.extend({ schema_version: z.literal(1) }).strict().parse(request.body);
-    const result = await mutation(request, repository, actor, requestId, async () => {
-      const family = registry.createWorkflowFamily({
+    const result = await registry.withFeatureMutation(() =>
+      transactionalMutation(request, repository, actor, requestId, async (tx) => {
+        const family = registry.createWorkflowFamily({
         slug: body.slug,
         displayName: body.displayName,
         description: body.description,
         tags: body.tags,
         required_profiles: body.required_profiles,
-        ...(body.source === undefined ? {} : { source: body.source })
-      });
-      await registry.persist();
-      await writeAudit(repository, {
-        actorId: actor.actorId, projectId: null, action: "workflow.family.created",
-        targetId: family.family_id, requestId, details: { slug: family.slug }
-      });
-      return { statusCode: 201, body: family };
-    });
+          ...(body.source === undefined ? {} : { source: body.source })
+        });
+        await registry.persist(tx);
+        await writeAudit(tx, {
+          actorId: actor.actorId, projectId: null, action: "workflow.family.created",
+          targetId: family.family_id, requestId, details: { slug: family.slug }
+        });
+        return { statusCode: 201, body: family };
+      })
+    );
     return send(reply, requestId, result);
   });
 
   app.post("/api/v1/workflow-families/:slug/sync", async (request, reply) => {
     const { actor, requestId } = await authenticated(request, repository);
     const { slug } = request.params as { slug: string };
-    const result = await registry.syncWorkflowFamilyFromSource(slug, actor.actorId, {
-      githubToken: process.env.GITHUB_TOKEN ?? null
-    });
-    reply.header("X-Request-Id", requestId);
-    return { ...result, request_id: requestId };
+    const family = registry.getWorkflowFamily(slug);
+    const result = await preparedTransactionalMutation(
+      request,
+      repository,
+      actor,
+      requestId,
+      () => registry.prepareWorkflowFamilySourceSync(slug),
+      async (prepared, tx) => {
+        const synced = await registry.commitWorkflowFamilySourceSync(prepared, tx);
+        await writeAudit(tx, {
+          actorId: actor.actorId,
+          projectId: null,
+          action: "workflow.family.synced",
+          targetId: family.family_id,
+          requestId,
+          details: { slug, ...synced }
+        });
+        return { statusCode: 200, body: synced };
+      },
+      (commit) => registry.withFeatureMutation(commit)
+    );
+    return send(reply, requestId, result);
   });
 
   app.get("/api/v1/workflow-families/:slug", async (request, reply) => {
@@ -2238,6 +2507,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     const { actor, requestId } = await authenticated(request, repository);
     const { projectId } = request.params as { projectId: string };
     await repository.getProject(actor.actorId, projectId);
+    await ensureSemanticIndexCurrent(actor.actorId, projectId);
     reply.header("X-Request-Id", requestId);
     return { ...(await semanticStore.overview(projectId)), request_id: requestId };
   });
@@ -2246,6 +2516,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     const { actor, requestId } = await authenticated(request, repository);
     const { projectId } = request.params as { projectId: string };
     await repository.getProject(actor.actorId, projectId);
+    await ensureSemanticIndexCurrent(actor.actorId, projectId);
     const query = z.object({
       limit: z.coerce.number().int().min(1).max(200).default(50),
       cursor: z.string().min(1).optional(),
@@ -2529,9 +2800,22 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     const { actor, requestId } = await authenticated(request, repository);
     const { projectId } = request.params as { projectId: string };
     await repository.getProject(actor.actorId, projectId);
+    await ensureSemanticIndexCurrent(actor.actorId, projectId);
     reply.header("X-Request-Id", requestId);
     return {
       items: await semanticStore.listByKinds(projectId, ["rule"]),
+      request_id: requestId
+    };
+  });
+
+  app.get("/api/v1/projects/:projectId/semantic/architecture", async (request, reply) => {
+    const { actor, requestId } = await authenticated(request, repository);
+    const { projectId } = request.params as { projectId: string };
+    await repository.getProject(actor.actorId, projectId);
+    await ensureSemanticIndexCurrent(actor.actorId, projectId);
+    reply.header("X-Request-Id", requestId);
+    return {
+      items: await semanticStore.listByKinds(projectId, ["architecture_document"]),
       request_id: requestId
     };
   });
@@ -2540,9 +2824,65 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     const { actor, requestId } = await authenticated(request, repository);
     const { projectId } = request.params as { projectId: string };
     await repository.getProject(actor.actorId, projectId);
+    await ensureSemanticIndexCurrent(actor.actorId, projectId);
+    const query = z.object({
+      limit: z.coerce.number().int().min(1).max(200).default(50),
+      cursor: z.string().min(1).optional()
+    }).strict().parse(request.query);
+    const offset = query.cursor === undefined
+      ? 0
+      : Number.parseInt(Buffer.from(query.cursor, "base64url").toString("utf8"), 10);
+    if (!Number.isSafeInteger(offset) || offset < 0) {
+      throw new ServerDomainError(400, "INVALID_CURSOR", "cursor is invalid");
+    }
+    const page = await semanticStore.listByKindsPage(
+      projectId,
+      ["archive_record", "change_document"],
+      { limit: query.limit, offset, order: "change-history" }
+    );
+    const archiveKeys = new Map<string, string>();
+    for (const document of page.items) {
+      if (document.kind !== "archive_record") continue;
+      const pathMatch = /^\.harness\/archive\/([^/]+)\/reports\/final\/summary-data\.json$/u
+        .exec(document.source_path);
+      const changeKey = typeof document.metadata.source_archive === "string"
+        ? document.metadata.source_archive
+        : pathMatch?.[1];
+      if (changeKey !== undefined) archiveKeys.set(document.document_id, changeKey);
+    }
+    const archives = await repository.getChangeArchivePackages(
+      actor.actorId,
+      projectId,
+      [...new Set(archiveKeys.values())]
+    );
+    const archivesByKey = new Map(archives.map((archive) => [archive.changeKey, archive]));
+    const items = page.items.map((document) => {
+      const changeKey = archiveKeys.get(document.document_id);
+      const archive = changeKey === undefined ? undefined : archivesByKey.get(changeKey);
+      if (changeKey === undefined || archive === undefined) return document;
+      return {
+        ...document,
+        metadata: {
+          ...document.metadata,
+          source_archive: changeKey,
+          archive_id: archive.archiveId,
+          archive_status: archive.archiveStatus,
+          knowledge_status: archive.knowledgeStatus,
+          package_sha256: archive.packageSha256,
+          manifest_sha256: archive.manifestSha256,
+          archive_uploaded_at: archive.createdAt,
+          archive_updated_at: archive.updatedAt
+        }
+      };
+    });
+    const nextOffset = offset + items.length;
     reply.header("X-Request-Id", requestId);
     return {
-      items: await semanticStore.listByKinds(projectId, ["archive_record"]),
+      items,
+      total: page.total,
+      next_cursor: nextOffset < page.total
+        ? Buffer.from(String(nextOffset)).toString("base64url")
+        : null,
       request_id: requestId
     };
   });
@@ -2551,6 +2891,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     const { actor, requestId } = await authenticated(request, repository);
     const { projectId } = request.params as { projectId: string };
     await repository.getProject(actor.actorId, projectId);
+    await ensureSemanticIndexCurrent(actor.actorId, projectId);
     const query = request.query as Record<string, string | undefined>;
     const focusDocumentId = query.focus_document_id?.trim() || undefined;
     const graph = await semanticStore.graph(projectId, focusDocumentId);
@@ -2573,10 +2914,21 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
       throw new ServerDomainError(400, "VALIDATION_FAILED", "q is required");
     }
     const projectId = query.project_id;
+    let items;
     if (projectId !== undefined) {
       await repository.getProject(actor.actorId, projectId);
+      await ensureSemanticIndexCurrent(actor.actorId, projectId);
+      items = await semanticStore.search(q, projectId);
+    } else {
+      const accessible = await accessibleSemanticProjectIds(actor.actorId);
+      // 全局搜索只需一次带 ACL allowlist 的存储查询。旧 schema 在后台
+      // 按固定并发迁移，完成前不会把旧分类文档混入搜索结果。
+      scheduleSemanticIndexesCurrent(actor.actorId, accessible);
+      items = await semanticStore.search(q, accessible, {
+        limit: 100,
+        currentSchemaOnly: true
+      });
     }
-    const items = await semanticStore.search(q, projectId);
     reply.header("X-Request-Id", requestId);
     return {
       items: items.map((document) => ({ document, project_id: document.project_id })),
@@ -2613,6 +2965,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     const { actor, requestId } = await authenticated(request, repository, "knowledge:read");
     const { projectId } = request.params as { projectId: string };
     await repository.getProject(actor.actorId, projectId);
+    await ensureSemanticIndexCurrent(actor.actorId, projectId);
     const query = request.query as Record<string, string | undefined>;
     const q = query.q?.trim() ?? "";
     if (q.length === 0) {
@@ -2631,22 +2984,24 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     const { projectId } = request.params as { projectId: string };
     await repository.getProject(actor.actorId, projectId);
     const body = projectWorkflowBindingSchema.parse(request.body);
-    const result = await mutation(request, repository, actor, requestId, async () => {
-      const binding = registry.bindProjectWorkflowFamily({
-        projectId,
-        familySlug: body.family_slug,
-        profile: body.profile,
-        version: body.version ?? null,
-        revision: body.revision
-      });
-      await registry.persist();
-      await writeAudit(repository, {
-        actorId: actor.actorId, projectId, action: "project.workflow.bound",
-        targetId: projectId, requestId,
-        details: { family_slug: binding.family_slug, profile: binding.profile, revision: binding.revision }
-      });
-      return { statusCode: 200, body: binding };
-    });
+    const result = await registry.withRegistryMutation(() =>
+      mutation(request, repository, actor, requestId, async () => {
+        const binding = registry.bindProjectWorkflowFamily({
+          projectId,
+          familySlug: body.family_slug,
+          profile: body.profile,
+          version: body.version ?? null,
+          revision: body.revision
+        });
+        await registry.persist();
+        await writeAudit(repository, {
+          actorId: actor.actorId, projectId, action: "project.workflow.bound",
+          targetId: projectId, requestId,
+          details: { family_slug: binding.family_slug, profile: binding.profile, revision: binding.revision }
+        });
+        return { statusCode: 200, body: binding };
+      })
+    );
     return send(reply, requestId, result);
   });
 
@@ -2715,17 +3070,23 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   app.post("/api/v1/workflow-families/:slug/publish", async (request, reply) => {
     const { actor, requestId } = await ownerAuthenticated(request, repository, ownerActorId);
     const { slug } = request.params as { slug: string };
-    const result = await mutation(request, repository, actor, requestId, async () => {
-      const body = publishWorkflowFamilyRequestSchema.parse(request.body);
-      const version = await registry.publishWorkflowFamily(slug, {
-        version: body.version, releaseNote: body.releaseNote ?? null, actorId: actor.actorId
-      });
-      await writeAudit(repository, {
-        actorId: actor.actorId, projectId: null, action: "workflow.family.published",
-        targetId: slug, requestId, details: { slug, version: version.version }
-      });
-      return { statusCode: 200, body: version };
-    });
+    const body = publishWorkflowFamilyRequestSchema.parse(request.body);
+    const result = await registry.withFeatureMutation(() =>
+      transactionalMutation(request, repository, actor, requestId, async (tx) => {
+        const published = await registry.publishWorkflowFamily(slug, {
+          version: body.version,
+          releaseNote: body.releaseNote ?? null,
+          actorId: actor.actorId,
+          tx
+        });
+        const version = registry.summarizeWorkflowFamilyVersion(published);
+        await writeAudit(tx, {
+          actorId: actor.actorId, projectId: null, action: "workflow.family.published",
+          targetId: slug, requestId, details: { slug, version: version.version }
+        });
+        return { statusCode: 200, body: version };
+      })
+    );
     return send(reply, requestId, result);
   });
 
@@ -2741,7 +3102,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   app.get("/api/v1/workflow-families/:slug/versions", async (request, reply) => {
     const { requestId } = await authenticated(request, repository);
     const { slug } = request.params as { slug: string };
-    const versions = registry.listWorkflowFamilyVersions(slug);
+    const versions = registry.listWorkflowFamilyVersionSummaries(slug);
     reply.header("X-Request-Id", requestId);
     return { items: versions, request_id: requestId };
   });
@@ -3532,7 +3893,12 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     return send(reply, requestId, result);
   });
 
-  registerSemanticMcpRoutes(app, { repository, semanticStore });
+  registerSemanticMcpRoutes(app, {
+    repository,
+    semanticStore,
+    ensureProjectCurrent: ensureSemanticIndexCurrent,
+    scheduleProjectsCurrent: scheduleSemanticIndexesCurrent
+  });
 
   registerRunRoutes(app, { repository, runStore, authenticated });
 

@@ -9,7 +9,11 @@ export interface SemanticMcpDeps {
   semanticStore: SemanticStore;
   repository: ServerRepository;
   actorId: string;
+  ensureProjectCurrent?: (projectId: string) => Promise<void>;
+  scheduleProjectsCurrent?: (projectIds: readonly string[]) => void;
 }
+
+const KNOWLEDGE_KINDS = ["knowledge_entry", "knowledge_markdown"] as const;
 
 function textResult(payload: unknown): { content: Array<{ type: "text"; text: string }> } {
   return {
@@ -70,10 +74,28 @@ export function createSemanticMcpServer(deps: SemanticMcpDeps): McpServer {
     },
     async ({ query, project, project_id, status, type, limit }) => {
       const projectId = project ?? project_id;
+      let documents: SemanticDocument[];
       if (projectId !== undefined) {
         await assertProjectAccess(deps.repository, deps.actorId, projectId);
+        await deps.ensureProjectCurrent?.(projectId);
+        documents = await deps.semanticStore.search(query, projectId, {
+          limit: 100,
+          kinds: KNOWLEDGE_KINDS
+        });
+      } else {
+        const projects = await listAccessibleProjects(deps.repository, deps.actorId);
+        const projectIds = projects.map((item) => item.projectId);
+        deps.scheduleProjectsCurrent?.(projectIds);
+        documents = await deps.semanticStore.search(
+          query,
+          projectIds,
+          {
+            limit: 100,
+            currentSchemaOnly: true,
+            kinds: KNOWLEDGE_KINDS
+          }
+        );
       }
-      const documents = await deps.semanticStore.search(query, projectId);
       const filtered = documents.filter((document) => {
         if (status !== undefined && document.metadata.status !== status) return false;
         if (type !== undefined && documentType(document) !== type) return false;
@@ -98,6 +120,7 @@ export function createSemanticMcpServer(deps: SemanticMcpDeps): McpServer {
     async ({ project, project_id }) => {
       const projectId = requireProjectId(project, project_id);
       await assertProjectAccess(deps.repository, deps.actorId, projectId);
+      await deps.ensureProjectCurrent?.(projectId);
       const overview = await deps.semanticStore.overview(projectId);
       return textResult(overview);
     }
@@ -112,6 +135,7 @@ export function createSemanticMcpServer(deps: SemanticMcpDeps): McpServer {
     async ({ id }) => {
       const projects = await listAccessibleProjects(deps.repository, deps.actorId);
       for (const project of projects) {
+        await deps.ensureProjectCurrent?.(project.projectId);
         const documents = await deps.semanticStore.listByKinds(project.projectId, [
           "knowledge_entry",
           "knowledge_markdown"
@@ -140,9 +164,13 @@ export function createSemanticMcpServer(deps: SemanticMcpDeps): McpServer {
     async ({ project, project_id, limit }) => {
       const projectId = requireProjectId(project, project_id);
       await assertProjectAccess(deps.repository, deps.actorId, projectId);
-      const items = await deps.semanticStore.listByKinds(projectId, ["archive_record"]);
-      const capped = items.slice(0, limit ?? 20);
-      return textResult({ items: capped });
+      await deps.ensureProjectCurrent?.(projectId);
+      const page = await deps.semanticStore.listByKindsPage(
+        projectId,
+        ["archive_record"],
+        { limit: limit ?? 20, offset: 0, order: "desc" }
+      );
+      return textResult({ items: page.items });
     }
   );
 

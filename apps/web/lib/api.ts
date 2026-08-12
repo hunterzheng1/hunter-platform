@@ -1,5 +1,7 @@
 import {
   canonicalJson,
+  type AgentTool,
+  type AgentToolMutation,
   type AiProviderApiFormat,
   type AiProviderConfig,
   type AiProviderWithKeySet,
@@ -33,8 +35,13 @@ import {
   type SensitiveReviewSubmission,
   type WorkflowFamily,
   type WorkflowFamilyDraftState,
+  type WorkflowFamilyDraftSummary,
   type WorkflowFamilyMutation,
-  type WorkflowFamilyVersion,
+  type WorkflowFamilySource,
+  type WorkflowFamilySourceImportResult,
+  type WorkflowFamilySourceInspection,
+  type ImportWorkflowFamilySourceRequest,
+  type WorkflowFamilyVersionSummary,
   type SemanticDocument,
   type SemanticEdge,
   type SemanticOverview
@@ -356,15 +363,22 @@ export interface HunterApi {
   mergeTag?(tagId: string, targetTagId: string, revision: number): Promise<RegistryTag>;
   bindSkillTag?(skillSlug: string, tagId: string, remove?: boolean): Promise<RegistrySkillDetail>;
   listWorkflowFamilies?(): Promise<WorkflowFamily[]>;
+  listAgentTools?(): Promise<AgentTool[]>;
+  createAgentTool?(input: AgentToolMutation): Promise<AgentTool>;
+  getAgentTool?(slug: string): Promise<AgentTool>;
   createWorkflowFamily?(input: WorkflowFamilyMutation): Promise<WorkflowFamily>;
+  inspectWorkflowFamilySource?(source: WorkflowFamilySource): Promise<WorkflowFamilySourceInspection>;
+  importWorkflowFamilySource?(
+    input: Omit<ImportWorkflowFamilySourceRequest, "schema_version">
+  ): Promise<WorkflowFamilySourceImportResult>;
   getWorkflowFamily?(slug: string): Promise<WorkflowFamily>;
   uploadWorkflowFamilyProfileDraft?(slug: string, profile: string, form: FormData): Promise<WorkflowFamilyDraftState>;
-  getWorkflowFamilyDraft?(slug: string): Promise<WorkflowFamilyDraftState>;
+  getWorkflowFamilyDraft?(slug: string): Promise<WorkflowFamilyDraftSummary>;
   discardWorkflowFamilyDraft?(slug: string, revision: number): Promise<{ slug: string; discarded: boolean }>;
   runWorkflowFamilyDraftChecks?(slug: string): Promise<SkillCheckResult>;
-  publishWorkflowFamilyDraft?(slug: string, req: PublishWorkflowFamilyRequest): Promise<WorkflowFamilyVersion>;
+  publishWorkflowFamilyDraft?(slug: string, req: PublishWorkflowFamilyRequest): Promise<WorkflowFamilyVersionSummary>;
   diffWorkflowFamilyDraft?(slug: string, profile?: string): Promise<SkillDiffFile[]>;
-  listWorkflowFamilyVersions?(slug: string): Promise<WorkflowFamilyVersion[]>;
+  listWorkflowFamilyVersions?(slug: string): Promise<WorkflowFamilyVersionSummary[]>;
   syncWorkflowFamily?(slug: string): Promise<{ updated: boolean; version?: string }>;
   getChangeArchive?(projectId: string, changeKey: string): Promise<ChangeArchiveSummary>;
   getChangeArchiveContent?(projectId: string, changeKey: string, path: string): Promise<{ content: string }>;
@@ -377,7 +391,11 @@ export interface HunterApi {
     options?: { limit?: number; cursor?: string | null; includeBody?: boolean }
   ): Promise<{ items: SemanticDocument[]; total: number; next_cursor: string | null }>;
   listProjectSemanticRules?(projectId: string): Promise<SemanticDocument[]>;
-  listProjectSemanticChanges?(projectId: string): Promise<SemanticDocument[]>;
+  listProjectSemanticArchitecture?(projectId: string): Promise<SemanticDocument[]>;
+  listProjectSemanticChanges?(
+    projectId: string,
+    options?: { limit?: number; cursor?: string | null }
+  ): Promise<{ items: SemanticDocument[]; total: number; next_cursor: string | null }>;
   getProjectSemanticGraph?(projectId: string, focusDocumentId?: string): Promise<ProjectSemanticGraph>;
   searchSemanticDocuments?(query: string, projectId?: string): Promise<Array<{ document: SemanticDocument; project_id: string }>>;
   listKnowledgeEntries?(projectId: string, options?: {
@@ -902,8 +920,36 @@ export class HttpHunterApi implements HunterApi {
     return (await this.request<{ items: WorkflowFamily[] }>("GET", "/api/v1/workflow-families")).items;
   }
 
+  async listAgentTools(): Promise<AgentTool[]> {
+    return (await this.request<{ items: AgentTool[] }>("GET", "/api/v1/agent-tools")).items;
+  }
+
+  async createAgentTool(input: AgentToolMutation): Promise<AgentTool> {
+    return this.request("POST", "/api/v1/agent-tools", { schema_version: 1, ...input });
+  }
+
+  async getAgentTool(slug: string): Promise<AgentTool> {
+    return this.request("GET", "/api/v1/agent-tools/" + encodeURIComponent(slug));
+  }
+
   async createWorkflowFamily(input: WorkflowFamilyMutation): Promise<WorkflowFamily> {
     return this.request("POST", "/api/v1/workflow-families", { schema_version: 1, ...input });
+  }
+
+  async inspectWorkflowFamilySource(source: WorkflowFamilySource): Promise<WorkflowFamilySourceInspection> {
+    return this.request("POST", "/api/v1/workflow-families/import/inspect", {
+      schema_version: 1,
+      source
+    });
+  }
+
+  async importWorkflowFamilySource(
+    input: Omit<ImportWorkflowFamilySourceRequest, "schema_version">
+  ): Promise<WorkflowFamilySourceImportResult> {
+    return this.request("POST", "/api/v1/workflow-families/import", {
+      schema_version: 1,
+      ...input
+    });
   }
 
   async getWorkflowFamily(slug: string): Promise<WorkflowFamily> {
@@ -917,7 +963,7 @@ export class HttpHunterApi implements HunterApi {
     );
   }
 
-  async getWorkflowFamilyDraft(slug: string): Promise<WorkflowFamilyDraftState> {
+  async getWorkflowFamilyDraft(slug: string): Promise<WorkflowFamilyDraftSummary> {
     return this.request("GET", "/api/v1/workflow-families/" + encodeURIComponent(slug) + "/draft");
   }
 
@@ -929,7 +975,7 @@ export class HttpHunterApi implements HunterApi {
     return this.request("POST", "/api/v1/workflow-families/" + encodeURIComponent(slug) + "/draft/checks", {});
   }
 
-  async publishWorkflowFamilyDraft(slug: string, req: PublishWorkflowFamilyRequest): Promise<WorkflowFamilyVersion> {
+  async publishWorkflowFamilyDraft(slug: string, req: PublishWorkflowFamilyRequest): Promise<WorkflowFamilyVersionSummary> {
     return this.request("POST", "/api/v1/workflow-families/" + encodeURIComponent(slug) + "/publish", req);
   }
 
@@ -941,8 +987,8 @@ export class HttpHunterApi implements HunterApi {
     return result.items;
   }
 
-  async listWorkflowFamilyVersions(slug: string): Promise<WorkflowFamilyVersion[]> {
-    const result = await this.request<{ items: WorkflowFamilyVersion[] }>(
+  async listWorkflowFamilyVersions(slug: string): Promise<WorkflowFamilyVersionSummary[]> {
+    const result = await this.request<{ items: WorkflowFamilyVersionSummary[] }>(
       "GET", "/api/v1/workflow-families/" + encodeURIComponent(slug) + "/versions"
     );
     return result.items;
@@ -1035,11 +1081,30 @@ export class HttpHunterApi implements HunterApi {
     return result.items;
   }
 
-  async listProjectSemanticChanges(projectId: string): Promise<SemanticDocument[]> {
+  async listProjectSemanticArchitecture(projectId: string): Promise<SemanticDocument[]> {
     const result = await this.request<{ items: SemanticDocument[] }>(
-      "GET", "/api/v1/projects/" + encodeURIComponent(projectId) + "/semantic/changes"
+      "GET", "/api/v1/projects/" + encodeURIComponent(projectId) + "/semantic/architecture"
     );
     return result.items;
+  }
+
+  async listProjectSemanticChanges(
+    projectId: string,
+    options: { limit?: number; cursor?: string | null } = {}
+  ): Promise<{ items: SemanticDocument[]; total: number; next_cursor: string | null }> {
+    const query = new URLSearchParams({ limit: String(options.limit ?? 50) });
+    if (options.cursor !== undefined && options.cursor !== null) {
+      query.set("cursor", options.cursor);
+    }
+    const result = await this.request<{
+      items: SemanticDocument[];
+      total: number;
+      next_cursor: string | null;
+    }>(
+      "GET", "/api/v1/projects/" + encodeURIComponent(projectId) +
+        "/semantic/changes?" + query.toString()
+    );
+    return result;
   }
 
   async getProjectSemanticGraph(projectId: string, focusDocumentId?: string): Promise<ProjectSemanticGraph> {

@@ -1,4 +1,6 @@
 import type {
+  AgentTool,
+  AgentToolMutation,
   AiProviderConfig,
   AiProviderWithKeySet,
   AiQuotaUsage,
@@ -15,10 +17,15 @@ import type {
   RegistryTag,
   SkillCatalogOrder,
   UpdateSkillCatalogOrderRequest,
+  WorkflowFamilySource,
+  WorkflowFamilySourceImportResult,
+  WorkflowFamilySourceInspection,
+  ImportWorkflowFamilySourceRequest,
   WorkflowFamily,
   WorkflowFamilyDraftState,
+  WorkflowFamilyDraftSummary,
   WorkflowFamilyMutation,
-  WorkflowFamilyVersion,
+  WorkflowFamilyVersionSummary,
   SkillCheckItem,
   SkillCheckResult,
   SkillDiffFile,
@@ -521,7 +528,81 @@ const MOCK_WORKFLOW_FAMILIES: WorkflowFamily[] = [{
   updated_at: "2026-06-20T00:00:00Z"
 }];
 
-const MOCK_HARNESS_VERSIONS: WorkflowFamilyVersion[] = [
+const MOCK_AGENT_TOOLS: AgentTool[] = [
+  {
+    tool_id: "atl_pi_coding_agent",
+    slug: "pi-coding-agent",
+    displayName: "Pi Coding Agent",
+    description: "面向终端的编码 Agent 运行时；保留 monorepo 中 coding-agent 包的精确来源路径。",
+    category: "runtime",
+    status: "active",
+    source: {
+      type: "github",
+      ref: "https://github.com/earendil-works/pi/tree/main/packages/coding-agent"
+    },
+    homepage: "https://github.com/earendil-works/pi/tree/main/packages/coding-agent",
+    packageName: null,
+    installCommand: null,
+    tags: ["coding-agent", "terminal"],
+    relatedWorkflowFamilies: [],
+    revision: 1,
+    created_at: "2026-08-01T09:00:00Z",
+    updated_at: "2026-08-01T09:00:00Z"
+  },
+  {
+    tool_id: "atl_hunter_harness",
+    slug: "hunter-harness",
+    displayName: "Hunter Harness",
+    description: "用于规范、执行和治理 Agent 开发工作流的 harness 与 CLI。",
+    category: "harness",
+    status: "active",
+    source: { type: "github", ref: "https://github.com/hunterzheng1/Hunter-Harness" },
+    homepage: "https://github.com/hunterzheng1/Hunter-Harness",
+    packageName: "@hunter-harness/cli",
+    installCommand: "npx @hunter-harness/cli",
+    tags: ["harness", "workflow"],
+    relatedWorkflowFamilies: ["harness"],
+    revision: 1,
+    created_at: "2026-08-01T08:00:00Z",
+    updated_at: "2026-08-01T08:00:00Z"
+  },
+  {
+    tool_id: "atl_herdr",
+    slug: "herdr",
+    displayName: "Herdr",
+    description: "用于组织和编排多个编码 Agent 的开发工具。",
+    category: "orchestrator",
+    status: "experimental",
+    source: { type: "github", ref: "https://github.com/herdrdev/herdr" },
+    homepage: "https://github.com/herdrdev/herdr",
+    packageName: null,
+    installCommand: null,
+    tags: ["multi-agent", "orchestration"],
+    relatedWorkflowFamilies: [],
+    revision: 1,
+    created_at: "2026-07-31T08:00:00Z",
+    updated_at: "2026-07-31T08:00:00Z"
+  },
+  {
+    tool_id: "atl_orca",
+    slug: "orca",
+    displayName: "Orca",
+    description: "围绕仓库、工作树和 Agent 会话构建的开发环境。",
+    category: "ade",
+    status: "experimental",
+    source: { type: "github", ref: "https://github.com/stablyai/orca" },
+    homepage: "https://github.com/stablyai/orca",
+    packageName: null,
+    installCommand: null,
+    tags: ["ade", "worktree"],
+    relatedWorkflowFamilies: [],
+    revision: 1,
+    created_at: "2026-07-30T08:00:00Z",
+    updated_at: "2026-07-30T08:00:00Z"
+  }
+];
+
+const MOCK_HARNESS_VERSIONS: WorkflowFamilyVersionSummary[] = [
   { version: "0.2.51", changeNote: "events-sync 断点续传与 ACK 游标修复", created_at: "2026-08-01T09:20:00Z" },
   { version: "0.2.50", changeNote: "archive 阶段产出归一化报告 normalizedReport", created_at: "2026-07-25T15:02:00Z" },
   { version: "0.2.49", changeNote: "新增 java overlay 的 package / apidoc 条件阶段", created_at: "2026-07-18T11:40:00Z" }
@@ -532,7 +613,7 @@ const MOCK_HARNESS_VERSIONS: WorkflowFamilyVersion[] = [
     profile: "general",
     bundle_manifest: { schema_version: 1, profile: "general", files: [{ path: "workflow.yaml", sha256: "sha256:" + "a".repeat(64) }] },
     artifact_id: `wfb_harness_${entry.version.replaceAll(".", "_")}`,
-    sourceFiles: []
+    file_count: 1
   }],
   artifacts: [],
   changeNote: entry.changeNote,
@@ -878,6 +959,13 @@ export class MockApiClient implements HunterApi {
 
   async listTags(): Promise<RegistryTag[]> { return delay(clone(MOCK_TAGS)); }
   async listWorkflowFamilies(): Promise<WorkflowFamily[]> { return delay(clone(MOCK_WORKFLOW_FAMILIES)); }
+  async listAgentTools(): Promise<AgentTool[]> { return delay(clone(MOCK_AGENT_TOOLS)); }
+  async getAgentTool(slug: string): Promise<AgentTool> {
+    const tool = MOCK_AGENT_TOOLS.find((item) => item.slug === slug);
+    if (tool === undefined) throw new ApiClientError(404, "AGENT_TOOL_NOT_FOUND", "Demo agent tool not found.");
+    return delay(clone(tool));
+  }
+  async createAgentTool(input: AgentToolMutation): Promise<AgentTool> { void input; return demoReadOnly(); }
   async listSkillArtifacts() { return delay([]); }
   async downloadSkillArtifact(): Promise<{ blob: Blob; hash: string; filename: string }> { return demoReadOnly(); }
   async createTag(): Promise<RegistryTag> { return demoReadOnly(); }
@@ -885,13 +973,40 @@ export class MockApiClient implements HunterApi {
   async mergeTag(): Promise<RegistryTag> { return demoReadOnly(); }
   async bindSkillTag(): Promise<RegistrySkillDetail> { return demoReadOnly(); }
   async createWorkflowFamily(input: WorkflowFamilyMutation): Promise<WorkflowFamily> { void input; return demoReadOnly(); }
+  async inspectWorkflowFamilySource(source: WorkflowFamilySource): Promise<WorkflowFamilySourceInspection> {
+    const isNpm = source.type === "npm";
+    return delay({
+      source: clone(source),
+      source_digest: "sha256:" + "d".repeat(64),
+      remote_version: isNpm ? "0.2.64" : null,
+      manifest_detected: true,
+      suggested: {
+        slug: isNpm ? "harness" : "example-workflow",
+        displayName: isNpm ? "Harness" : "Example workflow",
+        description: "Demo preflight result. No remote request was made.",
+        tags: isNpm ? ["harness"] : []
+      },
+      profiles: [
+        { profile: "general", file_count: 3 },
+        { profile: "java", file_count: 2 }
+      ],
+      warnings: [],
+      ready: true
+    });
+  }
+  async importWorkflowFamilySource(
+    input: Omit<ImportWorkflowFamilySourceRequest, "schema_version">
+  ): Promise<WorkflowFamilySourceImportResult> {
+    void input;
+    return demoReadOnly();
+  }
   async getWorkflowFamily(slug: string): Promise<WorkflowFamily> {
     const family = MOCK_WORKFLOW_FAMILIES.find((item) => item.slug === slug);
     if (family === undefined) throw new ApiClientError(404, "WORKFLOW_FAMILY_NOT_FOUND", "Demo workflow family not found.");
     return delay(clone(family));
   }
   async uploadWorkflowFamilyProfileDraft(): Promise<WorkflowFamilyDraftState> { return demoReadOnly(); }
-  async getWorkflowFamilyDraft(slug: string): Promise<WorkflowFamilyDraftState> {
+  async getWorkflowFamilyDraft(slug: string): Promise<WorkflowFamilyDraftSummary> {
     const family = MOCK_WORKFLOW_FAMILIES.find((item) => item.slug === slug);
     if (family === undefined) throw new ApiClientError(404, "DRAFT_NOT_FOUND", "Demo workflow family draft not found.");
     return delay({
@@ -913,16 +1028,16 @@ export class MockApiClient implements HunterApi {
       { id: "WF_BUNDLE_MANIFEST", label: "Bundle manifest", status: "green", message: "ok", filePath: null, fixable: false }
     ]));
   }
-  async publishWorkflowFamilyDraft(): Promise<WorkflowFamilyVersion> { return demoReadOnly(); }
+  async publishWorkflowFamilyDraft(): Promise<WorkflowFamilyVersionSummary> { return demoReadOnly(); }
   async diffWorkflowFamilyDraft(): Promise<SkillDiffFile[]> { return []; }
-  async listWorkflowFamilyVersions(slug: string): Promise<WorkflowFamilyVersion[]> {
+  async listWorkflowFamilyVersions(slug: string): Promise<WorkflowFamilyVersionSummary[]> {
     const family = MOCK_WORKFLOW_FAMILIES.find((item) => item.slug === slug);
     if (family === undefined || family.latest_version === null) return delay([]);
     if (slug === "harness") return delay(clone(MOCK_HARNESS_VERSIONS));
     return delay([{
       family_slug: family.slug,
       version: family.latest_version,
-      profiles: [{ profile: "general", bundle_manifest: { schema_version: 1, profile: "general", files: [{ path: "workflow.yaml", sha256: "sha256:" + "a".repeat(64) }] }, artifact_id: "wfb_demo_general", sourceFiles: [] }],
+      profiles: [{ profile: "general", bundle_manifest: { schema_version: 1, profile: "general", files: [{ path: "workflow.yaml", sha256: "sha256:" + "a".repeat(64) }] }, artifact_id: "wfb_demo_general", file_count: 1 }],
       artifacts: [],
       changeNote: "Demo release",
       created_at: "2026-06-20T00:00:00Z"
@@ -1015,7 +1130,7 @@ export class MockApiClient implements HunterApi {
     return delay({
       project_id: projectId,
       artifact_id: "art_demo",
-      counts: { documents: knowledge + 4, knowledge, rules: 2, changes: 3, agent_instructions: 1, edges: 9 }
+      counts: { documents: knowledge + 5, knowledge, rules: 2, changes: 3, architecture: 1, agent_instructions: 1, edges: 9 }
     });
   }
 
@@ -1053,8 +1168,37 @@ export class MockApiClient implements HunterApi {
     ]);
   }
 
-  async listProjectSemanticChanges(projectId: string): Promise<SemanticDocument[]> {
+  async listProjectSemanticArchitecture(projectId: string): Promise<SemanticDocument[]> {
     return delay([
+      mockSemanticDoc(
+        projectId,
+        "architecture_document",
+        "项目架构总览",
+        "# 项目架构总览\n\n项目采用分层模块结构，核心模块通过稳定接口协作。",
+        ".harness/codebase/map-summary.md",
+        { map_role: "summary" }
+      ),
+      mockSemanticDoc(
+        projectId,
+        "architecture_document",
+        "项目架构地图元数据",
+        "# 项目架构地图元数据\n\n- 生成时间：2026-08-12T08:00:00.000Z\n- 对应提交：abc1234",
+        ".harness/codebase/map-manifest.json",
+        {
+          map_role: "manifest",
+          generated_at: "2026-08-12T08:00:00.000Z",
+          last_mapped_commit: "abc1234",
+          warnings: []
+        }
+      )
+    ]);
+  }
+
+  async listProjectSemanticChanges(
+    projectId: string,
+    options: { limit?: number; cursor?: string | null } = {}
+  ): Promise<{ items: SemanticDocument[]; total: number; next_cursor: string | null }> {
+    const all = [
       mockSemanticDoc(
         projectId,
         "archive_record",
@@ -1110,13 +1254,24 @@ export class MockApiClient implements HunterApi {
         ".harness/archive/2026-07-17-knowledge-closeout/reports/final/summary-data.json",
         { status: "archived" }
       )
-    ]);
+    ];
+    const limit = options.limit ?? 50;
+    const offset = options.cursor === undefined || options.cursor === null
+      ? 0
+      : Number.parseInt(options.cursor, 10);
+    const items = all.slice(offset, offset + limit);
+    const nextOffset = offset + items.length;
+    return delay({
+      items,
+      total: all.length,
+      next_cursor: nextOffset < all.length ? String(nextOffset) : null
+    });
   }
 
   async getProjectSemanticGraph(projectId: string, focusDocumentId?: string): Promise<ProjectSemanticGraph> {
     const knowledge = (await this.listProjectSemanticKnowledge(projectId)).items.slice(0, 12);
     const rules = await this.listProjectSemanticRules(projectId);
-    const changes = (await this.listProjectSemanticChanges(projectId)).slice(0, 2);
+    const changes = (await this.listProjectSemanticChanges(projectId)).items.slice(0, 2);
     const nodes = [...knowledge, ...rules, ...changes];
     const indexed = mockProjectKnowledge(projectId).length + 2 + 3;
     const edge = (

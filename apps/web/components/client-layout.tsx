@@ -14,7 +14,7 @@ import { ToastProvider } from "./ui/Toast";
 interface NavItem {
   href: string;
   icon: IconName;
-  labelKey: "overview" | "projects" | "knowledge" | "runs" | "workflows" | "skills" | "aiConfig" | "publishing";
+  labelKey: "overview" | "projects" | "knowledge" | "runs" | "workflows" | "skills" | "agentTools" | "aiConfig" | "publishing";
   ownerOnly?: boolean;
 }
 
@@ -35,6 +35,7 @@ const NAV_GROUPS: NavGroup[] = [
     sectionKey: "sectionRegistry",
     items: [
       { href: "/skills", icon: "sparkles", labelKey: "skills" },
+      { href: "/agent-tools", icon: "agent", labelKey: "agentTools" },
       { href: "/knowledge", icon: "brain", labelKey: "knowledge" }
     ]
   },

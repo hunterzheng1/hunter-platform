@@ -3,6 +3,8 @@ import { z } from "zod";
 export const semanticDocumentKindSchema = z.enum([
   "knowledge_entry",
   "knowledge_markdown",
+  "change_document",
+  "architecture_document",
   "rule",
   "archive_record",
   "agent_instruction"
@@ -60,6 +62,7 @@ export const semanticOverviewSchema = z.object({
     knowledge: z.number().int().nonnegative(),
     rules: z.number().int().nonnegative(),
     changes: z.number().int().nonnegative(),
+    architecture: z.number().int().nonnegative(),
     agent_instructions: z.number().int().nonnegative(),
     edges: z.number().int().nonnegative()
   }).strict()

@@ -1,7 +1,9 @@
 import { Buffer } from "node:buffer";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 
 import {
+  agentToolSchema,
   aiConfigStateSchema,
   aiProviderConfigSchema,
   canonicalJson,
@@ -11,13 +13,20 @@ import {
   registrySkillDetailSchema,
   registrySkillVersionSchema,
   registryProjectWorkflowBindingSchema,
+  registrySlugSchema,
+  sha256Schema,
   skillCatalogOrderSchema,
   registryTagSchema,
   skillUsageExampleSchema,
+  sourceFileSchema,
+  workflowBundleManifestSchema,
   workflowFamilyDraftStateSchema,
   workflowFamilySchema,
+  workflowFamilyVersionProfileSchema,
   workflowFamilyVersionSchema,
   SKILL_ERROR_CODE,
+  type AgentTool,
+  type AgentToolMutation,
   type AiConfigState,
   type AiProviderApiFormat,
   type AiProviderConfig,
@@ -48,8 +57,14 @@ import {
   type SourceFile,
   type WorkflowFamily,
   type WorkflowFamilyDraftState,
+  type WorkflowFamilyDraftSummary,
+  type ImportWorkflowFamilySourceRequest,
   type WorkflowFamilyMutation,
-  type WorkflowFamilyVersion
+  type WorkflowFamilySource,
+  type WorkflowFamilySourceImportResult,
+  type WorkflowFamilySourceInspection,
+  type WorkflowFamilyVersion,
+  type WorkflowFamilyVersionSummary
 } from "@hunter-harness/contracts";
 import {
   AGENT_DESCRIPTORS,
@@ -70,6 +85,7 @@ import {
 } from "@hunter-harness/core";
 import AdmZip from "adm-zip";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { z } from "zod";
 
 import { ServerDomainError, type TransactionRepository } from "../repositories/interfaces.js";
 import type { ArtifactStorage } from "../storage/interface.js";
@@ -82,8 +98,22 @@ import {
   fetchExternalSnapshot,
   type ExternalFetcherDeps
 } from "../external/fetchers.js";
-import { WorkflowFamilyStore, type WorkflowFamilyState } from "./workflow-family-store.js";
-import { syncWorkflowFamilyFromSource as pullWorkflowFamilySource } from "./workflow-family-sync.js";
+import {
+  summarizeWorkflowFamilyVersion,
+  WorkflowFamilyStore,
+  type WorkflowFamilyState
+} from "./workflow-family-store.js";
+import {
+  commitPreparedWorkflowFamilyImport,
+  commitPreparedWorkflowFamilySync,
+  importWorkflowFamilyFromSource as importWorkflowSource,
+  inspectWorkflowFamilySource as inspectWorkflowSource,
+  prepareWorkflowFamilyImport,
+  prepareWorkflowFamilySync,
+  syncWorkflowFamilyFromSource as pullWorkflowFamilySource,
+  type PreparedWorkflowFamilyImport,
+  type PreparedWorkflowFamilySync
+} from "./workflow-family-sync.js";
 
 // applyFixSuggestion 可写白名单（examples/allowed_capabilities/instructions/description）；
 // tags/null 为展示型建议不可写 → 422。与 output-parser FIX_APPLIES_TO_WHITELIST（5 值含 tags，解析白名单）语义不同，不可合并。
@@ -317,6 +347,31 @@ function parseSuggestedStringArray(raw: unknown): string[] {
 
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
 
+const persistedWorkflowDraftProfileSchema = z.object({
+  profile: registrySlugSchema,
+  bundle_manifest: workflowBundleManifestSchema,
+  source_blob_sha256: sha256Schema,
+  source_file_count: z.number().int().nonnegative()
+}).strict();
+
+const persistedWorkflowFamilyDraftSchema = workflowFamilyDraftStateSchema
+  .omit({ profiles: true })
+  .extend({ profiles: z.array(persistedWorkflowDraftProfileSchema) })
+  .strict();
+
+const persistedWorkflowVersionProfileSchema = workflowFamilyVersionProfileSchema
+  .omit({ sourceFiles: true })
+  .extend({
+    source_blob_sha256: sha256Schema,
+    source_file_count: z.number().int().nonnegative()
+  })
+  .strict();
+
+const persistedWorkflowFamilyVersionSchema = workflowFamilyVersionSchema
+  .omit({ profiles: true })
+  .extend({ profiles: z.array(persistedWorkflowVersionProfileSchema).min(1) })
+  .strict();
+
 // YAML round-trip 重写 entry frontmatter（用于 applyFixSuggestion 改 description 等字段）。
 function rewriteFrontmatter(content: string, mutate: (fm: Record<string, unknown>) => void): string {
   const match = FRONTMATTER_RE.exec(content);
@@ -329,6 +384,7 @@ function rewriteFrontmatter(content: string, mutate: (fm: Record<string, unknown
 }
 
 export class RegistryStore {
+  private readonly agentTools = new Map<string, AgentTool>();
   private readonly skills = new Map<string, SkillState>();
   private readonly proposals = new Map<string, ProposalState>();
   private readonly tags = new Map<string, RegistryTag>();
@@ -340,7 +396,11 @@ export class RegistryStore {
   private readonly publishingSlugs = new Set<string>();
   private readonly workflowFamilies = new Map<string, WorkflowFamilyState>();
   private readonly workflowFamilyDrafts = new Map<string, WorkflowFamilyDraftState>();
+  private readonly workflowSourceBlobCache = new WeakMap<object, string>();
   private readonly workflowFamilyStore: WorkflowFamilyStore;
+  private featureMutationTail: Promise<void> = Promise.resolve();
+  private readonly featureMutationLease = Symbol("registry-feature-mutation");
+  private readonly featureMutationContext = new AsyncLocalStorage<symbol>();
   private readonly externalSkills = new Map<string, ExternalSkill>();
   private skillCatalogOrder: SkillCatalogOrder = { items: [], revision: 0, updated_at: null };
   private compilerVersion = "1.0.0";
@@ -357,7 +417,7 @@ export class RegistryStore {
       storage: this.storage,
       families: this.workflowFamilies,
       drafts: this.workflowFamilyDrafts,
-      persist: () => this.persist(),
+      persist: (tx) => this.persist(tx),
       compilerVersion: () => this.compilerVersion
     });
   }
@@ -450,6 +510,120 @@ export class RegistryStore {
     return canonicalJson(accepted) === canonicalJson([...fingerprints].sort());
   }
 
+  private async storeWorkflowSourceBlob(
+    owner: object,
+    sourceFiles: SourceFile[]
+  ): Promise<string> {
+    const cached = this.workflowSourceBlobCache.get(owner);
+    if (cached !== undefined) return cached;
+    const bytes = Buffer.from(JSON.stringify(sourceFiles), "utf8");
+    const hash = sha256Bytes(bytes);
+    await this.storage.putBlob(hash, bytes);
+    this.workflowSourceBlobCache.set(owner, hash);
+    return hash;
+  }
+
+  private async loadWorkflowSourceBlob(
+    hash: string,
+    expectedCount: number
+  ): Promise<SourceFile[]> {
+    try {
+      const bytes = await this.storage.getBlob(hash);
+      if (sha256Bytes(bytes) !== hash) {
+        throw new Error("workflow source blob hash mismatch");
+      }
+      const parsed = z.array(sourceFileSchema).parse(
+        JSON.parse(Buffer.from(bytes).toString("utf8"))
+      );
+      if (parsed.length !== expectedCount) {
+        throw new Error("workflow source blob file count mismatch");
+      }
+      return parsed;
+    } catch (error) {
+      throw new ServerDomainError(
+        500,
+        "REGISTRY_SNAPSHOT_INVALID",
+        "registry snapshot references an invalid workflow source blob",
+        { hash, reason: error instanceof Error ? error.message : String(error) }
+      );
+    }
+  }
+
+  private async compactWorkflowDraft(
+    draft: WorkflowFamilyDraftState
+  ): Promise<z.infer<typeof persistedWorkflowFamilyDraftSchema>> {
+    return persistedWorkflowFamilyDraftSchema.parse({
+      ...draft,
+      profiles: await Promise.all(draft.profiles.map(async (profile) => {
+        const { sourceFiles, ...metadata } = profile;
+        return {
+          ...metadata,
+          source_blob_sha256: await this.storeWorkflowSourceBlob(profile, sourceFiles),
+          source_file_count: sourceFiles.length
+        };
+      }))
+    });
+  }
+
+  private async hydrateWorkflowDraft(
+    compact: z.infer<typeof persistedWorkflowFamilyDraftSchema>
+  ): Promise<WorkflowFamilyDraftState> {
+    const profiles = await Promise.all(compact.profiles.map(async (profile) => ({
+      profile: profile.profile,
+      bundle_manifest: profile.bundle_manifest,
+      sourceFiles: await this.loadWorkflowSourceBlob(
+        profile.source_blob_sha256,
+        profile.source_file_count
+      )
+    })));
+    const hydrated = workflowFamilyDraftStateSchema.parse({ ...compact, profiles });
+    compact.profiles.forEach((profile, index) => {
+      const hydratedProfile = hydrated.profiles[index];
+      if (hydratedProfile !== undefined) {
+        this.workflowSourceBlobCache.set(hydratedProfile, profile.source_blob_sha256);
+      }
+    });
+    return hydrated;
+  }
+
+  private async compactWorkflowVersion(
+    version: WorkflowFamilyVersion
+  ): Promise<z.infer<typeof persistedWorkflowFamilyVersionSchema>> {
+    return persistedWorkflowFamilyVersionSchema.parse({
+      ...version,
+      profiles: await Promise.all(version.profiles.map(async (profile) => {
+        const { sourceFiles, ...metadata } = profile;
+        return {
+          ...metadata,
+          source_blob_sha256: await this.storeWorkflowSourceBlob(profile, sourceFiles),
+          source_file_count: sourceFiles.length
+        };
+      }))
+    });
+  }
+
+  private async hydrateWorkflowVersion(
+    compact: z.infer<typeof persistedWorkflowFamilyVersionSchema>
+  ): Promise<WorkflowFamilyVersion> {
+    const profiles = await Promise.all(compact.profiles.map(async (profile) => ({
+      profile: profile.profile,
+      bundle_manifest: profile.bundle_manifest,
+      artifact_id: profile.artifact_id,
+      sourceFiles: await this.loadWorkflowSourceBlob(
+        profile.source_blob_sha256,
+        profile.source_file_count
+      )
+    })));
+    const hydrated = workflowFamilyVersionSchema.parse({ ...compact, profiles });
+    compact.profiles.forEach((profile, index) => {
+      const hydratedProfile = hydrated.profiles[index];
+      if (hydratedProfile !== undefined) {
+        this.workflowSourceBlobCache.set(hydratedProfile, profile.source_blob_sha256);
+      }
+    });
+    return hydrated;
+  }
+
   async initialize(bundle?: BootstrapBundle): Promise<void> {
     const snapshot = await this.persistence?.load();
     if (snapshot !== null && snapshot !== undefined) {
@@ -464,6 +638,7 @@ export class RegistryStore {
         drafts?: Array<[string, unknown]>;
         workflowFamilies?: Array<[string, unknown]>;
         workflowFamilyDrafts?: Array<[string, unknown]>;
+        agentTools?: Array<[string, unknown]>;
         externalSkills?: Array<[string, unknown]>;
         skillCatalogOrder?: unknown;
         aiConfig?: unknown;
@@ -541,14 +716,30 @@ export class RegistryStore {
         if (!detail.success) continue;
         const versions: WorkflowFamilyVersion[] = [];
         for (const v of Array.isArray(state.versions) ? state.versions : []) {
-          const parsed = workflowFamilyVersionSchema.safeParse(v);
-          if (parsed.success) versions.push(parsed.data);
+          const legacy = workflowFamilyVersionSchema.safeParse(v);
+          if (legacy.success) {
+            versions.push(legacy.data);
+            continue;
+          }
+          const compact = persistedWorkflowFamilyVersionSchema.safeParse(v);
+          if (compact.success) versions.push(await this.hydrateWorkflowVersion(compact.data));
         }
         this.workflowFamilies.set(key, { detail: detail.data, versions });
       }
       for (const [key, raw] of value.workflowFamilyDrafts ?? []) {
-        const parsed = workflowFamilyDraftStateSchema.safeParse(raw);
-        if (parsed.success) this.workflowFamilyDrafts.set(key, parsed.data);
+        const legacy = workflowFamilyDraftStateSchema.safeParse(raw);
+        if (legacy.success) {
+          this.workflowFamilyDrafts.set(key, legacy.data);
+          continue;
+        }
+        const compact = persistedWorkflowFamilyDraftSchema.safeParse(raw);
+        if (compact.success) {
+          this.workflowFamilyDrafts.set(key, await this.hydrateWorkflowDraft(compact.data));
+        }
+      }
+      for (const [key, raw] of value.agentTools ?? []) {
+        const parsed = agentToolSchema.safeParse(raw);
+        if (parsed.success) this.agentTools.set(key, parsed.data);
       }
       for (const [key, raw] of value.externalSkills ?? []) {
         const parsed = externalSkillSchema.safeParse(raw);
@@ -606,8 +797,28 @@ export class RegistryStore {
   }
 
   async persist(tx?: TransactionRepository): Promise<void> {
-    await this.persistence?.save({
-      schemaVersion: 4,
+    // Every writer saves the same canonical snapshot. Wait behind any active
+    // feature transaction so a legacy writer cannot commit an uncommitted
+    // Agent Tool/workflow state, and serialize ordinary saves as well.
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      await this.withRegistryMutation(() => this.persist(tx));
+      return;
+    }
+    if (this.persistence === undefined) return;
+    const workflowFamilies = await Promise.all(
+      [...this.workflowFamilies.entries()].map(async ([slug, state]) => [slug, {
+        detail: state.detail,
+        versions: await Promise.all(state.versions.map((version) => this.compactWorkflowVersion(version)))
+      }] as const)
+    );
+    const workflowFamilyDrafts = await Promise.all(
+      [...this.workflowFamilyDrafts.entries()].map(async ([slug, draft]) => [
+        slug,
+        await this.compactWorkflowDraft(draft)
+      ] as const)
+    );
+    await this.persistence.save({
+      schemaVersion: 5,
       compilerVersion: this.compilerVersion,
       skills: [...this.skills.entries()],
       proposals: [],
@@ -615,14 +826,64 @@ export class RegistryStore {
       projectBindings: [...this.projectBindings.entries()],
       // 嵌套 drafts：[[slug, [[agent, DraftState]]]]（UT-031）
       drafts: [...this.drafts.entries()].map(([slug, m]) => [slug, [...m.entries()]] as [string, [RegistryAgent, DraftState][]]),
-      workflowFamilies: [...this.workflowFamilies.entries()].map(([slug, state]) => [slug, { detail: state.detail, versions: state.versions }]),
-      workflowFamilyDrafts: [...this.workflowFamilyDrafts.entries()],
+      workflowFamilies,
+      workflowFamilyDrafts,
+      agentTools: [...this.agentTools.entries()],
       externalSkills: [...this.externalSkills.entries()],
       skillCatalogOrder: this.skillCatalogOrder,
       aiConfig: this.aiConfig
       ,sensitiveReviews: [...this.sensitiveReviews.entries()]
       ,successfulPublishAttempts: [...this.successfulPublishAttempts.entries()]
     }, tx);
+  }
+
+  /** Serialize every registry writer before it can mutate shared in-memory state. */
+  async withRegistryMutation<T>(action: (lease: symbol) => Promise<T>): Promise<T> {
+    if (this.featureMutationContext.getStore() === this.featureMutationLease) {
+      return action(this.featureMutationLease);
+    }
+    const previous = this.featureMutationTail;
+    let release: (() => void) | undefined;
+    this.featureMutationTail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await this.featureMutationContext.run(
+        this.featureMutationLease,
+        () => action(this.featureMutationLease)
+      );
+    } finally {
+      release?.();
+    }
+  }
+
+  /**
+   * Feature transactions additionally roll their owned maps back when audit,
+   * idempotency, or durable snapshot persistence fails.
+   */
+  async withFeatureMutation<T>(action: (lease: symbol) => Promise<T>): Promise<T> {
+    if (this.featureMutationContext.getStore() === this.featureMutationLease) {
+      return action(this.featureMutationLease);
+    }
+    return this.withRegistryMutation(async () => {
+      const before = {
+        agentTools: structuredClone([...this.agentTools.entries()]),
+        workflowFamilies: structuredClone([...this.workflowFamilies.entries()]),
+        workflowFamilyDrafts: structuredClone([...this.workflowFamilyDrafts.entries()])
+      };
+      try {
+        return await action(this.featureMutationLease);
+      } catch (error) {
+        this.agentTools.clear();
+        for (const [slug, tool] of before.agentTools) this.agentTools.set(slug, tool);
+        this.workflowFamilies.clear();
+        for (const [slug, state] of before.workflowFamilies) this.workflowFamilies.set(slug, state);
+        this.workflowFamilyDrafts.clear();
+        for (const [slug, draft] of before.workflowFamilyDrafts) this.workflowFamilyDrafts.set(slug, draft);
+        throw error;
+      }
+    });
   }
 
   setExternalFetcherDeps(deps: ExternalFetcherDeps): void {
@@ -712,6 +973,9 @@ export class RegistryStore {
     draftVersion: string | null;
     catalogMeta?: SkillFrontmatter;
   }): Promise<DraftState> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.upsertDraft(input));
+    }
     const now = new Date().toISOString();
     const existing = this.getDraftState(input.slug, input.agent);
     const draft = draftStateSchema.parse({
@@ -735,6 +999,9 @@ export class RegistryStore {
   }
 
   async deleteDraft(slug: string, agent: RegistryAgent, revision: number): Promise<void> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.deleteDraft(slug, agent, revision));
+    }
     const draft = this.getDraftState(slug, agent);
     if (draft === undefined) {
       throw new ServerDomainError(404, SKILL_ERROR_CODE.DRAFT_NOT_FOUND, "skill draft not found", { slug, agent });
@@ -771,6 +1038,9 @@ export class RegistryStore {
     agent: RegistryAgent;
     review?: SensitiveReviewSubmission | undefined;
   }): Promise<DraftState> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.uploadDraft(input));
+    }
     const paths = input.files.map((f) => f.path);
     const hasWorkflow = paths.some((p) => /(^|\/)workflow\.ya?ml$/i.test(p));
     const hasSkillsDir = paths.some((p) => /(^|\/)skills\//i.test(p));
@@ -848,6 +1118,9 @@ export class RegistryStore {
   }
 
   async runChecks(input: { slug: string; agent: RegistryAgent; checkedAt: string }): Promise<SkillCheckResult> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.runChecks(input));
+    }
     const draft = this.getDraftState(input.slug, input.agent);
     if (draft === undefined) {
       throw new ServerDomainError(404, SKILL_ERROR_CODE.DRAFT_NOT_FOUND, "skill draft not found", { slug: input.slug, agent: input.agent });
@@ -873,6 +1146,9 @@ export class RegistryStore {
     aiChecks: SkillCheckResult;
     checkedAt: string;
   }): Promise<DraftState> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.setDraftAiChecks(input));
+    }
     const draft = this.getDraftState(input.slug, input.agent);
     if (draft === undefined) {
       throw new ServerDomainError(404, SKILL_ERROR_CODE.DRAFT_NOT_FOUND, "skill draft not found", { slug: input.slug, agent: input.agent });
@@ -900,6 +1176,9 @@ export class RegistryStore {
   }
 
   async applyDraftFix(slug: string, agent: RegistryAgent, checkIds: string[] | null): Promise<DraftState> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.applyDraftFix(slug, agent, checkIds));
+    }
     const draft = this.getDraftState(slug, agent);
     if (draft === undefined) {
       throw new ServerDomainError(404, SKILL_ERROR_CODE.DRAFT_NOT_FOUND, "skill draft not found", { slug, agent });
@@ -950,6 +1229,9 @@ export class RegistryStore {
     releaseNote: string;
     generatedAt: string;
   }): Promise<DraftState> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.setDraftReleaseNote(input));
+    }
     const draft = this.getDraftState(input.slug, input.agent);
     if (draft === undefined) {
       throw new ServerDomainError(404, SKILL_ERROR_CODE.DRAFT_NOT_FOUND, "skill draft not found", { slug: input.slug, agent: input.agent });
@@ -972,6 +1254,9 @@ export class RegistryStore {
     appliesTo: string | null;
     actorId: string;
   }): Promise<DraftState> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.applyFixSuggestion(input));
+    }
     const draft = this.getDraftState(input.slug, input.agent);
     if (draft === undefined) {
       throw new ServerDomainError(404, SKILL_ERROR_CODE.DRAFT_NOT_FOUND, "skill draft not found", { slug: input.slug, agent: input.agent });
@@ -1082,6 +1367,9 @@ export class RegistryStore {
     releaseNote?: string | null;
     actorId: string;
   }, tx?: TransactionRepository): Promise<RegistrySkillVersion> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.publish(input, tx));
+    }
     const draft = this.getDraftState(input.slug, input.agent);
     if (draft === undefined) {
       throw new ServerDomainError(404, SKILL_ERROR_CODE.DRAFT_NOT_FOUND, "skill draft not found", { slug: input.slug, agent: input.agent });
@@ -1194,6 +1482,9 @@ export class RegistryStore {
     config: NpmPublishConfig,
     publishNpm: (input: SkillNpmPackageInput) => Promise<NpmPublishAttemptResult>
   ): Promise<PublishSkillResponse> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.publishUnified(input, config, publishNpm));
+    }
     if (this.publishingSlugs.has(input.slug)) {
       throw new ServerDomainError(409, "SKILL_PUBLISH_IN_PROGRESS", "another publish is already in progress for this skill", {
         slug: input.slug
@@ -1422,6 +1713,9 @@ export class RegistryStore {
   }
 
   async deleteSkill(input: { slug: string; actorId: string }): Promise<void> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.deleteSkill(input));
+    }
     const state = this.skills.get(input.slug);
     const draftsInner = this.drafts.get(input.slug);
     if (state === undefined && draftsInner === undefined) {
@@ -1436,6 +1730,9 @@ export class RegistryStore {
   // 切换默认 agent（§3.4）：校验 agent enabled → 更新 detail.defaultAgent → revision 乐观并发 → 重算 agents（isDefault/fallback）。
   // 审计事件 skill.default-agent.changed 由路由层 mutation 四件套写（与 publish 一致；store 不直接写 audit）。
   async setDefaultAgent(slug: string, agent: RegistryAgent, revision: number): Promise<RegistrySkillDetail> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.setDefaultAgent(slug, agent, revision));
+    }
     const state = this.skills.get(slug);
     if (state === undefined) {
       throw new ServerDomainError(404, SKILL_ERROR_CODE.NOT_FOUND, "skill not found", { slug });
@@ -1463,6 +1760,58 @@ export class RegistryStore {
   }
 
   // ---- Workflow family 委派 ----
+  async createAgentTool(
+    input: AgentToolMutation,
+    tx?: TransactionRepository
+  ): Promise<AgentTool> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withFeatureMutation(() => this.createAgentTool(input, tx));
+    }
+    if (this.agentTools.has(input.slug)) {
+      throw new ServerDomainError(409, "AGENT_TOOL_EXISTS", "agent tool already exists", { slug: input.slug });
+    }
+    const now = new Date().toISOString();
+    const tool = agentToolSchema.parse({
+      tool_id: id("atl_"),
+      slug: input.slug,
+      displayName: input.displayName,
+      description: input.description,
+      category: input.category,
+      status: input.status,
+      source: input.source,
+      homepage: input.homepage ?? null,
+      packageName: input.packageName ?? null,
+      installCommand: input.installCommand ?? null,
+      tags: input.tags,
+      relatedWorkflowFamilies: input.relatedWorkflowFamilies,
+      revision: 1,
+      created_at: now,
+      updated_at: now
+    });
+    this.agentTools.set(tool.slug, tool);
+    try {
+      await this.persist(tx);
+    } catch (error) {
+      this.agentTools.delete(tool.slug);
+      throw error;
+    }
+    return structuredClone(tool);
+  }
+
+  listAgentTools(): AgentTool[] {
+    return [...this.agentTools.values()]
+      .map((tool) => structuredClone(tool))
+      .sort((left, right) => right.updated_at.localeCompare(left.updated_at) || left.slug.localeCompare(right.slug));
+  }
+
+  getAgentTool(slug: string): AgentTool {
+    const tool = this.agentTools.get(slug);
+    if (tool === undefined) {
+      throw new ServerDomainError(404, "AGENT_TOOL_NOT_FOUND", "agent tool not found", { slug });
+    }
+    return structuredClone(tool);
+  }
+
   createWorkflowFamily(input: WorkflowFamilyMutation): WorkflowFamily {
     return this.workflowFamilyStore.createFamily(input);
   }
@@ -1478,15 +1827,24 @@ export class RegistryStore {
     files: SourceFile[];
     actorId: string;
   }): Promise<WorkflowFamilyDraftState> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withFeatureMutation(() => this.uploadWorkflowFamilyProfileDraft(input));
+    }
     return this.workflowFamilyStore.uploadProfileDraft(input);
   }
-  getWorkflowFamilyDraft(slug: string): WorkflowFamilyDraftState {
-    return this.workflowFamilyStore.getFamilyDraft(slug);
+  getWorkflowFamilyDraft(slug: string): WorkflowFamilyDraftSummary {
+    return this.workflowFamilyStore.getFamilyDraftSummary(slug);
   }
   async discardWorkflowFamilyDraft(slug: string, revision: number): Promise<void> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withFeatureMutation(() => this.discardWorkflowFamilyDraft(slug, revision));
+    }
     return this.workflowFamilyStore.discardFamilyDraft(slug, revision);
   }
   async runWorkflowFamilyChecks(input: { slug: string; checkedAt: string }): Promise<SkillCheckResult> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withFeatureMutation(() => this.runWorkflowFamilyChecks(input));
+    }
     return this.workflowFamilyStore.runFamilyChecks(input);
   }
   diffWorkflowFamilyDraft(slug: string, profile?: string): SkillDiffFile[] {
@@ -1496,23 +1854,101 @@ export class RegistryStore {
     version: string;
     releaseNote?: string | null;
     actorId: string;
+    tx?: TransactionRepository;
   }): Promise<WorkflowFamilyVersion> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withFeatureMutation(() => this.publishWorkflowFamily(slug, input));
+    }
     return this.workflowFamilyStore.publishFamily(slug, input);
   }
   listWorkflowFamilyVersions(slug: string): WorkflowFamilyVersion[] {
     return this.workflowFamilyStore.listFamilyVersions(slug);
+  }
+  listWorkflowFamilyVersionSummaries(slug: string): WorkflowFamilyVersionSummary[] {
+    return this.workflowFamilyStore.listFamilyVersionSummaries(slug);
+  }
+  summarizeWorkflowFamilyVersion(version: WorkflowFamilyVersion): WorkflowFamilyVersionSummary {
+    return summarizeWorkflowFamilyVersion(version);
   }
   async getWorkflowFamilyProfileArtifactBytes(slug: string, profile: string, version?: string): Promise<Uint8Array> {
     return this.workflowFamilyStore.getProfileArtifactBytes(slug, profile, version);
   }
   async syncWorkflowFamilyFromSource(
     slug: string,
-    actorId: string,
-    deps?: ExternalFetcherDeps
+    deps?: ExternalFetcherDeps,
+    tx?: TransactionRepository
   ): Promise<{ updated: boolean; version?: string }> {
-    const result = await pullWorkflowFamilySource(this.workflowFamilyStore, slug, actorId, deps);
-    await this.persist();
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      const prepared = await this.prepareWorkflowFamilySourceSync(slug, deps);
+      return this.withFeatureMutation(() =>
+        this.commitWorkflowFamilySourceSync(prepared, tx)
+      );
+    }
+    const result = await pullWorkflowFamilySource(
+      this.workflowFamilyStore,
+      slug,
+      deps ?? this.externalFetcherDeps,
+      tx
+    );
     return result;
+  }
+
+  async prepareWorkflowFamilySourceSync(
+    slug: string,
+    deps?: ExternalFetcherDeps
+  ): Promise<PreparedWorkflowFamilySync> {
+    return prepareWorkflowFamilySync(
+      this.getWorkflowFamily(slug),
+      deps ?? this.externalFetcherDeps,
+      this.workflowFamilyStore.latestPublishedSourceDigest(slug)
+    );
+  }
+
+  async commitWorkflowFamilySourceSync(
+    prepared: PreparedWorkflowFamilySync,
+    tx?: TransactionRepository
+  ): Promise<{ updated: boolean; version?: string }> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withFeatureMutation(() =>
+        this.commitWorkflowFamilySourceSync(prepared, tx)
+      );
+    }
+    return commitPreparedWorkflowFamilySync(this.workflowFamilyStore, prepared, tx);
+  }
+
+  async inspectWorkflowFamilySource(source: WorkflowFamilySource): Promise<WorkflowFamilySourceInspection> {
+    return inspectWorkflowSource(source, this.externalFetcherDeps);
+  }
+
+  async importWorkflowFamilySource(
+    input: ImportWorkflowFamilySourceRequest,
+    tx?: TransactionRepository
+  ): Promise<WorkflowFamilySourceImportResult> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      const prepared = await this.prepareWorkflowFamilySourceImport(input);
+      return this.withFeatureMutation(() =>
+        this.commitWorkflowFamilySourceImport(prepared, tx)
+      );
+    }
+    return importWorkflowSource(this.workflowFamilyStore, input, this.externalFetcherDeps, tx);
+  }
+
+  async prepareWorkflowFamilySourceImport(
+    input: ImportWorkflowFamilySourceRequest
+  ): Promise<PreparedWorkflowFamilyImport> {
+    return prepareWorkflowFamilyImport(input, this.externalFetcherDeps);
+  }
+
+  async commitWorkflowFamilySourceImport(
+    prepared: PreparedWorkflowFamilyImport,
+    tx?: TransactionRepository
+  ): Promise<WorkflowFamilySourceImportResult> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withFeatureMutation(() =>
+        this.commitWorkflowFamilySourceImport(prepared, tx)
+      );
+    }
+    return commitPreparedWorkflowFamilyImport(this.workflowFamilyStore, prepared, tx);
   }
 
   // ---- AI provider 配置（§12.9；key 不进 store，只存 provider 元数据 + 用量）----
@@ -1544,6 +1980,9 @@ export class RegistryStore {
   }
 
   async updateCodexConfig(patch: { selected_model?: string | null; enabled?: boolean }): Promise<void> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.updateCodexConfig(patch));
+    }
     if (patch.selected_model !== undefined) {
       this.aiConfig.codex.selected_model = patch.selected_model;
     }
@@ -1554,6 +1993,9 @@ export class RegistryStore {
   }
 
   async setCodexEnabledExclusive(enabled: boolean): Promise<void> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.setCodexEnabledExclusive(enabled));
+    }
     this.applyCodexEnabled(enabled);
     await this.persist();
   }
@@ -1575,6 +2017,9 @@ export class RegistryStore {
     selected_model_id?: string | null;
     sort_order?: number;
   }): Promise<AiProviderConfig> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.upsertProvider(input));
+    }
     const now = new Date().toISOString();
     const existing = this.aiConfig.providers.find((item) => item.provider_id === input.provider_id);
     const extra = {
@@ -1635,6 +2080,9 @@ export class RegistryStore {
     revision: number,
     patch: Partial<Pick<AiProviderConfig, "label" | "base_url" | "model" | "enabled" | "api_key_env" | "daily_request_limit" | "daily_token_limit" | "models" | "api_format" | "note" | "website" | "selected_model_id" | "sort_order">>
   ): Promise<AiProviderConfig> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.updateProvider(providerId, revision, patch));
+    }
     const idx = this.aiConfig.providers.findIndex((item) => item.provider_id === providerId);
     if (idx === -1) {
       throw new ServerDomainError(404, "PROVIDER_NOT_FOUND", "ai provider not found", { provider_id: providerId });
@@ -1666,6 +2114,9 @@ export class RegistryStore {
   }
 
   async deleteProvider(providerId: string): Promise<void> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.deleteProvider(providerId));
+    }
     const idx = this.aiConfig.providers.findIndex((item) => item.provider_id === providerId);
     if (idx === -1) {
       throw new ServerDomainError(404, "PROVIDER_NOT_FOUND", "ai provider not found", { provider_id: providerId });
@@ -1678,6 +2129,9 @@ export class RegistryStore {
   }
 
   async setDefault(providerId: string): Promise<void> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.setDefault(providerId));
+    }
     this.applyEnabledProvider(providerId);
     await this.persist();
   }
@@ -1710,6 +2164,9 @@ export class RegistryStore {
     cache_hit_tokens?: number;
     cache_create_tokens?: number;
   }): Promise<void> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.recordUsage(input));
+    }
     const model = input.model ?? "";
     const inputTokens = input.input_tokens ?? 0;
     const outputTokens = input.output_tokens ?? 0;
@@ -1781,6 +2238,9 @@ export class RegistryStore {
 
   // 拖拽重排 providers：providerIds 必须覆盖所有现有 providers（不多不少），否则 422 VALIDATION_FAILED；更新 sort_order = index。
   async reorderProviders(providerIds: string[]): Promise<void> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.reorderProviders(providerIds));
+    }
     const existingIds = this.aiConfig.providers.map((p) => p.provider_id);
     const idSet = new Set(providerIds);
     if (providerIds.length !== existingIds.length || existingIds.some((id) => !idSet.has(id))) {
@@ -1799,6 +2259,9 @@ export class RegistryStore {
 
   // enabled 单选互斥：该 provider enabled=true，其他 enabled=false（一次 persist 保证原子；API-04 单选语义）。
   async setEnabledExclusive(providerId: string): Promise<void> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.setEnabledExclusive(providerId));
+    }
     this.applyEnabledProvider(providerId);
     await this.persist();
   }
@@ -2018,13 +2481,28 @@ export class RegistryStore {
   }
 
   referencedBlobHashes(): Set<string> {
+    const workflowSourceHashes = [
+      ...[...this.workflowFamilyDrafts.values()].flatMap((draft) =>
+        draft.profiles.map((profile) =>
+          sha256Bytes(Buffer.from(JSON.stringify(profile.sourceFiles), "utf8"))
+        )
+      ),
+      ...[...this.workflowFamilies.values()].flatMap((state) =>
+        state.versions.flatMap((version) =>
+          version.profiles.map((profile) =>
+            sha256Bytes(Buffer.from(JSON.stringify(profile.sourceFiles), "utf8"))
+          )
+        )
+      )
+    ];
     return new Set([
       ...[...this.skills.values()].flatMap((state) => state.versions.flatMap((version) =>
         version.artifacts.map((artifact) => artifact.content_sha256)
       )),
       ...[...this.workflowFamilies.values()].flatMap((state) => state.versions.flatMap((version) =>
         version.artifacts.map((artifact) => artifact.content_sha256)
-      ))
+      )),
+      ...workflowSourceHashes
     ]);
   }
 
@@ -2033,6 +2511,9 @@ export class RegistryStore {
     config: NpmPublishConfig,
     publish: (input: SkillNpmPackageInput) => Promise<NpmPublishAttemptResult>
   ): Promise<NpmReleaseRecord> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.releaseSkillToNpm(slug, config, publish));
+    }
     const state = this.skills.get(slug);
     if (state === undefined) {
       throw new ServerDomainError(404, SKILL_ERROR_CODE.NOT_FOUND, "skill not found");
@@ -2092,6 +2573,9 @@ export class RegistryStore {
     publish: (input: WorkflowFamilyNpmPackageInput) => Promise<NpmPublishAttemptResult>,
     extraFiles: SourceFile[] = []
   ): Promise<NpmReleaseRecord> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withFeatureMutation(() => this.releaseFamilyToNpm(slug, config, publish, extraFiles));
+    }
     const family = this.workflowFamilyStore.getFamily(slug);
     if (family.latest_version === null) {
       throw new ServerDomainError(422, "NPM_PUBLISH_NOT_PUBLISHED", "workflow family has no published version to release");
@@ -2313,6 +2797,9 @@ export class RegistryStore {
   }
 
   async updateSkillCatalogOrder(input: { items: string[]; revision: number }): Promise<SkillCatalogOrder> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.updateSkillCatalogOrder(input));
+    }
     if (input.revision !== this.skillCatalogOrder.revision) {
       throw new ServerDomainError(409, "SKILL_CATALOG_ORDER_CONFLICT", "skill catalog order revision is stale", {
         expected: this.skillCatalogOrder.revision,
@@ -2361,32 +2848,34 @@ export class RegistryStore {
     } catch (error) {
       this.rethrowExternalFetch(error);
     }
-    const duplicate = [...this.externalSkills.values()].find(
-      (item) => item.source.type === fetched.source.type && item.source.ref === fetched.source.ref
-    );
-    if (duplicate !== undefined) {
-      throw new ServerDomainError(409, "EXTERNAL_SKILL_EXISTS", "external skill already registered", {
-        id: duplicate.id,
-        source: duplicate.source
+    return this.withRegistryMutation(async () => {
+      const duplicate = [...this.externalSkills.values()].find(
+        (item) => item.source.type === fetched.source.type && item.source.ref === fetched.source.ref
+      );
+      if (duplicate !== undefined) {
+        throw new ServerDomainError(409, "EXTERNAL_SKILL_EXISTS", "external skill already registered", {
+          id: duplicate.id,
+          source: duplicate.source
+        });
+      }
+      const now = fetched.snapshot.fetchedAt;
+      const skill = externalSkillSchema.parse({
+        id: id("ext_"),
+        source: fetched.source,
+        snapshot: fetched.snapshot,
+        aiSummary: null,
+        curationNote: input.curationNote ?? "",
+        tags: [...(input.tags ?? [])].sort(),
+        updateAvailable: false,
+        lastCheckedAt: now,
+        revision: 1,
+        created_at: now,
+        updated_at: now
       });
-    }
-    const now = fetched.snapshot.fetchedAt;
-    const skill = externalSkillSchema.parse({
-      id: id("ext_"),
-      source: fetched.source,
-      snapshot: fetched.snapshot,
-      aiSummary: null,
-      curationNote: input.curationNote ?? "",
-      tags: [...(input.tags ?? [])].sort(),
-      updateAvailable: false,
-      lastCheckedAt: now,
-      revision: 1,
-      created_at: now,
-      updated_at: now
+      this.externalSkills.set(skill.id, skill);
+      await this.persist();
+      return structuredClone(skill);
     });
-    this.externalSkills.set(skill.id, skill);
-    await this.persist();
-    return structuredClone(skill);
   }
 
   async patchExternalSkill(input: {
@@ -2396,6 +2885,9 @@ export class RegistryStore {
     tags?: string[];
     acknowledgeUpdate?: boolean;
   }): Promise<ExternalSkill> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.patchExternalSkill(input));
+    }
     const existing = this.externalSkills.get(input.id);
     if (existing === undefined) {
       throw new ServerDomainError(404, "EXTERNAL_SKILL_NOT_FOUND", "external skill not found", { id: input.id });
@@ -2426,6 +2918,9 @@ export class RegistryStore {
     revision: number;
     summary: ExternalSkillAiSummary;
   }): Promise<ExternalSkill> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.setExternalSkillAiSummary(input));
+    }
     const existing = this.externalSkills.get(input.id);
     if (existing === undefined) {
       throw new ServerDomainError(404, "EXTERNAL_SKILL_NOT_FOUND", "external skill not found", { id: input.id });
@@ -2456,6 +2951,9 @@ export class RegistryStore {
   }
 
   async deleteExternalSkill(id: string): Promise<{ id: string; deleted: boolean }> {
+    if (this.featureMutationContext.getStore() !== this.featureMutationLease) {
+      return this.withRegistryMutation(() => this.deleteExternalSkill(id));
+    }
     if (!this.externalSkills.has(id)) {
       throw new ServerDomainError(404, "EXTERNAL_SKILL_NOT_FOUND", "external skill not found", { id });
     }
@@ -2465,33 +2963,45 @@ export class RegistryStore {
   }
 
   async refreshExternalSkill(id: string): Promise<ExternalSkill> {
-    const existing = this.externalSkills.get(id);
-    if (existing === undefined) {
-      throw new ServerDomainError(404, "EXTERNAL_SKILL_NOT_FOUND", "external skill not found", { id });
-    }
-    const previousNote = existing.curationNote;
+    const observed = this.getExternalSkill(id);
     let fetched: Awaited<ReturnType<typeof fetchExternalSnapshot>>;
     try {
-      fetched = await fetchExternalSnapshot(existing.source, this.externalFetcherDeps);
+      fetched = await fetchExternalSnapshot(observed.source, this.externalFetcherDeps);
     } catch (error) {
       this.rethrowExternalFetch(error);
     }
-    const versionChanged = fetched.snapshot.version !== existing.snapshot.version;
-    const now = fetched.snapshot.fetchedAt;
-    const sourceHash = externalSkillSummarySourceHash(fetched.snapshot);
-    const next = externalSkillSchema.parse({
-      ...existing,
-      snapshot: fetched.snapshot,
-      aiSummary: existing.aiSummary?.source_sha256 === sourceHash ? existing.aiSummary : null,
-      curationNote: previousNote,
-      updateAvailable: versionChanged ? true : existing.updateAvailable,
-      lastCheckedAt: now,
-      revision: existing.revision + 1,
-      updated_at: now
+    return this.withRegistryMutation(async () => {
+      const existing = this.externalSkills.get(id);
+      if (existing === undefined) {
+        throw new ServerDomainError(404, "EXTERNAL_SKILL_NOT_FOUND", "external skill not found", { id });
+      }
+      if (existing.revision !== observed.revision ||
+          existing.source.type !== observed.source.type ||
+          existing.source.ref !== observed.source.ref) {
+        throw new ServerDomainError(
+          409,
+          "EXTERNAL_SKILL_CHANGED",
+          "external skill changed while its upstream source was being read",
+          { id, expected_revision: observed.revision, current_revision: existing.revision }
+        );
+      }
+      const versionChanged = fetched.snapshot.version !== existing.snapshot.version;
+      const now = fetched.snapshot.fetchedAt;
+      const sourceHash = externalSkillSummarySourceHash(fetched.snapshot);
+      const next = externalSkillSchema.parse({
+        ...existing,
+        snapshot: fetched.snapshot,
+        aiSummary: existing.aiSummary?.source_sha256 === sourceHash ? existing.aiSummary : null,
+        curationNote: existing.curationNote,
+        updateAvailable: versionChanged ? true : existing.updateAvailable,
+        lastCheckedAt: now,
+        revision: existing.revision + 1,
+        updated_at: now
+      });
+      this.externalSkills.set(next.id, next);
+      await this.persist();
+      return structuredClone(next);
     });
-    this.externalSkills.set(next.id, next);
-    await this.persist();
-    return structuredClone(next);
   }
 
   async refreshAllExternalSkills(): Promise<{ refreshed: number; failed: number }> {

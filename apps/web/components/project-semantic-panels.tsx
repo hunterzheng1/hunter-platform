@@ -9,24 +9,33 @@ import { runPreservingWindowScroll, suppressMouseFocusScroll } from "../lib/pres
 import { MarkdownDocument } from "./skill-shared";
 import { ToastFeedback } from "./ui/Toast";
 
-type SemanticTab = "library" | "rules" | "changes" | "relations";
+type SemanticTab = "library" | "rules" | "architecture" | "changes" | "relations";
 
 interface SemanticData {
   overview: SemanticOverview;
   knowledge: SemanticDocument[];
   rules: SemanticDocument[] | null;
+  architecture: SemanticDocument[] | null;
   changes: SemanticDocument[] | null;
+}
+
+interface SemanticChangePage {
+  items: SemanticDocument[];
+  total: number;
+  next_cursor: string | null;
 }
 
 const PAGE_SIZE = 25;
 
 function exportContextPack(projectId: string, data: SemanticData): void {
   const rules = data.rules ?? [];
+  const architecture = data.architecture ?? [];
   const changes = data.changes ?? [];
   const lines = [
-    `# Context pack — ${projectId}`, "", `Documents: ${data.overview.counts.documents}`, "",
+    "# 项目上下文", "", `已整理文档：${data.overview.counts.documents}`, "",
     "## Knowledge", ...data.knowledge.flatMap((item) => [`### ${item.title}`, item.body, ""]),
     "## Rules", ...rules.flatMap((item) => [`### ${item.title}`, item.body, ""]),
+    "## Architecture", ...architecture.flatMap((item) => [`### ${item.title}`, item.body, ""]),
     "## Changes", ...changes.flatMap((item) => [`### ${item.title}`, item.body, ""])
   ];
   const url = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" }));
@@ -40,12 +49,52 @@ function exportContextPack(projectId: string, data: SemanticData): void {
 function humanKind(document: SemanticDocument, lang: "zh" | "en"): string {
   const labels = lang === "zh" ? {
     knowledge_entry: "知识条目", knowledge_markdown: "知识文档", rule: "项目规则",
+    change_document: "变更文档", architecture_document: "架构地图",
     archive_record: "变更总结", agent_instruction: "Agent 指令"
   } : {
     knowledge_entry: "Knowledge entry", knowledge_markdown: "Knowledge document", rule: "Project rule",
+    change_document: "Change document", architecture_document: "Architecture map",
     archive_record: "Change summary", agent_instruction: "Agent instruction"
   };
   return labels[document.kind];
+}
+
+function readableArchiveBody(document: SemanticDocument): string {
+  if (document.kind !== "archive_record" || !document.body.trimStart().startsWith("{")) {
+    return document.body;
+  }
+  try {
+    const raw = JSON.parse(document.body) as Record<string, unknown>;
+    const verification = typeof raw.verification === "object" && raw.verification !== null
+      ? raw.verification as Record<string, unknown>
+      : {};
+    const gitFacts = typeof raw.gitFacts === "object" && raw.gitFacts !== null
+      ? raw.gitFacts as Record<string, unknown>
+      : {};
+    const risks = Array.isArray(raw.knownRisks) ? raw.knownRisks.map(String) : [];
+    const status = String(raw.finalStatus ?? raw.status ?? "未知");
+    return [
+      `# ${String(raw.businessGoal ?? raw.changeName ?? document.title)}`,
+      "",
+      "## 变更结果",
+      "",
+      `- 状态：${status}`,
+      `- 变更文件：${String(gitFacts.filesChanged ?? "未知")}`,
+      `- 新增 / 删除：${String(gitFacts.insertions ?? "未知")} / ${String(gitFacts.deletions ?? "未知")}`,
+      "",
+      "## 验证结果",
+      "",
+      ...Object.entries(verification).map(([key, value]) =>
+        `- ${key}：${typeof value === "object" && value !== null ? String((value as Record<string, unknown>).status ?? "已记录") : String(value)}`
+      ),
+      "",
+      "## 需要注意",
+      "",
+      ...(risks.length > 0 ? risks.map((risk) => `- ${risk}`) : ["- 无已知风险"])
+    ].join("\n");
+  } catch {
+    return document.body;
+  }
 }
 
 function documentStatus(document: SemanticDocument, lang: "zh" | "en", statusLabels: Record<string, string>): string {
@@ -73,7 +122,7 @@ function DocumentBrowser({
   // Only auto-jump the pager when selection identity changes. Re-running on
   // `filtered` identity churn (same selection, new array) races manual Next/Prev
   // and was flaking Ubuntu CI after "下一页".
-  const lastJumpedSelectedId = useRef<string | null>(null);
+  const lastJumpedSelectedId = useRef<string | null>(selectedId);
 
   const statuses = useMemo(() => {
     if (!enableStatusFilter) return [] as string[];
@@ -162,10 +211,262 @@ function DocumentBrowser({
     <article className="knowledge-preview">
       {selected === null ? <div className="knowledge-empty"><span>◇</span><p>{empty}</p></div> : <>
         <header><div><span>{humanKind(selected, lang)}</span><h2>{selected.title}</h2></div><p className="knowledge-source-path" title={selected.source_path}>{lang === "zh" ? "来源" : "Source"} · <code>{selected.source_path}</code></p></header>
-        <div className="knowledge-body"><MarkdownDocument content={selected.body} /></div>
+        <div className="knowledge-body"><MarkdownDocument content={readableArchiveBody(selected)} /></div>
         <footer>{Object.entries(selected.metadata).filter(([, value]) => typeof value === "string" || Array.isArray(value)).slice(0, 5).map(([key, value]) => <span key={key}>{key}: {Array.isArray(value) ? value.join(", ") : (statusLabels[String(value)] ?? String(value))}</span>)}</footer>
       </>}
     </article>
+  </div>;
+}
+
+function archiveKeyOf(document: SemanticDocument): string {
+  if (typeof document.metadata.source_archive === "string" && document.metadata.source_archive !== "") {
+    return document.metadata.source_archive;
+  }
+  return /^\.harness\/archive\/([^/]+)\//u.exec(document.source_path)?.[1] ?? document.title;
+}
+
+function archiveHeading(document: SemanticDocument): string {
+  return readableArchiveBody(document).match(/^#\s+(.+)$/mu)?.[1]?.trim() ?? document.title;
+}
+
+function ChangeHistoryPanel({
+  items,
+  selectedId,
+  onSelect,
+  lang,
+  total,
+  hasMore,
+  loadingMore,
+  onLoadMore
+}: {
+  items: SemanticDocument[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  lang: "zh" | "en";
+  total: number;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
+}) {
+  const groups = useMemo(() => {
+    const grouped = new Map<string, SemanticDocument[]>();
+    for (const item of items) {
+      const key = archiveKeyOf(item);
+      grouped.set(key, [...(grouped.get(key) ?? []), item]);
+    }
+    return [...grouped.entries()].map(([key, documents]) => {
+      const summary = documents.find((item) => item.kind === "archive_record") ?? null;
+      const uploadedAt = typeof summary?.metadata.archive_uploaded_at === "string"
+        ? summary.metadata.archive_uploaded_at
+        : "";
+      return { key, documents, summary, uploadedAt };
+    }).sort((left, right) => right.uploadedAt.localeCompare(left.uploadedAt) || left.key.localeCompare(right.key));
+  }, [items]);
+  const selectedGroup = groups.find((group) =>
+    group.documents.some((item) => item.document_id === selectedId)
+  ) ?? groups[0] ?? null;
+  const selectedDocument = selectedGroup?.documents.find((item) => item.document_id === selectedId)
+    ?? selectedGroup?.summary
+    ?? selectedGroup?.documents[0]
+    ?? null;
+  const copy = lang === "zh" ? {
+    empty: "还没有变更记录。",
+    records: "历史变更",
+    summary: "变更总结",
+    spec: "设计说明",
+    plan: "实施计划",
+    archiveMeta: "归档说明",
+    attachment: "相关文档",
+    remoteReady: "远端归档已保存",
+    remotePending: "归档状态待确认",
+    knowledgeReady: "知识索引已就绪",
+    knowledgePending: "知识索引处理中",
+    knowledgeFailed: "知识索引失败",
+    files: (count: number) => `${count} 个文件`,
+    lines: (additions: number, deletions: number) => `+${additions} / -${deletions} 行`,
+    goal: "本次目标",
+    loaded: (count: number, all: number) => `已加载 ${count} / ${all} 份文档`,
+    loadMore: "加载更多变更"
+  } : {
+    empty: "No change history yet.",
+    records: "Change history",
+    summary: "Summary",
+    spec: "Design",
+    plan: "Plan",
+    archiveMeta: "Archive notes",
+    attachment: "Related documents",
+    remoteReady: "Remote archive saved",
+    remotePending: "Archive status pending",
+    knowledgeReady: "Knowledge index ready",
+    knowledgePending: "Knowledge indexing",
+    knowledgeFailed: "Knowledge indexing failed",
+    files: (count: number) => `${count} files`,
+    lines: (additions: number, deletions: number) => `+${additions} / -${deletions} lines`,
+    goal: "Goal",
+    loaded: (count: number, all: number) => `${count} of ${all} documents loaded`,
+    loadMore: "Load more changes"
+  };
+  if (selectedGroup === null || selectedDocument === null) {
+    return <div className="knowledge-empty"><span>◇</span><p>{copy.empty}</p></div>;
+  }
+  const summary = selectedGroup.summary;
+  const metadata = summary?.metadata ?? {};
+  const filesChanged = Number(metadata.files_changed ?? 0);
+  const additions = Number(metadata.additions ?? 0);
+  const deletions = Number(metadata.deletions ?? 0);
+  const businessGoal = typeof metadata.business_goal === "string" ? metadata.business_goal : null;
+  const archiveReady = metadata.archive_status === "durable";
+  const knowledgeStatus = metadata.knowledge_status;
+  const knowledgeLabel = knowledgeStatus === "ready"
+    ? copy.knowledgeReady
+    : knowledgeStatus === "failed"
+      ? copy.knowledgeFailed
+      : copy.knowledgePending;
+  const roleLabel = (document: SemanticDocument): string => {
+    if (document.kind === "archive_record") return copy.summary;
+    if (document.metadata.archive_role === "spec") return copy.spec;
+    if (document.metadata.archive_role === "plan") return copy.plan;
+    if (document.metadata.archive_role === "archive_meta") return copy.archiveMeta;
+    return copy.attachment;
+  };
+  const orderedDocuments = [...selectedGroup.documents].sort((left, right) => {
+    if (left.kind === "archive_record") return -1;
+    if (right.kind === "archive_record") return 1;
+    return left.source_path.localeCompare(right.source_path);
+  });
+
+  return <div className="change-history-workbench">
+    <aside className="change-history-list">
+      <header><strong>{copy.records}</strong><span>{copy.loaded(items.length, total)}</span></header>
+      <div>
+        {groups.map((group) => {
+          const groupSummary = group.summary ?? group.documents[0];
+          if (groupSummary === undefined) return null;
+          const active = group.key === selectedGroup.key;
+          return <button
+            key={group.key}
+            type="button"
+            className={active ? "selected" : ""}
+            onMouseDown={suppressMouseFocusScroll}
+            onClick={() => onSelect(groupSummary.document_id)}
+          >
+            <strong>{archiveHeading(groupSummary)}</strong>
+            <small>{group.key}</small>
+            <span>{group.documents.length} {lang === "zh" ? "份文档" : "documents"}</span>
+          </button>;
+        })}
+        {hasMore ? <button
+          type="button"
+          className="change-history-load-more"
+          disabled={loadingMore}
+          onClick={onLoadMore}
+        >{loadingMore ? (lang === "zh" ? "正在加载…" : "Loading…") : copy.loadMore}</button> : null}
+      </div>
+    </aside>
+    <article className="change-history-detail">
+      <header className="change-history-summary">
+        <div className="change-history-state">
+          <span className={archiveReady ? "success" : "neutral"}>{archiveReady ? copy.remoteReady : copy.remotePending}</span>
+          <span className={knowledgeStatus === "failed" ? "danger" : knowledgeStatus === "ready" ? "success" : "warning"}>{knowledgeLabel}</span>
+        </div>
+        <div className="change-history-metrics">
+          <span><strong>{copy.files(filesChanged)}</strong><small>{copy.lines(additions, deletions)}</small></span>
+          <span><strong>{String(metadata.final_status ?? "—")}</strong><small>{lang === "zh" ? "归档结果" : "Archive result"}</small></span>
+        </div>
+        {businessGoal === null ? null : <p><span>{copy.goal}</span>{businessGoal}</p>}
+      </header>
+      <nav className="change-document-tabs" aria-label={copy.attachment}>
+        {orderedDocuments.map((document) => <button
+          key={document.document_id}
+          type="button"
+          className={document.document_id === selectedDocument.document_id ? "selected" : ""}
+          onMouseDown={suppressMouseFocusScroll}
+          onClick={() => onSelect(document.document_id)}
+        >
+          <span>{roleLabel(document)}</span>
+          <strong>{document.title}</strong>
+        </button>)}
+      </nav>
+      <section className="change-document-preview">
+        <MarkdownDocument content={readableArchiveBody(selectedDocument)} />
+      </section>
+    </article>
+  </div>;
+}
+
+function ArchitecturePanel({
+  items,
+  selectedId,
+  onSelect,
+  lang,
+  statusLabels
+}: {
+  items: SemanticDocument[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  lang: "zh" | "en";
+  statusLabels: Record<string, string>;
+}) {
+  const manifest = items.find((item) => item.metadata.map_role === "manifest") ?? null;
+  const documents = items.filter((item) => item.metadata.map_role !== "manifest");
+  const generatedAt = typeof manifest?.metadata.generated_at === "string"
+    ? manifest.metadata.generated_at
+    : null;
+  const mappedCommit = typeof manifest?.metadata.last_mapped_commit === "string"
+    ? manifest.metadata.last_mapped_commit
+    : null;
+  const warnings = Array.isArray(manifest?.metadata.warnings)
+    ? manifest.metadata.warnings.map(String)
+    : [];
+  const generatedTime = generatedAt === null
+    ? (lang === "zh" ? "尚未记录" : "Not recorded")
+    : new Intl.DateTimeFormat(lang === "zh" ? "zh-CN" : "en", {
+      dateStyle: "medium",
+      timeStyle: "short"
+    }).format(new Date(generatedAt));
+  const copy = lang === "zh" ? {
+    snapshot: "架构快照",
+    docs: "地图文档",
+    generated: "最近生成",
+    commit: "对应版本",
+    health: "地图状态",
+    healthy: "内容完整",
+    warning: `${warnings.length} 条生成提示`,
+    empty: "还没有项目架构地图。",
+    hint: "运行 /harness-codebase-map 后，平台会展示技术栈、模块结构、集成、约定、测试与风险。"
+  } : {
+    snapshot: "Architecture snapshot",
+    docs: "Map documents",
+    generated: "Generated",
+    commit: "Mapped commit",
+    health: "Map status",
+    healthy: "Complete",
+    warning: `${warnings.length} generation warnings`,
+    empty: "No architecture map yet.",
+    hint: "Run /harness-codebase-map to publish stack, structure, integrations, conventions, testing, and risks."
+  };
+  if (items.length === 0) {
+    return <div className="knowledge-empty"><span>◇</span><p>{copy.empty}</p><small>{copy.hint}</small></div>;
+  }
+  return <div className="architecture-workbench">
+    <section className="architecture-snapshot" aria-label={copy.snapshot}>
+      <div><span>{copy.docs}</span><strong>{documents.length}</strong></div>
+      <div><span>{copy.generated}</span><strong>{generatedTime}</strong></div>
+      <div><span>{copy.commit}</span><strong>{mappedCommit?.slice(0, 12) ?? "—"}</strong></div>
+      <div className={warnings.length > 0 ? "warning" : "success"}>
+        <span>{copy.health}</span><strong>{warnings.length > 0 ? copy.warning : copy.healthy}</strong>
+      </div>
+    </section>
+    {warnings.length > 0 ? <details className="architecture-warnings"><summary>{copy.warning}</summary><ul>{warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></details> : null}
+    <DocumentBrowser
+      items={documents}
+      selectedId={selectedId}
+      onSelect={onSelect}
+      empty={copy.empty}
+      emptyHint={copy.hint}
+      lang={lang}
+      statusLabels={statusLabels}
+    />
   </div>;
 }
 
@@ -511,16 +812,20 @@ export function ProjectSemanticPanels({ api, projectId }: { api: HunterApi; proj
   const [error, setError] = useState<string | null>(null);
   const [pendingCount, setPendingCount] = useState(0);
   const [exporting, setExporting] = useState(false);
+  const [changesCursor, setChangesCursor] = useState<string | null>(null);
+  const [changesTotal, setChangesTotal] = useState(0);
+  const [changesLoadingMore, setChangesLoadingMore] = useState(false);
   const rulesRequest = useRef<{ projectId: string; promise: Promise<SemanticDocument[]> } | null>(null);
-  const changesRequest = useRef<{ projectId: string; promise: Promise<SemanticDocument[]> } | null>(null);
+  const architectureRequest = useRef<{ projectId: string; promise: Promise<SemanticDocument[]> } | null>(null);
+  const changesRequest = useRef<{ projectId: string; promise: Promise<SemanticChangePage> } | null>(null);
 
   const copy = lang === "zh" ? {
-    title: "项目知识", subtitle: "浏览从项目内容中整理出的知识、规则、变更总结和关联信息。", library: "知识库", rules: "项目规则", changes: "变更总结", relations: "知识关系",
-    search: "搜索标题、正文或路径", export: "导出上下文", preparingExport: "正在准备…", noKnowledge: "还没有项目知识", noRules: "还没有项目规则。", noChanges: "还没有变更总结。",
-    loading: "正在加载项目知识…", loadingGraph: "正在更新关系…", failed: "项目知识暂不可用。", documents: "已整理文档", knowledge: "知识", edges: "关系",
-    pending: "还有 {n} 条知识正在整理，内容可能暂时不完整。", emptyPushHint: "通过 Hunter Harness 上传项目内容后，平台会自动整理知识。"
+    title: "项目知识", subtitle: "集中查看经过整理的知识、规则、架构地图与历史变更。", library: "知识库", rules: "项目规则", architecture: "项目架构", changes: "变更记录", relations: "知识关系",
+    search: "搜索标题、正文或路径", export: "导出上下文", preparingExport: "正在准备…", noKnowledge: "还没有知识条目", noRules: "还没有项目规则。", noChanges: "还没有变更记录。",
+    loading: "正在加载项目内容…", loadingGraph: "正在更新关系…", failed: "项目内容暂不可用。", documents: "已整理文档", knowledge: "知识条目", edges: "知识关系",
+    pending: "还有 {n} 条知识正在由服务端整理，内容可能暂时不完整。", emptyPushHint: "知识库只展示明确提交到知识入库流程的内容；设计、计划和架构地图会分别展示。"
   } : {
-    title: "Project knowledge", subtitle: "Searchable knowledge from push-indexed files and ingest projection.", library: "Knowledge library", rules: "Project rules", changes: "Change summaries", relations: "Relationship explorer",
+    title: "Project knowledge", subtitle: "Curated knowledge, rules, architecture maps, and change history.", library: "Knowledge library", rules: "Project rules", architecture: "Architecture", changes: "Change history", relations: "Relationship explorer",
     search: "Search titles, content, or paths", export: "Export context", preparingExport: "Preparing…", noKnowledge: "No project knowledge yet. Sources: push file index and knowledge ingest projection.", noRules: "No project rules yet.", noChanges: "No change summaries yet.",
     loading: "Loading project knowledge…", loadingGraph: "Updating relations…", failed: "Project knowledge is unavailable.", documents: "Indexed documents", knowledge: "Knowledge", edges: "Relationships",
     pending: "{n} ingest entries pending projection — the semantic library may be incomplete.", emptyPushHint: "If empty: CLI push first, or wait for ingest projection; after purge/DB swap, push again."
@@ -535,6 +840,8 @@ export function ProjectSemanticPanels({ api, projectId }: { api: HunterApi; proj
     setGraph(null);
     setData(null);
     setPendingCount(0);
+    setChangesCursor(null);
+    setChangesTotal(0);
     void (async () => {
       if (api.getProjectSemanticOverview === undefined || api.listProjectSemanticKnowledge === undefined) throw new Error("semantic API unavailable");
       const pendingRequest = api.getKnowledgeProjectionStatus === undefined
@@ -546,7 +853,7 @@ export function ProjectSemanticPanels({ api, projectId }: { api: HunterApi; proj
       ]);
       const knowledge = knowledgePage.items;
       if (!active) return;
-      setData({ overview, knowledge, rules: null, changes: null });
+      setData({ overview, knowledge, rules: null, architecture: null, changes: null });
       setPendingCount(pending);
       setSelectedId(knowledge[0]?.document_id ?? null);
     })().catch(() => { if (active) setError(copy.failed); });
@@ -564,14 +871,25 @@ export function ProjectSemanticPanels({ api, projectId }: { api: HunterApi; proj
     return promise;
   }, [api, projectId]);
 
-  const requestChanges = useCallback((): Promise<SemanticDocument[]> => {
+  const requestChanges = useCallback((): Promise<SemanticChangePage> => {
     if (api.listProjectSemanticChanges === undefined) return Promise.reject(new Error("semantic changes API unavailable"));
     if (changesRequest.current?.projectId === projectId) return changesRequest.current.promise;
-    const promise = api.listProjectSemanticChanges(projectId).catch((reason: unknown) => {
+    const promise = api.listProjectSemanticChanges(projectId, { limit: 50 }).catch((reason: unknown) => {
       if (changesRequest.current?.promise === promise) changesRequest.current = null;
       throw reason;
     });
     changesRequest.current = { projectId, promise };
+    return promise;
+  }, [api, projectId]);
+
+  const requestArchitecture = useCallback((): Promise<SemanticDocument[]> => {
+    if (api.listProjectSemanticArchitecture === undefined) return Promise.reject(new Error("semantic architecture API unavailable"));
+    if (architectureRequest.current?.projectId === projectId) return architectureRequest.current.promise;
+    const promise = api.listProjectSemanticArchitecture(projectId).catch((reason: unknown) => {
+      if (architectureRequest.current?.promise === promise) architectureRequest.current = null;
+      throw reason;
+    });
+    architectureRequest.current = { projectId, promise };
     return promise;
   }, [api, projectId]);
 
@@ -585,10 +903,24 @@ export function ProjectSemanticPanels({ api, projectId }: { api: HunterApi; proj
   }, [data, tab, requestRules, copy.failed]);
 
   useEffect(() => {
+    if (data === null || data.architecture !== null || (tab !== "architecture" && tab !== "relations")) return;
+    let active = true;
+    void requestArchitecture()
+      .then((architecture) => { if (active) setData((current) => current === null ? current : { ...current, architecture }); })
+      .catch(() => { if (active) setError(copy.failed); });
+    return () => { active = false; };
+  }, [data, tab, requestArchitecture, copy.failed]);
+
+  useEffect(() => {
     if (data === null || data.changes !== null || (tab !== "changes" && tab !== "relations")) return;
     let active = true;
     void requestChanges()
-      .then((changes) => { if (active) setData((current) => current === null ? current : { ...current, changes }); })
+      .then((page) => {
+        if (!active) return;
+        setData((current) => current === null ? current : { ...current, changes: page.items });
+        setChangesCursor(page.next_cursor);
+        setChangesTotal(page.total);
+      })
       .catch(() => { if (active) setError(copy.failed); });
     return () => { active = false; };
   }, [data, tab, requestChanges, copy.failed]);
@@ -627,17 +959,60 @@ export function ProjectSemanticPanels({ api, projectId }: { api: HunterApi; proj
     }
   }
 
+  async function loadMoreChanges(): Promise<void> {
+    if (changesCursor === null || changesLoadingMore || api.listProjectSemanticChanges === undefined) return;
+    setChangesLoadingMore(true);
+    try {
+      const page = await api.listProjectSemanticChanges(projectId, {
+        limit: 50,
+        cursor: changesCursor
+      });
+      setData((current) => current === null ? current : {
+        ...current,
+        changes: [...(current.changes ?? []), ...page.items]
+      });
+      setChangesCursor(page.next_cursor);
+      setChangesTotal(page.total);
+    } catch {
+      setError(copy.failed);
+    } finally {
+      setChangesLoadingMore(false);
+    }
+  }
+
+  async function requestAllChanges(): Promise<SemanticChangePage> {
+    if (api.listProjectSemanticChanges === undefined) throw new Error("semantic changes API unavailable");
+    const first = await requestChanges();
+    const items = [...first.items];
+    const seenCursors = new Set<string>();
+    let cursor = first.next_cursor;
+    let total = first.total;
+    while (cursor !== null) {
+      if (seenCursors.has(cursor)) throw new Error("semantic changes cursor repeated");
+      seenCursors.add(cursor);
+      const page = await api.listProjectSemanticChanges(projectId, { limit: 200, cursor });
+      items.push(...page.items);
+      total = page.total;
+      cursor = page.next_cursor;
+    }
+    return { items, total, next_cursor: cursor };
+  }
+
   async function exportAll(): Promise<void> {
     if (data === null || exporting) return;
     setExporting(true);
     setError(null);
     try {
-      const [rules, changes] = await Promise.all([
+      const [rules, architecture, changePage] = await Promise.all([
         data.rules === null ? requestRules() : Promise.resolve(data.rules),
-        data.changes === null ? requestChanges() : Promise.resolve(data.changes)
+        data.architecture === null ? requestArchitecture() : Promise.resolve(data.architecture),
+        requestAllChanges()
       ]);
-      const complete = { ...data, rules, changes };
+      const changes = changePage.items;
+      const complete = { ...data, rules, architecture, changes };
       setData(complete);
+      setChangesCursor(changePage.next_cursor);
+      setChangesTotal(changePage.total);
       exportContextPack(projectId, complete);
     } catch {
       setError(copy.failed);
@@ -648,11 +1023,13 @@ export function ProjectSemanticPanels({ api, projectId }: { api: HunterApi; proj
 
   if (error !== null && data === null) return <div className="empty-state">{error}</div>;
   if (data === null) return <div className="empty-state">{copy.loading}</div>;
-  const items = tab === "rules" ? data.rules ?? [] : tab === "changes" ? data.changes ?? [] : hits ?? data.knowledge;
-  const documentsLoading = (tab === "rules" && data.rules === null) || (tab === "changes" && data.changes === null);
+  const items = tab === "rules" ? data.rules ?? [] : tab === "architecture" ? data.architecture ?? [] : tab === "changes" ? data.changes ?? [] : hits ?? data.knowledge;
+  const documentsLoading = (tab === "rules" && data.rules === null) || (tab === "architecture" && data.architecture === null) || (tab === "changes" && data.changes === null);
   const emptyCopy = tab === "rules"
     ? copy.noRules
-    : tab === "changes"
+    : tab === "architecture"
+      ? (lang === "zh" ? "还没有项目架构地图。" : "No architecture map yet.")
+      : tab === "changes"
       ? copy.noChanges
       : copy.noKnowledge;
 
@@ -661,19 +1038,19 @@ export function ProjectSemanticPanels({ api, projectId }: { api: HunterApi; proj
     <div className="knowledge-metrics"><span><strong>{data.overview.counts.documents}</strong>{copy.documents}</span><span><strong>{data.overview.counts.knowledge}</strong>{copy.knowledge}</span><span><strong>{data.overview.counts.edges}</strong>{copy.edges}</span></div>
     {pendingCount > 0 ? <p className="notice warning" role="status">{copy.pending.replace("{n}", String(pendingCount))}</p> : null}
     <div className="knowledge-controls">
-      <div className="knowledge-tabs" role="tablist" aria-label={copy.title}>{(["library", "rules", "changes", "relations"] as const).map((id) => <button key={id} type="button" role="tab" aria-selected={tab === id} className={tab === id ? "selected" : ""} onMouseDown={suppressMouseFocusScroll} onClick={() => switchTab(id)}>{copy[id]}</button>)}</div>
+      <div className="knowledge-tabs" role="tablist" aria-label={copy.title}>{(["library", "rules", "architecture", "changes", "relations"] as const).map((id) => <button key={id} type="button" role="tab" aria-selected={tab === id} className={tab === id ? "selected" : ""} onMouseDown={suppressMouseFocusScroll} onClick={() => switchTab(id)}>{copy[id]}</button>)}</div>
       {tab === "library" ? <div className="knowledge-search"><span>⌕</span><input aria-label={copy.search} placeholder={copy.search} value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void search(); }} /><button type="button" disabled={searching} onClick={() => void search()}>{lang === "zh" ? "搜索" : "Search"}</button></div> : null}
     </div>
     {tab === "relations" ? graph === null ? <div className="empty-state">{copy.loading}</div> : <div className={graphLoading ? "relation-panel refreshing" : "relation-panel"}>
       {graphLoading ? <p className="relation-refresh-hint" aria-live="polite">{copy.loadingGraph}</p> : null}
       <RelationWorkbench
         graph={graph}
-        candidates={[...data.knowledge, ...(data.rules ?? []), ...(data.changes ?? [])]}
+        candidates={[...data.knowledge, ...(data.rules ?? []), ...(data.architecture ?? []), ...(data.changes ?? [])]}
         selectedId={selectedId}
         onSelect={selectDocument}
         lang={lang}
       />
-    </div> : documentsLoading ? <div className="empty-state">{copy.loading}</div> : <DocumentBrowser items={items} selectedId={selectedId} onSelect={selectDocument} empty={emptyCopy} {...(tab === "library" && data.knowledge.length === 0 ? { emptyHint: copy.emptyPushHint } : {})} lang={lang} enableStatusFilter={tab === "library"} statusLabels={statusLabels} />}
+    </div> : documentsLoading ? <div className="empty-state">{copy.loading}</div> : tab === "architecture" ? <ArchitecturePanel items={items} selectedId={selectedId} onSelect={selectDocument} lang={lang} statusLabels={statusLabels} /> : tab === "changes" ? <ChangeHistoryPanel items={items} selectedId={selectedId} onSelect={selectDocument} lang={lang} total={changesTotal} hasMore={changesCursor !== null} loadingMore={changesLoadingMore} onLoadMore={() => void loadMoreChanges()} /> : <DocumentBrowser items={items} selectedId={selectedId} onSelect={selectDocument} empty={emptyCopy} {...(tab === "library" && data.knowledge.length === 0 ? { emptyHint: copy.emptyPushHint } : {})} lang={lang} enableStatusFilter={tab === "library"} statusLabels={statusLabels} />}
     {data === null ? null : <ToastFeedback tone="danger" message={error} />}
   </section>;
 }
