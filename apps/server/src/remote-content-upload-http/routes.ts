@@ -279,6 +279,17 @@ function uploadChunk(bytes: Uint8Array, sequence: number, offset: number, final:
   };
 }
 
+function joinChunkParts(parts: readonly Uint8Array[], size: number): Uint8Array {
+  if (parts.length === 1) return parts[0] as Uint8Array;
+  const result = new Uint8Array(size);
+  let offset = 0;
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.byteLength;
+  }
+  return result;
+}
+
 type StreamCompletionTracker = { complete: boolean };
 
 /** Adapt a one-shot raw request stream to the contract's bounded chunk stream. */
@@ -290,7 +301,8 @@ async function* boundedChunks(
   completion: StreamCompletionTracker
 ): AsyncIterable<RemoteContentUploadChunk> {
   const digest = createHash("sha256");
-  let pending: Uint8Array | null = null;
+  const pendingParts: Uint8Array[] = [];
+  let pendingBytes = 0;
   let sequence = 0;
   let offset = 0;
   try {
@@ -299,17 +311,23 @@ async function* boundedChunks(
       if (!isBinaryChunk(incoming) || incoming.byteLength === 0) {
         fail(400, "REMOTE_CONTENT_UPLOAD_STREAM_INVALID", "remote content upload stream is invalid");
       }
-      for (let at = 0; at < incoming.byteLength; at += REMOTE_CONTENT_UPLOAD_HTTP_MAX_CHUNK_BYTES) {
-        const next = incoming.subarray(at, Math.min(at + REMOTE_CONTENT_UPLOAD_HTTP_MAX_CHUNK_BYTES, incoming.byteLength));
-        if (offset + (pending?.byteLength ?? 0) + next.byteLength > expectedSize) {
+      for (let at = 0; at < incoming.byteLength;) {
+        const take = Math.min(REMOTE_CONTENT_UPLOAD_HTTP_MAX_CHUNK_BYTES - pendingBytes, incoming.byteLength - at);
+        const next = incoming.subarray(at, at + take);
+        if (offset + pendingBytes + next.byteLength > expectedSize) {
           fail(400, "REMOTE_CONTENT_UPLOAD_SIZE_MISMATCH", "remote content upload size does not match Content-Length");
         }
-        if (pending !== null) {
-          digest.update(pending);
-          yield uploadChunk(pending, sequence++, offset, false);
-          offset += pending.byteLength;
+        pendingParts.push(next);
+        pendingBytes += next.byteLength;
+        at += next.byteLength;
+        if (pendingBytes === REMOTE_CONTENT_UPLOAD_HTTP_MAX_CHUNK_BYTES) {
+          const chunk = joinChunkParts(pendingParts, pendingBytes);
+          digest.update(chunk);
+          yield uploadChunk(chunk, sequence++, offset, false);
+          offset += chunk.byteLength;
+          pendingParts.length = 0;
+          pendingBytes = 0;
         }
-        pending = next;
       }
     }
   } catch (error) {
@@ -317,9 +335,10 @@ async function* boundedChunks(
     fail(400, "REMOTE_CONTENT_UPLOAD_STREAM_INVALID", "remote content upload stream is invalid");
   }
   if (signal.aborted) fail(499, "REMOTE_CONTENT_UPLOAD_ABORTED", "remote content upload was aborted");
-  if (pending === null || offset + pending.byteLength !== expectedSize) {
+  if (pendingBytes === 0 || offset + pendingBytes !== expectedSize) {
     fail(400, "REMOTE_CONTENT_UPLOAD_SIZE_MISMATCH", "remote content upload size does not match Content-Length");
   }
+  const pending = joinChunkParts(pendingParts, pendingBytes);
   digest.update(pending);
   if (`sha256:${digest.digest("hex")}` !== expectedHash) {
     fail(400, "REMOTE_CONTENT_UPLOAD_HASH_MISMATCH", "remote content upload hash does not match X-Content-SHA256");
