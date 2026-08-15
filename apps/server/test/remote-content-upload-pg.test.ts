@@ -22,6 +22,7 @@ function descriptor(bytes: Uint8Array, idempotency = "a".repeat(64), expiry = "6
   const hash = digest(bytes);
   return {
     schema_version: 1,
+    purpose: "remote_archive",
     path: { project_id: "prj_upload", branch_name: "feature" },
     auth: { actor_id: "actor_1" },
     headers: {
@@ -52,6 +53,7 @@ function chunks(bytes: Uint8Array): AsyncIterable<{ sequence: number; offset: nu
 function statusDescriptor(request: RemoteContentUploadHttpRequestDescriptor) {
   return {
     schema_version: 1 as const,
+    purpose: request.purpose,
     path: request.path,
     auth: request.auth,
     headers: {
@@ -69,10 +71,10 @@ function memoryRecords(options: { failMark?: boolean; failMarkOnce?: boolean } =
   const same = (left: RemoteContentUploadRecordIdentity, right: RemoteContentUploadRecordIdentity): boolean =>
     JSON.stringify({ project_id: left.project_id, branch_name: left.branch_name, actor_id: left.actor_id,
       idempotency_key: left.idempotency_key, content_sha256: left.content_sha256, size_bytes: left.size_bytes,
-      expires_at: left.expires_at, source: left.source }) ===
+      expires_at: left.expires_at, purpose: left.purpose, source: left.source }) ===
     JSON.stringify({ project_id: right.project_id, branch_name: right.branch_name, actor_id: right.actor_id,
       idempotency_key: right.idempotency_key, content_sha256: right.content_sha256, size_bytes: right.size_bytes,
-      expires_at: right.expires_at, source: right.source });
+      expires_at: right.expires_at, purpose: right.purpose, source: right.source });
   const lookup = (row: { identity: RemoteContentUploadRecordIdentity; record: RemoteContentUploadHttpRecord; state: "staged" | "stored"; stage_attempt_id?: string }, now: string): RemoteContentUploadRecordLookup => {
     if (Date.parse(row.record.expires_at) <= Date.parse(now)) return { outcome: "expired", record: row.record };
     return row.state === "stored" ? { outcome: "stored", record: row.record } : {

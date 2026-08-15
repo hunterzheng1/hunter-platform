@@ -126,6 +126,7 @@ function identityFromDescriptor(descriptor: RemoteContentUploadHttpRequestDescri
     branch_name: source.branch_name,
     actor_id: source.actor_id,
     idempotency_key: descriptor.headers["Idempotency-Key"],
+    purpose: descriptor.purpose,
     content_sha256: descriptor.headers["X-Content-SHA256"],
     size_bytes: Number(descriptor.headers["Content-Length"]),
     expires_at: new Date(Date.parse(now) + Number(descriptor.headers["X-Upload-Expires-In-Ms"])).toISOString(),
@@ -135,7 +136,7 @@ function identityFromDescriptor(descriptor: RemoteContentUploadHttpRequestDescri
 
 function uploadToken(identity: RemoteContentUploadRecordIdentity): string {
   const digest = createHash("sha256").update(JSON.stringify([
-    identity.project_id, identity.branch_name, identity.actor_id, identity.idempotency_key,
+    identity.project_id, identity.branch_name, identity.actor_id, identity.idempotency_key, identity.purpose,
     identity.content_sha256, identity.size_bytes, identity.expires_at, identity.source.commit_sha ?? null,
     identity.source.client_id ?? null, identity.source.change_key ?? null,
   ])).digest("base64url");
@@ -149,7 +150,7 @@ function recordFor(identity: RemoteContentUploadRecordIdentity, createdAt: strin
     upload_id: `remote_content_upload:${token}`,
     source: identity.source,
     idempotency_key: identity.idempotency_key,
-    purpose: "remote_archive" as const,
+    purpose: identity.purpose,
     content_sha256: identity.content_sha256,
     size_bytes: identity.size_bytes,
     upload_ref: { ref_id: `bounded_upload:${token}`, sha256: identity.content_sha256, size_bytes: identity.size_bytes },
@@ -375,7 +376,8 @@ export function createPgRemoteContentUploadHttpService(options: RemoteContentUpl
         ...(descriptor.headers["X-Change-Key"] === undefined ? {} : { change_key: descriptor.headers["X-Change-Key"] }),
       };
       const lookup = await records.findByStatus({ project_id: source.project_id, branch_name: source.branch_name,
-        actor_id: source.actor_id, idempotency_key: descriptor.headers["Idempotency-Key"], source, now: canonicalNow(now()) });
+        actor_id: source.actor_id, idempotency_key: descriptor.headers["Idempotency-Key"], purpose: descriptor.purpose,
+        source, now: canonicalNow(now()) });
       return statusFor(lookup);
     },
     async claimGarbage(input) {

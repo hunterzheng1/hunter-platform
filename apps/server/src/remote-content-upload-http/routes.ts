@@ -5,6 +5,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import {
   REMOTE_CONTENT_UPLOAD_HTTP_MAX_BYTES,
   REMOTE_CONTENT_UPLOAD_HTTP_MAX_CHUNK_BYTES,
+  REMOTE_CONTENT_UPLOAD_HTTP_MAX_REMOTE_SYNC_FILE_BYTES,
   REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS,
   remoteContentUploadHttpErrorCodeSchema,
   validateRemoteContentUploadHttpRequestDescriptor,
@@ -87,7 +88,7 @@ function pathParams(request: FastifyRequest): { project_id: string; branch_name:
       branch.length === 0 || branch.length > 160 ||
       [...project, ...branch].some((character) => {
         const point = character.codePointAt(0) ?? 0;
-        return point <= 0x1f || point === 0x7f || character === "\\" || character === "/";
+        return point <= 0x1f || point === 0x7f || character === "\\";
       }) || project.trim() !== project || branch.trim() !== branch) {
     fail(400, "VALIDATION_FAILED", "project or branch is invalid");
   }
@@ -156,10 +157,10 @@ function rejectUnsupportedRequestFeatures(request: FastifyRequest): void {
   }
 }
 
-function rejectOversizedContentLength(request: FastifyRequest): void {
+function rejectOversizedContentLength(request: FastifyRequest, maximum = REMOTE_CONTENT_UPLOAD_HTTP_MAX_BYTES): void {
   const value = readHeader(request, "content-length");
   if (value !== undefined && /^[1-9][0-9]+$/u.test(value) &&
-      (value.length > 9 || Number(value) > REMOTE_CONTENT_UPLOAD_HTTP_MAX_BYTES)) {
+      (value.length > 9 || Number(value) > maximum)) {
     fail(413, "REMOTE_CONTENT_UPLOAD_TOO_LARGE", "remote content upload exceeds the maximum size");
   }
 }
@@ -341,13 +342,14 @@ function optionalSourceMatches(actual: string | undefined, expected: string | un
 
 function recordMatchesUploadRequest(
   record: RemoteContentUploadHttpRecord,
+  purpose: RemoteContentUploadHttpRecord["purpose"],
   path: { project_id: string; branch_name: string },
   actorId: string,
   headers: RemoteContentUploadHttpRequestHeaders
 ): boolean {
   const expectedExpiry = Number(headers["X-Upload-Expires-In-Ms"]);
   const actualExpiry = Date.parse(record.expires_at) - Date.parse(record.created_at);
-  return record.source.project_id === path.project_id && record.source.branch_name === path.branch_name &&
+  return record.purpose === purpose && record.source.project_id === path.project_id && record.source.branch_name === path.branch_name &&
     record.source.actor_id === actorId && record.idempotency_key === headers["Idempotency-Key"] &&
     record.content_sha256 === headers["X-Content-SHA256"] &&
     record.size_bytes === Number(headers["Content-Length"]) &&
@@ -361,11 +363,12 @@ function recordMatchesUploadRequest(
 
 function recordMatchesStatusRequest(
   record: RemoteContentUploadHttpRecord,
+  purpose: RemoteContentUploadHttpRecord["purpose"],
   path: { project_id: string; branch_name: string },
   actorId: string,
   headers: RemoteContentUploadHttpStatusHeaders
 ): boolean {
-  return record.source.project_id === path.project_id && record.source.branch_name === path.branch_name &&
+  return record.purpose === purpose && record.source.project_id === path.project_id && record.source.branch_name === path.branch_name &&
     record.source.actor_id === actorId && record.idempotency_key === headers["Idempotency-Key"] &&
     optionalSourceMatches(record.source.commit_sha, headers["X-Commit-SHA"]) &&
     optionalSourceMatches(record.source.client_id, headers["X-Client-Id"]) &&
@@ -374,22 +377,24 @@ function recordMatchesStatusRequest(
 
 function assertUploadResultIdentity(
   result: RemoteContentUploadHttpResult,
+  purpose: RemoteContentUploadHttpRecord["purpose"],
   path: { project_id: string; branch_name: string },
   actorId: string,
   headers: RemoteContentUploadHttpRequestHeaders
 ): void {
-  if (!recordMatchesUploadRequest(result.record, path, actorId, headers)) {
+  if (!recordMatchesUploadRequest(result.record, purpose, path, actorId, headers)) {
     fail(503, "REMOTE_UNAVAILABLE", "remote content upload service returned invalid scope");
   }
 }
 
 function assertStatusRecordIdentity(
   record: RemoteContentUploadHttpRecord,
+  purpose: RemoteContentUploadHttpRecord["purpose"],
   path: { project_id: string; branch_name: string },
   actorId: string,
   headers: RemoteContentUploadHttpStatusHeaders
 ): void {
-  if (!recordMatchesStatusRequest(record, path, actorId, headers)) {
+  if (!recordMatchesStatusRequest(record, purpose, path, actorId, headers)) {
     fail(503, "REMOTE_UNAVAILABLE", "remote content upload service returned invalid scope");
   }
 }
@@ -405,29 +410,65 @@ export function registerRemoteContentUploadHttpRoutes(
     // this encapsulated parser leaves the new route's body as a raw stream.
     child.removeContentTypeParser("application/zip");
     child.addContentTypeParser("application/zip", (_request, payload, done) => done(null, payload));
+    child.removeContentTypeParser("application/octet-stream");
+    child.addContentTypeParser("application/octet-stream", (_request, payload, done) => done(null, payload));
 
-    child.post(
-      "/api/v1/projects/:projectId/branches/:branchName/remote-sync/content-upload",
-      { bodyLimit: REMOTE_CONTENT_UPLOAD_HTTP_MAX_BYTES },
+    const uploadRoutes = [
+      {
+        path: "/api/v1/projects/:projectId/branches/:branchName/remote-sync/content-upload",
+        purpose: "remote_archive" as const,
+        mediaType: "application/zip" as const,
+        scope: "archive:write" as const,
+        operation: "upload_content" as const,
+        maxBytes: REMOTE_CONTENT_UPLOAD_HTTP_MAX_BYTES,
+      },
+      {
+        path: "/api/v1/projects/:projectId/branches/:branchName/remote-sync/file-upload",
+        purpose: "remote_sync_file" as const,
+        mediaType: "application/octet-stream" as const,
+        scope: "files:write" as const,
+        operation: "upload_remote_sync_file" as const,
+        maxBytes: REMOTE_CONTENT_UPLOAD_HTTP_MAX_REMOTE_SYNC_FILE_BYTES,
+      },
+    ];
+    const statusRoutes = [
+      {
+        path: "/api/v1/projects/:projectId/branches/:branchName/remote-sync/content-upload/status",
+        purpose: "remote_archive" as const,
+        scope: "archive:read" as const,
+        operation: "upload_status" as const,
+      },
+      {
+        path: "/api/v1/projects/:projectId/branches/:branchName/remote-sync/file-upload/status",
+        purpose: "remote_sync_file" as const,
+        scope: "files:read" as const,
+        operation: "remote_sync_file_status" as const,
+      },
+    ];
+
+    for (const route of uploadRoutes) child.post(
+      route.path,
+      { bodyLimit: route.maxBytes },
       async (request, reply) => {
-        const { actor, requestId } = await options.authenticated(request, options.repository, "archive:write");
+        const { actor, requestId } = await options.authenticated(request, options.repository, route.scope);
         const path = pathParams(request);
         await bindProject(options.repository, actor.actorId, path.project_id);
         rejectUnsupportedRequestFeatures(request);
-        rejectOversizedContentLength(request);
-        if (readHeader(request, "content-type") !== "application/zip") {
-          fail(415, "REMOTE_CONTENT_UPLOAD_MEDIA_TYPE_UNSUPPORTED", "remote content upload requires application/zip");
+        rejectOversizedContentLength(request, route.maxBytes);
+        if (readHeader(request, "content-type") !== route.mediaType) {
+          fail(415, "REMOTE_CONTENT_UPLOAD_MEDIA_TYPE_UNSUPPORTED", `remote content upload requires ${route.mediaType}`);
         }
         if (resolution.kind !== "ready") unavailable(resolution);
 
         const descriptor = {
           schema_version: 1 as const,
+          purpose: route.purpose,
           path,
           auth: { actor_id: actor.actorId },
           headers: uploadHeaders(request),
           body_stream: {
             kind: "single_binary_stream" as const,
-            media_type: "application/zip" as const,
+            media_type: route.mediaType,
             content_encoding: "identity" as const,
             content_length_bytes: Number(readHeader(request, "content-length")),
             content_sha256: readHeader(request, "x-content-sha256"),
@@ -440,7 +481,7 @@ export function registerRemoteContentUploadHttpRoutes(
         const lifecycle = requestSignal(request);
         try {
           const completion: StreamCompletionTracker = { complete: false };
-          const result = await callService<RemoteContentUploadHttpResult>("upload_content", resolution.methods.stage, {
+          const result = await callService<RemoteContentUploadHttpResult>(route.operation, resolution.methods.stage, {
             descriptor: valid.data,
             chunks: boundedChunks(
               request.body as AsyncIterable<unknown>,
@@ -457,7 +498,7 @@ export function registerRemoteContentUploadHttpRoutes(
           }
           const parsed = validateRemoteContentUploadHttpResult(result);
           if (!parsed.success) fail(503, "REMOTE_UNAVAILABLE", "remote content upload service returned invalid output");
-          assertUploadResultIdentity(parsed.data, path, actor.actorId, valid.data.headers);
+          assertUploadResultIdentity(parsed.data, route.purpose, path, actor.actorId, valid.data.headers);
           return reply.header("X-Request-Id", requestId)
             .code(parsed.data.outcome === "new" ? 201 : 200)
             .send(parsed.data);
@@ -467,16 +508,17 @@ export function registerRemoteContentUploadHttpRoutes(
       }
     );
 
-    child.get(
-      "/api/v1/projects/:projectId/branches/:branchName/remote-sync/content-upload/status",
+    for (const route of statusRoutes) child.get(
+      route.path,
       async (request, reply) => {
-        const { actor, requestId } = await options.authenticated(request, options.repository, "archive:read");
+        const { actor, requestId } = await options.authenticated(request, options.repository, route.scope);
         const path = pathParams(request);
         await bindProject(options.repository, actor.actorId, path.project_id);
         rejectUnsupportedRequestFeatures(request);
         if (resolution.kind !== "ready") unavailable(resolution);
         const descriptor = {
           schema_version: 1 as const,
+          purpose: route.purpose,
           path,
           auth: { actor_id: actor.actorId },
           headers: statusHeaders(request)
@@ -486,14 +528,14 @@ export function registerRemoteContentUploadHttpRoutes(
 
         const lifecycle = requestSignal(request);
         try {
-          const result = await callService("upload_status", resolution.methods.status, {
+          const result = await callService(route.operation, resolution.methods.status, {
             descriptor: valid.data,
             signal: lifecycle.signal
           });
           const parsed = validateRemoteContentUploadHttpStatus(result);
           if (!parsed.success) fail(503, "REMOTE_UNAVAILABLE", "remote content upload service returned invalid output");
           if (parsed.data.record !== null) {
-            assertStatusRecordIdentity(parsed.data.record, path, actor.actorId, valid.data.headers);
+            assertStatusRecordIdentity(parsed.data.record, route.purpose, path, actor.actorId, valid.data.headers);
           }
           return reply.header("X-Request-Id", requestId).code(200).send(parsed.data);
         } finally {

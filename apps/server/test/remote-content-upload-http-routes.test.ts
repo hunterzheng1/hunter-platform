@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   REMOTE_CONTENT_UPLOAD_HTTP_MAX_BYTES,
   REMOTE_CONTENT_UPLOAD_HTTP_MAX_CHUNK_BYTES,
+  REMOTE_CONTENT_UPLOAD_HTTP_MAX_REMOTE_SYNC_FILE_BYTES,
   remoteContentUploadHttpRecordHash,
   remoteContentUploadHttpResultSchema,
   validateRemoteContentUploadHttpResult,
@@ -25,6 +26,7 @@ function uploadResult(input: {
   readonly sizeBytes: number;
   readonly outcome?: "new" | "replay";
   readonly expiresInMs?: number;
+  readonly purpose?: RemoteContentUploadHttpRecord["purpose"];
   readonly source?: Partial<RemoteContentUploadHttpSource>;
 }): RemoteContentUploadHttpResult {
   const uploadRef = {
@@ -42,7 +44,7 @@ function uploadResult(input: {
       ...input.source
     },
     idempotency_key: IDEMPOTENCY_KEY,
-    purpose: "remote_archive",
+    purpose: input.purpose ?? "remote_archive",
     content_sha256: input.sha256,
     size_bytes: input.sizeBytes,
     upload_ref: uploadRef,
@@ -117,6 +119,68 @@ describe("Remote Content Upload HTTP routes", () => {
     expect(serviceValidation).toMatchObject({ success: true });
     if (response.statusCode !== 201) expect(response.json()).toEqual({ expected_status: 201 });
     expect(stage).toHaveBeenCalledOnce();
+  });
+
+  it("stages raw Remote Sync file bytes under files authority and an exact purpose", async () => {
+    const bytes = Buffer.from("remote sync branch file", "utf8");
+    const sha = `sha256:${createHash("sha256").update(bytes).digest("hex")}` as const;
+    const stage = vi.fn(async (input: Parameters<RemoteContentUploadHttpServicePort["stage"]>[0]) => {
+      expect(input.descriptor).toMatchObject({
+        purpose: "remote_sync_file",
+        headers: { "Content-Type": "application/octet-stream" },
+        body_stream: { media_type: "application/octet-stream", content_sha256: sha, content_length_bytes: bytes.length }
+      });
+      const received = [];
+      for await (const chunk of input.chunks) received.push(Buffer.from(chunk.bytes));
+      expect(Buffer.concat(received)).toEqual(bytes);
+      return uploadResult({ projectId, sha256: sha, sizeBytes: bytes.length, purpose: "remote_sync_file" });
+    });
+    const service = { stage, status: vi.fn() } satisfies RemoteContentUploadHttpServicePort;
+    app = await createServer({ repository, storage: new MemoryArtifactStorage(), remoteContentUpload: service });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectId}/branches/main/remote-sync/file-upload`,
+      payload: bytes,
+      headers: {
+        authorization: "Bearer upload-token",
+        "content-type": "application/octet-stream",
+        "content-length": String(bytes.length),
+        "idempotency-key": IDEMPOTENCY_KEY,
+        "x-content-sha256": sha,
+        "x-upload-expires-in-ms": "60000"
+      }
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json().record.purpose).toBe("remote_sync_file");
+    expect(stage).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a raw Remote Sync file above the durable snapshot limit before staging", async () => {
+    const bytes = Buffer.alloc(REMOTE_CONTENT_UPLOAD_HTTP_MAX_REMOTE_SYNC_FILE_BYTES + 1, 0x41);
+    const sha = `sha256:${createHash("sha256").update(bytes).digest("hex")}` as const;
+    const stage = vi.fn();
+    const service = { stage, status: vi.fn() } as unknown as RemoteContentUploadHttpServicePort;
+    app = await createServer({ repository, storage: new MemoryArtifactStorage(), remoteContentUpload: service });
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectId}/branches/main/remote-sync/file-upload`,
+      payload: bytes,
+      headers: {
+        authorization: "Bearer upload-token",
+        "content-type": "application/octet-stream",
+        "content-length": String(bytes.length),
+        "idempotency-key": IDEMPOTENCY_KEY,
+        "x-content-sha256": sha,
+        "x-upload-expires-in-ms": "60000"
+      }
+    });
+
+    expect(response.statusCode).toBe(413);
+    expect(response.json().error.code).toBe("REMOTE_CONTENT_UPLOAD_TOO_LARGE");
+    expect(stage).not.toHaveBeenCalled();
   });
 
   it.each([1, 2, REMOTE_CONTENT_UPLOAD_HTTP_MAX_BYTES / REMOTE_CONTENT_UPLOAD_HTTP_MAX_CHUNK_BYTES])(

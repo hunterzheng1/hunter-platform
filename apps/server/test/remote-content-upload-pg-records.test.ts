@@ -57,6 +57,7 @@ function stagedFixture(expiresAt = "2026-08-15T00:01:00.000Z") {
     branch_name: source.branch_name,
     actor_id: source.actor_id,
     idempotency_key: idempotencyKey,
+    purpose: body.purpose,
     content_sha256: contentSha256,
     size_bytes: body.size_bytes,
     expires_at: expiresAt,
@@ -225,6 +226,40 @@ describe("Pg remote content upload durable records", () => {
       expect(candidateQueries[0]).toContain("record_json->'lease'->>'expires_at'");
       expect(liveQueries).toHaveLength(1);
     }
+  });
+
+  it("pins a Remote Sync committing upload ref across HTTP expiry in every GC phase", async () => {
+    const source = await readFile(fileURLToPath(new URL("../src/remote-content-upload-pg/pg-records.ts", import.meta.url)), "utf8");
+    expect(source.match(/p\.state IN \('committing','committed'\) OR \(p\.state='prepared' AND/gu)).toHaveLength(4);
+    expect(source).not.toMatch(/p\.state='committed' OR \(p\.state IN \('prepared','committing'\)/u);
+    expect(source.match(/p\.files_json @>/gu)).toHaveLength(4);
+    expect(source).not.toContain("jsonb_array_elements(p.files_json)");
+
+    const input = stagedFixture("2026-08-15T00:01:00.000Z");
+    const pool = poolFor((sql) => {
+      if (sql.includes("FROM remote_content_upload_cas_objects c")) {
+        return { rows: [{ content_sha256: input.content_sha256, size_bytes: input.size_bytes }], rowCount: 1 };
+      }
+      if (sql.includes("FROM remote_content_upload_cas_objects") && sql.includes("FOR UPDATE")) {
+        return { rows: [{ content_sha256: input.content_sha256, size_bytes: input.size_bytes,
+          state: "ready", gc_batch_id: null }], rowCount: 1 };
+      }
+      if (sql.includes("SELECT 1 FROM remote_content_uploads")) {
+        return sql.includes("p.state IN ('committing','committed')")
+          ? { rows: [{ live: 1 }], rowCount: 1 }
+          : empty();
+      }
+      return empty();
+    });
+    const records = new PgRemoteContentUploadRecordPort(pool);
+    const claim = await records.claimGarbage({
+      project_id: input.project_id,
+      now: "2026-08-15T03:00:00.000Z",
+      limit: 1,
+      worker_id: "worker_remote_sync_committing",
+      lease_until: "2026-08-15T03:01:00.000Z",
+    });
+    expect(claim.refs).toEqual([]);
   });
 
   it("does not let an old acknowledged batch finalize an object reclaimed by a new batch", async () => {

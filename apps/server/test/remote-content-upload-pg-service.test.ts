@@ -23,6 +23,7 @@ const token = "a".repeat(64);
 function descriptor(bytes: Uint8Array, overrides: Partial<RemoteContentUploadHttpRequestDescriptor> = {}): RemoteContentUploadHttpRequestDescriptor {
   return {
     schema_version: 1,
+    purpose: "remote_archive",
     path: { project_id: "prj_upload", branch_name: "main" },
     auth: { actor_id: "actor_upload" },
     headers: {
@@ -137,6 +138,26 @@ describe("Pg remote content upload service", () => {
     const first = await service.stage({ descriptor: request, chunks: chunks(bytes) });
     const second = await service.stage({ descriptor: request, chunks: chunks(bytes) });
     expect(first.outcome).toBe("new"); expect(second.outcome).toBe("replay"); expect(cas.published.size).toBe(1);
+  });
+
+  it("persists raw Remote Sync file uploads under an exact purpose identity", async () => {
+    const bytes = Buffer.from("remote sync file", "utf8");
+    const cas = makeCas();
+    const records = makeRecords();
+    const service = createPgRemoteContentUploadHttpService({ pool: {} as never, cas, records,
+      now: () => "2026-08-15T00:00:00.000Z" });
+    const base = descriptor(bytes);
+    const request = descriptor(bytes, {
+      purpose: "remote_sync_file",
+      headers: { ...base.headers, "Content-Type": "application/octet-stream" },
+      body_stream: { ...base.body_stream, media_type: "application/octet-stream" },
+    });
+
+    const result = await service.stage({ descriptor: request, chunks: chunks(bytes) });
+
+    expect(result.record.purpose).toBe("remote_sync_file");
+    expect([...records.values.values()]).toHaveLength(1);
+    expect([...records.values.values()][0]?.purpose).toBe("remote_sync_file");
   });
 
   it("keeps a 15-minute upload claim live through a valid 11-minute stream", async () => {

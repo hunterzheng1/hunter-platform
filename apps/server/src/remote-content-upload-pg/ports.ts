@@ -42,6 +42,7 @@ export interface RemoteContentUploadRecordIdentity {
   readonly branch_name: string;
   readonly actor_id: string;
   readonly idempotency_key: string;
+  readonly purpose: RemoteContentUploadHttpRecord["purpose"];
   readonly content_sha256: string;
   readonly size_bytes: number;
   readonly expires_at: string;
@@ -110,6 +111,7 @@ export interface RemoteContentUploadRecordPort {
     readonly branch_name: string;
     readonly actor_id: string;
     readonly idempotency_key: string;
+    readonly purpose: RemoteContentUploadHttpRecord["purpose"];
     readonly source: RemoteContentUploadHttpSource;
     readonly now: string;
   }): Promise<RemoteContentUploadRecordLookup>;

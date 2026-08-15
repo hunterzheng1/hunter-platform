@@ -88,6 +88,7 @@ function identityMatches(record: RemoteContentUploadHttpRecord, input: RemoteCon
   const inputTtl = Date.parse(input.expires_at) - Date.parse(now);
   return record.source.project_id === input.project_id && record.source.branch_name === input.branch_name &&
     record.source.actor_id === input.actor_id && record.idempotency_key === input.idempotency_key &&
+    record.purpose === input.purpose &&
     record.content_sha256 === input.content_sha256 && record.size_bytes === input.size_bytes &&
     Number.isFinite(recordTtl) && Number.isFinite(inputTtl) && recordTtl === inputTtl &&
     sameOptional(record.source.commit_sha, input.source.commit_sha) &&
@@ -113,6 +114,7 @@ function statusLookupRow(row: UploadRow | undefined, input: {
   readonly branch_name: string;
   readonly actor_id: string;
   readonly idempotency_key: string;
+  readonly purpose: RemoteContentUploadHttpRecord["purpose"];
   readonly source: RemoteContentUploadHttpSource;
   readonly now: string;
 }): RemoteContentUploadRecordLookup {
@@ -120,6 +122,7 @@ function statusLookupRow(row: UploadRow | undefined, input: {
   const record = recordFromRow(row);
   if (record.source.project_id !== input.project_id || record.source.branch_name !== input.branch_name ||
       record.source.actor_id !== input.actor_id || record.idempotency_key !== input.idempotency_key ||
+      record.purpose !== input.purpose ||
       !sameOptional(record.source.commit_sha, input.source.commit_sha) ||
       !sameOptional(record.source.client_id, input.source.client_id) ||
       !sameOptional(record.source.change_key, input.source.change_key)) {
@@ -172,6 +175,7 @@ export class PgRemoteContentUploadRecordPort implements RemoteContentUploadRecor
     readonly branch_name: string;
     readonly actor_id: string;
     readonly idempotency_key: string;
+    readonly purpose: RemoteContentUploadHttpRecord["purpose"];
     readonly source: RemoteContentUploadHttpSource;
     readonly now: string;
   }): Promise<RemoteContentUploadRecordLookup> {
@@ -267,7 +271,8 @@ export class PgRemoteContentUploadRecordPort implements RemoteContentUploadRecor
       return lookupRow(row, {
         project_id: input.project_id, branch_name: input.record.source.branch_name, actor_id: input.actor_id,
         idempotency_key: input.idempotency_key, content_sha256: input.record.content_sha256,
-        size_bytes: input.record.size_bytes, expires_at: input.record.expires_at, source: input.record.source,
+        size_bytes: input.record.size_bytes, expires_at: input.record.expires_at, purpose: input.record.purpose,
+        source: input.record.source,
       }, input.record.created_at);
     });
   }
@@ -302,6 +307,7 @@ export class PgRemoteContentUploadRecordPort implements RemoteContentUploadRecor
         branch_name: input.branch_name,
         actor_id: input.actor_id,
         idempotency_key: input.idempotency_key,
+        purpose: input.record.purpose,
         content_sha256: input.record.content_sha256,
         size_bytes: input.record.size_bytes,
         expires_at: input.record.expires_at,
@@ -496,6 +502,11 @@ export class PgRemoteContentUploadRecordPort implements RemoteContentUploadRecor
               AND a.record_json->'upload_ref'->>'size_bytes'=c.size_bytes::text
               AND (a.state='committed' OR (a.state IN ('prepared','committing')
                 AND a.record_json->'lease'->>'expires_at'>$4)))
+          AND NOT EXISTS (SELECT 1 FROM remote_sync_http_pushes p
+            WHERE p.project_id=c.project_id
+              AND p.files_json @> jsonb_build_array(jsonb_build_object('upload_ref',
+                jsonb_build_object('sha256',c.content_sha256,'size_bytes',c.size_bytes)))
+              AND (p.state IN ('committing','committed') OR (p.state='prepared' AND p.expires_at>$4)))
         ORDER BY c.content_sha256 LIMIT $3`,
       [input.project_id, input.now, input.limit, input.now]);
       await client.query(`INSERT INTO remote_content_upload_gc_batches
@@ -519,11 +530,17 @@ export class PgRemoteContentUploadRecordPort implements RemoteContentUploadRecor
               OR (u.state='stored' AND u.expires_at>$3))
           UNION ALL
           SELECT 1 FROM remote_archive_v2_records a
-          WHERE a.project_id=$1
+            WHERE a.project_id=$1
             AND a.record_json->'upload_ref'->>'sha256'=$2
             AND a.record_json->'upload_ref'->>'size_bytes'=$4
             AND (a.state='committed' OR (a.state IN ('prepared','committing')
               AND a.record_json->'lease'->>'expires_at'>$5))
+          UNION ALL
+          SELECT 1 FROM remote_sync_http_pushes p
+            WHERE p.project_id=$1
+              AND p.files_json @> jsonb_build_array(jsonb_build_object('upload_ref',
+                jsonb_build_object('sha256',$2,'size_bytes',$4::bigint)))
+              AND (p.state IN ('committing','committed') OR (p.state='prepared' AND p.expires_at>$5))
           LIMIT 1`,
         [input.project_id, ref.sha256, input.now, String(current.rows[0].size_bytes), input.now]);
         if ((live.rowCount ?? 0) !== 0) continue;
@@ -577,11 +594,17 @@ export class PgRemoteContentUploadRecordPort implements RemoteContentUploadRecor
               OR (state='stored' AND expires_at>$3))
           UNION ALL
           SELECT 1 FROM remote_archive_v2_records a
-          WHERE a.project_id=$1
+            WHERE a.project_id=$1
             AND a.record_json->'upload_ref'->>'sha256'=$2
             AND a.record_json->'upload_ref'->>'size_bytes'=$4
             AND (a.state='committed' OR (a.state IN ('prepared','committing')
               AND a.record_json->'lease'->>'expires_at'>$5))
+          UNION ALL
+          SELECT 1 FROM remote_sync_http_pushes p
+            WHERE p.project_id=$1
+              AND p.files_json @> jsonb_build_array(jsonb_build_object('upload_ref',
+                jsonb_build_object('sha256',$2,'size_bytes',$4::bigint)))
+              AND (p.state IN ('committing','committed') OR (p.state='prepared' AND p.expires_at>$5))
           LIMIT 1`,
         [input.project_id, item.content_sha256, input.now, String(object.size_bytes), input.now]);
         if (live.rowCount === 0) {
@@ -633,12 +656,18 @@ export class PgRemoteContentUploadRecordPort implements RemoteContentUploadRecor
               OR (state='stored' AND expires_at>now()))
           UNION ALL
           SELECT 1 FROM remote_archive_v2_records a
-          WHERE a.project_id=$1
+            WHERE a.project_id=$1
             AND a.record_json->'upload_ref'->>'sha256'=$2
             AND a.record_json->'upload_ref'->>'size_bytes'=$3
             AND (a.state='committed' OR (a.state IN ('prepared','committing')
               AND a.record_json->'lease'->>'expires_at'>
                 to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')))
+          UNION ALL
+          SELECT 1 FROM remote_sync_http_pushes p
+            WHERE p.project_id=$1
+              AND p.files_json @> jsonb_build_array(jsonb_build_object('upload_ref',
+                jsonb_build_object('sha256',$2,'size_bytes',$3::bigint)))
+              AND (p.state IN ('committing','committed') OR (p.state='prepared' AND p.expires_at>clock_timestamp()))
           LIMIT 1`,
         [input.project_id, item.content_sha256, String(object.size_bytes)]);
         if ((live.rowCount ?? 0) === 0) {
