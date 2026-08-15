@@ -2,11 +2,13 @@ import { isProxy } from "node:util/types";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import {
+  REMOTE_SYNC_ARCHIVE_HTTP_OPERATIONS,
   remoteSyncArchiveHttpErrorCodeSchema,
+  remoteSyncArchiveHttpStableHash,
   validateRemoteSyncArchiveCommitHttpRequest,
   validateRemoteSyncArchiveCommitHttpResponse,
   validateRemoteSyncArchiveLookupHttpRequest,
-  validateRemoteSyncArchivePrepareHttpRequest,
+  validateRemoteSyncArchivePrepareHttpRequestStructure,
   validateRemoteSyncArchivePrepareHttpResponse,
   validateRemoteSyncArchiveReceiptHttpResponse,
   validateRemoteSyncArchiveStatusHttpResponse,
@@ -36,6 +38,7 @@ type Methods = {
   readonly status: RemoteSyncArchiveHttpServicePort["status"];
   readonly receipt: RemoteSyncArchiveHttpServicePort["receipt"];
 };
+type ArchiveOperation = keyof typeof REMOTE_SYNC_ARCHIVE_HTTP_OPERATIONS;
 
 function fail(status: number, code: string, message: string): never {
   throw new ServerDomainError(status, code, message);
@@ -108,7 +111,27 @@ function sourceFor(path: { project_id: string; branch_name: string }, actorId: s
   return source as RemoteSyncArchiveSourceHttp;
 }
 
-function mapError(error: unknown): never {
+function sameSource(left: RemoteSyncArchiveSourceHttp, right: RemoteSyncArchiveSourceHttp): boolean {
+  return left.project_id === right.project_id && left.branch_name === right.branch_name && left.actor_id === right.actor_id &&
+    left.commit_sha === right.commit_sha && left.client_id === right.client_id && left.change_key === right.change_key;
+}
+
+function assertResponseSource(actual: RemoteSyncArchiveSourceHttp, expected: RemoteSyncArchiveSourceHttp): void {
+  if (!sameSource(actual, expected)) fail(503, "REMOTE_UNAVAILABLE", "remote archive service returned an out-of-scope record");
+}
+
+function serviceErrorStatus(operation: ArchiveOperation, code: string): number | null {
+  // Authentication and project authority are established by this route. An
+  // adapter may only select a declared archive-domain outcome for its endpoint.
+  if (!code.startsWith("REMOTE_ARCHIVE_")) return null;
+  const errors = REMOTE_SYNC_ARCHIVE_HTTP_OPERATIONS[operation].errors;
+  for (const [status, codes] of Object.entries(errors)) {
+    if (codes.includes(code)) return Number(status);
+  }
+  return null;
+}
+
+function mapError(operation: ArchiveOperation, error: unknown): never {
   let code: unknown;
   try {
     if (error !== null && typeof error === "object" && !isProxy(error)) {
@@ -118,13 +141,8 @@ function mapError(error: unknown): never {
   } catch { code = undefined; }
   const parsed = typeof code === "string" ? remoteSyncArchiveHttpErrorCodeSchema.safeParse(code) : null;
   if (parsed === null || !parsed.success) fail(503, "REMOTE_UNAVAILABLE", "remote archive service is unavailable");
-  const status = parsed.data === "REMOTE_ARCHIVE_IDEMPOTENCY_CONFLICT" || parsed.data === "REMOTE_ARCHIVE_LEASE_FENCED" ||
-    parsed.data === "REMOTE_ARCHIVE_LEASE_SCOPE_MISMATCH" || parsed.data === "REMOTE_ARCHIVE_CAPABILITY_UNAVAILABLE" ||
-    parsed.data === "REMOTE_ARCHIVE_COMMIT_AMBIGUOUS" ? 409
-    : parsed.data === "REMOTE_ARCHIVE_PREPARE_NOT_FOUND" ? 404
-      : parsed.data === "REMOTE_ARCHIVE_PREPARE_EXPIRED" ? 410
-        : parsed.data === "REMOTE_ARCHIVE_PAYLOAD_HASH_MISMATCH" ? 422
-          : parsed.data === "REMOTE_ARCHIVE_INPUT_INVALID" || parsed.data === "REMOTE_ARCHIVE_RECORD_INVALID" ? 400 : 503;
+  const status = serviceErrorStatus(operation, parsed.data);
+  if (status === null || status === 503) fail(503, "REMOTE_UNAVAILABLE", "remote archive service is unavailable");
   fail(status, parsed.data, "remote archive operation failed");
 }
 
@@ -136,23 +154,28 @@ function nativePromise<T>(value: unknown): Promise<T> | null {
   } catch { return null; }
 }
 
-async function call<T, I>(method: (input: I) => unknown, input: I): Promise<T> {
+async function call<T, I>(operation: ArchiveOperation, method: (input: I) => unknown, input: I): Promise<T> {
   let raw: unknown;
-  try { raw = Reflect.apply(method, undefined, [input]); } catch (error) { return mapError(error); }
+  try { raw = Reflect.apply(method, undefined, [input]); } catch (error) { return mapError(operation, error); }
   const promise = nativePromise<T>(raw);
   if (promise === null) fail(503, "REMOTE_UNAVAILABLE", "remote archive service is unavailable");
-  try { return await promise; } catch (error) { return mapError(error); }
+  try { return await promise; } catch (error) { return mapError(operation, error); }
 }
 
-function validate<T>(result: { success: boolean; data?: T }, message: string): T {
+function validateRequest<T>(result: { success: boolean; data?: T }, message: string): T {
+  if (!result.success) fail(400, "REMOTE_ARCHIVE_INPUT_INVALID", message);
+  return result.data as T;
+}
+
+function validateResponse<T>(result: { success: boolean; data?: T }, message: string): T {
   if (!result.success) fail(503, "REMOTE_UNAVAILABLE", message);
   return result.data as T;
 }
 
 function fastifyPath(path: string): string {
   return path.replace("{project_id}", ":projectId").replace("{branch_name}", ":branchName")
-    .replace("{operation_id}", ":operationId").replace("/archive:prepare", "/archive/prepare")
-    .replace("/archive:commit", "/archive/commit");
+    .replace("{operation_id}", ":operationId").replace("/archive:prepare", "/archive::prepare")
+    .replace("/archive:commit", "/archive::commit");
 }
 
 export function registerRemoteSyncArchiveHttpRoutes(app: FastifyInstance, options: RemoteSyncArchiveHttpRoutesOptions): void {
@@ -165,14 +188,17 @@ export function registerRemoteSyncArchiveHttpRoutes(app: FastifyInstance, option
     if (methods === null) fail(503, "REMOTE_UNAVAILABLE", options.service === undefined ? "remote archive service is not configured" : "remote archive service is unavailable");
     const body = bodyRecord(request);
     const idem = requiredHeader(request, "idempotency-key");
-    const candidate = validate<RemoteSyncArchivePrepareHttpRequest>(validateRemoteSyncArchivePrepareHttpRequest(body), "remote archive request is invalid");
+    const candidate = validateRequest<RemoteSyncArchivePrepareHttpRequest>(
+      validateRemoteSyncArchivePrepareHttpRequestStructure(body), "remote archive request is invalid"
+    );
+    if (candidate.payload_hash !== remoteSyncArchiveHttpStableHash(candidate.metadata)) {
+      fail(422, "REMOTE_ARCHIVE_PAYLOAD_HASH_MISMATCH", "remote archive payload hash does not match metadata");
+    }
     if (candidate.idempotency_key !== idem) fail(409, "REMOTE_ARCHIVE_IDEMPOTENCY_CONFLICT", "Idempotency-Key does not match request");
     sourceFor(path, actor.actorId, candidate.metadata.source);
-    const result = await call(methods.prepare, candidate as unknown as Parameters<typeof methods.prepare>[0]);
-    const response = validate(validateRemoteSyncArchivePrepareHttpResponse(result), "remote archive service returned invalid response");
-    if (response.record.source.project_id !== path.project_id || response.record.source.branch_name !== path.branch_name || response.record.source.actor_id !== actor.actorId) {
-      fail(503, "REMOTE_UNAVAILABLE", "remote archive service returned an out-of-scope record");
-    }
+    const result = await call("prepare_archive", methods.prepare, candidate as unknown as Parameters<typeof methods.prepare>[0]);
+    const response = validateResponse(validateRemoteSyncArchivePrepareHttpResponse(result), "remote archive service returned invalid response");
+    assertResponseSource(response.record.source, candidate.metadata.source);
     return reply.header("X-Request-Id", requestId).code(response.outcome === "new" ? 201 : 200).send(response);
   };
 
@@ -183,29 +209,36 @@ export function registerRemoteSyncArchiveHttpRoutes(app: FastifyInstance, option
     if (methods === null) fail(503, "REMOTE_UNAVAILABLE", options.service === undefined ? "remote archive service is not configured" : "remote archive service is unavailable");
     const body = bodyRecord(request);
     const idem = requiredHeader(request, "idempotency-key");
-    const candidate = validate<RemoteSyncArchiveCommitHttpRequest>(validateRemoteSyncArchiveCommitHttpRequest(body), "remote archive commit request is invalid");
+    const candidate = validateRequest<RemoteSyncArchiveCommitHttpRequest>(validateRemoteSyncArchiveCommitHttpRequest(body), "remote archive commit request is invalid");
     if (candidate.idempotency_key !== idem) fail(409, "REMOTE_ARCHIVE_IDEMPOTENCY_CONFLICT", "Idempotency-Key does not match request");
     sourceFor(path, actor.actorId, candidate.claim.source);
     // HTTP carries idempotency/payload echoes for transport binding; the Core
     // commit seam consumes the authoritative fenced claim only.
-    const result = await call(methods.commit, { claim: candidate.claim } as unknown as Parameters<typeof methods.commit>[0]);
-    const response = validate(validateRemoteSyncArchiveCommitHttpResponse(result), "remote archive service returned invalid response");
-    if (response.record.source.project_id !== path.project_id || response.record.source.branch_name !== path.branch_name || response.record.source.actor_id !== actor.actorId) {
-      fail(503, "REMOTE_UNAVAILABLE", "remote archive service returned an out-of-scope record");
-    }
+    const result = await call("commit_archive", methods.commit, { claim: candidate.claim } as unknown as Parameters<typeof methods.commit>[0]);
+    const response = validateResponse(validateRemoteSyncArchiveCommitHttpResponse(result), "remote archive service returned invalid response");
+    assertResponseSource(response.record.source, candidate.claim.source);
     return reply.header("X-Request-Id", requestId).code(200).send(response);
   };
 
   const lookupInput = (request: FastifyRequest, actor: Actor, operationIdOverride?: unknown): RemoteSyncArchiveLookupHttpRequest => {
     const path = pathParams(request);
-    const query = request.query as Record<string, unknown>;
-    const source = {
-      project_id: path.project_id, branch_name: path.branch_name, actor_id: actor.actorId,
-      ...(typeof query.commit_sha === "string" ? { commit_sha: query.commit_sha } : {}),
-      ...(typeof query.client_id === "string" ? { client_id: query.client_id } : {}),
-      ...(typeof query.change_key === "string" ? { change_key: query.change_key } : {})
+    const queryValue = request.query;
+    if (queryValue === null || typeof queryValue !== "object" || Array.isArray(queryValue) || isProxy(queryValue)) {
+      fail(400, "REMOTE_ARCHIVE_INPUT_INVALID", "remote archive lookup query is invalid");
+    }
+    const query = queryValue as Record<string, unknown>;
+    const source: Record<string, unknown> = {
+      project_id: path.project_id, branch_name: path.branch_name, actor_id: query.actor_id
     };
-    return validate<RemoteSyncArchiveLookupHttpRequest>(validateRemoteSyncArchiveLookupHttpRequest({ operation_id: operationIdOverride ?? query.operation_id, source }), "remote archive lookup request is invalid");
+    for (const field of ["commit_sha", "client_id", "change_key"] as const) {
+      if (Object.hasOwn(query, field)) source[field] = query[field];
+    }
+    const candidate = validateRequest<RemoteSyncArchiveLookupHttpRequest>(
+      validateRemoteSyncArchiveLookupHttpRequest({ operation_id: operationIdOverride ?? query.operation_id, source }),
+      "remote archive lookup request is invalid"
+    );
+    sourceFor(path, actor.actorId, candidate.source);
+    return candidate;
   };
 
   const status = async (request: FastifyRequest, reply: FastifyReply) => {
@@ -214,8 +247,9 @@ export function registerRemoteSyncArchiveHttpRoutes(app: FastifyInstance, option
     await bindProject(options.repository, actor.actorId, path.project_id);
     if (methods === null) fail(503, "REMOTE_UNAVAILABLE", options.service === undefined ? "remote archive service is not configured" : "remote archive service is unavailable");
     const input = lookupInput(request, actor);
-    const result = await call(methods.status, input as unknown as Parameters<typeof methods.status>[0]);
-    const response = validate(validateRemoteSyncArchiveStatusHttpResponse(result), "remote archive service returned invalid status");
+    const result = await call("archive_status", methods.status, input as unknown as Parameters<typeof methods.status>[0]);
+    const response = validateResponse(validateRemoteSyncArchiveStatusHttpResponse(result), "remote archive service returned invalid status");
+    if (response.record !== null) assertResponseSource(response.record.source, input.source);
     return reply.header("X-Request-Id", requestId).code(200).send(response);
   };
 
@@ -226,8 +260,9 @@ export function registerRemoteSyncArchiveHttpRoutes(app: FastifyInstance, option
     if (methods === null) fail(503, "REMOTE_UNAVAILABLE", options.service === undefined ? "remote archive service is not configured" : "remote archive service is unavailable");
     const params = request.params as Record<string, unknown>;
     const input = lookupInput(request, actor, params.operationId);
-    const value = await call(methods.receipt, input as unknown as Parameters<typeof methods.receipt>[0]);
-    const response = validate(validateRemoteSyncArchiveReceiptHttpResponse({ receipt: value }), "remote archive service returned invalid receipt");
+    const value = await call("archive_receipt", methods.receipt, input as unknown as Parameters<typeof methods.receipt>[0]);
+    const response = validateResponse(validateRemoteSyncArchiveReceiptHttpResponse({ receipt: value }), "remote archive service returned invalid receipt");
+    if (response.receipt !== null) assertResponseSource(response.receipt.source, input.source);
     return reply.header("X-Request-Id", requestId).code(200).send(response);
   };
 

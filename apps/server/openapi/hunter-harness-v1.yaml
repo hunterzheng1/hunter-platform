@@ -1613,10 +1613,22 @@ paths:
         - name: operation_id
           in: query
           required: true
-          schema: { type: string, pattern: "^remote_archive_operation:.{1,216}$" }
+          schema: { type: string, pattern: "^remote_archive_operation:.{1,215}$" }
         - name: actor_id
           in: query
           required: true
+          schema: { type: string, minLength: 1, maxLength: 160 }
+        - name: commit_sha
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 160 }
+        - name: client_id
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 160 }
+        - name: change_key
+          in: query
+          required: false
           schema: { type: string, minLength: 1, maxLength: 160 }
         - $ref: "#/components/parameters/RequestId"
       responses:
@@ -1651,10 +1663,22 @@ paths:
         - name: operation_id
           in: path
           required: true
-          schema: { type: string, pattern: "^remote_archive_operation:.{1,216}$" }
+          schema: { type: string, pattern: "^remote_archive_operation:.{1,215}$" }
         - name: actor_id
           in: query
           required: true
+          schema: { type: string, minLength: 1, maxLength: 160 }
+        - name: commit_sha
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 160 }
+        - name: client_id
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 160 }
+        - name: change_key
+          in: query
+          required: false
           schema: { type: string, minLength: 1, maxLength: 160 }
         - $ref: "#/components/parameters/RequestId"
       responses:
@@ -5014,7 +5038,7 @@ components:
       properties:
         schema_version: { type: integer, const: 2 }
         receipt_id: { type: string, pattern: "^remote_archive_receipt:sha256:[a-f0-9]{64}$" }
-        operation_id: { type: string, pattern: "^remote_archive_operation:.{1,216}$" }
+        operation_id: { type: string, pattern: "^remote_archive_operation:.{1,215}$" }
         prepare_id: { type: string, pattern: "^remote_archive_prepare:sha256:[a-f0-9]{64}$" }
         idempotency_key: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
         payload_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
@@ -5035,7 +5059,7 @@ components:
       required: [schema_version, operation_id, prepare_id, idempotency_key, payload_hash, source, archive_id, identities, upload_ref, state, generation, lease, receipt, failure_code, created_at, updated_at, record_hash]
       properties:
         schema_version: { type: integer, const: 2 }
-        operation_id: { type: string, pattern: "^remote_archive_operation:.{1,216}$" }
+        operation_id: { type: string, pattern: "^remote_archive_operation:.{1,215}$" }
         prepare_id: { type: string, pattern: "^remote_archive_prepare:sha256:[a-f0-9]{64}$" }
         idempotency_key: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
         payload_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
@@ -5062,19 +5086,19 @@ components:
       additionalProperties: false
       required: [operation_id, prepare_id, source, generation, fencing_token, capability]
       properties:
-        operation_id: { type: string, pattern: "^remote_archive_operation:.{1,216}$" }
+        operation_id: { type: string, pattern: "^remote_archive_operation:.{1,215}$" }
         prepare_id: { type: string, pattern: "^remote_archive_prepare:sha256:[a-f0-9]{64}$" }
         source: { $ref: "#/components/schemas/RemoteSyncArchiveSourceHttp" }
         generation: { type: integer, minimum: 1 }
         fencing_token: { type: integer, minimum: 1 }
-        capability: { type: string, pattern: "^remote_archive_capability:.{1,216}$" }
+        capability: { type: string, pattern: "^remote_archive_capability:.{1,214}$" }
     RemoteSyncArchivePrepareHttpRequest:
       type: object
       additionalProperties: false
       required: [schema_version, operation_id, idempotency_key, payload_hash, lease_ttl_ms, metadata]
       properties:
         schema_version: { type: integer, const: 2 }
-        operation_id: { type: string, pattern: "^remote_archive_operation:.{1,216}$" }
+        operation_id: { type: string, pattern: "^remote_archive_operation:.{1,215}$" }
         idempotency_key: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
         payload_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
         lease_ttl_ms: { type: integer, minimum: 1, maximum: 600000 }
@@ -5111,7 +5135,7 @@ components:
       additionalProperties: false
       required: [operation_id, state, record]
       properties:
-        operation_id: { type: string, pattern: "^remote_archive_operation:.{1,216}$" }
+        operation_id: { type: string, pattern: "^remote_archive_operation:.{1,215}$" }
         state: { type: string, enum: [pending, prepared, committing, committed, failed, unknown] }
         record:
           oneOf: [{ $ref: "#/components/schemas/RemoteSyncArchiveRecordHttp" }, { type: "null" }]

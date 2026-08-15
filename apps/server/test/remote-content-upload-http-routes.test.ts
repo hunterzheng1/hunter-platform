@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import {
+  REMOTE_CONTENT_UPLOAD_HTTP_MAX_BYTES,
+  REMOTE_CONTENT_UPLOAD_HTTP_MAX_CHUNK_BYTES,
   remoteContentUploadHttpRecordHash,
   remoteContentUploadHttpResultSchema,
   validateRemoteContentUploadHttpResult,
@@ -9,6 +11,7 @@ import {
 } from "@hunter-harness/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServer } from "../src/app.js";
+import { boundedChunks } from "../src/remote-content-upload-http/routes.js";
 import type { RemoteContentUploadHttpServicePort } from "../src/remote-content-upload-http/index.js";
 import { MemoryRepository } from "../src/repositories/memory.js";
 import { MemoryArtifactStorage } from "../src/storage/memory.js";
@@ -115,6 +118,37 @@ describe("Remote Content Upload HTTP routes", () => {
     if (response.statusCode !== 201) expect(response.json()).toEqual({ expected_status: 201 });
     expect(stage).toHaveBeenCalledOnce();
   });
+
+  it.each([1, 2, REMOTE_CONTENT_UPLOAD_HTTP_MAX_BYTES / REMOTE_CONTENT_UPLOAD_HTTP_MAX_CHUNK_BYTES])(
+    "keeps an exact %i MiB body valid through the delayed-final-chunk boundary",
+    async (megabytes) => {
+      const block = Buffer.alloc(REMOTE_CONTENT_UPLOAD_HTTP_MAX_CHUNK_BYTES, 0x5a);
+      const expectedSize = megabytes * REMOTE_CONTENT_UPLOAD_HTTP_MAX_CHUNK_BYTES;
+      const digest = createHash("sha256");
+      for (let index = 0; index < megabytes; index += 1) digest.update(block);
+      async function* body(): AsyncIterable<Uint8Array> {
+        for (let index = 0; index < megabytes; index += 1) yield block;
+      }
+
+      const completion = { complete: false };
+      let chunks = 0;
+      let total = 0;
+      let finalChunks = 0;
+      for await (const chunk of boundedChunks(
+        body(), expectedSize, `sha256:${digest.digest("hex")}`, new AbortController().signal, completion
+      )) {
+        chunks += 1;
+        total += chunk.size;
+        if (chunk.final) finalChunks += 1;
+      }
+
+      expect(chunks).toBe(megabytes);
+      expect(total).toBe(expectedSize);
+      expect(finalChunks).toBe(1);
+      expect(completion.complete).toBe(true);
+    },
+    60_000
+  );
 
   it("keeps a trusted stage unpublished when the trailing raw stream hash fails", async () => {
     const bytes = Buffer.alloc(1024 * 1024 + 1, 0x50);
@@ -332,6 +366,43 @@ describe("Remote Content Upload HTTP routes", () => {
     });
     expect(response.body).not.toContain("service-getter-secret");
     expect(traps).toBe(0);
+  });
+
+  it("fails closed when an adapter reports a known content-upload code for the wrong endpoint", async () => {
+    const bytes = Buffer.from("PK\u0003\u0004wrong-endpoint-code");
+    const sha256 = `sha256:${createHash("sha256").update(bytes).digest("hex")}` as const;
+    const service = {
+      stage: async () => { throw Object.assign(new Error("stage-secret"), { code: "REMOTE_CONTENT_UPLOAD_SCOPE_MISMATCH" }); },
+      status: async () => { throw Object.assign(new Error("status-secret"), { code: "REMOTE_CONTENT_UPLOAD_EXPIRED" }); }
+    } satisfies RemoteContentUploadHttpServicePort;
+    app = await createServer({ repository, storage: new MemoryArtifactStorage(), remoteContentUpload: service });
+    const [upload, status] = await Promise.all([
+      app.inject({ method: "POST", url: `/api/v1/projects/${projectId}/branches/main/remote-sync/content-upload`,
+        headers: {
+          authorization: "Bearer upload-token", "content-type": "application/zip", "content-length": String(bytes.length),
+          "idempotency-key": IDEMPOTENCY_KEY, "x-content-sha256": sha256, "x-upload-expires-in-ms": "60000"
+        }, payload: bytes }),
+      app.inject({ method: "GET", url: `/api/v1/projects/${projectId}/branches/main/remote-sync/content-upload/status`,
+        headers: { authorization: "Bearer upload-token", "idempotency-key": IDEMPOTENCY_KEY } })
+    ]);
+    for (const response of [upload, status]) {
+      expect(response.statusCode).toBe(503);
+      expect(response.json().error.code).toBe("REMOTE_UNAVAILABLE");
+      expect(response.body).not.toContain("secret");
+    }
+  });
+
+  it("fails closed when a content-upload adapter tries to report an authentication failure", async () => {
+    const service = {
+      stage: async () => null,
+      status: async () => { throw Object.assign(new Error("auth-secret"), { code: "AUTH_REQUIRED" }); }
+    } satisfies RemoteContentUploadHttpServicePort;
+    app = await createServer({ repository, storage: new MemoryArtifactStorage(), remoteContentUpload: service });
+    const response = await app.inject({ method: "GET", url: `/api/v1/projects/${projectId}/branches/main/remote-sync/content-upload/status`,
+      headers: { authorization: "Bearer upload-token", "idempotency-key": IDEMPOTENCY_KEY } });
+    expect(response.statusCode).toBe(503);
+    expect(response.json().error.code).toBe("REMOTE_UNAVAILABLE");
+    expect(response.body).not.toContain("auth-secret");
   });
 
 });

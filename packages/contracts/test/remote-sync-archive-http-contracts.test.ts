@@ -5,6 +5,7 @@ import { REMOTE_SYNC_ARCHIVE_HTTP_ERROR_CODES, REMOTE_SYNC_ARCHIVE_HTTP_OPERATIO
   remoteSyncArchiveHttpScopeSchema, validateRemoteSyncArchiveCommitHttpRequest,
   validateRemoteSyncArchiveCommitHttpResponse, validateRemoteSyncArchiveErrorEnvelope,
   validateRemoteSyncArchiveLookupHttpRequest, validateRemoteSyncArchivePrepareHttpRequest,
+  validateRemoteSyncArchivePrepareHttpRequestStructure,
   validateRemoteSyncArchivePrepareHttpResponse, validateRemoteSyncArchiveReceiptHttpResponse,
   validateRemoteSyncArchiveStatusHttpResponse } from "../src/index.js";
 
@@ -82,6 +83,18 @@ describe("remote sync archive HTTP v1 contract", () => {
 
   it("rejects hash, identity, capability, state, fencing, and time drift", () => {
     expect(validateRemoteSyncArchivePrepareHttpRequest({ ...prepare, payload_hash: B }).success).toBe(false);
+    expect(validateRemoteSyncArchivePrepareHttpRequestStructure({ ...prepare, payload_hash: B }))
+      .toEqual({ success: true, data: { ...prepare, payload_hash: B } });
+    const operationPrefix = "remote_archive_operation:";
+    expect(validateRemoteSyncArchiveLookupHttpRequest({ ...lookup,
+      operation_id: `${operationPrefix}${"x".repeat(215)}` }).success).toBe(true);
+    expect(validateRemoteSyncArchiveLookupHttpRequest({ ...lookup,
+      operation_id: `${operationPrefix}${"x".repeat(216)}` }).success).toBe(false);
+    const capabilityPrefix = "remote_archive_capability:";
+    expect(validateRemoteSyncArchiveCommitHttpRequest({ idempotency_key: idempotencyKey, payload_hash: payloadHash, claim: { ...claim,
+      capability: `${capabilityPrefix}${"x".repeat(214)}` } }).success).toBe(true);
+    expect(validateRemoteSyncArchiveCommitHttpRequest({ idempotency_key: idempotencyKey, payload_hash: payloadHash, claim: { ...claim,
+      capability: `${capabilityPrefix}${"x".repeat(215)}` } }).success).toBe(false);
     expect(validateRemoteSyncArchivePrepareHttpResponse(wire({ outcome: "new", claim,
       record: { ...prepared, prepare_id: `remote_archive_prepare:${A}` } })).success).toBe(false);
     expect(validateRemoteSyncArchivePrepareHttpResponse(wire({ outcome: "new", claim: { ...claim, capability: "remote_archive_capability:wrong" },

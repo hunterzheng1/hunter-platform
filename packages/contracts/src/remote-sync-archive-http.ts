@@ -203,11 +203,12 @@ export const remoteSyncArchiveClaimHttpSchema = z.object({
   capability: boundedText(240).regex(/^remote_archive_capability:/u)
 }).strict();
 
-export const remoteSyncArchivePrepareHttpRequestSchema = z.object({
+export const remoteSyncArchivePrepareHttpRequestStructureSchema = z.object({
   schema_version: z.literal(2), operation_id: operationIdSchema, idempotency_key: sha256Schema,
   payload_hash: sha256Schema, lease_ttl_ms: z.number().int().min(1).max(10 * 60_000),
   metadata: remoteSyncArchiveMetadataHttpSchema
-}).strict().superRefine((value, context) => {
+}).strict();
+export const remoteSyncArchivePrepareHttpRequestSchema = remoteSyncArchivePrepareHttpRequestStructureSchema.superRefine((value, context) => {
   if (value.payload_hash !== remoteSyncArchiveHttpStableHash(value.metadata)) {
     context.addIssue({ code: "custom", path: ["payload_hash"], message: "payload hash mismatch" });
   }
@@ -302,6 +303,8 @@ export const validateRemoteSyncArchiveErrorEnvelope = (value: unknown) =>
   safeArchiveHttpValidation(remoteSyncArchiveHttpErrorEnvelopeSchema, value);
 export const validateRemoteSyncArchivePrepareHttpRequest = (value: unknown) =>
   safeArchiveHttpValidation(remoteSyncArchivePrepareHttpRequestSchema, value);
+export const validateRemoteSyncArchivePrepareHttpRequestStructure = (value: unknown) =>
+  safeArchiveHttpValidation(remoteSyncArchivePrepareHttpRequestStructureSchema, value);
 export const validateRemoteSyncArchivePrepareHttpResponse = (value: unknown) =>
   safeArchiveHttpValidation(remoteSyncArchivePrepareHttpResponseSchema, value);
 export const validateRemoteSyncArchiveCommitHttpRequest = (value: unknown) =>

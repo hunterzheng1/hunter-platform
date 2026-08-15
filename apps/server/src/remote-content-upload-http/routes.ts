@@ -5,6 +5,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import {
   REMOTE_CONTENT_UPLOAD_HTTP_MAX_BYTES,
   REMOTE_CONTENT_UPLOAD_HTTP_MAX_CHUNK_BYTES,
+  REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS,
   remoteContentUploadHttpErrorCodeSchema,
   validateRemoteContentUploadHttpRequestDescriptor,
   validateRemoteContentUploadHttpResult,
@@ -35,6 +36,7 @@ type ServiceMethods = {
   readonly stage: ServiceMethod;
   readonly status: ServiceMethod;
 };
+type ContentUploadOperation = keyof typeof REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS;
 type ServiceResolution =
   | { readonly kind: "absent" }
   | { readonly kind: "invalid" }
@@ -173,19 +175,14 @@ async function bindProject(repository: ServerRepository, actorId: string, projec
   }
 }
 
-function remoteStatus(code: string): number {
-  if (code === "AUTH_REQUIRED" || code === "TOKEN_INVALID" || code === "SESSION_INVALID") return 401;
-  if (code === "PROJECT_INFORMATION_FORBIDDEN" || code === "PROJECT_KEY_SCOPE" ||
-      code === "PROJECT_KEY_MISMATCH" || code === "REMOTE_CONTENT_UPLOAD_SCOPE_MISMATCH") return 403;
-  if (code === "REMOTE_CONTENT_UPLOAD_IDEMPOTENCY_CONFLICT") return 409;
-  if (code === "REMOTE_CONTENT_UPLOAD_EXPIRED") return 410;
-  if (code === "REMOTE_CONTENT_UPLOAD_NOT_FOUND") return 404;
-  if (code === "REMOTE_CONTENT_UPLOAD_TOO_LARGE") return 413;
-  if (code === "REMOTE_CONTENT_UPLOAD_MEDIA_TYPE_UNSUPPORTED") return 415;
-  if (code === "REMOTE_CONTENT_UPLOAD_ABORTED") return 499;
-  if (code === "VALIDATION_FAILED" || code === "REMOTE_CONTENT_UPLOAD_INPUT_INVALID" || code === "REMOTE_CONTENT_UPLOAD_STREAM_INVALID" ||
-      code === "REMOTE_CONTENT_UPLOAD_HASH_MISMATCH" || code === "REMOTE_CONTENT_UPLOAD_SIZE_MISMATCH") return 400;
-  return 503;
+function serviceErrorStatus(operation: ContentUploadOperation, code: string): number | null {
+  // Auth/project failures belong to the server authority, not an adapter.
+  if (!code.startsWith("REMOTE_CONTENT_UPLOAD_")) return null;
+  const errors = REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS[operation].errors;
+  for (const [status, codes] of Object.entries(errors)) {
+    if (codes.includes(code)) return Number(status);
+  }
+  return null;
 }
 
 function serviceCode(error: unknown): string | null {
@@ -199,13 +196,15 @@ function serviceCode(error: unknown): string | null {
   }
 }
 
-function mapServiceError(error: unknown): never {
+function mapServiceError(operation: ContentUploadOperation, error: unknown): never {
   const code = serviceCode(error);
   const parsed = code === null ? null : remoteContentUploadHttpErrorCodeSchema.safeParse(code);
   if (parsed === null || !parsed.success) {
     fail(503, "REMOTE_UNAVAILABLE", "remote content upload service is unavailable");
   }
-  fail(remoteStatus(parsed.data), parsed.data, "remote content upload operation failed");
+  const status = serviceErrorStatus(operation, parsed.data);
+  if (status === null || status === 503) fail(503, "REMOTE_UNAVAILABLE", "remote content upload service is unavailable");
+  fail(status, parsed.data, "remote content upload operation failed");
 }
 
 /** Reject thenables and Promise instances with own accessors/extra keys before await. */
@@ -223,19 +222,19 @@ function nativePromise<T>(value: unknown): Promise<T> | null {
   }
 }
 
-async function callService<T>(method: ServiceMethod, input: unknown): Promise<T> {
+async function callService<T>(operation: ContentUploadOperation, method: ServiceMethod, input: unknown): Promise<T> {
   let raw: unknown;
   try {
     raw = Reflect.apply(method, undefined, [input]);
   } catch (error) {
-    return mapServiceError(error);
+    return mapServiceError(operation, error);
   }
   const promise = nativePromise<T>(raw);
   if (promise === null) fail(503, "REMOTE_UNAVAILABLE", "remote content upload service is unavailable");
   try {
     return await promise;
   } catch (error) {
-    return mapServiceError(error);
+    return mapServiceError(operation, error);
   }
 }
 
@@ -279,21 +278,10 @@ function uploadChunk(bytes: Uint8Array, sequence: number, offset: number, final:
   };
 }
 
-function joinChunkParts(parts: readonly Uint8Array[], size: number): Uint8Array {
-  if (parts.length === 1) return parts[0] as Uint8Array;
-  const result = new Uint8Array(size);
-  let offset = 0;
-  for (const part of parts) {
-    result.set(part, offset);
-    offset += part.byteLength;
-  }
-  return result;
-}
-
-type StreamCompletionTracker = { complete: boolean };
+export type StreamCompletionTracker = { complete: boolean };
 
 /** Adapt a one-shot raw request stream to the contract's bounded chunk stream. */
-async function* boundedChunks(
+export async function* boundedChunks(
   stream: AsyncIterable<unknown>,
   expectedSize: number,
   expectedHash: string,
@@ -301,7 +289,7 @@ async function* boundedChunks(
   completion: StreamCompletionTracker
 ): AsyncIterable<RemoteContentUploadChunk> {
   const digest = createHash("sha256");
-  const pendingParts: Uint8Array[] = [];
+  let pending = new Uint8Array(REMOTE_CONTENT_UPLOAD_HTTP_MAX_CHUNK_BYTES);
   let pendingBytes = 0;
   let sequence = 0;
   let offset = 0;
@@ -312,22 +300,22 @@ async function* boundedChunks(
         fail(400, "REMOTE_CONTENT_UPLOAD_STREAM_INVALID", "remote content upload stream is invalid");
       }
       for (let at = 0; at < incoming.byteLength;) {
-        const take = Math.min(REMOTE_CONTENT_UPLOAD_HTTP_MAX_CHUNK_BYTES - pendingBytes, incoming.byteLength - at);
-        const next = incoming.subarray(at, at + take);
-        if (offset + pendingBytes + next.byteLength > expectedSize) {
-          fail(400, "REMOTE_CONTENT_UPLOAD_SIZE_MISMATCH", "remote content upload size does not match Content-Length");
-        }
-        pendingParts.push(next);
-        pendingBytes += next.byteLength;
-        at += next.byteLength;
+        // A complete block may be final. Hold it until a following byte proves
+        // there is more content, so exact-N MiB streams get one final chunk.
         if (pendingBytes === REMOTE_CONTENT_UPLOAD_HTTP_MAX_CHUNK_BYTES) {
-          const chunk = joinChunkParts(pendingParts, pendingBytes);
-          digest.update(chunk);
-          yield uploadChunk(chunk, sequence++, offset, false);
-          offset += chunk.byteLength;
-          pendingParts.length = 0;
+          digest.update(pending);
+          yield uploadChunk(pending, sequence++, offset, false);
+          offset += pending.byteLength;
+          pending = new Uint8Array(REMOTE_CONTENT_UPLOAD_HTTP_MAX_CHUNK_BYTES);
           pendingBytes = 0;
         }
+        const take = Math.min(REMOTE_CONTENT_UPLOAD_HTTP_MAX_CHUNK_BYTES - pendingBytes, incoming.byteLength - at);
+        if (offset + pendingBytes + take > expectedSize) {
+          fail(400, "REMOTE_CONTENT_UPLOAD_SIZE_MISMATCH", "remote content upload size does not match Content-Length");
+        }
+        pending.set(incoming.subarray(at, at + take), pendingBytes);
+        pendingBytes += take;
+        at += take;
       }
     }
   } catch (error) {
@@ -338,13 +326,13 @@ async function* boundedChunks(
   if (pendingBytes === 0 || offset + pendingBytes !== expectedSize) {
     fail(400, "REMOTE_CONTENT_UPLOAD_SIZE_MISMATCH", "remote content upload size does not match Content-Length");
   }
-  const pending = joinChunkParts(pendingParts, pendingBytes);
-  digest.update(pending);
+  const finalChunk = pending.subarray(0, pendingBytes);
+  digest.update(finalChunk);
   if (`sha256:${digest.digest("hex")}` !== expectedHash) {
     fail(400, "REMOTE_CONTENT_UPLOAD_HASH_MISMATCH", "remote content upload hash does not match X-Content-SHA256");
   }
   completion.complete = true;
-  yield uploadChunk(pending, sequence, offset, true);
+  yield uploadChunk(finalChunk, sequence, offset, true);
 }
 
 function optionalSourceMatches(actual: string | undefined, expected: string | undefined): boolean {
@@ -452,7 +440,7 @@ export function registerRemoteContentUploadHttpRoutes(
         const lifecycle = requestSignal(request);
         try {
           const completion: StreamCompletionTracker = { complete: false };
-          const result = await callService<RemoteContentUploadHttpResult>(resolution.methods.stage, {
+          const result = await callService<RemoteContentUploadHttpResult>("upload_content", resolution.methods.stage, {
             descriptor: valid.data,
             chunks: boundedChunks(
               request.body as AsyncIterable<unknown>,
@@ -498,7 +486,7 @@ export function registerRemoteContentUploadHttpRoutes(
 
         const lifecycle = requestSignal(request);
         try {
-          const result = await callService(resolution.methods.status, {
+          const result = await callService("upload_status", resolution.methods.status, {
             descriptor: valid.data,
             signal: lifecycle.signal
           });

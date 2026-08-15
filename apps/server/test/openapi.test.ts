@@ -20,6 +20,7 @@ import {
   platformInformationListHttpQuerySchema,
   knowledgeExtractionRetryIntentSchema,
   projectContentCandidateSchema,
+  remoteSyncArchiveSourceHttpSchema,
   remoteVersionIdentitySchema,
   restoreBranchFilesConfirmationIntentSchema,
   snapshotFileSchema,
@@ -105,6 +106,7 @@ describe("OpenAPI v1 contract", () => {
         "x-hunter-auth-source"?: string;
         "x-hunter-project-allowlist-source"?: string;
         "x-hunter-project-key-scope"?: string;
+        parameters?: Array<{ name?: string; in?: string; required?: boolean; schema?: { type?: string; minLength?: number; maxLength?: number } }>;
         requestBody?: { content?: Record<string, unknown> };
         responses?: Record<string, { content?: Record<string, { schema?: { $ref?: string } }> }>;
       }>>;
@@ -131,6 +133,38 @@ describe("OpenAPI v1 contract", () => {
     });
     expect(status?.responses?.["200"]?.content?.["application/json"]?.schema?.$ref)
       .toBe("#/components/schemas/RemoteContentUploadHttpStatus");
+  });
+
+  it("documents every optional source binding on archive lookup operations", async () => {
+    const document = parseYaml(await readFile(
+      new URL("../openapi/hunter-harness-v1.yaml", import.meta.url), "utf8"
+    )) as { paths: Record<string, Record<string, { parameters?: Array<{
+      name?: string; in?: string; required?: boolean; schema?: { type?: string; minLength?: number; maxLength?: number };
+    }> }>>; components: { schemas: Record<string, { properties?: Record<string, { pattern?: string }> }> } };
+    for (const path of [
+      "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/archive/status",
+      "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/archive/{operation_id}/receipt"
+    ]) {
+      const parameters = document.paths[path]?.get?.parameters ?? [];
+      for (const name of ["commit_sha", "client_id", "change_key"]) {
+        expect(parameters).toContainEqual({ name, in: "query", required: false,
+          schema: { type: "string", minLength: 1, maxLength: 160 } });
+        expect(remoteSyncArchiveSourceHttpSchema.safeParse({ project_id: "project", branch_name: "main", actor_id: "actor",
+          [name]: "x".repeat(160) }).success).toBe(true);
+        expect(remoteSyncArchiveSourceHttpSchema.safeParse({ project_id: "project", branch_name: "main", actor_id: "actor",
+          [name]: "x".repeat(161) }).success).toBe(false);
+      }
+      const operation = parameters.find((parameter) => parameter.name === "operation_id");
+      expect(operation?.schema).toMatchObject({ type: "string", pattern: "^remote_archive_operation:.{1,215}$" });
+    }
+    for (const name of [
+      "RemoteSyncArchiveReceiptHttp", "RemoteSyncArchiveRecordHttp", "RemoteSyncArchiveClaimHttp",
+      "RemoteSyncArchivePrepareHttpRequest", "RemoteSyncArchiveStatusHttpResponse"
+    ]) {
+      expect(document.components.schemas[name]?.properties?.operation_id?.pattern).toBe("^remote_archive_operation:.{1,215}$");
+    }
+    expect(document.components.schemas.RemoteSyncArchiveClaimHttp?.properties?.capability?.pattern)
+      .toBe("^remote_archive_capability:.{1,214}$");
   });
 
   it("freezes stage 01 content-sync components and the protocol content hash", async () => {

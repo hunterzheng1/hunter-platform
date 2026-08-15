@@ -2,6 +2,7 @@ import type { Pool, PoolClient, QueryResultRow } from "pg";
 
 import {
   normalizeRemoteArchiveV2Record,
+  sameRemoteArchiveV2Source,
   type RemoteArchiveV2Record,
   type RemoteArchiveV2Source,
 } from "@hunter-harness/core";
@@ -16,6 +17,12 @@ interface UploadRow extends QueryResultRow {
 }
 
 function fail(): never { throw new Error("REMOTE_ARCHIVE_RECORD_INVALID"); }
+
+function leaseScopeMismatch(): never {
+  const error = new Error("REMOTE_ARCHIVE_LEASE_SCOPE_MISMATCH") as Error & { code: string };
+  error.code = "REMOTE_ARCHIVE_LEASE_SCOPE_MISMATCH";
+  throw error;
+}
 
 function instant(value: string | Date): string {
   const result = value instanceof Date ? value.toISOString() : value;
@@ -74,6 +81,12 @@ export class PgRemoteSyncArchiveRecordPort {
     ]);
   }
 
+  public async lockUploadObject(client: PoolClient, projectId: string, contentSha256: string): Promise<void> {
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
+      JSON.stringify({ project_id: projectId, content_sha256: contentSha256 })
+    ]);
+  }
+
   public async findById(client: PoolClient, projectId: string, operationId: string): Promise<RemoteArchiveV2Record | null> {
     const result = await client.query<RemoteSyncArchivePgRow>(`SELECT ${columns} FROM remote_archive_v2_records
       WHERE project_id=$1 AND operation_id=$2 FOR UPDATE`, [projectId, operationId]);
@@ -123,8 +136,7 @@ export class PgRemoteSyncArchiveRecordPort {
       WHERE project_id=$1 AND operation_id=$2`, [projectId, operationId]);
     if (result.rows[0] === undefined) return null;
     const record = recordFromRow(result.rows[0]);
-    if (record.source.project_id !== source.project_id || record.source.branch_name !== source.branch_name ||
-        record.source.actor_id !== source.actor_id) throw new Error("REMOTE_ARCHIVE_LEASE_SCOPE_MISMATCH");
+    if (!sameRemoteArchiveV2Source(record.source, source)) leaseScopeMismatch();
     return record;
   }
 }

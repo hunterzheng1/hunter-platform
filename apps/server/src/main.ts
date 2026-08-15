@@ -12,6 +12,10 @@ import { PgSemanticStore } from "./semantic/pg-store.js";
 import { PgRunStore } from "./runs/pg-store.js";
 import { LocalArtifactStorage } from "./storage/local.js";
 import { decodeNpmCredentialEncryptionKey } from "./npm/credentials.js";
+import { createProductionPlatformInformationFromEnvironment } from "./platform-information/production.js";
+import { createPgKnowledgeQueryHttpService } from "./knowledge-query-http/index.js";
+import { createRemoteContentUploadLocalCas, createPgRemoteContentUploadHttpService } from "./remote-content-upload-pg/index.js";
+import { createPgRemoteSyncArchiveV2 } from "./remote-sync-archive-pg/index.js";
 
 async function secret(name: string, required: boolean): Promise<string | undefined> {
   const value = process.env[name];
@@ -58,6 +62,19 @@ const credentialKeyValue = await secret("HUNTER_HARNESS_CREDENTIAL_KEY", false);
 const npmCredentialEncryptionKey = credentialKeyValue === undefined
   ? null
   : decodeNpmCredentialEncryptionKey(credentialKeyValue);
+const runStore = new PgRunStore(pool);
+const knowledgeQuery = createPgKnowledgeQueryHttpService(pool);
+const remoteContentUploadCas = await createRemoteContentUploadLocalCas({
+  root: process.env.HUNTER_REMOTE_CONTENT_UPLOAD_ROOT ?? `${artifactRoot}/remote-content-uploads`,
+});
+const remoteContentUpload = createPgRemoteContentUploadHttpService({ pool, cas: remoteContentUploadCas });
+const remoteSyncArchive = createPgRemoteSyncArchiveV2({ pool });
+const platformInformation = await createProductionPlatformInformationFromEnvironment({
+  pool,
+  runStore,
+  platformInformationExportRoot: process.env.HUNTER_PLATFORM_INFORMATION_EXPORT_ROOT
+    ?? `${artifactRoot}/platform-information-exports`,
+});
 if (bootstrapToken !== undefined && bootstrapToken !== "") {
   await repository.createActorWithToken({
     actorId: process.env.HUNTER_HARNESS_BOOTSTRAP_ACTOR ?? "actor_owner",
@@ -74,7 +91,11 @@ const app = await createServer({
   registryPersistence: new PostgresRegistryPersistence(pool),
   aiJobStore: new PgAiJobStore(pool),
   semanticStore: new PgSemanticStore(pool),
-  runStore: new PgRunStore(pool),
+  runStore,
+  knowledgeQuery,
+  remoteContentUpload,
+  remoteSyncArchive,
+  platformInformation,
   npmCredentialEncryptionKey,
   logger: true
 });
@@ -90,6 +111,8 @@ await app.listen({
 async function shutdown(signal: string): Promise<void> {
   app.log.info({ signal }, "shutting down");
   await app.close();
+  await remoteContentUpload.close();
+  await remoteSyncArchive.close();
   await pool.end();
 }
 process.once("SIGTERM", () => {

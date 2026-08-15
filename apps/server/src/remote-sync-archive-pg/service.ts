@@ -133,7 +133,6 @@ export function createPgRemoteSyncArchiveV2(options: RemoteSyncArchivePgOptions)
       try { input = snapshotRemoteArchiveV2Prepare(raw); } catch { fail("REMOTE_ARCHIVE_INPUT_INVALID"); }
       if (remoteArchiveV2PayloadHash(input.metadata) !== input.payload_hash) fail("REMOTE_ARCHIVE_PAYLOAD_HASH_MISMATCH");
       const source = sourceCopy(input.metadata.source);
-      const now = nowIso(clock);
       return inTransaction(options.pool, async (client) => {
         await records.lock(client, source.project_id, input.idempotency_key);
         const existing = await records.findByKey(client, source.project_id, input.idempotency_key);
@@ -144,13 +143,14 @@ export function createPgRemoteSyncArchiveV2(options: RemoteSyncArchivePgOptions)
         }
         const operation = await records.findById(client, source.project_id, input.operation_id);
         if (operation !== null) fail("REMOTE_ARCHIVE_IDEMPOTENCY_CONFLICT");
+        await records.lockUploadObject(client, source.project_id, input.metadata.upload_ref.sha256);
+        const created = nowIso(clock);
         const uploadReady = await records.uploadIsStored(client, {
           project_id: source.project_id, ref_id: input.metadata.upload_ref.ref_id,
-          sha256: input.metadata.upload_ref.sha256, size_bytes: input.metadata.upload_ref.size_bytes, now
+          sha256: input.metadata.upload_ref.sha256, size_bytes: input.metadata.upload_ref.size_bytes, now: created
         });
-        if (!uploadReady) fail("REMOTE_ARCHIVE_RECORD_INVALID");
+        if (!uploadReady) fail("REMOTE_ARCHIVE_INPUT_INVALID");
         const rawCapability = capability();
-        const created = now;
         const record = recordWithHash({
           schema_version: 2, operation_id: input.operation_id, prepare_id: prepareId(input),
           idempotency_key: input.idempotency_key, payload_hash: input.payload_hash, source,
@@ -173,7 +173,7 @@ export function createPgRemoteSyncArchiveV2(options: RemoteSyncArchivePgOptions)
       if (envelope === null || typeof envelope !== "object" || Array.isArray(envelope) ||
           Object.keys(envelope).length !== 1 || !Object.hasOwn(envelope, "claim")) fail("REMOTE_ARCHIVE_INPUT_INVALID");
       try { claim = snapshotRemoteArchiveV2Claim((envelope as { readonly claim: unknown }).claim); } catch { fail("REMOTE_ARCHIVE_INPUT_INVALID"); }
-      return inTransaction(options.pool, async (client) => {
+      const transactionResult = await inTransaction(options.pool, async (client) => {
         await records.lockOperation(client, claim.source.project_id, claim.operation_id);
         const record = await records.findById(client, claim.source.project_id, claim.operation_id);
         if (record === null) fail("REMOTE_ARCHIVE_PREPARE_NOT_FOUND");
@@ -183,16 +183,19 @@ export function createPgRemoteSyncArchiveV2(options: RemoteSyncArchivePgOptions)
             record.prepare_id !== claim.prepare_id) fail("REMOTE_ARCHIVE_LEASE_FENCED");
         if (record.state === "committed") {
           if (record.receipt === null) fail("REMOTE_ARCHIVE_RECORD_INVALID");
-          return freezeDeep({ outcome: "replay" as const, record, receipt: record.receipt });
+          return { expired: false as const,
+            value: freezeDeep({ outcome: "replay" as const, record, receipt: record.receipt }) };
         }
         if (record.state === "failed") fail("REMOTE_ARCHIVE_LEASE_FENCED");
         if (record.state === "prepared" && record.generation !== claim.generation) fail("REMOTE_ARCHIVE_LEASE_FENCED");
+        await records.lockUploadObject(client, record.source.project_id, record.upload_ref.sha256);
         const current = nowIso(clock);
-        if (record.state === "prepared" && Date.parse(record.lease.expires_at) <= Date.parse(current)) {
+        if ((record.state === "prepared" || record.state === "committing") &&
+            Date.parse(record.lease.expires_at) <= Date.parse(current)) {
           const failed = recordWithHash({ ...record, state: "failed", generation: record.generation + 1,
             lease: null, receipt: null, failure_code: "REMOTE_ARCHIVE_PREPARE_EXPIRED", updated_at: current });
           await records.replace(client, failed);
-          fail("REMOTE_ARCHIVE_PREPARE_EXPIRED");
+          return { expired: true as const };
         }
         const committing = record.state === "committing" ? record : recordWithHash({ ...record,
           state: "committing", generation: record.generation + 1, updated_at: current });
@@ -202,8 +205,11 @@ export function createPgRemoteSyncArchiveV2(options: RemoteSyncArchivePgOptions)
         const committed = recordWithHash({ ...committing, state: "committed", generation: committing.generation + 1,
           receipt, failure_code: null, updated_at: storedAt });
         await records.replace(client, committed);
-        return freezeDeep({ outcome: "new" as const, record: committed, receipt });
+        return { expired: false as const,
+          value: freezeDeep({ outcome: "new" as const, record: committed, receipt }) };
       });
+      if (transactionResult.expired) fail("REMOTE_ARCHIVE_PREPARE_EXPIRED");
+      return transactionResult.value;
     },
     async status(raw) {
       ensureOpen();

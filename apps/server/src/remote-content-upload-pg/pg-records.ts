@@ -490,8 +490,14 @@ export class PgRemoteContentUploadRecordPort implements RemoteContentUploadRecor
             WHERE u.project_id=c.project_id AND u.content_sha256=c.content_sha256
               AND ((u.state='staged' AND u.stage_lease_until>$2 AND u.expires_at>$2)
                 OR (u.state='stored' AND u.expires_at>$2)))
+          AND NOT EXISTS (SELECT 1 FROM remote_archive_v2_records a
+            WHERE a.project_id=c.project_id
+              AND a.record_json->'upload_ref'->>'sha256'=c.content_sha256
+              AND a.record_json->'upload_ref'->>'size_bytes'=c.size_bytes::text
+              AND (a.state='committed' OR (a.state IN ('prepared','committing')
+                AND a.record_json->'lease'->>'expires_at'>$4)))
         ORDER BY c.content_sha256 LIMIT $3`,
-      [input.project_id, input.now, input.limit]);
+      [input.project_id, input.now, input.limit, input.now]);
       await client.query(`INSERT INTO remote_content_upload_gc_batches
         (batch_id,project_id,worker_id,lease_until,created_at) VALUES ($1,$2,$3,$4,$5)`,
       [batch_id, input.project_id, input.worker_id, input.lease_until, input.now]);
@@ -510,8 +516,16 @@ export class PgRemoteContentUploadRecordPort implements RemoteContentUploadRecor
         const live = await client.query(`SELECT 1 FROM remote_content_uploads u
           WHERE u.project_id=$1 AND u.content_sha256=$2
             AND ((u.state='staged' AND u.stage_lease_until>$3 AND u.expires_at>$3)
-              OR (u.state='stored' AND u.expires_at>$3)) LIMIT 1`,
-        [input.project_id, ref.sha256, input.now]);
+              OR (u.state='stored' AND u.expires_at>$3))
+          UNION ALL
+          SELECT 1 FROM remote_archive_v2_records a
+          WHERE a.project_id=$1
+            AND a.record_json->'upload_ref'->>'sha256'=$2
+            AND a.record_json->'upload_ref'->>'size_bytes'=$4
+            AND (a.state='committed' OR (a.state IN ('prepared','committing')
+              AND a.record_json->'lease'->>'expires_at'>$5))
+          LIMIT 1`,
+        [input.project_id, ref.sha256, input.now, String(current.rows[0].size_bytes), input.now]);
         if ((live.rowCount ?? 0) !== 0) continue;
         const ordinal = refs.length + 1;
         refs.push({ ...ref, bytes: Number(current.rows[0].size_bytes) });
@@ -560,8 +574,16 @@ export class PgRemoteContentUploadRecordPort implements RemoteContentUploadRecor
         const live = await client.query(`SELECT 1 FROM remote_content_uploads
           WHERE project_id=$1 AND content_sha256=$2
             AND ((state='staged' AND stage_lease_until>$3 AND expires_at>$3)
-              OR (state='stored' AND expires_at>$3)) LIMIT 1`,
-        [input.project_id, item.content_sha256, input.now]);
+              OR (state='stored' AND expires_at>$3))
+          UNION ALL
+          SELECT 1 FROM remote_archive_v2_records a
+          WHERE a.project_id=$1
+            AND a.record_json->'upload_ref'->>'sha256'=$2
+            AND a.record_json->'upload_ref'->>'size_bytes'=$4
+            AND (a.state='committed' OR (a.state IN ('prepared','committing')
+              AND a.record_json->'lease'->>'expires_at'>$5))
+          LIMIT 1`,
+        [input.project_id, item.content_sha256, input.now, String(object.size_bytes), input.now]);
         if (live.rowCount === 0) {
           removable.push({ project_id: input.project_id, sha256: item.content_sha256 as `sha256:${string}`, bytes: Number(object.size_bytes) });
         } else {
@@ -608,8 +630,17 @@ export class PgRemoteContentUploadRecordPort implements RemoteContentUploadRecor
         const live = await client.query(`SELECT 1 FROM remote_content_uploads
           WHERE project_id=$1 AND content_sha256=$2
             AND ((state='staged' AND stage_lease_until>now() AND expires_at>now())
-              OR (state='stored' AND expires_at>now())) LIMIT 1`,
-        [input.project_id, item.content_sha256]);
+              OR (state='stored' AND expires_at>now()))
+          UNION ALL
+          SELECT 1 FROM remote_archive_v2_records a
+          WHERE a.project_id=$1
+            AND a.record_json->'upload_ref'->>'sha256'=$2
+            AND a.record_json->'upload_ref'->>'size_bytes'=$3
+            AND (a.state='committed' OR (a.state IN ('prepared','committing')
+              AND a.record_json->'lease'->>'expires_at'>
+                to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')))
+          LIMIT 1`,
+        [input.project_id, item.content_sha256, String(object.size_bytes)]);
         if ((live.rowCount ?? 0) === 0) {
           await input.removeObject({ project_id: input.project_id,
             sha256: item.content_sha256 as `sha256:${string}`, bytes: Number(object.size_bytes) });

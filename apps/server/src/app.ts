@@ -182,7 +182,7 @@ export interface CreateServerOptions {
   remoteSync?: RemoteSyncHttpServicePort;
   /** Stage 09 remote knowledge service. Absent deployments fail closed with 503. */
   knowledgeQuery?: KnowledgeQueryHttpServicePort;
-  /** Bounded raw archive upload seam. Production main intentionally leaves this absent. */
+  /** Bounded raw archive upload seam. Production main injects it; absent deployments fail closed with 503. */
   remoteContentUpload?: RemoteContentUploadHttpServicePort;
   /** Remote Archive v2 lifecycle seam. Absent deployments fail closed with 503. */
   remoteSyncArchive?: RemoteSyncArchiveHttpServicePort;

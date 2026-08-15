@@ -34,13 +34,38 @@ type Stored = {
   state: string; generation: number; record_json: unknown; created_at: string; updated_at: string;
 };
 
-function fakePool() {
+function fakePool(
+  onQuery?: (sql: string, params: readonly unknown[]) => void,
+  uploadExists = true,
+) {
   const rows = new Map<string, Stored>();
-  const uploads = new Set<string>(["prj_archive_pg\0bounded_upload:pg-test"]);
+  let transactionSnapshot: Map<string, Stored> | null = null;
+  const uploads = new Set<string>(uploadExists ? ["prj_archive_pg\0bounded_upload:pg-test"] : []);
   const key = (project: string, operation: string) => `${project}\0${operation}`;
+  const cloneRows = (): Map<string, Stored> => new Map([...rows].map(([entryKey, row]) => [entryKey, {
+    ...row,
+    record_json: JSON.parse(JSON.stringify(row.record_json)) as unknown,
+  }]));
   const client = {
     async query(sql: string, params: readonly unknown[] = []) {
-      if (/^(BEGIN|COMMIT|ROLLBACK|SELECT pg_advisory)/u.test(sql.trim())) return { rows: [], rowCount: 0 };
+      onQuery?.(sql, params);
+      if (sql.trim() === "BEGIN") {
+        transactionSnapshot = cloneRows();
+        return { rows: [], rowCount: 0 };
+      }
+      if (sql.trim() === "COMMIT") {
+        transactionSnapshot = null;
+        return { rows: [], rowCount: 0 };
+      }
+      if (sql.trim() === "ROLLBACK") {
+        if (transactionSnapshot !== null) {
+          rows.clear();
+          for (const [entryKey, row] of transactionSnapshot) rows.set(entryKey, row);
+          transactionSnapshot = null;
+        }
+        return { rows: [], rowCount: 0 };
+      }
+      if (/^SELECT pg_advisory/u.test(sql.trim())) return { rows: [], rowCount: 0 };
       if (sql.includes("FROM remote_content_uploads")) {
         const project = String(params[0]); const ref = String(params[1]);
         const found = uploads.has(`${project}\0${ref}`);
@@ -94,11 +119,91 @@ describe("Remote Sync Archive PostgreSQL adapter", () => {
     expect(await restarted.receipt({ operation_id: request.operation_id, source: request.metadata.source })).toEqual(committed.receipt);
   });
 
+  it("keeps PostgreSQL status visibility bound to every canonical source field", async () => {
+    const pool = fakePool();
+    const archive = createPgRemoteSyncArchiveV2({ pool, now: () => "2026-08-15T00:00:00.000Z" });
+    const initial = input();
+    const metadata = { ...initial.metadata, source: { ...initial.metadata.source,
+      commit_sha: "commit-pg", client_id: "client-pg", change_key: "change-pg" } };
+    const request = { ...initial, metadata, payload_hash: remoteArchiveV2PayloadHash(metadata) };
+    await archive.prepare(request);
+
+    await expect(archive.status({ operation_id: request.operation_id, source: metadata.source })).resolves.toMatchObject({ state: "prepared" });
+    await expect(archive.status({ operation_id: request.operation_id, source: { ...metadata.source, client_id: "other-client" } }))
+      .rejects.toMatchObject({ code: "REMOTE_ARCHIVE_LEASE_SCOPE_MISMATCH" });
+  });
+
   it("keeps the migration scoped to project and durable record identity", async () => {
     const migration = await readFile(fileURLToPath(new URL("../migrations/026_remote_sync_archive_v2.sql", import.meta.url)), "utf8");
     expect(migration).toContain("PRIMARY KEY (project_id, operation_id)");
     expect(migration).toContain("UNIQUE (project_id, idempotency_key)");
     expect(migration).toContain("record_json->>'operation_id' = operation_id");
     expect(migration).toContain("record_json->'source'->>'project_id' = project_id");
+  });
+
+  it("holds the upload object fence while preparing and committing its archive reference", async () => {
+    const queries: Array<{ readonly sql: string; readonly params: readonly unknown[] }> = [];
+    const pool = fakePool((sql, params) => queries.push({ sql, params }));
+    const archive = createPgRemoteSyncArchiveV2({ pool, now: () => "2026-08-15T00:00:00.000Z" });
+    const request = input();
+
+    const prepared = await archive.prepare(request);
+    const prepareObjectLock = queries.findIndex((query) => query.sql.includes("pg_advisory_xact_lock") &&
+      String(query.params[0]).includes('"content_sha256"'));
+    const uploadCheck = queries.findIndex((query) => query.sql.includes("FROM remote_content_uploads"));
+    const archiveCreate = queries.findIndex((query) => query.sql.startsWith("INSERT INTO remote_archive_v2_records"));
+    expect(prepareObjectLock).toBeGreaterThanOrEqual(0);
+    expect(uploadCheck).toBeGreaterThan(prepareObjectLock);
+    expect(archiveCreate).toBeGreaterThan(uploadCheck);
+
+    if (prepared.claim === null) throw new Error("claim missing");
+    queries.length = 0;
+    await archive.commit({ claim: prepared.claim });
+    const commitObjectLock = queries.findIndex((query) => query.sql.includes("pg_advisory_xact_lock") &&
+      String(query.params[0]).includes('"content_sha256"'));
+    const firstTransition = queries.findIndex((query) => query.sql.startsWith("UPDATE remote_archive_v2_records"));
+    expect(commitObjectLock).toBeGreaterThanOrEqual(0);
+    expect(firstTransition).toBeGreaterThan(commitObjectLock);
+  });
+
+  it("rechecks upload expiry after waiting for the upload object fence", async () => {
+    let current = "2026-08-15T00:00:00.000Z";
+    const pool = fakePool((sql, params) => {
+      if (sql.includes("pg_advisory_xact_lock") && String(params[0]).includes('"content_sha256"')) {
+        current = "2026-08-15T02:00:00.000Z";
+      }
+    });
+    const archive = createPgRemoteSyncArchiveV2({ pool, now: () => current });
+
+    await expect(archive.prepare(input())).rejects.toMatchObject({ code: "REMOTE_ARCHIVE_INPUT_INVALID" });
+  });
+
+  it("maps a missing durable upload reference to the public prepare input error", async () => {
+    const archive = createPgRemoteSyncArchiveV2({
+      pool: fakePool(undefined, false),
+      now: () => "2026-08-15T00:00:00.000Z",
+    });
+
+    await expect(archive.prepare(input())).rejects.toMatchObject({ code: "REMOTE_ARCHIVE_INPUT_INVALID" });
+  });
+
+  it("durably commits an expired prepare failure before returning its error", async () => {
+    let current = "2026-08-15T00:00:00.000Z";
+    const pool = fakePool();
+    const archive = createPgRemoteSyncArchiveV2({ pool, now: () => current });
+    const request = input();
+    const prepared = await archive.prepare(request);
+    if (prepared.claim === null) throw new Error("claim missing");
+
+    current = "2026-08-15T00:02:00.000Z";
+    await expect(archive.commit({ claim: prepared.claim }))
+      .rejects.toMatchObject({ code: "REMOTE_ARCHIVE_PREPARE_EXPIRED" });
+
+    const restarted = createPgRemoteSyncArchiveV2({ pool, now: () => current });
+    await expect(restarted.status({ operation_id: request.operation_id, source: request.metadata.source }))
+      .resolves.toMatchObject({ state: "failed", record: {
+        state: "failed", generation: 2, lease: null, receipt: null,
+        failure_code: "REMOTE_ARCHIVE_PREPARE_EXPIRED",
+      } });
   });
 });
