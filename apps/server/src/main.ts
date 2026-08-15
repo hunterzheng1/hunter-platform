@@ -16,6 +16,8 @@ import { createProductionPlatformInformationFromEnvironment } from "./platform-i
 import { createPgKnowledgeQueryHttpService } from "./knowledge-query-http/index.js";
 import { createRemoteContentUploadLocalCas, createPgRemoteContentUploadHttpService } from "./remote-content-upload-pg/index.js";
 import { createPgRemoteSyncArchiveV2 } from "./remote-sync-archive-pg/index.js";
+import { createBranchSnapshotProducer } from "./branch-snapshots/producer.js";
+import { createPgRemoteSyncCommitPort } from "./remote-sync-pg/index.js";
 
 async function secret(name: string, required: boolean): Promise<string | undefined> {
   const value = process.env[name];
@@ -69,6 +71,8 @@ const remoteContentUploadCas = await createRemoteContentUploadLocalCas({
 });
 const remoteContentUpload = createPgRemoteContentUploadHttpService({ pool, cas: remoteContentUploadCas });
 const remoteSyncArchive = createPgRemoteSyncArchiveV2({ pool });
+const remoteSyncCommitPort = createPgRemoteSyncCommitPort({ pool });
+const branchSnapshotProducer = createBranchSnapshotProducer({ commit_port: remoteSyncCommitPort });
 const platformInformation = await createProductionPlatformInformationFromEnvironment({
   pool,
   runStore,
@@ -95,6 +99,7 @@ const app = await createServer({
   knowledgeQuery,
   remoteContentUpload,
   remoteSyncArchive,
+  branchSnapshotProducer,
   platformInformation,
   npmCredentialEncryptionKey,
   logger: true

@@ -153,6 +153,7 @@ import {
 } from "./knowledge-query-http/index.js";
 import { registerRemoteContentUploadHttpRoutes, type RemoteContentUploadHttpServicePort } from "./remote-content-upload-http/index.js";
 import { registerRemoteSyncArchiveHttpRoutes, type RemoteSyncArchiveHttpServicePort } from "./remote-sync-archive-http/index.js";
+import type { BranchSnapshotProducer } from "./branch-snapshots/producer.js";
 import { SemanticMemoryStore } from "./semantic/memory-store.js";
 import {
   SEMANTIC_INDEX_SCHEMA_VERSION,
@@ -186,6 +187,8 @@ export interface CreateServerOptions {
   remoteContentUpload?: RemoteContentUploadHttpServicePort;
   /** Remote Archive v2 lifecycle seam. Absent deployments fail closed with 503. */
   remoteSyncArchive?: RemoteSyncArchiveHttpServicePort;
+  /** Transaction-bound Remote Sync → Branch Snapshot producer. */
+  branchSnapshotProducer?: BranchSnapshotProducer;
   /** Required trust dependencies for Stage 13 branch-monitor reads. Absent means explicit 503. */
   branchMonitorTrust?: {
     readonly eventBundleReader: PlanQualityEventBundleReaderPort;
@@ -856,6 +859,9 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     preservePath: true,
     limits: { fileSize: config.maxFileBytes, files: config.maxUploadFiles }
   });
+  if (options.branchSnapshotProducer !== undefined) {
+    app.decorate("branchSnapshotProducer", options.branchSnapshotProducer);
+  }
 
   const semanticRefreshes = new Map<string, Promise<void>>();
   const ensureSemanticIndexCurrent = async (actorId: string, projectId: string): Promise<void> => {
