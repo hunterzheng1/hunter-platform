@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   PLATFORM_INFORMATION_HTTP_OPERATIONS,
   REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS,
+  REMOTE_SYNC_ARCHIVE_HTTP_OPERATIONS,
   archiveIngestReceiptSchema,
   branchSnapshotSchema,
   contentSyncStatusesSchema,
@@ -262,6 +263,10 @@ describe("OpenAPI v1 contract", () => {
       "/api/v1/projects/{project_id}/artifacts",
       "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/content-upload",
       "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/content-upload/status",
+      "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/archive/status",
+      "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/archive/{operation_id}/receipt",
+      "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/archive:commit",
+      "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/archive:prepare",
       "/api/v1/projects/{project_id}/changes/{change_key}/archive-package",
       "/api/v1/projects/{project_id}/changes/{change_key}/archive-package/download",
       "/api/v1/projects/{project_id}/information/branch-files:confirm-restore",
@@ -627,9 +632,9 @@ describe("stage 13 platform information OpenAPI contracts", () => {
       ));
       const responses = operation?.responses as Record<string, { headers?: object }>;
       expect(Object.keys(responses).map(Number).sort((a, b) => a - b)).toEqual(
-        [descriptor.success_status,
+        [...new Set([descriptor.success_status,
           ...("replay_status" in descriptor ? [descriptor.replay_status] : []),
-          ...Object.keys(descriptor.errors).map(Number)].sort((a, b) => a - b)
+          ...Object.keys(descriptor.errors).map(Number)])].sort((a, b) => a - b)
       );
       expect(responses[String(descriptor.success_status)]?.headers).toHaveProperty("X-Request-Id");
       const hasBody = Object.hasOwn(operation ?? {}, "requestBody");
@@ -784,6 +789,46 @@ describe("stage 13 platform information OpenAPI contracts", () => {
     await confirmationValidator.app.close();
     await retryValidator.app.close();
     await exportValidator.app.close();
+  });
+});
+
+describe("remote archive v2 OpenAPI contracts", () => {
+  it("keeps every archive descriptor path, auth, scope, identity and response status in parity", async () => {
+    const document = parseYaml(await readFile(
+      new URL("../openapi/hunter-harness-v1.yaml", import.meta.url), "utf8"
+    )) as { paths: Record<string, Record<string, Record<string, unknown>>> };
+    for (const descriptor of Object.values(REMOTE_SYNC_ARCHIVE_HTTP_OPERATIONS)) {
+      const operation = document.paths[descriptor.path]?.[descriptor.method.toLowerCase()];
+      expect(operation).toBeDefined();
+      const operationRecord = operation as Record<string, unknown> | undefined;
+      expect(operationRecord?.operationId).toBe(descriptor.operation_id);
+      expect(operationRecord?.["x-hunter-auth-source"]).toBe("authenticated_principal");
+      expect(operationRecord?.["x-hunter-project-allowlist-source"]).toBe("server_authority");
+      expect(operationRecord?.["x-hunter-project-key-scope"]).toBe(descriptor.auth.project_key_scope);
+      expect(operationRecord?.["x-hunter-error-codes"]).toEqual(Object.fromEntries(
+        Object.entries(descriptor.errors).map(([status, codes]) => [status, [...codes]])
+      ));
+      const responses = operationRecord?.responses as Record<string, { headers?: object }> ?? {};
+      expect(Object.keys(responses).map(Number).sort((a, b) => a - b)).toEqual(
+        [...new Set([descriptor.success_status,
+          ...("replay_status" in descriptor ? [descriptor.replay_status] : []),
+          ...Object.keys(descriptor.errors).map(Number)])].sort((a, b) => a - b)
+      );
+      expect(responses[String(descriptor.success_status)]?.headers).toHaveProperty("X-Request-Id");
+      expect(Object.hasOwn(operationRecord ?? {}, "requestBody")).toBe(descriptor.request_placement === "path_and_json_body");
+    }
+  });
+
+  it("publishes the archive v2 schemas", async () => {
+    const document = parseYaml(await readFile(
+      new URL("../openapi/hunter-harness-v1.yaml", import.meta.url), "utf8"
+    )) as { components: { schemas: Record<string, unknown> } };
+    expect(Object.keys(document.components.schemas)).toEqual(expect.arrayContaining([
+      "RemoteSyncArchiveSourceHttp", "RemoteSyncArchiveUploadRefHttp", "RemoteSyncArchiveMetadataHttp",
+      "RemoteSyncArchiveRecordHttp", "RemoteSyncArchivePrepareHttpRequest", "RemoteSyncArchivePrepareHttpResponse",
+      "RemoteSyncArchiveCommitHttpRequest", "RemoteSyncArchiveCommitHttpResponse", "RemoteSyncArchiveStatusHttpResponse",
+      "RemoteSyncArchiveReceiptHttpResponse"
+    ]));
   });
 });
 

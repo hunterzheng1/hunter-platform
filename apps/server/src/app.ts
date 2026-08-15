@@ -152,6 +152,7 @@ import {
   type KnowledgeQueryHttpServicePort
 } from "./knowledge-query-http/index.js";
 import { registerRemoteContentUploadHttpRoutes, type RemoteContentUploadHttpServicePort } from "./remote-content-upload-http/index.js";
+import { registerRemoteSyncArchiveHttpRoutes, type RemoteSyncArchiveHttpServicePort } from "./remote-sync-archive-http/index.js";
 import { SemanticMemoryStore } from "./semantic/memory-store.js";
 import {
   SEMANTIC_INDEX_SCHEMA_VERSION,
@@ -183,6 +184,8 @@ export interface CreateServerOptions {
   knowledgeQuery?: KnowledgeQueryHttpServicePort;
   /** Bounded raw archive upload seam. Production main intentionally leaves this absent. */
   remoteContentUpload?: RemoteContentUploadHttpServicePort;
+  /** Remote Archive v2 lifecycle seam. Absent deployments fail closed with 503. */
+  remoteSyncArchive?: RemoteSyncArchiveHttpServicePort;
   /** Required trust dependencies for Stage 13 branch-monitor reads. Absent means explicit 503. */
   branchMonitorTrust?: {
     readonly eventBundleReader: PlanQualityEventBundleReaderPort;
@@ -4127,6 +4130,8 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
   registerRemoteContentUploadHttpRoutes(app, { repository, authenticated,
     ...(options.remoteContentUpload === undefined ? {} : { service: options.remoteContentUpload }) });
+  registerRemoteSyncArchiveHttpRoutes(app, { repository, authenticated,
+    ...(options.remoteSyncArchive === undefined ? {} : { service: options.remoteSyncArchive }) });
 
   const cleanupExpiredProjects = async (): Promise<void> => {
     const now = new Date().toISOString();

@@ -58,3 +58,4 @@ export * from "./update/update.js";
 export * from "./verification/capability-graph.js";
 export * from "./runtime/python.js";
 export * from "./runtime/managed-execution.js";
+export * from "./remote-sync/archive/index.js";
