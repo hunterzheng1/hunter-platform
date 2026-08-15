@@ -8,6 +8,10 @@ import { defineConfig } from "vitest/config";
 // Hunter-Harness repository, which owns the required workflow fixtures.
 const platformPackageTestFiles = [
   "packages/contracts/test/knowledge-ingest.test.ts",
+  "packages/contracts/test/plan-event-contracts.test.ts",
+  "packages/contracts/test/platform-information-export-contracts.test.ts",
+  "packages/contracts/test/remote-content-upload-http-contracts.test.ts",
+  "packages/contracts/test/remote-sync-archive-http-contracts.test.ts",
   "packages/contracts/test/schemas.test.ts",
   "packages/contracts/test/skill-package.test.ts",
   "packages/core/test/ai-prompt-parser.test.ts",

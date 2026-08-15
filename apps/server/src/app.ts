@@ -128,8 +128,30 @@ import {
   projectPendingKnowledge
 } from "./semantic/knowledge-projection.js";
 import { MemoryRunStore } from "./runs/memory-store.js";
+import { createRunStoreBranchMonitorSource } from "./runs/branch-monitor-source.js";
+import type { BranchMonitorCursorPort } from "./runs/branch-monitor-cursor.js";
+import {
+  createStage12MonitorVerifierAdapter,
+  type PlanQualityEventBundleReaderPort
+} from "./runs/stage12-monitor-verifier.js";
 import { registerRunRoutes } from "./runs/routes.js";
 import type { RunStore } from "./runs/store.js";
+import {
+  createBranchMonitorQueryAdapter,
+} from "./branch-monitor-query/index.js";
+import {
+  registerPlatformInformationRoutes,
+  type PlatformInformationAdapters
+} from "./platform-information/routes.js";
+import {
+  registerRemoteSyncHttpRoutes,
+  type RemoteSyncHttpServicePort
+} from "./remote-sync-http/index.js";
+import {
+  registerKnowledgeQueryHttpRoutes,
+  type KnowledgeQueryHttpServicePort
+} from "./knowledge-query-http/index.js";
+import { registerRemoteContentUploadHttpRoutes, type RemoteContentUploadHttpServicePort } from "./remote-content-upload-http/index.js";
 import { SemanticMemoryStore } from "./semantic/memory-store.js";
 import {
   SEMANTIC_INDEX_SCHEMA_VERSION,
@@ -153,6 +175,19 @@ export interface CreateServerOptions {
   registryPersistence?: RegistryPersistence;
   semanticStore?: SemanticStore;
   runStore?: RunStore;
+  /** Stage 13 read-only query adapters. Routes fail closed with 503 when absent. */
+  platformInformation?: PlatformInformationAdapters;
+  /** Remote Sync HTTP service. Absent deployments fail closed with 503. */
+  remoteSync?: RemoteSyncHttpServicePort;
+  /** Stage 09 remote knowledge service. Absent deployments fail closed with 503. */
+  knowledgeQuery?: KnowledgeQueryHttpServicePort;
+  /** Bounded raw archive upload seam. Production main intentionally leaves this absent. */
+  remoteContentUpload?: RemoteContentUploadHttpServicePort;
+  /** Required trust dependencies for Stage 13 branch-monitor reads. Absent means explicit 503. */
+  branchMonitorTrust?: {
+    readonly eventBundleReader: PlanQualityEventBundleReaderPort;
+    readonly cursorPort: BranchMonitorCursorPort;
+  };
   // AiJobStore ???PG ??? PgAiJobStore ????? + ?? recoverOrphans??? MemoryAiJobStore ??? fallback?
   aiJobStore?: AiJobStore;
   // AI LlmClient ????? createLlmClient ?? DeepSeek?????? mock?
@@ -427,6 +462,13 @@ async function authenticated(
     }
     const params = request.params as Record<string, unknown> | null;
     const projectId = typeof params?.projectId === "string" ? params.projectId : undefined;
+    if (projectId === undefined || projectId === "") {
+      throw new ServerDomainError(
+        403,
+        "PROJECT_KEY_MISMATCH",
+        "project API keys require a project-bound route"
+      );
+    }
     assertProjectKeyScope(request, projectScope, projectId);
   }
   return { actor, requestId: routeRequestId(request) };
@@ -656,6 +698,16 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   const aiJobStore = options.aiJobStore ?? new MemoryAiJobStore();
   const semanticStore = options.semanticStore ?? new SemanticMemoryStore();
   const runStore = options.runStore ?? new MemoryRunStore();
+  const branchMonitor = options.branchMonitorTrust === undefined
+    ? undefined
+    : createBranchMonitorQueryAdapter({
+        source_port: createRunStoreBranchMonitorSource(runStore, options.branchMonitorTrust.cursorPort),
+        stage12_verifier_port: createStage12MonitorVerifierAdapter({
+          eventBundleReader: options.branchMonitorTrust.eventBundleReader,
+          runStore
+        }),
+        cursor_verifier: options.branchMonitorTrust.cursorPort
+      });
   const codexService = options.codexService ?? new CodexAppServerService(config.codexHome);
   // R3???????? running/pending job?PG ??? failed ?? partial unique index?memory no-op??
   await aiJobStore.recoverOrphans();
@@ -887,6 +939,8 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
         ? "SKILL_UPLOAD_TOO_LARGE"
         : route === "/api/v1/projects/:projectId/changes/:changeKey/archive-package"
           ? "ARCHIVE_PACKAGE_TOO_LARGE"
+          : route === "/api/v1/projects/:projectId/branches/:branchName/remote-sync/content-upload"
+            ? "REMOTE_CONTENT_UPLOAD_TOO_LARGE"
           : "PROPOSAL_TOO_LARGE";
       message = "Request body exceeds the configured limit.";
     }
@@ -4051,6 +4105,28 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   registerRunRoutes(app, { repository, runStore, authenticated });
+  registerPlatformInformationRoutes(app, {
+    repository,
+    authenticated,
+    ...(options.platformInformation === undefined && branchMonitor === undefined
+      ? {}
+      : { adapters: {
+          ...(options.platformInformation ?? {}),
+          ...(branchMonitor === undefined ? {} : { branchMonitor })
+      } })
+  });
+  registerRemoteSyncHttpRoutes(app, {
+    repository,
+    authenticated,
+    ...(options.remoteSync === undefined ? {} : { service: options.remoteSync })
+  });
+  registerKnowledgeQueryHttpRoutes(app, {
+    repository,
+    authenticated,
+    ...(options.knowledgeQuery === undefined ? {} : { service: options.knowledgeQuery })
+  });
+  registerRemoteContentUploadHttpRoutes(app, { repository, authenticated,
+    ...(options.remoteContentUpload === undefined ? {} : { service: options.remoteContentUpload }) });
 
   const cleanupExpiredProjects = async (): Promise<void> => {
     const now = new Date().toISOString();

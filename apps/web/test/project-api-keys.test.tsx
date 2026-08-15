@@ -29,10 +29,12 @@ describe("ProjectApiKeysPanel", () => {
 
     await waitFor(() => expect(screen.getByText(/尚未签发|No keys issued/i)).toBeTruthy());
     const checkboxes = screen.getAllByRole("checkbox");
-    expect(checkboxes).toHaveLength(5);
+    expect(checkboxes).toHaveLength(8);
     for (const checkbox of checkboxes) {
       expect(checkbox).toBeChecked();
     }
+    expect(screen.getByText("archive:read")).toBeVisible();
+    expect(screen.getByText("archive:write")).toBeVisible();
   });
 
   it("shows inline errors when label or scopes are missing", async () => {

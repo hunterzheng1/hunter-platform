@@ -59,7 +59,11 @@ export const PROJECT_KEY_SCOPES = [
   "knowledge:read",
   "knowledge:write",
   "progress:write",
-  "files:read"
+  "platform:read",
+  "files:read",
+  "files:write"
+  ,"archive:read",
+  "archive:write"
 ] as const;
 
 export type ProjectKeyScope = (typeof PROJECT_KEY_SCOPES)[number];
