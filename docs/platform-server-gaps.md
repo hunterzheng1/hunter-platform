@@ -88,6 +88,18 @@
 - **背景**：全局 /runs 页已下线（监控内置于项目）。如未来要做全局运行墙：`GET /api/v1/runs?status=running` 跨项目聚合，避免前端 N+1。
 - **状态**：明确不做（本轮范围外）。
 
+### S11. Platform Information 视图未开箱可用（密钥 + 数据源双层缺口）
+
+- **现象**：项目详情的「分支文件 / 项目资料 / 项目知识（平台信息版）/ 变更记录」页报 `PLATFORM_INFORMATION_UNAVAILABLE`（"… adapter is not configured"）。
+- **第一层（配置）**：~~四个视图适配器仅在对应游标签名密钥存在时才组合，未配置即 503~~。**已于 2026-08-08 修复**：`production.ts` 的密钥解析改为 环境变量 → `*_FILE` → **进程内临时密钥兜底**（base64url 24 字节=32 字符，满足 SECRET_BYTES=32 与 ≥16 不重复字节约束；仅在有 pg pool 时启用，无 pool 仍保持 fail-closed；console.warn 提示多实例生产应显式配置共享密钥）。测试 `platform-information-production.test.ts` 6/6、`platform-information-routes.test.ts` 31/31 通过。`.env.example` 已补录 4 个密钥的显式配置方式；docker-compose 仍可后续补 secrets 下发（多实例场景）。
+- **第二层（数据源，roadmap 阶段 13 明示"仍未接入"）**：
+  - branch snapshot 的生产写入者未接入 Push/Finalize → 无快照时 Materials view 诚实返回 processing/503；
+  - 项目知识与变更记录缺 Stage 06 的生产持久真相源；
+  - 导出 HTTP create/download 生命周期未冻结。
+  见 `Hunter-Harness/docs/harness-improvement-roadmap/13-platform-information-architecture.md` 各节"关闭后仍未接入"。
+- **方向**：① ~~运维侧配齐 4 个密钥~~（已由临时兜底解决，显式配置仍推荐用于多实例）；② 数据侧按 roadmap 把快照写入接入 Push/Finalize、Stage 06 真相源落地后页面才有真实内容；③ 短期演示可用 `NEXT_PUBLIC_HUNTER_HARNESS_DEMO=true`（mock 已实现这些视图）。
+- **成果预期**：兜底后页面从 503 变为诚实空态/processing；数据源接入（roadmap 后续工作包）后显示真实分支快照/资料/知识/变更记录。
+
 ## 已决策记录
 
 - **归档摘要展示**：前端已移除「归档摘要」区块（用户判断信息密度低）。**数据收集保留**：`summary-data.json` 是归档记录与知识抽取（S4）的唯一来源，上传管线不变——不展示 ≠ 不收集。

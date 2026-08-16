@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { Buffer } from "node:buffer";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 import type { Pool } from "pg";
 import {
@@ -206,74 +206,85 @@ export function createProductionPlatformInformation(
   });
 }
 
+/**
+ * 进程内临时游标密钥（按 env 名缓存，保证同一进程内多次组合共享同一密钥，
+ * 游标在进程生命周期内可验签；进程重启后旧游标自然失效——对本机/单实例部署无害）。
+ */
+const ephemeralCursorSecrets = new Map<string, string>();
+
+/**
+ * 解析视图的游标签名密钥：环境变量 → *_FILE → 临时兜底。
+ * 兜底仅在 pg pool 可用时启用（没有数据源时维持原有 fail-closed 行为，页面诚实返回 503）。
+ */
+async function resolveCursorSecret(params: {
+  environment: Readonly<Record<string, string | undefined>>;
+  envName: string;
+  readSecretFile: (path: string) => Promise<string>;
+  poolAvailable: boolean;
+}): Promise<string | undefined> {
+  const { environment, envName, readSecretFile, poolAvailable } = params;
+  const direct = environment[envName]?.trim();
+  if (direct !== undefined && direct !== "") return direct;
+
+  const secretFile = environment[`${envName}_FILE`]?.trim();
+  if (secretFile !== undefined && secretFile !== "") {
+    const fileValue = (await readSecretFile(secretFile)).trim();
+    if (fileValue === "") {
+      throw new Error(`${envName}_FILE is empty`);
+    }
+    return fileValue;
+  }
+
+  if (!poolAvailable) return undefined;
+  let ephemeral = ephemeralCursorSecrets.get(envName);
+  if (ephemeral === undefined) {
+    // 24 字节随机数 base64url 编码后恰为 32 字符（满足 SECRET_BYTES=32），
+    // 64 符号字母表保证 ≥16 个不重复字节（MIN_SECRET_DISTINCT_BYTES）。
+    ephemeral = randomBytes(24).toString("base64url");
+    ephemeralCursorSecrets.set(envName, ephemeral);
+    console.warn(
+      `[platform-information] ${envName} 未配置，已生成进程内临时游标密钥；` +
+      "多实例生产部署请通过环境变量或 *_FILE 显式配置共享密钥。"
+    );
+  }
+  return ephemeral;
+}
+
 export async function createProductionPlatformInformationFromEnvironment(
   options: ProductionPlatformInformationEnvironmentOptions
 ): Promise<PlatformInformationAdapters> {
   const environment = options.environment ?? process.env;
-  const direct = environment.HUNTER_BRANCH_MONITOR_CURSOR_SECRET?.trim();
-  let branchMonitorCursorSecret = direct === "" ? undefined : direct;
+  const readSecretFile = options.readSecretFile ?? (
+    async (path: string): Promise<string> => await readFile(path, "utf8")
+  );
 
-  if (branchMonitorCursorSecret === undefined) {
-    const secretFile = environment.HUNTER_BRANCH_MONITOR_CURSOR_SECRET_FILE?.trim();
-    if (secretFile !== undefined && secretFile !== "") {
-      const readSecretFile = options.readSecretFile ?? (
-        async (path: string): Promise<string> => await readFile(path, "utf8")
-      );
-      const fileValue = (await readSecretFile(secretFile)).trim();
-      if (fileValue === "") {
-        throw new Error("HUNTER_BRANCH_MONITOR_CURSOR_SECRET_FILE is empty");
-      }
-      branchMonitorCursorSecret = fileValue;
-    }
-  }
-
-  const materialDirect = environment.HUNTER_PROJECT_MATERIALS_CURSOR_SECRET?.trim();
-  let projectMaterialsCursorSecret = materialDirect === "" ? undefined : materialDirect;
-  if (projectMaterialsCursorSecret === undefined) {
-    const secretFile = environment.HUNTER_PROJECT_MATERIALS_CURSOR_SECRET_FILE?.trim();
-    if (secretFile !== undefined && secretFile !== "") {
-      const readSecretFile = options.readSecretFile ?? (
-        async (path: string): Promise<string> => await readFile(path, "utf8")
-      );
-      const fileValue = (await readSecretFile(secretFile)).trim();
-      if (fileValue === "") {
-        throw new Error("HUNTER_PROJECT_MATERIALS_CURSOR_SECRET_FILE is empty");
-      }
-      projectMaterialsCursorSecret = fileValue;
-    }
-  }
-
-  const knowledgeDirect = environment.HUNTER_PROJECT_KNOWLEDGE_CURSOR_SECRET?.trim();
-  let projectKnowledgeCursorSecret = knowledgeDirect === "" ? undefined : knowledgeDirect;
-  if (projectKnowledgeCursorSecret === undefined) {
-    const secretFile = environment.HUNTER_PROJECT_KNOWLEDGE_CURSOR_SECRET_FILE?.trim();
-    if (secretFile !== undefined && secretFile !== "") {
-      const readSecretFile = options.readSecretFile ?? (
-        async (path: string): Promise<string> => await readFile(path, "utf8")
-      );
-      const fileValue = (await readSecretFile(secretFile)).trim();
-      if (fileValue === "") {
-        throw new Error("HUNTER_PROJECT_KNOWLEDGE_CURSOR_SECRET_FILE is empty");
-      }
-      projectKnowledgeCursorSecret = fileValue;
-    }
-  }
-
-  const changeDirect = environment.HUNTER_CHANGE_RECORDS_CURSOR_SECRET?.trim();
-  let changeRecordsCursorSecret = changeDirect === "" ? undefined : changeDirect;
-  if (changeRecordsCursorSecret === undefined) {
-    const secretFile = environment.HUNTER_CHANGE_RECORDS_CURSOR_SECRET_FILE?.trim();
-    if (secretFile !== undefined && secretFile !== "") {
-      const readSecretFile = options.readSecretFile ?? (
-        async (path: string): Promise<string> => await readFile(path, "utf8")
-      );
-      const fileValue = (await readSecretFile(secretFile)).trim();
-      if (fileValue === "") {
-        throw new Error("HUNTER_CHANGE_RECORDS_CURSOR_SECRET_FILE is empty");
-      }
-      changeRecordsCursorSecret = fileValue;
-    }
-  }
+  const [branchMonitorCursorSecret, projectMaterialsCursorSecret, projectKnowledgeCursorSecret, changeRecordsCursorSecret] =
+    await Promise.all([
+      resolveCursorSecret({
+        environment,
+        envName: "HUNTER_BRANCH_MONITOR_CURSOR_SECRET",
+        readSecretFile,
+        poolAvailable: options.pool !== undefined
+      }),
+      resolveCursorSecret({
+        environment,
+        envName: "HUNTER_PROJECT_MATERIALS_CURSOR_SECRET",
+        readSecretFile,
+        poolAvailable: options.pool !== undefined
+      }),
+      resolveCursorSecret({
+        environment,
+        envName: "HUNTER_PROJECT_KNOWLEDGE_CURSOR_SECRET",
+        readSecretFile,
+        poolAvailable: options.pool !== undefined
+      }),
+      resolveCursorSecret({
+        environment,
+        envName: "HUNTER_CHANGE_RECORDS_CURSOR_SECRET",
+        readSecretFile,
+        poolAvailable: options.pool !== undefined
+      })
+    ]);
 
   const base = createProductionPlatformInformation({
     runStore: options.runStore,

@@ -9,6 +9,67 @@ import { createProductionPlatformInformationFromEnvironment } from
   "../src/platform-information/production.js";
 import { MemoryRunStore } from "../src/runs/memory-store.js";
 
+describe("production Platform Information cursor secret fallback", () => {
+  it("composes all views with ephemeral cursor secrets when only a pool is available", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const query = vi.fn().mockResolvedValue({ rows: [] });
+      const pool = { query } as unknown as Pool;
+      const adapters = await createProductionPlatformInformationFromEnvironment({
+        pool,
+        runStore: new MemoryRunStore(),
+        environment: {}
+      });
+
+      expect(adapters.branchMonitor).toBeDefined();
+      expect(adapters.projectMaterials).toBeDefined();
+      expect(adapters.projectKnowledge).toBeDefined();
+      expect(adapters.changeRecords).toBeDefined();
+      expect(warn).toHaveBeenCalledTimes(4);
+      expect(String(warn.mock.calls[0]?.[0])).toContain("CURSOR_SECRET");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("keeps fail-closed behaviour (no adapters, no warning) when neither pool nor secrets exist", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const adapters = await createProductionPlatformInformationFromEnvironment({
+        runStore: new MemoryRunStore(),
+        environment: {}
+      });
+
+      expect(adapters.projectMaterials).toBeUndefined();
+      expect(adapters.projectKnowledge).toBeUndefined();
+      expect(adapters.changeRecords).toBeUndefined();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("reuses the same ephemeral secret within a process and never overrides an explicit secret", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const query = vi.fn().mockResolvedValue({ rows: [] });
+      const pool = { query } as unknown as Pool;
+      const first = await createProductionPlatformInformationFromEnvironment({
+        pool,
+        runStore: new MemoryRunStore(),
+        environment: { HUNTER_PROJECT_KNOWLEDGE_CURSOR_SECRET: "explicit-knowledge-secret-012345" }
+      });
+      expect(first.projectKnowledge).toBeDefined();
+      // 显式密钥存在时该视图不再产生临时兜底告警
+      const knowledgeWarnings = warn.mock.calls.filter((call) =>
+        String(call[0]).includes("HUNTER_PROJECT_KNOWLEDGE_CURSOR_SECRET"));
+      expect(knowledgeWarnings).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
 describe("production Platform Information export lifecycle", () => {
   const roots: string[] = [];
   afterEach(async () => {
