@@ -118,6 +118,7 @@ const app = await createServer({
 // production process. The service owns the DB/CAS fences; this loop only
 // discovers project scopes and supplies one non-overlapping worker.
 let maintenanceBusy = false;
+let maintenancePromise: Promise<void> | null = null;
 const maintenanceWorkerId = `remote-content-upload-worker:${randomUUID()}`;
 const runRemoteContentUploadMaintenance = async (): Promise<void> => {
   if (maintenanceBusy) return;
@@ -131,7 +132,7 @@ const runRemoteContentUploadMaintenance = async (): Promise<void> => {
          SELECT project_id FROM remote_content_uploads
          UNION
          SELECT project_id FROM remote_content_upload_cas_objects
-       ) projects ORDER BY project_id`
+       ) projects ORDER BY project_id LIMIT 256`
     );
     for (const row of projects.rows) {
       const batch = await remoteContentUpload.claimGarbage({
@@ -154,9 +155,15 @@ const runRemoteContentUploadMaintenance = async (): Promise<void> => {
     maintenanceBusy = false;
   }
 };
-const maintenanceTimer = setInterval(() => { void runRemoteContentUploadMaintenance(); }, 60_000);
+const scheduleRemoteContentUploadMaintenance = (): void => {
+  if (maintenancePromise !== null) return;
+  maintenancePromise = runRemoteContentUploadMaintenance().finally(() => {
+    maintenancePromise = null;
+  });
+};
+const maintenanceTimer = setInterval(scheduleRemoteContentUploadMaintenance, 60_000);
 maintenanceTimer.unref?.();
-void runRemoteContentUploadMaintenance();
+scheduleRemoteContentUploadMaintenance();
 const port = Number(process.env.PORT ?? "3001");
 if (!Number.isInteger(port) || port < 1 || port > 65_535) {
   throw new Error("PORT must be an integer between 1 and 65535");
@@ -169,6 +176,7 @@ await app.listen({
 async function shutdown(signal: string): Promise<void> {
   app.log.info({ signal }, "shutting down");
   clearInterval(maintenanceTimer);
+  await maintenancePromise?.catch((error) => app.log.error({ error }, "remote content upload maintenance shutdown failed"));
   await app.close();
   await remoteContentUpload.close();
   await remoteSync.close();

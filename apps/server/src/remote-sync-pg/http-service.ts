@@ -6,6 +6,7 @@ import {
   remoteSyncSourceRefSchema,
   remoteSyncPreparedPushSchema,
   remoteSyncPushReceiptHttpSchema,
+  remoteSyncPushPrepareHttpRequestSchema,
   remoteSyncPushStatusSchema,
   remoteSyncRemoteSnapshotSchema,
   remoteSyncPullReceiptSchema,
@@ -69,6 +70,29 @@ function fail(code: string, retryable = false): never {
 
 function hash(value: unknown): `sha256:${string}` {
   return `sha256:${createHash("sha256").update(canonicalJson(value), "utf8").digest("hex")}`;
+}
+
+function compareCodepoint(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function remoteSyncPayloadHash(input: RemoteSyncPushPrepareHttpRequest): string {
+  const sortOperations = (operations: typeof input.operations) => [...operations].sort((left, right) =>
+    compareCodepoint(left.path, right.path) ||
+    compareCodepoint(left.action, right.action) ||
+    compareCodepoint(left.source_path ?? "", right.source_path ?? ""));
+  return hash({
+    source: input.source,
+    expected_revision: input.expected_revision,
+    preview_hash: input.preview_hash,
+    idempotency_key: input.idempotency_key,
+    files: input.files.map(({ upload_ref, ...file }) => {
+      void upload_ref;
+      return file;
+    }).sort((left, right) => compareCodepoint(left.path, right.path)),
+    operations: sortOperations(input.operations),
+    skipped: sortOperations(input.skipped)
+  });
 }
 
 function token(prefix: string): string {
@@ -507,6 +531,10 @@ export function createPgRemoteSyncHttpService(options: PgRemoteSyncHttpServiceOp
     open();
     ensureSource(input.source, input.lease);
     ensureUniquePushPaths(input);
+    const parsedInput = remoteSyncPushPrepareHttpRequestSchema.safeParse(input);
+    if (!parsedInput.success || remoteSyncPayloadHash(parsedInput.data) !== parsedInput.data.payload_hash) {
+      fail("SYNC_STREAM_INVALID");
+    }
     const requestHash = hash(input);
     return transaction(options.pool, async (client) => {
       await lockBranch(client, input.source);

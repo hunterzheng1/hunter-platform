@@ -37,13 +37,13 @@ const pushPrepareInput = () => {
   const source = fullSource();
   const lease = leaseFor(source);
   const contentHash = digest("x");
-  return {
+  const input = {
     source,
     lease,
     expected_revision: "revision_0001",
     preview_hash: digest("preview"),
     idempotency_key: "push-prepare-1",
-    payload_hash: digest("payload"),
+    payload_hash: "",
     files: [{
       path: "src/index.ts",
       content_hash: contentHash,
@@ -59,6 +59,16 @@ const pushPrepareInput = () => {
     }],
     skipped: [],
   };
+  input.payload_hash = digest(canonicalJson({
+    source: input.source,
+    expected_revision: input.expected_revision,
+    preview_hash: input.preview_hash,
+    idempotency_key: input.idempotency_key,
+    files: input.files.map(({ upload_ref, ...file }) => { void upload_ref; return file; }),
+    operations: input.operations,
+    skipped: input.skipped
+  }));
+  return input;
 };
 
 class LeaseCommandDatabase {
