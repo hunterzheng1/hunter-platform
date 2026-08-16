@@ -1582,7 +1582,7 @@ paths:
         required: true
         content:
           application/octet-stream:
-            schema: { type: string, format: binary, maxLength: 536870912 }
+            schema: { type: string, format: binary, maxLength: 10485760 }
       responses:
         "201":
           description: New bounded Remote Sync file upload
@@ -1839,7 +1839,7 @@ paths:
           in: path
           required: true
           schema: { type: string, minLength: 1, maxLength: 160 }
-        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/RemoteSyncIdempotencyKey"
         - $ref: "#/components/parameters/RequestId"
       requestBody:
         required: true
@@ -1877,7 +1877,7 @@ paths:
           in: path
           required: true
           schema: { type: string, minLength: 1, maxLength: 128 }
-        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/RemoteSyncIdempotencyKey"
         - $ref: "#/components/parameters/RequestId"
       requestBody:
         required: true
@@ -1915,7 +1915,7 @@ paths:
           in: path
           required: true
           schema: { type: string, minLength: 1, maxLength: 128 }
-        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/RemoteSyncIdempotencyKey"
         - $ref: "#/components/parameters/RequestId"
       requestBody:
         required: true
@@ -2035,7 +2035,7 @@ paths:
           in: path
           required: true
           schema: { type: string, minLength: 1, maxLength: 160 }
-        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/RemoteSyncIdempotencyKey"
         - $ref: "#/components/parameters/RequestId"
       requestBody:
         required: true
@@ -2071,7 +2071,7 @@ paths:
           in: path
           required: true
           schema: { type: string, minLength: 1, maxLength: 160 }
-        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/RemoteSyncIdempotencyKey"
         - $ref: "#/components/parameters/RequestId"
       requestBody:
         required: true
@@ -2189,7 +2189,7 @@ paths:
           in: path
           required: true
           schema: { type: string, minLength: 1, maxLength: 160 }
-        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/RemoteSyncIdempotencyKey"
         - $ref: "#/components/parameters/RequestId"
       requestBody:
         required: true
@@ -2739,6 +2739,15 @@ components:
       schema:
         type: string
         format: uuid
+    RemoteSyncIdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 240
+        pattern: "^[!-~]+$"
     KnowledgeQueryIdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -5529,12 +5538,22 @@ components:
       type: object
       additionalProperties: false
       required: [path, content_hash, size]
+      x-hunter-validator-id: validateRemoteSyncPushMetadata
+      x-hunter-identity-bindings:
+        - "upload_ref.sha256 == content_hash"
+        - "upload_ref.size_bytes == size"
+        - "files[].path is unique under case-folded comparison"
       properties:
         path: { type: string, minLength: 1, maxLength: 1024 }
         content_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
         size: { type: integer, minimum: 0, maximum: 10485760 }
         content_kind: { type: string, enum: [config, rule, architecture, instruction, branch_file, change_document, archive_package, knowledge_entry, knowledge_candidate, project_content_candidate] }
         upload_ref: { $ref: "#/components/schemas/RemoteContentUploadHttpRef" }
+      oneOf:
+        - properties: { size: { const: 0 } }
+          not: { required: [upload_ref] }
+        - required: [upload_ref]
+          properties: { size: { minimum: 1 } }
     RemoteSyncLeaseScopedSource:
       type: object
       additionalProperties: false
@@ -5551,11 +5570,15 @@ components:
         lease: { $ref: "#/components/schemas/RemoteSyncLease" }
         expected_revision: { type: string, minLength: 1, maxLength: 160 }
         preview_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
-        idempotency_key: { type: string, minLength: 1, maxLength: 240 }
+        idempotency_key: { type: string, minLength: 1, maxLength: 240, pattern: "^[!-~]+$" }
         payload_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
-        files: { type: array, maxItems: 100000, items: { $ref: "#/components/schemas/RemoteSyncPushFileMetadataHttp" } }
+        files: { type: array, maxItems: 100000, x-hunter-max-total-bytes: 268435456, items: { $ref: "#/components/schemas/RemoteSyncPushFileMetadataHttp" } }
         operations: { type: array, maxItems: 100000, items: { $ref: "#/components/schemas/RemoteSyncOperation" } }
         skipped: { type: array, maxItems: 100000, items: { $ref: "#/components/schemas/RemoteSyncOperation" } }
+      x-hunter-identity-bindings:
+        - "files[].path is unique under case-folded comparison"
+        - "operations[].path and skipped[].path are jointly unique under case-folded comparison"
+        - "payload_hash equals canonical Core remoteSyncPushPayloadHash of source, expected_revision, preview_hash, idempotency_key, files and outcomes"
     RemoteSyncPreparedPush:
       type: object
       additionalProperties: false
@@ -5569,7 +5592,7 @@ components:
         lease_generation: { type: integer, minimum: 1 }
         expected_revision: { type: string, minLength: 1, maxLength: 160 }
         preview_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
-        idempotency_key: { type: string, minLength: 1, maxLength: 240 }
+        idempotency_key: { type: string, minLength: 1, maxLength: 240, pattern: "^[!-~]+$" }
         payload_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
         state: { type: string, const: prepared }
         expires_at: { type: string, format: date-time }
@@ -5591,7 +5614,7 @@ components:
       properties:
         prepare_id: { type: string, minLength: 1, maxLength: 160 }
         lease: { $ref: "#/components/schemas/RemoteSyncLease" }
-        idempotency_key: { type: string, minLength: 1, maxLength: 240 }
+        idempotency_key: { type: string, minLength: 1, maxLength: 240, pattern: "^[!-~]+$" }
         payload_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
     RemoteSyncPushReceipt:
       type: object
@@ -5601,7 +5624,7 @@ components:
         schema_version: { type: integer, const: 1 }
         prepare_id: { type: string, minLength: 1, maxLength: 160 }
         source: { $ref: "#/components/schemas/RemoteSyncSourceRef" }
-        idempotency_key: { type: string, minLength: 1, maxLength: 240 }
+        idempotency_key: { type: string, minLength: 1, maxLength: 240, pattern: "^[!-~]+$" }
         payload_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
         preview_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
         project_version: { type: [string, "null"], pattern: "^pv_[A-Za-z0-9_-]{1,159}$" }
@@ -5628,7 +5651,7 @@ components:
         source: { $ref: "#/components/schemas/RemoteSyncSourceRef" }
         state: { type: string, enum: [prepared, committing, committed, failed, unknown] }
         prepare_id: { type: string, minLength: 1, maxLength: 160 }
-        idempotency_key: { type: string, minLength: 1, maxLength: 240 }
+        idempotency_key: { type: string, minLength: 1, maxLength: 240, pattern: "^[!-~]+$" }
         payload_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
         receipt: { $ref: "#/components/schemas/RemoteSyncPushReceipt" }
     RemoteSyncPushReceiptHttpResponse:
@@ -5640,7 +5663,7 @@ components:
       properties:
         source: { $ref: "#/components/schemas/RemoteSyncSourceRef" }
         actor_id: { type: string, minLength: 1, maxLength: 160 }
-        idempotency_key: { type: string, minLength: 1, maxLength: 240 }
+        idempotency_key: { type: string, minLength: 1, maxLength: 240, pattern: "^[!-~]+$" }
         payload_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
     RemoteSyncPullReceipt:
       type: object
@@ -5649,7 +5672,7 @@ components:
       properties:
         schema_version: { type: integer, const: 1 }
         source: { $ref: "#/components/schemas/RemoteSyncSourceRef" }
-        idempotency_key: { type: string, minLength: 1, maxLength: 240 }
+        idempotency_key: { type: string, minLength: 1, maxLength: 240, pattern: "^[!-~]+$" }
         payload_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
         remote_revision: { type: string, minLength: 1, maxLength: 160 }
         local_transaction: { type: string, const: committed }

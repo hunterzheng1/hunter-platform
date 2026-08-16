@@ -235,8 +235,9 @@ export const remoteSyncPushPrepareHttpRequestSchema = z.object({
       value.lease.actor_id !== value.source.actor_id) {
     context.addIssue({ code: "custom", path: ["lease"], message: "lease is outside source scope" });
   }
-  const filePaths = value.files.map((file) => file.path);
-  const outcomePaths = [...value.operations, ...value.skipped].map((operation) => operation.path);
+  const filePaths = value.files.map((file) => file.path.toLocaleLowerCase("en-US"));
+  const outcomePaths = [...value.operations, ...value.skipped]
+    .map((operation) => operation.path.toLocaleLowerCase("en-US"));
   if (new Set(filePaths).size !== filePaths.length) {
     context.addIssue({ code: "custom", path: ["files"], message: "push file paths must be unique" });
   }

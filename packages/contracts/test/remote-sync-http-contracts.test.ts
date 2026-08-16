@@ -234,6 +234,22 @@ describe("Remote Sync HTTP v1 shared contract", () => {
       skipped: [{ ...operation, action: "no_change" as const }],
     };
     expect(remoteSyncPushPrepareHttpRequestSchema.safeParse(request).success).toBe(false);
+    expect(remoteSyncPushPrepareHttpRequestSchema.safeParse({
+      ...request,
+      files: [
+        request.files[0],
+        {
+          ...request.files[0],
+          path: "src/INDEX.ts",
+          upload_ref: { ...request.files[0].upload_ref, ref_id: `bounded_upload:${"B".repeat(43)}` }
+        }
+      ],
+      skipped: []
+    }).success).toBe(false);
+    expect(remoteSyncPushPrepareHttpRequestSchema.safeParse({
+      ...request,
+      skipped: [{ ...operation, path: "SRC/INDEX.ts", action: "no_change" as const }]
+    }).success).toBe(false);
     const receipt = {
       schema_version: 1,
       prepare_id: "prepare-no-change",
