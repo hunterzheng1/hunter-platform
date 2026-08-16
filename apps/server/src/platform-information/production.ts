@@ -12,6 +12,8 @@ import {
 } from "@hunter-harness/contracts";
 
 import { PgBranchSnapshotPort } from "../branch-snapshots/pg.js";
+import { createBranchSnapshotModule } from "../branch-snapshots/module.js";
+import { createBranchVersionQueryAdapter } from "../branch-version-query/index.js";
 import { createBranchMonitorQueryAdapter } from "../branch-monitor-query/index.js";
 import {
   ProjectMaterialsCursorAuthority,
@@ -138,6 +140,25 @@ export function createProductionPlatformInformation(
         cursor_verifier: trust.cursorPort
       });
 
+  // 分支文件 / 版本记录视图：依赖 branch snapshot 存储（Pg），无独立游标密钥
+  // （PgBranchSnapshotPort 自带持久化 cursor verifier），pool 存在即可组合。
+  let branchVersion: PlatformInformationAdapters["branchVersion"];
+  if (options.pool !== undefined) {
+    const snapshotPort = new PgBranchSnapshotPort(options.pool);
+    const snapshotModule = createBranchSnapshotModule({
+      repository_port: snapshotPort,
+      blob_read_port: snapshotPort,
+      cursor_verifier_port: snapshotPort,
+      // 服务端无法感知本机工作区状态，恢复冲突检测诚实返回空集（与集成测试一致）。
+      restore_conflict_port: {
+        async listConflicts(input) {
+          return { actor_id: input.actor_id, identity: input.identity, conflicts: [] };
+        }
+      }
+    });
+    branchVersion = createBranchVersionQueryAdapter(snapshotModule);
+  }
+
   let projectMaterials: PlatformInformationAdapters["projectMaterials"];
   if (options.projectMaterialsCursorSecret !== undefined) {
     if (options.pool === undefined) {
@@ -200,6 +221,7 @@ export function createProductionPlatformInformation(
 
   return Object.freeze({
     ...(branchMonitor === undefined ? {} : { branchMonitor }),
+    ...(branchVersion === undefined ? {} : { branchVersion }),
     ...(projectMaterials === undefined ? {} : { projectMaterials }),
     ...(projectKnowledge === undefined ? {} : { projectKnowledge }),
     ...(changeRecords === undefined ? {} : { changeRecords })

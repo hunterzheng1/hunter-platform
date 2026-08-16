@@ -92,13 +92,13 @@
 
 - **现象**：项目详情的「分支文件 / 项目资料 / 项目知识（平台信息版）/ 变更记录」页报 `PLATFORM_INFORMATION_UNAVAILABLE`（"… adapter is not configured"）。
 - **第一层（配置）**：~~四个视图适配器仅在对应游标签名密钥存在时才组合，未配置即 503~~。**已于 2026-08-08 修复**：`production.ts` 的密钥解析改为 环境变量 → `*_FILE` → **进程内临时密钥兜底**（base64url 24 字节=32 字符，满足 SECRET_BYTES=32 与 ≥16 不重复字节约束；仅在有 pg pool 时启用，无 pool 仍保持 fail-closed；console.warn 提示多实例生产应显式配置共享密钥）。测试 `platform-information-production.test.ts` 6/6、`platform-information-routes.test.ts` 31/31 通过。`.env.example` 已补录 4 个密钥的显式配置方式；docker-compose 仍可后续补 secrets 下发（多实例场景）。
-- **第二层（数据源，roadmap 阶段 13 明示"仍未接入"）**：
-  - branch snapshot 的生产写入者未接入 Push/Finalize → 无快照时 Materials view 诚实返回 processing/503；
-  - 项目知识与变更记录缺 Stage 06 的生产持久真相源；
-  - 导出 HTTP create/download 生命周期未冻结。
-  见 `Hunter-Harness/docs/harness-improvement-roadmap/13-platform-information-architecture.md` 各节"关闭后仍未接入"。
-- **方向**：① ~~运维侧配齐 4 个密钥~~（已由临时兜底解决，显式配置仍推荐用于多实例）；② 数据侧按 roadmap 把快照写入接入 Push/Finalize、Stage 06 真相源落地后页面才有真实内容；③ 短期演示可用 `NEXT_PUBLIC_HUNTER_HARNESS_DEMO=true`（mock 已实现这些视图）。
-- **成果预期**：兜底后页面从 503 变为诚实空态/processing；数据源接入（roadmap 后续工作包）后显示真实分支快照/资料/知识/变更记录。
+- **第二层（数据源）**：~~roadmap 阶段 13 明示"仍未接入"~~。**2026-08-08 代码审计更正——文档已滞后于代码**：branch snapshot 生产写入者已接入 push commit 事务（`main.ts:79` + `remote-sync-pg/http-service.ts:851`）；项目知识真相源 `knowledge_ingest_entries` 与变更记录 `change_archive_packages` 均有真实写入路径；导出 HTTP create/download 也已接路由（`routes.ts:433/500`）。
+- **仍存缺口（2026-08-08 审计 + 修复后更新）**：
+  - ~~branchVersion 适配器从未被生产组合~~ → **已修复（同日）**：`production.ts` 在 pool 可用时即组合 `createBranchVersionQueryAdapter(createBranchSnapshotModule(...))`（PgBranchSnapshotPort 兼任 repository/blob/cursor-verifier，恢复冲突端口诚实返回空集）。「分支文件」「版本记录」列表因此可用。测试 production 7/7 + routes 31/31 + adapter 12/12 通过。
+  - `branch_files` / `version_records` 的**详情路由仍 503**（"trusted detail locator is not wired"，`platform-information/routes.ts:561`）——设计缺口：需要服务端持有 detail_id→locator 的可信映射（建议复用 cursor authority 的 HMAC 签名模式：list 投影时签发、detail 时验签解码）。**属构建项，非配置项**。
+  - 06A 知识队列 worker：`worker-host` 只会跑单个 job，**生产调度器（dequeue + lease + ack 循环）尚不存在**——需要独立工作包实现调度循环后再接 main.ts，不是"start 一下"能解决的。生产投影仍走旧 in-process 全量重建（可用，非阻塞）。
+  - roadmap 阶段 14（回填迁移脚本、平台 CI、端到端验收）**整体仍是仅文档**。
+- **方向**：① ~~运维侧配齐 4 个密钥~~（已由临时兜底解决）；② ~~branchVersion 组合~~（已修复）；③ 构建详情 locator 签名映射；④ 构建知识队列生产调度器；⑤ 短期演示可用 `NEXT_PUBLIC_HUNTER_HARNESS_DEMO=true`。
 
 ## 已决策记录
 

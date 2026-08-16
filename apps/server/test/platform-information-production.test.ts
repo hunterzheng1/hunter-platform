@@ -40,6 +40,7 @@ describe("production Platform Information cursor secret fallback", () => {
         environment: {}
       });
 
+      expect(adapters.branchVersion).toBeUndefined();
       expect(adapters.projectMaterials).toBeUndefined();
       expect(adapters.projectKnowledge).toBeUndefined();
       expect(adapters.changeRecords).toBeUndefined();
@@ -47,6 +48,38 @@ describe("production Platform Information cursor secret fallback", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+
+  it("composes branch version view whenever a pool is available (no cursor secret required)", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    const adapters = await createProductionPlatformInformationFromEnvironment({
+      pool: { query } as unknown as Pool,
+      runStore: new MemoryRunStore(),
+      environment: {}
+    });
+
+    expect(adapters.branchVersion).toBeDefined();
+    const result = await adapters.branchVersion?.query(JSON.stringify({
+      schema_version: 1,
+      contract_kind: "query",
+      view: "version_records",
+      project_id: "prj_versions",
+      query_scope: {
+        actor_id: "actor_versions",
+        accessible_project_ids: ["prj_versions"],
+        content_types: ["branch_file"]
+      },
+      limit: 10,
+      cursor: null,
+      cursor_verification: "server_port_required",
+      sort: "uploaded_at_desc_snapshot_version_asc"
+    }));
+    // mock pool 无法满足模块游标读取的行形状 → SOURCE_INVALID 恰好证明
+    // 组合链已贯通（若组合缺失这里会是 QUERY_INVALID 或 adapter undefined）。
+    expect(result).toBeDefined();
+    expect(result?.ok).toBe(false);
+    expect((result as { ok: false; reason_code: string }).reason_code).toBe("BRANCH_VERSION_SOURCE_INVALID");
   });
 
   it("reuses the same ephemeral secret within a process and never overrides an explicit secret", async () => {
