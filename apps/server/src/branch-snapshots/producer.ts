@@ -1,8 +1,14 @@
 import { createHash } from "node:crypto";
 import { types as nodeTypes } from "node:util";
 
-import { remoteSyncSourceRefSchema, type RemoteSyncSourceRef } from "@hunter-harness/contracts";
+import {
+  remoteSyncLeaseSchema,
+  remoteSyncSourceRefSchema,
+  type RemoteSyncLease,
+  type RemoteSyncSourceRef,
+} from "@hunter-harness/contracts";
 import { z } from "zod";
+import type { PoolClient } from "pg";
 
 import {
   branchSnapshotRecordSchema,
@@ -47,11 +53,11 @@ const file = z
   .object({
     path: z.string().min(1).max(1_024),
     content_kind: contentKind,
-    size: z.number().int().nonnegative().max(64 * 1024 * 1024),
+    size: z.number().int().nonnegative().max(10 * 1024 * 1024),
     content_hash: sha256,
     media_type: mediaType,
     action,
-    content: z.string().max(64 * 1024 * 1024),
+    content: z.string().max(10 * 1024 * 1024),
   })
   .strict();
 
@@ -61,6 +67,7 @@ const inputSchema = z
     actor_id: z.string().min(1).max(160),
     idempotency_key: z.string().min(1).max(240),
     expected_revision: z.string().min(1).max(240),
+    lease_fence: remoteSyncLeaseSchema.optional(),
     source: remoteSyncSourceRefSchema.refine(
       (value) => value.commit_sha !== undefined,
       "commit_sha is required",
@@ -71,6 +78,7 @@ const inputSchema = z
     diff_ref: identifier,
     uploaded_at: z.iso.datetime({ offset: true }),
     changed_paths: z.array(z.string().min(1).max(1_024)).max(100_000),
+    removed_paths: z.array(z.string().min(1).max(1_024)).max(100_000).optional().default([]),
     files: z.array(file).max(100_000),
   })
   .strict();
@@ -80,6 +88,7 @@ export interface BranchSnapshotProducerInput {
   actor_id: string;
   idempotency_key: string;
   expected_revision: string;
+  lease_fence?: RemoteSyncLease;
   source: RemoteSyncSourceRef & { commit_sha?: string };
   project_version: string;
   artifact_id: string;
@@ -87,12 +96,13 @@ export interface BranchSnapshotProducerInput {
   diff_ref: string;
   uploaded_at: string;
   changed_paths: string[];
+  removed_paths?: string[];
   files: BranchSnapshotSeed["files"];
 }
 
 export type BranchSnapshotDurableCommitResult =
   | { outcome: "new" | "replay"; record: BranchSnapshotRecord }
-  | { outcome: "conflict"; reason_code: "BRANCH_SNAPSHOT_IDENTITY_CONFLICT" | "BRANCH_SNAPSHOT_REVISION_CONFLICT" };
+  | { outcome: "conflict"; reason_code: "BRANCH_SNAPSHOT_IDENTITY_CONFLICT" | "BRANCH_SNAPSHOT_REVISION_CONFLICT" | "BRANCH_SNAPSHOT_LEASE_FENCED" };
 
 export type BranchSnapshotCommitResult =
   | BranchSnapshotDurableCommitResult
@@ -110,13 +120,23 @@ export interface BranchSnapshotCommitPort {
     idempotency_key: string;
     /** Opaque branch-pointer CAS token; the uninitialized branch has no row. */
     expected_revision: string;
+    lease_fence?: RemoteSyncLease;
     source: RemoteSyncSourceRef;
     seed: BranchSnapshotSeed;
   }): Promise<BranchSnapshotDurableCommitResult>;
+  /** Optional transaction-bound variant used by the Remote Sync HTTP commit. */
+  commitSnapshotWithClient?(
+    client: PoolClient,
+    input: Parameters<BranchSnapshotCommitPort["commitSnapshot"]>[0],
+  ): Promise<BranchSnapshotDurableCommitResult>;
 }
 
 export interface BranchSnapshotProducer {
   publish(input: BranchSnapshotProducerInput): Promise<BranchSnapshotCommitResult>;
+  publishWithClient?(
+    client: PoolClient,
+    input: BranchSnapshotProducerInput,
+  ): Promise<BranchSnapshotCommitResult>;
 }
 
 function compareCodepoint(left: string, right: string): number {
@@ -155,7 +175,8 @@ function commitMethod(value: unknown): BranchSnapshotCommitPort["commitSnapshot"
   }
   const descriptors = Object.getOwnPropertyDescriptors(value);
   const keys = Reflect.ownKeys(descriptors);
-  if (keys.length !== 1 || keys[0] !== "commitSnapshot") {
+  if (keys.length < 1 || keys.length > 2 || !keys.includes("commitSnapshot") ||
+      keys.some((key) => key !== "commitSnapshot" && key !== "commitSnapshotWithClient")) {
     throw producerError("BRANCH_SNAPSHOT_PRODUCER_PORT_INVALID");
   }
   const descriptor = descriptors.commitSnapshot;
@@ -165,6 +186,21 @@ function commitMethod(value: unknown): BranchSnapshotCommitPort["commitSnapshot"
     throw producerError("BRANCH_SNAPSHOT_PRODUCER_PORT_INVALID");
   }
   return descriptor.value as BranchSnapshotCommitPort["commitSnapshot"];
+}
+
+function boundCommitMethod(value: unknown): NonNullable<BranchSnapshotCommitPort["commitSnapshotWithClient"]> {
+  if (value === null || typeof value !== "object" || nodeTypes.isProxy(value) ||
+      Object.getPrototypeOf(value) !== Object.prototype) {
+    throw producerError("BRANCH_SNAPSHOT_PRODUCER_PORT_INVALID");
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const descriptor = descriptors.commitSnapshotWithClient;
+  if (descriptor === undefined || !("value" in descriptor) ||
+      typeof descriptor.value !== "function" || nodeTypes.isProxy(descriptor.value) ||
+      descriptor.enumerable !== true || descriptor.get !== undefined || descriptor.set !== undefined) {
+    throw producerError("BRANCH_SNAPSHOT_PRODUCER_PORT_INVALID");
+  }
+  return descriptor.value as NonNullable<BranchSnapshotCommitPort["commitSnapshotWithClient"]>;
 }
 
 interface SnapshotBudget {
@@ -251,12 +287,14 @@ function dependencyPort(value: unknown): BranchSnapshotCommitPort {
 function canonicalSeed(value: z.infer<typeof inputSchema>): BranchSnapshotSeed {
   const files = value.files.map((entry) => ({ ...entry }));
   const paths = files.map((entry) => entry.path);
-  const changed = files
+  const changedFiles = files
     .filter((entry) => entry.action !== "no_change")
-    .map((entry) => entry.path)
-    .sort(compareCodepoint);
+    .map((entry) => entry.path);
+  const removed = [...value.removed_paths].sort(compareCodepoint);
+  const changed = [...changedFiles, ...removed].sort(compareCodepoint);
   if (new Set(paths).size !== paths.length ||
       paths.join("\0") !== [...paths].sort(compareCodepoint).join("\0") ||
+      new Set(removed).size !== removed.length || removed.some((path) => paths.includes(path)) ||
       new Set(value.changed_paths).size !== value.changed_paths.length ||
       value.changed_paths.join("\0") !== [...value.changed_paths].sort(compareCodepoint).join("\0") ||
       changed.join("\0") !== value.changed_paths.join("\0")) {
@@ -270,7 +308,11 @@ function canonicalSeed(value: z.infer<typeof inputSchema>): BranchSnapshotSeed {
     }
   }
   const commitSha = value.source.commit_sha;
-  if (commitSha === undefined || value.source.actor_id !== value.actor_id) {
+  if (commitSha === undefined || value.source.actor_id !== value.actor_id ||
+      (value.lease_fence !== undefined &&
+        (value.lease_fence.project_id !== value.source.project_id ||
+         value.lease_fence.branch_name !== value.source.branch_name ||
+         value.lease_fence.actor_id !== value.source.actor_id))) {
     throw producerError("BRANCH_SNAPSHOT_PRODUCER_INPUT_INVALID");
   }
   const seed: BranchSnapshotSeed = {
@@ -312,7 +354,7 @@ function readResult(value: unknown, expected: BranchSnapshotRecord): BranchSnaps
   const conflict = z
     .object({
       outcome: z.literal("conflict"),
-      reason_code: z.enum(["BRANCH_SNAPSHOT_IDENTITY_CONFLICT", "BRANCH_SNAPSHOT_REVISION_CONFLICT"]),
+      reason_code: z.enum(["BRANCH_SNAPSHOT_IDENTITY_CONFLICT", "BRANCH_SNAPSHOT_REVISION_CONFLICT", "BRANCH_SNAPSHOT_LEASE_FENCED"]),
     })
     .strict()
     .safeParse(plain);
@@ -342,42 +384,56 @@ export function createBranchSnapshotProducer(input: {
 }): BranchSnapshotProducer {
   const commitPort = dependencyPort(input);
   const commitSnapshot = commitMethod(commitPort);
+  const commitSnapshotWithClient = Object.prototype.hasOwnProperty.call(commitPort, "commitSnapshotWithClient")
+    ? boundCommitMethod(commitPort)
+    : null;
+  async function publishInternal(
+    raw: unknown,
+    invoke: (input: Parameters<BranchSnapshotCommitPort["commitSnapshot"]>[0]) => unknown,
+  ): Promise<BranchSnapshotCommitResult> {
+    let parsed: z.infer<typeof inputSchema>;
+    try {
+      parsed = inputSchema.parse(boundedSnapshot(raw));
+    } catch {
+      throw producerError("BRANCH_SNAPSHOT_PRODUCER_INPUT_INVALID");
+    }
+    let seed: BranchSnapshotSeed;
+    try {
+      seed = canonicalSeed(parsed);
+    } catch {
+      throw producerError("BRANCH_SNAPSHOT_PRODUCER_INPUT_INVALID");
+    }
+    const expected = expectedRecord(seed);
+    if (seed.changed_paths.length === 0) return { outcome: "no_changes" };
+    let returned: unknown;
+    try {
+      returned = invoke({
+        actor_id: parsed.actor_id,
+        idempotency_key: parsed.idempotency_key,
+        expected_revision: parsed.expected_revision,
+        ...(parsed.lease_fence === undefined ? {} : { lease_fence: parsed.lease_fence }),
+        source: parsed.source,
+        seed,
+      });
+    } catch {
+      throw producerError("BRANCH_SNAPSHOT_PRODUCER_PORT_INVALID");
+    }
+    if (!nativePromise(returned)) throw producerError("BRANCH_SNAPSHOT_PRODUCER_PORT_INVALID");
+    let resolved: unknown;
+    try {
+      resolved = await returned;
+    } catch {
+      throw producerError("BRANCH_SNAPSHOT_PRODUCER_PORT_INVALID");
+    }
+    return readResult(resolved, expected);
+  }
   return {
     async publish(raw) {
-      let parsed: z.infer<typeof inputSchema>;
-      try {
-        parsed = inputSchema.parse(boundedSnapshot(raw));
-      } catch {
-        throw producerError("BRANCH_SNAPSHOT_PRODUCER_INPUT_INVALID");
-      }
-      let seed: BranchSnapshotSeed;
-      try {
-        seed = canonicalSeed(parsed);
-      } catch {
-        throw producerError("BRANCH_SNAPSHOT_PRODUCER_INPUT_INVALID");
-      }
-      const expected = expectedRecord(seed);
-      if (seed.changed_paths.length === 0) return { outcome: "no_changes" };
-      let returned: unknown;
-      try {
-        returned = Reflect.apply(commitSnapshot, commitPort, [{
-          actor_id: parsed.actor_id,
-          idempotency_key: parsed.idempotency_key,
-          expected_revision: parsed.expected_revision,
-          source: parsed.source,
-          seed,
-        }]);
-      } catch {
-        throw producerError("BRANCH_SNAPSHOT_PRODUCER_PORT_INVALID");
-      }
-      if (!nativePromise(returned)) throw producerError("BRANCH_SNAPSHOT_PRODUCER_PORT_INVALID");
-      let resolved: unknown;
-      try {
-        resolved = await returned;
-      } catch {
-        throw producerError("BRANCH_SNAPSHOT_PRODUCER_PORT_INVALID");
-      }
-      return readResult(resolved, expected);
+      return publishInternal(raw, (commitInput) => Reflect.apply(commitSnapshot, commitPort, [commitInput]));
+    },
+    async publishWithClient(client, raw) {
+      if (commitSnapshotWithClient === null) throw producerError("BRANCH_SNAPSHOT_PRODUCER_PORT_INVALID");
+      return publishInternal(raw, (commitInput) => Reflect.apply(commitSnapshotWithClient, commitPort, [client, commitInput]));
     },
   };
 }

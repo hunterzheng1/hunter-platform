@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 import { Pool } from "pg";
@@ -15,9 +16,10 @@ import { decodeNpmCredentialEncryptionKey } from "./npm/credentials.js";
 import { createProductionPlatformInformationFromEnvironment } from "./platform-information/production.js";
 import { createPgKnowledgeQueryHttpService } from "./knowledge-query-http/index.js";
 import { createRemoteContentUploadLocalCas, createPgRemoteContentUploadHttpService } from "./remote-content-upload-pg/index.js";
+import { createRemoteContentUploadResolver } from "./remote-content-upload-pg/resolver.js";
 import { createPgRemoteSyncArchiveV2 } from "./remote-sync-archive-pg/index.js";
 import { createBranchSnapshotProducer } from "./branch-snapshots/producer.js";
-import { createPgRemoteSyncCommitPort } from "./remote-sync-pg/index.js";
+import { createPgRemoteSyncCommitPort, createPgRemoteSyncHttpService } from "./remote-sync-pg/index.js";
 
 async function secret(name: string, required: boolean): Promise<string | undefined> {
   const value = process.env[name];
@@ -70,9 +72,15 @@ const remoteContentUploadCas = await createRemoteContentUploadLocalCas({
   root: process.env.HUNTER_REMOTE_CONTENT_UPLOAD_ROOT ?? `${artifactRoot}/remote-content-uploads`,
 });
 const remoteContentUpload = createPgRemoteContentUploadHttpService({ pool, cas: remoteContentUploadCas });
+const remoteContentUploadResolver = createRemoteContentUploadResolver({ pool, cas: remoteContentUploadCas });
 const remoteSyncArchive = createPgRemoteSyncArchiveV2({ pool });
 const remoteSyncCommitPort = createPgRemoteSyncCommitPort({ pool });
 const branchSnapshotProducer = createBranchSnapshotProducer({ commit_port: remoteSyncCommitPort });
+const remoteSync = createPgRemoteSyncHttpService({
+  pool,
+  branchSnapshotProducer,
+  resolveUpload: remoteContentUploadResolver.resolve,
+});
 const platformInformation = await createProductionPlatformInformationFromEnvironment({
   pool,
   runStore,
@@ -98,12 +106,57 @@ const app = await createServer({
   runStore,
   knowledgeQuery,
   remoteContentUpload,
+  remoteSync,
   remoteSyncArchive,
   branchSnapshotProducer,
   platformInformation,
   npmCredentialEncryptionKey,
   logger: true
 });
+
+// Keep private upload attempts and unreferenced CAS objects bounded in the
+// production process. The service owns the DB/CAS fences; this loop only
+// discovers project scopes and supplies one non-overlapping worker.
+let maintenanceBusy = false;
+const maintenanceWorkerId = `remote-content-upload-worker:${randomUUID()}`;
+const runRemoteContentUploadMaintenance = async (): Promise<void> => {
+  if (maintenanceBusy) return;
+  maintenanceBusy = true;
+  try {
+    const now = new Date();
+    const nowIso = now.toISOString();
+    await remoteContentUpload.cleanupStaleAttempts();
+    const projects = await pool.query<{ project_id: string }>(
+      `SELECT project_id FROM (
+         SELECT project_id FROM remote_content_uploads
+         UNION
+         SELECT project_id FROM remote_content_upload_cas_objects
+       ) projects ORDER BY project_id`
+    );
+    for (const row of projects.rows) {
+      const batch = await remoteContentUpload.claimGarbage({
+        project_id: row.project_id,
+        now: nowIso,
+        limit: 128,
+        worker_id: maintenanceWorkerId,
+        lease_until: new Date(now.getTime() + 60_000).toISOString(),
+      });
+      await remoteContentUpload.acknowledgeGarbage({
+        project_id: row.project_id,
+        batch_id: batch.batch_id,
+        worker_id: maintenanceWorkerId,
+        now: nowIso,
+      });
+    }
+  } catch (error) {
+    app.log.error({ error }, "remote content upload maintenance failed");
+  } finally {
+    maintenanceBusy = false;
+  }
+};
+const maintenanceTimer = setInterval(() => { void runRemoteContentUploadMaintenance(); }, 60_000);
+maintenanceTimer.unref?.();
+void runRemoteContentUploadMaintenance();
 const port = Number(process.env.PORT ?? "3001");
 if (!Number.isInteger(port) || port < 1 || port > 65_535) {
   throw new Error("PORT must be an integer between 1 and 65535");
@@ -115,8 +168,10 @@ await app.listen({
 
 async function shutdown(signal: string): Promise<void> {
   app.log.info({ signal }, "shutting down");
+  clearInterval(maintenanceTimer);
   await app.close();
   await remoteContentUpload.close();
+  await remoteSync.close();
   await remoteSyncArchive.close();
   await pool.end();
 }
