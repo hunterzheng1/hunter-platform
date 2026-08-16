@@ -1,5 +1,6 @@
 import type {
   LegacyPlatformInformation,
+  PlatformInformationBranchFilesPage,
   PlatformInformationDetailResponse,
   PlatformInformationPage,
   RestoreBranchFilesConfirmationIntent,
@@ -46,8 +47,13 @@ export interface BranchVersionQueryAdapter {
   >;
   detail(serializedRequest: unknown, serializedLocator: unknown): Promise<BranchVersionDetailResult>;
   diff(serializedRequest: unknown, serializedLocator: unknown): Promise<BranchVersionDetailResult>;
-  /** version_records 详情：仅凭 detail_id（版本引用编码）在服务端解析 locator 并返回与前任快照的 diff。 */
+  /** 详情：仅凭 detail_id 在服务端解析 locator——vr_ 返回与前任快照的 diff，bff_ 返回文件内容。 */
   queryDetail(serializedRequest: unknown): Promise<BranchVersionDetailResult>;
+  /** branch_files 文件清单：bf_ 定位符解析为快照后列出文件（每项携带 bff_ 内容定位符）。 */
+  listFilesByDetailId(serializedQuery: unknown, detailId: unknown): Promise<
+    | { ok: true; value: PlatformInformationBranchFilesPage }
+    | { ok: false; reason_code: "BRANCH_FILES_QUERY_INVALID" | "BRANCH_VERSION_SOURCE_INVALID" | "BRANCH_VERSION_NOT_FOUND" }
+  >;
   previewRestore(serialized: unknown): Promise<
     | { ok: true; value: RestoreBranchFilesPreviewReceipt }
     | { ok: false; reason_code: "BRANCH_FILES_RESTORE_PREVIEW_INVALID" | "BRANCH_VERSION_SOURCE_INVALID" }

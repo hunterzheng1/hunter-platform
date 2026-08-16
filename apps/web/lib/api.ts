@@ -48,6 +48,7 @@ import {
   type SemanticOverview,
   PLATFORM_INFORMATION_HTTP_OPERATIONS,
   type PlatformInformationPage,
+  type PlatformInformationBranchFilesPage,
   type PlatformInformationDetailResponse,
   type RestoreBranchFilesIntent,
   type RestoreBranchFilesPreviewReceipt,
@@ -441,6 +442,12 @@ export interface HunterApi {
     view: PlatformInformationPage["view"],
     detailId: string,
   ): Promise<PlatformInformationDetailResponse>;
+  /** 分支文件：bf_ 快照定位符 → 文件清单（每项携带 bff_ 内容定位符）。 */
+  listPlatformInformationBranchFiles?(
+    projectId: string,
+    detailId: string,
+    query?: { limit?: number; cursor?: string | null },
+  ): Promise<PlatformInformationBranchFilesPage>;
   previewBranchFilesRestore?(
     projectId: string,
     intent: RestoreBranchFilesIntent,
@@ -910,6 +917,18 @@ export class HttpHunterApi implements HunterApi {
     const path = buildPlatformInformationPath("detail", { project_id: projectId, view, detail_id: detailId });
     const result = await this.requestPlatformInformation("detail", path);
     return this.parsePlatformInformationResponse("detail", platformInformationWire.detailResponse, result);
+  }
+
+  async listPlatformInformationBranchFiles(
+    projectId: string,
+    detailId: string,
+    input: { limit?: number; cursor?: string | null } = {},
+  ): Promise<PlatformInformationBranchFilesPage> {
+    const query = buildPlatformInformationListQuery(input);
+    if (query === null) throw this.platformInformationClientError("list_files", "VALIDATION_FAILED", "Platform information query is invalid.");
+    const path = buildPlatformInformationPath("list_files", { project_id: projectId, detail_id: detailId });
+    const result = await this.requestPlatformInformation("list_files", path + "?" + query.toString());
+    return this.parsePlatformInformationResponse("list_files", platformInformationWire.branchFilesPageResponse, result);
   }
 
   async previewBranchFilesRestore(

@@ -322,6 +322,17 @@ export const PLATFORM_INFORMATION_HTTP_OPERATIONS = Object.freeze({
     success_status: 200 as const,
     success_schema: "PlatformInformationDetailResponse" as const,
   }, detailErrors),
+  list_files: operation({
+    method: "GET" as const,
+    path: "/api/v1/projects/{project_id}/information/branch_files/{detail_id}/files" as const,
+    operation_id: "listPlatformInformationBranchFiles" as const,
+    request_placement: "path_and_query" as const,
+    auth: listAuth,
+    request_schema: "PlatformInformationListHttpQuery" as const,
+    normalizer_id: "normalizePlatformInformationListHttpQuery" as const,
+    success_status: 200 as const,
+    success_schema: "PlatformInformationBranchFilesPage" as const,
+  }, detailErrors),
   preview_restore: operation({
     method: "POST" as const,
     path: "/api/v1/projects/{project_id}/information/branch-files:preview-restore" as const,

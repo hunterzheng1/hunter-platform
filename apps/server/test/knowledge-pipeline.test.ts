@@ -372,6 +372,26 @@ describe("knowledge pipeline v1", () => {
     expect(trapCalls).toBe(0);
   });
 
+  it("dequeues queued knowledge and change projection jobs in enqueue order for the scheduler", async () => {
+    const { pipeline, jobRepository } = setup();
+    await pipeline.acceptArchive(input("dequeue-first"));
+    await pipeline.acceptArchive(input("dequeue-second"));
+
+    const knowledgeJobs = await jobRepository.listQueuedKnowledgeJobs(10);
+    const changeJobs = await jobRepository.listQueuedChangeProjectionJobs(10);
+
+    expect(knowledgeJobs).toHaveLength(2);
+    expect(changeJobs).toHaveLength(2);
+    expect(knowledgeJobs.every((job) => job.status === "queued")).toBe(true);
+    expect(changeJobs.every((job) => job.status === "queued")).toBe(true);
+    const knowledgeIds = knowledgeJobs.map((job) => job.job_id);
+    expect([...knowledgeIds].sort()).toEqual(knowledgeIds);
+    expect(await jobRepository.listQueuedKnowledgeJobs(1)).toHaveLength(1);
+    await expect(jobRepository.listQueuedKnowledgeJobs(0)).rejects.toMatchObject({
+      reason_code: "KNOWLEDGE_DEQUEUE_INVALID"
+    });
+  });
+
   it("keeps upload idempotency stable when only knowledge protocol versions change", async () => {
     const { pipeline } = setup();
     const first = await pipeline.acceptArchive(input("upload-identity"));

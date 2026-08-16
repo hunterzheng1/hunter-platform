@@ -160,8 +160,29 @@ const branchSnapshotItemSchema = z.object({
   uploaded_at: timestampSchema,
   file_count: z.number().int().nonnegative(),
   changed_file_count: z.number().int().nonnegative(),
+  /** 服务端签发的快照文件清单定位符（bf_<branch>~<version>），files 子路由参数。 */
+  detail_id: idSchema.optional(),
   sort_key: sortKeySchema
 }).strict();
+
+const branchFileEntrySchema = z.object({
+  path: pathSchema,
+  size: z.number().int().nonnegative(),
+  content_hash: hashSchema,
+  /** 服务端签发的文件内容定位符（bff_<branch>~<version>~<path>），detail 请求原样回传。 */
+  detail_id: idSchema
+}).strict();
+
+/** 分支文件清单页（files 子路由响应）。 */
+export const platformInformationBranchFilesPageSchema = z.object({
+  schema_version: schemaVersionSchema,
+  contract_kind: z.literal("branch_files_page"),
+  project_id: projectIdSchema,
+  detail_id: idSchema,
+  items: z.array(branchFileEntrySchema).max(100),
+  next_cursor: z.string().min(16).max(512).nullable()
+}).strict();
+export type PlatformInformationBranchFilesPage = z.infer<typeof platformInformationBranchFilesPageSchema>;
 
 const projectMaterialItemSchema = z.object({
   item_kind: z.literal("project_material"),

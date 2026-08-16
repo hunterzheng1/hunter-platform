@@ -36,6 +36,7 @@ describe("Platform Information HTTP routes", () => {
   const materialsDetail = vi.fn<ProjectMaterialsQueryAdapter["detail"]>();
   const branchQuery = vi.fn<BranchVersionQueryAdapter["query"]>();
   const branchVersionDetail = vi.fn<BranchVersionQueryAdapter["queryDetail"]>();
+  const branchFilesPage = vi.fn<BranchVersionQueryAdapter["listFilesByDetailId"]>();
   const previewRestore = vi.fn<BranchVersionQueryAdapter["previewRestore"]>();
   const knowledgePage = vi.fn<ProjectKnowledgeQueryAdapter["queryPage"]>();
   const knowledgeDetail = vi.fn<ProjectKnowledgeQueryAdapter["queryDetail"]>();
@@ -73,6 +74,7 @@ describe("Platform Information HTTP routes", () => {
         branchVersion: {
           query: branchQuery,
           listFiles: vi.fn(),
+          listFilesByDetailId: branchFilesPage,
           detail: vi.fn(),
           diff: vi.fn(),
           queryDetail: branchVersionDetail,
@@ -350,7 +352,7 @@ describe("Platform Information HTTP routes", () => {
       storage: new MemoryArtifactStorage(),
       runStore,
       platformInformation: {
-        branchVersion: { query: branchQuery, listFiles: vi.fn(), detail: vi.fn(), diff: vi.fn(), queryDetail: branchVersionDetail, previewRestore, confirmRestore: vi.fn() },
+        branchVersion: { query: branchQuery, listFiles: vi.fn(), listFilesByDetailId: branchFilesPage, detail: vi.fn(), diff: vi.fn(), queryDetail: branchVersionDetail, previewRestore, confirmRestore: vi.fn() },
         projectMaterials: { query: materialsQuery, detail: materialsDetail },
         projectKnowledge: { queryPage: knowledgePage, queryDetail: knowledgeDetail, createRetryIntent: retryIntent },
         changeRecords: { queryPage: changePage, queryDetail: changeDetail },
@@ -486,6 +488,66 @@ describe("Platform Information HTTP routes", () => {
       detail_id: "vr_main~pv_0002",
       query_scope: { actor_id: "actor_routes", accessible_project_ids: [projectId] }
     });
+  });
+
+  it("lists branch snapshot files through the bf_ locator sub-route", async () => {
+    const page = {
+      schema_version: 1 as const,
+      contract_kind: "branch_files_page" as const,
+      project_id: projectId,
+      detail_id: "bf_main~pv_0002",
+      items: [{
+        path: "AGENTS.md",
+        size: 8,
+        content_hash: `sha256:${"a".repeat(64)}`,
+        detail_id: "bff_main~pv_0002~AGENTS.md"
+      }],
+      next_cursor: null
+    };
+    branchFilesPage.mockResolvedValue({ ok: true, value: page });
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v1/projects/${projectId}/information/branch_files/${encodeURIComponent("bf_main~pv_0002")}/files?limit=25`,
+      headers: { authorization: "Bearer route-token" }
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(page);
+    const [serialized, locator] = branchFilesPage.mock.calls[0] as [string, unknown];
+    expect(JSON.parse(serialized)).toMatchObject({
+      contract_kind: "query", view: "branch_files", project_id: projectId, limit: 25
+    });
+    expect(locator).toBe("bf_main~pv_0002");
+  });
+
+  it("serves branch file content through bff_ locators but keeps 503 for non-locator branch details", async () => {
+    const detail: PlatformInformationDetailResponse = {
+      schema_version: 1,
+      contract_kind: "detail_response",
+      view: "branch_files",
+      project_id: projectId,
+      detail_id: "bff_main~pv_0002~AGENTS.md",
+      detail: {
+        detail_kind: "branch_file",
+        content: "# agent\n",
+        content_hash: `sha256:${"b".repeat(64)}`,
+        media_type: "text/markdown"
+      }
+    };
+    branchVersionDetail.mockResolvedValue({ ok: true, mode: "current", value: detail });
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v1/projects/${projectId}/information/branch_files/${encodeURIComponent("bff_main~pv_0002~AGENTS.md")}`,
+      headers: { authorization: "Bearer route-token" }
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(detail);
+
+    const snapshotLevel = await app.inject({
+      method: "GET",
+      url: `/api/v1/projects/${projectId}/information/branch_files/${encodeURIComponent("bf_main~pv_0002")}`,
+      headers: { authorization: "Bearer route-token" }
+    });
+    expect(snapshotLevel.statusCode).toBe(503);
   });
 
   it("returns an explicit 503 when a branch detail has no trusted locator", async () => {

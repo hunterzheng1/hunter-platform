@@ -545,6 +545,30 @@ export function registerPlatformInformationRoutes(
     return reply.send(Readable.from(bytes, { objectMode: false }));
   });
 
+  app.get(fastifyPath(PLATFORM_INFORMATION_HTTP_OPERATIONS.list_files), async (request, reply) => {
+    const params = request.params as { projectId: string; detailId: string };
+    const projectId = requireProjectId(params.projectId);
+    const detailId = params.detailId;
+    if (detailId.length === 0 || detailId.length > 512) {
+      throw new ServerDomainError(400, "VALIDATION_FAILED", "information files request is invalid");
+    }
+    const { actor, requestId } = await authenticated(request, repository, policies.branch_files.scope);
+    await bindProject(repository, actor.actorId, projectId);
+    if (adapters === undefined) unavailable("platform information adapters are not configured");
+
+    const raw = rawListQuerySchema.safeParse(request.query);
+    const normalized = normalizePlatformInformationListHttpQuery(raw.success ? {
+      ...(raw.data.limit === undefined ? {} : { limit: Number(raw.data.limit) }),
+      ...(raw.data.cursor === undefined ? {} : { cursor: raw.data.cursor })
+    } : request.query);
+    if (!normalized.ok) routeFailure(normalized.reason_code, "list");
+    const serialized = canonicalRequest(actor.actorId, projectId, "branch_files", normalized.value);
+    const result = await requireAdapter(adapters.branchVersion, "branch version").listFilesByDetailId(serialized, detailId);
+    if (!result.ok) routeFailure(result.reason_code, "detail");
+    reply.header(PLATFORM_INFORMATION_HTTP_OPERATIONS.list_files.request_id_header, requestId);
+    return result.value;
+  });
+
   app.get(fastifyPath(PLATFORM_INFORMATION_HTTP_OPERATIONS.detail), async (request, reply) => {
     const params = request.params as {
       projectId: string; view: string; detailId: string;
@@ -558,8 +582,8 @@ export function registerPlatformInformationRoutes(
     const view = viewResult.data;
     const { actor, requestId } = await authenticated(request, repository, policies[view].scope);
     await bindProject(repository, actor.actorId, projectId);
-    if (view === "branch_files") {
-      // 文件级详情需要 files 子路由 + 路径级签名 locator（见 docs/platform-server-gaps.md S11），暂保持诚实 503。
+    if (view === "branch_files" && !detailId.startsWith("bff_")) {
+      // 快照级 bf_ 定位符没有详情语义（应走 files 子路由）；未知形态一律诚实 503。
       unavailable("trusted detail locator is not wired");
     }
     if (adapters === undefined) unavailable("platform information adapters are not configured");
@@ -570,7 +594,7 @@ export function registerPlatformInformationRoutes(
       ? await requireAdapter(adapters.projectMaterials, "project materials").detail(serialized)
       : view === "project_knowledge"
         ? await requireAdapter(adapters.projectKnowledge, "project knowledge").queryDetail(serialized)
-        : view === "version_records"
+        : view === "version_records" || view === "branch_files"
           ? await requireAdapter(adapters.branchVersion, "branch version").queryDetail(serialized)
           : await requireAdapter(adapters.changeRecords, "change records").queryDetail(serialized);
     if (!result.ok) routeFailure(result.reason_code, "detail");

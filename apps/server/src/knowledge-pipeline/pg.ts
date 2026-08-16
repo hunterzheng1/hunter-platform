@@ -1070,6 +1070,34 @@ export class PgJobRepository implements JobRepository {
     });
   }
 
+  async listQueuedKnowledgeJobs(limit: number): Promise<KnowledgeExtractionJob[]> {
+    return safeStorage(async () => {
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) fail("KNOWLEDGE_DEQUEUE_INVALID");
+      const result = await this.#pool.query<Row>(
+        `SELECT * FROM knowledge_pipeline_knowledge_jobs
+          WHERE status = 'queued'
+          ORDER BY updated_at ASC, job_id ASC
+          LIMIT $1`,
+        [limit]
+      );
+      return result.rows.map(knowledgeJobFromRow);
+    });
+  }
+
+  async listQueuedChangeProjectionJobs(limit: number): Promise<ChangeProjectionJob[]> {
+    return safeStorage(async () => {
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) fail("CHANGE_PROJECTION_DEQUEUE_INVALID");
+      const result = await this.#pool.query<Row>(
+        `SELECT * FROM knowledge_pipeline_change_jobs
+          WHERE status = 'queued'
+          ORDER BY updated_at ASC, job_id ASC
+          LIMIT $1`,
+        [limit]
+      );
+      return result.rows.map(changeJobFromRow);
+    });
+  }
+
   async getChangeProjectionJob(job_id: string): Promise<ChangeProjectionJob | null> {
     return safeStorage(async () => {
       const id = text(job_id, "CHANGE_PROJECTION_JOB_ID_INVALID", 160);

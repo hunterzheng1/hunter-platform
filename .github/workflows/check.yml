@@ -1,0 +1,73 @@
+name: check
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: hunter_harness_test
+          POSTGRES_USER: hunter_harness
+          POSTGRES_PASSWORD: hunter_harness_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hunter_harness -d hunter_harness_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      HUNTER_HARNESS_TEST_DATABASE_URL: postgresql://hunter_harness:hunter_harness_test@127.0.0.1:5432/hunter_harness_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run full check (lint + typecheck + tests incl. pg integration + build)
+        run: npm run check
+
+  check-windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint and typecheck
+        run: npm run check:push
+
+      - name: Run tests (pg integration suites are covered by check-linux)
+        run: npm test -- --exclude "**/*.integration.test.ts"

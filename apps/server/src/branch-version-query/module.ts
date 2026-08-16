@@ -1,4 +1,5 @@
 import {
+  platformInformationBranchFilesPageSchema,
   platformInformationDetailResponseSchema,
   platformInformationPageSchema,
   readPlatformInformationContract,
@@ -107,6 +108,48 @@ function decodeVersionDetailId(detailId: string): { branch_name: string; project
   }
 }
 
+/** 分支文件：快照文件清单定位符 `bf_<branch>~<project_version>`。 */
+function encodeBranchFilesDetailId(branchName: string, projectVersion: string): string {
+  return `bf_${encodeURIComponent(branchName)}~${encodeURIComponent(projectVersion)}`;
+}
+
+function decodeBranchFilesDetailId(detailId: string): { branch_name: string; project_version: string } | null {
+  const match = /^bf_([^~]+)~(.+)$/u.exec(detailId);
+  if (match === null) return null;
+  try {
+    const branchName = decodeURIComponent(match[1] ?? "");
+    const projectVersion = decodeURIComponent(match[2] ?? "");
+    if (branchName.length < 1 || branchName.length > 160 || projectVersion.length < 1 || projectVersion.length > 160) {
+      return null;
+    }
+    return { branch_name: branchName, project_version: projectVersion };
+  } catch {
+    return null;
+  }
+}
+
+/** 分支文件：文件内容定位符 `bff_<branch>~<project_version>~<path>`（path 段为剩余整体，允许含 "~"）。 */
+function encodeBranchFileDetailId(branchName: string, projectVersion: string, path: string): string {
+  return `bff_${encodeURIComponent(branchName)}~${encodeURIComponent(projectVersion)}~${encodeURIComponent(path)}`;
+}
+
+function decodeBranchFileDetailId(detailId: string): { branch_name: string; project_version: string; path: string } | null {
+  const match = /^bff_([^~]+)~([^~]+)~(.+)$/u.exec(detailId);
+  if (match === null) return null;
+  try {
+    const branchName = decodeURIComponent(match[1] ?? "");
+    const projectVersion = decodeURIComponent(match[2] ?? "");
+    const path = decodeURIComponent(match[3] ?? "");
+    if (branchName.length < 1 || branchName.length > 160 || projectVersion.length < 1 || projectVersion.length > 160 ||
+        path.length < 1 || path.length > 1024) {
+      return null;
+    }
+    return { branch_name: branchName, project_version: projectVersion, path };
+  } catch {
+    return null;
+  }
+}
+
 function compareSummary(left: z.infer<typeof snapshotSummarySchema>, right: z.infer<typeof snapshotSummarySchema>): number {
   const uploaded = Date.parse(right.uploaded_at) - Date.parse(left.uploaded_at);
   if (uploaded !== 0) return uploaded;
@@ -150,7 +193,7 @@ function restorePreviewMatchesEnvelope(
 }
 
 export function createBranchVersionQueryAdapter(source: BranchSnapshotModule): BranchVersionQueryAdapter {
-  return Object.freeze({
+  const adapter: BranchVersionQueryAdapter = {
     async query(serialized: unknown): Promise<BranchVersionQueryResult> {
       const read = readPlatformInformationContract(serialized);
       if (!read.ok) return { ok: false, reason_code: "BRANCH_VERSION_QUERY_INVALID" };
@@ -194,6 +237,7 @@ export function createBranchVersionQueryAdapter(source: BranchSnapshotModule): B
         uploaded_at: item.uploaded_at,
         file_count: item.file_count,
         changed_file_count: item.changed_file_count,
+        detail_id: encodeBranchFilesDetailId(item.branch_name, item.project_version),
         sort_key: `${sortKey(item.uploaded_at, item.project_version)}|${item.branch_name}|${item.artifact_id}`
       } : {
         item_kind: "version_record" as const,
@@ -362,17 +406,35 @@ export function createBranchVersionQueryAdapter(source: BranchSnapshotModule): B
       if (!read.ok) return { ok: false as const, reason_code: "BRANCH_VERSION_DETAIL_INVALID" as const };
       if (read.mode === "legacy_read_only") return { ok: true as const, mode: read.mode, value: read.value };
       const request = read.value;
-      if (request.contract_kind !== "detail_request" || request.view !== "version_records") {
+      if (request.contract_kind !== "detail_request") {
         return { ok: false as const, reason_code: "BRANCH_VERSION_DETAIL_INVALID" as const };
       }
-      const ref = decodeVersionDetailId(request.detail_id);
-      if (ref === null) return { ok: false as const, reason_code: "BRANCH_VERSION_DETAIL_INVALID" as const };
       const scope = {
         schema_version: 1 as const,
         actor_id: request.query_scope.actor_id,
         project_id: request.project_id,
         accessible_project_ids: [...request.query_scope.accessible_project_ids]
       };
+      if (request.view === "branch_files") {
+        const fileRef = decodeBranchFileDetailId(request.detail_id);
+        if (fileRef === null) return { ok: false as const, reason_code: "BRANCH_VERSION_DETAIL_INVALID" as const };
+        try {
+          const found = await source.getSnapshotByVersionRef({
+            ...scope, branch_name: fileRef.branch_name, project_version: fileRef.project_version
+          });
+          if (found === null) return { ok: false as const, reason_code: "BRANCH_VERSION_NOT_FOUND" as const };
+          return await adapter.detail(serializedRequest, JSON.stringify({
+            detail_id: request.detail_id, identity: found.identity, path: fileRef.path
+          }));
+        } catch {
+          return { ok: false as const, reason_code: "BRANCH_VERSION_SOURCE_INVALID" as const };
+        }
+      }
+      if (request.view !== "version_records") {
+        return { ok: false as const, reason_code: "BRANCH_VERSION_DETAIL_INVALID" as const };
+      }
+      const ref = decodeVersionDetailId(request.detail_id);
+      if (ref === null) return { ok: false as const, reason_code: "BRANCH_VERSION_DETAIL_INVALID" as const };
       try {
         const found = await source.getSnapshotByVersionRef({
           ...scope, branch_name: ref.branch_name, project_version: ref.project_version
@@ -402,6 +464,63 @@ export function createBranchVersionQueryAdapter(source: BranchSnapshotModule): B
         });
         if (!projected.success) throw new Error("invalid diff");
         return { ok: true as const, mode: "current" as const, value: projected.data };
+      } catch {
+        return { ok: false as const, reason_code: "BRANCH_VERSION_SOURCE_INVALID" as const };
+      }
+    },
+
+    async listFilesByDetailId(serializedQuery: unknown, detailIdValue: unknown) {
+      const read = readPlatformInformationContract(serializedQuery);
+      if (!read.ok || read.mode !== "current" || read.value.contract_kind !== "query" ||
+          read.value.view !== "branch_files" || typeof detailIdValue !== "string") {
+        return { ok: false as const, reason_code: "BRANCH_FILES_QUERY_INVALID" as const };
+      }
+      const query = read.value;
+      const ref = decodeBranchFilesDetailId(detailIdValue);
+      if (ref === null) return { ok: false as const, reason_code: "BRANCH_FILES_QUERY_INVALID" as const };
+      try {
+        const found = await source.getSnapshotByVersionRef({
+          schema_version: 1,
+          actor_id: query.query_scope.actor_id,
+          project_id: query.project_id,
+          accessible_project_ids: [...query.query_scope.accessible_project_ids],
+          branch_name: ref.branch_name,
+          project_version: ref.project_version
+        });
+        if (found === null) return { ok: false as const, reason_code: "BRANCH_VERSION_NOT_FOUND" as const };
+        const raw = await source.listSnapshotFiles({
+          schema_version: 1,
+          actor_id: query.query_scope.actor_id,
+          project_id: query.project_id,
+          accessible_project_ids: [...query.query_scope.accessible_project_ids],
+          identity: found.identity,
+          limit: query.limit,
+          cursor: query.cursor
+        });
+        const page = filePageSchema.safeParse(snapshotPlain(raw));
+        if (!page.success || page.data.items.length > query.limit ||
+            new Set(page.data.items.map((item) => item.path)).size !== page.data.items.length ||
+            page.data.items.some((item, index) => {
+              const previous = page.data.items[index - 1];
+              return index > 0 && (previous === undefined || previous.path >= item.path);
+            })) {
+          throw new Error("invalid source page");
+        }
+        const projected = platformInformationBranchFilesPageSchema.safeParse({
+          schema_version: 1,
+          contract_kind: "branch_files_page",
+          project_id: query.project_id,
+          detail_id: detailIdValue,
+          items: page.data.items.map((file) => ({
+            path: file.path,
+            size: file.size,
+            content_hash: file.content_hash,
+            detail_id: encodeBranchFileDetailId(ref.branch_name, ref.project_version, file.path)
+          })),
+          next_cursor: page.data.next_cursor
+        });
+        if (!projected.success) throw new Error("invalid files page");
+        return { ok: true as const, value: projected.data };
       } catch {
         return { ok: false as const, reason_code: "BRANCH_VERSION_SOURCE_INVALID" as const };
       }
@@ -451,5 +570,6 @@ export function createBranchVersionQueryAdapter(source: BranchSnapshotModule): B
         request_only: true as const
       }) };
     }
-  });
+  };
+  return Object.freeze(adapter);
 }

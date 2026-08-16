@@ -134,6 +134,7 @@ describe("BranchVersionQueryAdapter", () => {
           uploaded_at: "2026-08-13T08:00:00.000Z",
           file_count: 3,
           changed_file_count: 1,
+          detail_id: "bf_main~pv_0002",
           sort_key: "2026-08-13T08:00:00.000Z|pv_0002|main|art_0002"
         }],
         next_cursor: null,
@@ -436,6 +437,54 @@ describe("BranchVersionQueryAdapter", () => {
     await expect(adapter.queryDetail(detailRequest("version_records", "not-a-locator")))
       .resolves.toEqual({ ok: false, reason_code: "BRANCH_VERSION_DETAIL_INVALID" });
     await expect(adapter.queryDetail(detailRequest("branch_files", "vr_main~pv_0002")))
+      .resolves.toEqual({ ok: false, reason_code: "BRANCH_VERSION_DETAIL_INVALID" });
+  });
+
+  it("lists snapshot files by bf_ locator with per-file bff_ content locators", async () => {
+    const adapter = createBranchVersionQueryAdapter(realSnapshotModule([snapshotSeed()]));
+
+    const result = await adapter.listFilesByDetailId(branchQuery, "bf_main~pv_0002");
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        schema_version: 1,
+        contract_kind: "branch_files_page",
+        project_id: "prj_stage13",
+        detail_id: "bf_main~pv_0002",
+        items: [{
+          path: "AGENTS.md",
+          size: Buffer.byteLength("# agent\n"),
+          content_hash: digest("# agent\n"),
+          detail_id: `bf_main~pv_0002~${"AGENTS.md"}`.replace("bf_main", "bff_main")
+        }],
+        next_cursor: null
+      }
+    });
+
+    await expect(adapter.listFilesByDetailId(branchQuery, "bf_main~pv_9999"))
+      .resolves.toEqual({ ok: false, reason_code: "BRANCH_VERSION_NOT_FOUND" });
+    await expect(adapter.listFilesByDetailId(branchQuery, "garbage"))
+      .resolves.toEqual({ ok: false, reason_code: "BRANCH_FILES_QUERY_INVALID" });
+  });
+
+  it("resolves bff_ locators to exact file content and rejects drift", async () => {
+    const adapter = createBranchVersionQueryAdapter(realSnapshotModule([snapshotSeed()]));
+
+    const detail = await adapter.queryDetail(detailRequest("branch_files", "bff_main~pv_0002~AGENTS.md"));
+    expect(detail).toMatchObject({
+      ok: true,
+      value: {
+        view: "branch_files",
+        detail_id: "bff_main~pv_0002~AGENTS.md",
+        detail: { detail_kind: "branch_file", content: "# agent\n", content_hash: digest("# agent\n"), media_type: "text/markdown" }
+      }
+    });
+
+    await expect(adapter.queryDetail(detailRequest("branch_files", "bff_main~pv_0002~missing.md")))
+      .resolves.toEqual({ ok: false, reason_code: "BRANCH_VERSION_NOT_FOUND" });
+    await expect(adapter.queryDetail(detailRequest("branch_files", "bff_main~pv_9999~AGENTS.md")))
+      .resolves.toEqual({ ok: false, reason_code: "BRANCH_VERSION_NOT_FOUND" });
+    await expect(adapter.queryDetail(detailRequest("branch_files", "bf_main~pv_0002")))
       .resolves.toEqual({ ok: false, reason_code: "BRANCH_VERSION_DETAIL_INVALID" });
   });
 });

@@ -337,6 +337,7 @@ describe("OpenAPI v1 contract", () => {
       "/api/v1/projects/{project_id}/changes/{change_key}/archive-package/download",
       "/api/v1/projects/{project_id}/information/branch-files:confirm-restore",
       "/api/v1/projects/{project_id}/information/branch-files:preview-restore",
+      "/api/v1/projects/{project_id}/information/branch_files/{detail_id}/files",
       "/api/v1/projects/{project_id}/information/knowledge:retry-extraction",
       "/api/v1/projects/{project_id}/information/{view}",
       "/api/v1/projects/{project_id}/information/{view}/exports/{export_id}",

@@ -96,15 +96,19 @@
 - **仍存缺口（2026-08-08 审计 + 修复后更新）**：
   - ~~branchVersion 适配器从未被生产组合~~ → **已修复（同日）**：`production.ts` 在 pool 可用时即组合 `createBranchVersionQueryAdapter(createBranchSnapshotModule(...))`（PgBranchSnapshotPort 兼任 repository/blob/cursor-verifier，恢复冲突端口诚实返回空集）。「分支文件」「版本记录」列表因此可用。测试 production 7/7 + routes 31/31 + adapter 12/12 通过；server 全量套件 1045 通过（仅 1 个需测试库的集成套件因缺 `HUNTER_HARNESS_TEST_DATABASE_URL` 环境跳过失败，与本改动无关）。
   - `branch_files` / `version_records` 的**详情路由**：
-    - ~~version_records 详情 503~~ → **已实现（同日）**：采用"反查定位"方案——`versionRecordItemSchema` 增量 `detail_id`（optional，兼容冻结 fixture）；编码 `vr_<branch>~<project_version>`（"~" 是 git refname 非法字符）；repository 新增 `getSnapshotByVersionRef`（命中表唯一约束）+ `getSnapshotPredecessor`（diff 的 from 端，pg + memory 双实现）；adapter 新增 `queryDetail` 在服务端解析 locator → 与前任快照 diff；路由接通；前端版本记录项可点击打开 diff 视图（缺 detail_id 的旧数据保持只读卡）。测试：adapter 14/14、routes 32/32、production 7/7 等受影响 79 项全过。
-    - `branch_files` 文件级详情仍 503：需要 files 列表子路由（`adapter.listFiles` 已实现但无 HTTP 路由）+ 路径级 locator，列为后续工作包。
-  - 06A 知识队列**完整链路勘察结论**（不是"start 一下"，缺 4 环）：
-    1. **生产者缺失**：归档上传路由（`archive/package-ingest.ts` → `putChangeArchivePackage`）不调 `pipeline.acceptArchive`，队列永远为空——需在路由侧事务入队；
-    2. **dequeue 缺失**：`JobRepository` 只有按 job_id claim，无 `listQueued*`（ports + pg + memory 三处实现）；
+    - ~~version_records 详情 503~~ → **已实现（同日）**：采用"反查定位"方案——`versionRecordItemSchema` 增量 `detail_id`（optional，兼容冻结 fixture）；编码 `vr_<branch>~<project_version>`（"~" 是 git refname 非法字符）；repository 新增 `getSnapshotByVersionRef`（命中表唯一约束）+ `getSnapshotPredecessor`（diff 的 from 端，pg + memory 双实现）；adapter 新增 `queryDetail` 在服务端解析 locator → 与前任快照 diff；路由接通；前端版本记录项可点击打开 diff 视图（缺 detail_id 的旧数据保持只读卡）。
+    - ~~branch_files 文件级详情 503~~ → **已实现（同日）**：契约新增 `list_files` 操作（`GET .../information/branch_files/{detail_id}/files`，fixture 与 schemas 镜像同步）与 `PlatformInformationBranchFilesPage`；快照项签发 `bf_<branch>~<version>`（展开文件清单），文件项签发 `bff_<branch>~<version>~<path>`（detail 路由经 `queryDetail` 服务端重建可信 locator 后走既有 `adapter.detail`，字节哈希核验）；前端快照卡可展开文件行、点文件看内容。测试：contracts 117/117、adapter 16/16、routes 34/34、web 面板 19/19。
+  - 06A 知识队列**投产链路状态（2026-08-08 更新，缺 3 环 + 新发现 1 环）**：
+    1. **生产者缺失**：归档上传路由（`archive/package-ingest.ts` → `putChangeArchivePackage`）不调 `pipeline.acceptArchive`，队列永远为空——需在路由侧事务入队（还要从 ingest 内部构造 `ValidatedArchivePackage` + `ArchiveValidationEvidencePort` 生产实现）；
+    2. ~~dequeue 缺失~~ → **已实现**：`JobRepository.listQueuedKnowledgeJobs/listQueuedChangeProjectionJobs`（ports + pg + memory 三实现，按入队时间升序），pipeline 测试 47/47 含 dequeue 用例；
     3. **调度器缺失**：需要 poll 循环（批量取队列 → `worker-host.run`，lease/ack 已在 worker 内部）+ main.ts 启停；
-    4. **extractor 缺失**：`KnowledgeExtractorPort` 无任何生产实现，知识 job 会无限重试 `KNOWLEDGE_EXTRACTOR_UNAVAILABLE`——调度器 v1 应只跑 change projection 队列，或先实现 extractor（可复用 `semantic/knowledge-*` 的裁决逻辑）。另缺 `ArchiveValidationEvidencePort` 生产实现。
+    4. **extractor 缺失**：`KnowledgeExtractorPort` 无任何生产实现（输入只有 job，需自带 archive 读取 + 裁决，可复用 `semantic/knowledge-*` 逻辑）；
+    5. **verifier 缺失（新发现）**：change projection 队列还需 `ArchivePackageVerifierPort` 生产实现（复验归档包字节），无实现。
     生产投影仍走旧 in-process 全量重建（可用，非阻塞）。
-  - roadmap 阶段 14（回填迁移脚本、平台 CI、端到端验收）**整体仍是仅文档**。
+  - roadmap 阶段 14：
+    - ~~平台 CI~~ → **已实现**：`.github/workflows/check.yml`（linux 全量含 pg 服务容器跑集成测试；windows lint/typecheck/单测）；
+    - ~~端到端冒烟~~ → **已实现**：`apps/server/test/acceptance-smoke.e2e.test.ts`（真实 HTTP + 真实快照模块 + 真实适配器 + 内存存储，覆盖版本 diff/文件清单/文件内容/非法定位符 fail-closed 全链路）；
+    - 仍缺：回填迁移脚本（无旧数据可验证，暂缓）、整体验收签字（owner 活动，非代码可关闭）。
 - **方向**：① ~~运维侧配齐 4 个密钥~~（已修复）；② ~~branchVersion 组合~~（已修复）；③ 按上面分解实施详情 locator 工作包；④ 按 4 环分解实施知识队列投产工作包；⑤ 短期演示可用 `NEXT_PUBLIC_HUNTER_HARNESS_DEMO=true`。
 
 ## 已决策记录

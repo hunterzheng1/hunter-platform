@@ -742,6 +742,32 @@ export class MemoryJobRepository implements JobRepository {
     return job === undefined ? null : cloneJob(job);
   }
 
+  async listQueuedKnowledgeJobs(limit: number): Promise<KnowledgeExtractionJob[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new KnowledgePipelineError("KNOWLEDGE_DEQUEUE_INVALID", false);
+    }
+    return [...this.#knowledgeJobs.values()]
+      .filter((job) => job.status === "queued")
+      .sort((left, right) => left.updated_at === right.updated_at
+        ? (left.job_id < right.job_id ? -1 : 1)
+        : left.updated_at.localeCompare(right.updated_at))
+      .slice(0, limit)
+      .map(cloneJob);
+  }
+
+  async listQueuedChangeProjectionJobs(limit: number): Promise<ChangeProjectionJob[]> {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new KnowledgePipelineError("CHANGE_PROJECTION_DEQUEUE_INVALID", false);
+    }
+    return [...this.#changeProjectionJobs.values()]
+      .filter((job) => job.status === "queued")
+      .sort((left, right) => left.updated_at === right.updated_at
+        ? (left.job_id < right.job_id ? -1 : 1)
+        : left.updated_at.localeCompare(right.updated_at))
+      .slice(0, limit)
+      .map(cloneChangeProjectionJob);
+  }
+
   async getChangeProjectionJob(job_id: string): Promise<ChangeProjectionJob | null> {
     const job = this.#changeProjectionJobs.get(job_id);
     return job === undefined ? null : cloneChangeProjectionJob(job);

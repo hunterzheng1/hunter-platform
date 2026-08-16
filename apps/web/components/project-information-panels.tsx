@@ -1,6 +1,7 @@
 "use client";
 
 import type {
+  PlatformInformationBranchFilesPage,
   PlatformInformationDetailResponse,
   PlatformInformationPage,
 } from "@hunter-harness/contracts";
@@ -322,9 +323,68 @@ export function ChangeRecordsInformationPanel(props: PanelProps) {
 
 export function BranchFilesInformationPanel(props: PanelProps) {
   const c = COPY[props.lang];
-  return <InformationPanel {...props} view="branch_files" title={c.branchFiles} emptyTechnical={{ label: "Code", value: "BRANCH_FILE_LOCATOR_ROUTE_UNAVAILABLE" }} renderItem={(raw) => {
+  const { api, projectId } = props;
+  const [expanded, setExpanded] = useState<Record<string, {
+    loading: boolean;
+    files?: PlatformInformationBranchFilesPage["items"];
+    error?: string;
+  }>>({});
+
+  async function toggleFiles(detailId: string): Promise<void> {
+    if (expanded[detailId]?.files !== undefined) {
+      setExpanded((previous) => Object.fromEntries(
+        Object.entries(previous).filter(([key]) => key !== detailId)
+      ));
+      return;
+    }
+    if (api.listPlatformInformationBranchFiles === undefined) {
+      setExpanded((previous) => ({ ...previous, [detailId]: { loading: false, error: "list_files unavailable" } }));
+      return;
+    }
+    setExpanded((previous) => ({ ...previous, [detailId]: { loading: true } }));
+    try {
+      const page = await api.listPlatformInformationBranchFiles(projectId, detailId, { limit: 100 });
+      setExpanded((previous) => ({ ...previous, [detailId]: { loading: false, files: page.items } }));
+    } catch (reason) {
+      setExpanded((previous) => ({
+        ...previous,
+        [detailId]: { loading: false, error: reason instanceof Error ? reason.message : "load failed" }
+      }));
+    }
+  }
+
+  return <InformationPanel {...props} view="branch_files" title={c.branchFiles} emptyTechnical={{ label: "Code", value: "BRANCH_FILE_LOCATOR_ROUTE_UNAVAILABLE" }} renderItem={(raw, select) => {
     if (raw.item_kind !== "branch_snapshot") return null;
-    return <article className="information-list-card static"><span className="information-kicker">{raw.snapshot_version}</span><strong>{raw.branch_name}</strong><code>{raw.commit_sha.slice(0, 8)}</code><span>{raw.file_count} {c.files} · {raw.changed_file_count} {c.changed}</span><time>{formatTime(raw.uploaded_at, props.lang)}</time><p>{c.unavailableFiles}</p><code>BRANCH_FILE_LOCATOR_ROUTE_UNAVAILABLE</code></article>;
+    if (raw.detail_id === undefined) {
+      return <article className="information-list-card static"><span className="information-kicker">{raw.snapshot_version}</span><strong>{raw.branch_name}</strong><code>{raw.commit_sha.slice(0, 8)}</code><span>{raw.file_count} {c.files} · {raw.changed_file_count} {c.changed}</span><time>{formatTime(raw.uploaded_at, props.lang)}</time><p>{c.unavailableFiles}</p><code>BRANCH_FILE_LOCATOR_ROUTE_UNAVAILABLE</code></article>;
+    }
+    const detailId = raw.detail_id;
+    const state = expanded[detailId];
+    return <div className="information-snapshot">
+      {itemButton(detailId, raw.snapshot_version, c.open, <>
+        <span className="information-kicker">{raw.snapshot_version}</span>
+        <strong>{raw.branch_name}</strong>
+        <code>{raw.commit_sha.slice(0, 8)}</code>
+        <span>{raw.file_count} {c.files} · {raw.changed_file_count} {c.changed}</span>
+        <time>{formatTime(raw.uploaded_at, props.lang)}</time>
+      </>, () => void toggleFiles(detailId))}
+      {state?.loading === true ? <p className="information-files-note">{c.detailLoading}</p> : null}
+      {state?.error !== undefined ? <p className="information-files-note">{state.error}</p> : null}
+      {state?.files !== undefined ? (
+        state.files.length === 0
+          ? <p className="information-files-note">{c.empty}</p>
+          : <ul className="information-files">
+              {state.files.map((file) => (
+                <li key={file.detail_id}>
+                  <button type="button" title={file.path} onClick={() => select(file.detail_id)}>
+                    <code>{file.path}</code>
+                    <small>{file.size} B</small>
+                  </button>
+                </li>
+              ))}
+            </ul>
+      ) : null}
+    </div>;
   }} />;
 }
 

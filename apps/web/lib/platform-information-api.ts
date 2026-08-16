@@ -1,6 +1,7 @@
 import {
   PLATFORM_INFORMATION_HTTP_OPERATIONS,
   normalizePlatformInformationListHttpQuery,
+  platformInformationBranchFilesPageSchema,
   platformInformationConfirmRestoreHttpRequestSchema,
   platformInformationDetailResponseSchema,
   platformInformationPageSchema,
@@ -52,6 +53,7 @@ export const platformInformationWire = Object.freeze({
   confirmSemanticRequest: validatePlatformInformationConfirmRestoreHttpRequest,
   retryRequest: platformInformationRetryExtractionHttpRequestSchema,
   listResponse: platformInformationPageSchema,
+  branchFilesPageResponse: platformInformationBranchFilesPageSchema,
   detailResponse: platformInformationDetailResponseSchema,
   previewResponse: restoreBranchFilesPreviewReceiptSchema,
   confirmResponse: restoreBranchFilesConfirmedIntentSchema,
