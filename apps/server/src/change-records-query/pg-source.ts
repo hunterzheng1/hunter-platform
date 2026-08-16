@@ -276,7 +276,7 @@ export class PgChangeArchiveSource implements ChangeRecordsQuerySourcePort, Chan
       schema_version: 1, source_kind: "change_records_page", actor_id: input.actor_id,
       project_id: input.project_id, accessible_project_ids: input.accessible_project_ids,
       content_types: input.content_types, sort: input.sort, request_cursor: input.cursor,
-      page_state: valid.length === 0 ? "empty" : "processing", records: valid,
+      page_state: valid.length === 0 ? "empty" : "ready", records: valid,
       next_cursor: next, failures: []
     });
   }
