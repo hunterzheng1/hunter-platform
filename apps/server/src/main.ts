@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 
 import { Pool } from "pg";
 
@@ -78,6 +79,7 @@ const remoteSyncCommitPort = createPgRemoteSyncCommitPort({ pool });
 const branchSnapshotProducer = createBranchSnapshotProducer({ commit_port: remoteSyncCommitPort });
 const remoteSync = createPgRemoteSyncHttpService({
   pool,
+  workspaceRoot: join(artifactRoot, "remote-sync-workspaces"),
   branchSnapshotProducer,
   resolveUpload: remoteContentUploadResolver.resolve,
 });

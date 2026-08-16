@@ -1,4 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
+import { mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 
 import {
   canonicalJson,
@@ -22,6 +24,7 @@ import {
   type RemoteSyncContentChunk,
 } from "@hunter-harness/contracts";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
+import { runTransaction, type TransactionOperation } from "@hunter-harness/core";
 
 import type { BranchSnapshotProducer } from "../branch-snapshots/producer.js";
 import { branchSnapshotRecordSchema, canonicalSnapshotFileRefs, validateSnapshotManifest } from "../branch-snapshots/module.js";
@@ -36,6 +39,7 @@ import type { RemoteContentUploadHttpRef, RemoteContentUploadHttpSource } from "
 
 export interface PgRemoteSyncHttpServiceOptions {
   readonly pool: Pool;
+  readonly workspaceRoot?: string;
   readonly branchSnapshotProducer: BranchSnapshotProducer;
   readonly resolveUpload: (input: {
     readonly source: RemoteContentUploadHttpSource;
@@ -950,10 +954,65 @@ export function createPgRemoteSyncHttpService(options: PgRemoteSyncHttpServiceOp
         }
         return { outcome: "replay", value: parsed.data };
       }
-      // A local-workspace transaction adapter is intentionally not wired yet.
-      // Never fabricate a committed/no-change receipt for a pull that did not
-      // mutate and verify a real local workspace.
-      fail("REMOTE_UNAVAILABLE");
+      if (options.workspaceRoot === undefined) fail("REMOTE_UNAVAILABLE");
+      const pointer = await currentPointer(client, input.source);
+      const snapshot = remoteSnapshotFromRow(input.source, pointer);
+      const workspaceRoot = join(options.workspaceRoot, idSuffix({
+        project_id: input.source.project_id,
+        branch_name: input.source.branch_name,
+      }));
+      const operations: TransactionOperation[] = [];
+      for (const file of snapshot.files) {
+        const blob = await client.query<{ content_bytes: Buffer }>(
+          "SELECT content_bytes FROM branch_snapshot_blobs WHERE content_hash=$1",
+          [file.content_hash]
+        );
+        const bytes = blob.rows[0]?.content_bytes;
+        if (bytes === undefined || bytes.byteLength !== file.size ||
+            `sha256:${createHash("sha256").update(bytes).digest("hex")}` !== file.content_hash) {
+          fail("REMOTE_UNAVAILABLE");
+        }
+        operations.push({ operation: "modify", path: file.path, content: new Uint8Array(bytes) });
+      }
+      const transactionId = `remote_pull_${idSuffix({
+        source: input.source,
+        idempotency_key: input.idempotency_key,
+      })}`;
+      const applied = await runTransaction(workspaceRoot, operations, {
+        id: transactionId,
+        kind: "update",
+        projectIdentity: canonicalJson({ source: input.source, direction: "pull" }),
+        targetBundleVersion: snapshot.revision,
+        ownershipManifestHash: snapshot.manifest_hash,
+      });
+      if (applied.status !== "committed") fail("SYNC_PULL_WORKSPACE_FAILED", true);
+      const receipt = remoteSyncPullReceiptSchema.parse({
+        schema_version: 1,
+        source: input.source,
+        idempotency_key: input.idempotency_key,
+        payload_hash: payloadHash,
+        remote_revision: snapshot.revision,
+        local_transaction: "committed",
+        commit_sha: snapshot.commit_sha,
+        artifact_id: snapshot.artifact_id,
+        manifest_hash: snapshot.manifest_hash,
+        project_version: snapshot.project_version,
+        no_changes: operations.length === 0,
+        applied: [],
+        skipped: [],
+        retryable: [],
+      });
+      await mkdir(join(workspaceRoot, ".harness", "state"), { recursive: true });
+      await writeFile(join(workspaceRoot, ".harness", "state", "remote-sync-manifest.json"),
+        JSON.stringify({ source: input.source, revision: snapshot.revision, manifest_hash: snapshot.manifest_hash }), "utf8");
+      await client.query(
+        `INSERT INTO remote_sync_http_pulls
+          (project_id,branch_name,actor_id,idempotency_key,payload_hash,receipt_json,created_at)
+         VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7)`,
+        [input.source.project_id, input.source.branch_name, input.source.actor_id,
+          input.idempotency_key, payloadHash, JSON.stringify(receipt), now()]
+      );
+      return { outcome: "new", value: receipt };
     });
   }
 
