@@ -35,6 +35,7 @@ describe("Platform Information HTTP routes", () => {
   const materialsQuery = vi.fn<ProjectMaterialsQueryAdapter["query"]>();
   const materialsDetail = vi.fn<ProjectMaterialsQueryAdapter["detail"]>();
   const branchQuery = vi.fn<BranchVersionQueryAdapter["query"]>();
+  const branchVersionDetail = vi.fn<BranchVersionQueryAdapter["queryDetail"]>();
   const previewRestore = vi.fn<BranchVersionQueryAdapter["previewRestore"]>();
   const knowledgePage = vi.fn<ProjectKnowledgeQueryAdapter["queryPage"]>();
   const knowledgeDetail = vi.fn<ProjectKnowledgeQueryAdapter["queryDetail"]>();
@@ -74,6 +75,7 @@ describe("Platform Information HTTP routes", () => {
           listFiles: vi.fn(),
           detail: vi.fn(),
           diff: vi.fn(),
+          queryDetail: branchVersionDetail,
           previewRestore,
           confirmRestore: vi.fn()
         },
@@ -348,7 +350,7 @@ describe("Platform Information HTTP routes", () => {
       storage: new MemoryArtifactStorage(),
       runStore,
       platformInformation: {
-        branchVersion: { query: branchQuery, listFiles: vi.fn(), detail: vi.fn(), diff: vi.fn(), previewRestore, confirmRestore: vi.fn() },
+        branchVersion: { query: branchQuery, listFiles: vi.fn(), detail: vi.fn(), diff: vi.fn(), queryDetail: branchVersionDetail, previewRestore, confirmRestore: vi.fn() },
         projectMaterials: { query: materialsQuery, detail: materialsDetail },
         projectKnowledge: { queryPage: knowledgePage, queryDetail: knowledgeDetail, createRetryIntent: retryIntent },
         changeRecords: { queryPage: changePage, queryDetail: changeDetail },
@@ -451,6 +453,37 @@ describe("Platform Information HTTP routes", () => {
       view: "project_materials",
       project_id: projectId,
       detail_id: "material_1",
+      query_scope: { actor_id: "actor_routes", accessible_project_ids: [projectId] }
+    });
+  });
+
+  it("dispatches version_records detail through the server-resolved branch version locator", async () => {
+    const detail: PlatformInformationDetailResponse = {
+      schema_version: 1,
+      contract_kind: "detail_response",
+      view: "version_records",
+      project_id: projectId,
+      detail_id: "vr_main~pv_0002",
+      detail: {
+        detail_kind: "version_diff",
+        from_version: "pv_0001",
+        to_version: "pv_0002",
+        changed_paths: ["AGENTS.md"]
+      }
+    };
+    branchVersionDetail.mockResolvedValue({ ok: true, mode: "current", value: detail });
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v1/projects/${projectId}/information/version_records/${encodeURIComponent("vr_main~pv_0002")}`,
+      headers: { authorization: "Bearer route-token" }
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(detail);
+    expect(JSON.parse(firstArgument(branchVersionDetail.mock.calls) as string)).toMatchObject({
+      contract_kind: "detail_request",
+      view: "version_records",
+      project_id: projectId,
+      detail_id: "vr_main~pv_0002",
       query_scope: { actor_id: "actor_routes", accessible_project_ids: [projectId] }
     });
   });

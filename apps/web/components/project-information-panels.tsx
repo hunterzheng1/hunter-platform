@@ -330,8 +330,12 @@ export function BranchFilesInformationPanel(props: PanelProps) {
 
 export function VersionRecordsInformationPanel(props: PanelProps) {
   const c = COPY[props.lang];
-  return <InformationPanel {...props} view="version_records" title={c.versions} renderItem={(raw) => {
+  return <InformationPanel {...props} view="version_records" title={c.versions} renderItem={(raw, select) => {
     if (raw.item_kind !== "version_record") return null;
-    return <article className="information-list-card static"><span className="information-kicker">{raw.branch_name}</span><strong>{raw.snapshot_version}</strong><code>{raw.diff_ref}</code><span>{raw.file_count} {c.files} · {raw.changed_file_count} {c.changed}</span><time>{formatTime(raw.uploaded_at, props.lang)}</time><p>{c.unavailableDiff}</p><code>VERSION_DIFF_LOCATOR_ROUTE_UNAVAILABLE</code></article>;
+    // detail_id 为 v1 增量字段：缺失时保持只读卡片（旧服务端/旧数据）
+    if (raw.detail_id === undefined) {
+      return <article className="information-list-card static"><span className="information-kicker">{raw.branch_name}</span><strong>{raw.snapshot_version}</strong><code>{raw.diff_ref}</code><span>{raw.file_count} {c.files} · {raw.changed_file_count} {c.changed}</span><time>{formatTime(raw.uploaded_at, props.lang)}</time><p>{c.unavailableDiff}</p><code>VERSION_DIFF_LOCATOR_ROUTE_UNAVAILABLE</code></article>;
+    }
+    return itemButton(raw.detail_id, raw.snapshot_version, c.open, <><span className="information-kicker">{raw.branch_name}</span><strong>{raw.snapshot_version}</strong><code>{raw.diff_ref}</code><span>{raw.file_count} {c.files} · {raw.changed_file_count} {c.changed}</span><time>{formatTime(raw.uploaded_at, props.lang)}</time></>, select);
   }} />;
 }

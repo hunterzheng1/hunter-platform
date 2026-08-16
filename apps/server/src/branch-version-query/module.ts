@@ -84,6 +84,29 @@ function parseSerialized<T>(serialized: unknown, schema: z.ZodType<T>): T | unde
   }
 }
 
+/**
+ * version_records 详情定位符编码：`vr_<branch>~<project_version>`
+ * （"~" 是 git 引用名的非法字符，不会出现在分支名中；两段分别 encodeURIComponent）。
+ */
+function encodeVersionDetailId(branchName: string, projectVersion: string): string {
+  return `vr_${encodeURIComponent(branchName)}~${encodeURIComponent(projectVersion)}`;
+}
+
+function decodeVersionDetailId(detailId: string): { branch_name: string; project_version: string } | null {
+  const match = /^vr_([^~]+)~(.+)$/u.exec(detailId);
+  if (match === null) return null;
+  try {
+    const branchName = decodeURIComponent(match[1] ?? "");
+    const projectVersion = decodeURIComponent(match[2] ?? "");
+    if (branchName.length < 1 || branchName.length > 160 || projectVersion.length < 1 || projectVersion.length > 160) {
+      return null;
+    }
+    return { branch_name: branchName, project_version: projectVersion };
+  } catch {
+    return null;
+  }
+}
+
 function compareSummary(left: z.infer<typeof snapshotSummarySchema>, right: z.infer<typeof snapshotSummarySchema>): number {
   const uploaded = Date.parse(right.uploaded_at) - Date.parse(left.uploaded_at);
   if (uploaded !== 0) return uploaded;
@@ -181,6 +204,7 @@ export function createBranchVersionQueryAdapter(source: BranchSnapshotModule): B
         file_count: item.file_count,
         changed_file_count: item.changed_file_count,
         diff_ref: item.diff_ref,
+        detail_id: encodeVersionDetailId(item.branch_name, item.project_version),
         sort_key: `${sortKey(item.uploaded_at, item.project_version)}|${item.branch_name}|${item.artifact_id}`
       });
       const projected = platformInformationPageSchema.safeParse({
@@ -313,6 +337,56 @@ export function createBranchVersionQueryAdapter(source: BranchSnapshotModule): B
         if (raw.project_id !== request.project_id || raw.diff_ref !== locator.detail_id ||
             JSON.stringify(raw.from) !== JSON.stringify(locator.from) ||
             JSON.stringify(raw.to) !== JSON.stringify(locator.to)) throw new Error("source identity mismatch");
+        const projected = platformInformationDetailResponseSchema.safeParse({
+          schema_version: 1,
+          contract_kind: "detail_response",
+          view: "version_records",
+          project_id: request.project_id,
+          detail_id: request.detail_id,
+          detail: {
+            detail_kind: "version_diff",
+            from_version: raw.from?.project_version ?? raw.to.project_version,
+            to_version: raw.to.project_version,
+            changed_paths: raw.changed_paths
+          }
+        });
+        if (!projected.success) throw new Error("invalid diff");
+        return { ok: true as const, mode: "current" as const, value: projected.data };
+      } catch {
+        return { ok: false as const, reason_code: "BRANCH_VERSION_SOURCE_INVALID" as const };
+      }
+    },
+
+    async queryDetail(serializedRequest: unknown) {
+      const read = readPlatformInformationContract(serializedRequest);
+      if (!read.ok) return { ok: false as const, reason_code: "BRANCH_VERSION_DETAIL_INVALID" as const };
+      if (read.mode === "legacy_read_only") return { ok: true as const, mode: read.mode, value: read.value };
+      const request = read.value;
+      if (request.contract_kind !== "detail_request" || request.view !== "version_records") {
+        return { ok: false as const, reason_code: "BRANCH_VERSION_DETAIL_INVALID" as const };
+      }
+      const ref = decodeVersionDetailId(request.detail_id);
+      if (ref === null) return { ok: false as const, reason_code: "BRANCH_VERSION_DETAIL_INVALID" as const };
+      const scope = {
+        schema_version: 1 as const,
+        actor_id: request.query_scope.actor_id,
+        project_id: request.project_id,
+        accessible_project_ids: [...request.query_scope.accessible_project_ids]
+      };
+      try {
+        const found = await source.getSnapshotByVersionRef({
+          ...scope, branch_name: ref.branch_name, project_version: ref.project_version
+        });
+        if (found === null) return { ok: false as const, reason_code: "BRANCH_VERSION_NOT_FOUND" as const };
+        const predecessor = await source.getSnapshotPredecessor({ ...scope, identity: found.identity });
+        const raw = snapshotPlain(await source.getSnapshotDiff({
+          ...scope, from: predecessor?.identity ?? null, to: found.identity
+        })) as Awaited<ReturnType<BranchSnapshotModule["getSnapshotDiff"]>>;
+        if (raw.project_id !== request.project_id || raw.diff_ref !== found.record.diff_ref ||
+            JSON.stringify(raw.to) !== JSON.stringify(found.identity) ||
+            JSON.stringify(raw.from) !== JSON.stringify(predecessor?.identity ?? null)) {
+          throw new Error("source identity mismatch");
+        }
         const projected = platformInformationDetailResponseSchema.safeParse({
           schema_version: 1,
           contract_kind: "detail_response",

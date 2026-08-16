@@ -26,6 +26,9 @@ export interface SnapshotPageRequest extends PageRequest { identity: SnapshotIde
 export interface SnapshotFileRequest extends AuthorizedProjectScope { identity: SnapshotIdentity; path: string; }
 export interface SnapshotDiffRequest extends AuthorizedProjectScope { from: SnapshotIdentity | null; to: SnapshotIdentity; }
 export interface RestorePreviewRequest extends AuthorizedProjectScope { client_id: string; intent: RestoreBranchFilesIntent; }
+export interface SnapshotVersionRefRequest extends AuthorizedProjectScope { branch_name: string; project_version: string; }
+export interface SnapshotIdentityRequest extends AuthorizedProjectScope { identity: SnapshotIdentity; }
+export interface SnapshotRecordEnvelope { identity: SnapshotIdentity; record: BranchSnapshotRecord; }
 export interface BranchSnapshotModule {
   listBranches(input: PageRequest): Promise<SnapshotPage<BranchSnapshotSummary>>;
   listProjectSnapshotVersions(input: PageRequest): Promise<SnapshotPage<SnapshotVersionSummary>>;
@@ -33,6 +36,10 @@ export interface BranchSnapshotModule {
   listSnapshotFiles(input: SnapshotPageRequest): Promise<SnapshotPage<SnapshotFileSummary>>;
   getSnapshotFile(input: SnapshotFileRequest): Promise<SnapshotFileDetail>;
   getSnapshotDiff(input: SnapshotDiffRequest): Promise<SnapshotDiff>;
+  /** 按 (branch_name, project_version) 唯一版本引用反查快照（详情定位符解析）。 */
+  getSnapshotByVersionRef(input: SnapshotVersionRefRequest): Promise<SnapshotRecordEnvelope | null>;
+  /** 同分支列表排序中严格位于目标之前的第一条快照（diff 的 from 端）。 */
+  getSnapshotPredecessor(input: SnapshotIdentityRequest): Promise<SnapshotRecordEnvelope | null>;
   previewRestore(input: RestorePreviewRequest): Promise<RestoreBranchFilesPreviewReceipt>;
 }
 export interface LegacyBranchSnapshot { schemaVersion: 0; projectId: string; projectVersion: string; artifactId: string; commitSha: string; uploadedAt: string; files: Array<{ path: string; contentHash: string; size: number }>; }

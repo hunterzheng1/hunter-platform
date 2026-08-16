@@ -276,6 +276,45 @@ export class PgBranchSnapshotPort implements BranchSnapshotRepositoryPort, BlobR
       record: await recordFrom(this.pool, result.rows[0] ?? {}) };
   }
 
+  async getSnapshotByVersionRef(input: {
+    actor_id: string; allowed_project_ids: readonly string[];
+    project_id: string; branch_name: string; project_version: string;
+  }) {
+    await this.authorize(input);
+    const result = await this.pool.query(
+      `SELECT * FROM branch_snapshots snapshot
+       WHERE snapshot.project_id = $1 AND snapshot.branch_name = $2 AND snapshot.project_version = $3`,
+      [input.project_id, input.branch_name, input.project_version]
+    );
+    if (result.rowCount !== 1) return null;
+    const record = await recordFrom(this.pool, result.rows[0] ?? {});
+    return { actor_id: input.actor_id, identity: identityFrom(result.rows[0] ?? {}), record };
+  }
+
+  async getSnapshotPredecessor(input: {
+    actor_id: string; allowed_project_ids: readonly string[]; identity: SnapshotIdentity;
+  }) {
+    await this.authorize({ ...input, project_id: input.identity.project_id });
+    const target = await this.pool.query(
+      `SELECT uploaded_at, project_version FROM branch_snapshots snapshot WHERE ${identityWhere()}`,
+      identityValues(input.identity)
+    );
+    if (target.rowCount !== 1) return null;
+    const result = await this.pool.query(
+      `SELECT * FROM branch_snapshots snapshot
+       WHERE snapshot.project_id = $1 AND snapshot.branch_name = $2
+         AND (snapshot.uploaded_at < $3::timestamptz
+           OR (snapshot.uploaded_at = $3::timestamptz AND snapshot.project_version COLLATE "C" > $4))
+       ORDER BY snapshot.uploaded_at DESC, snapshot.project_version COLLATE "C" ASC
+       LIMIT 1`,
+      [input.identity.project_id, input.identity.branch_name,
+        target.rows[0]?.uploaded_at, input.identity.project_version]
+    );
+    if (result.rowCount !== 1) return null;
+    const record = await recordFrom(this.pool, result.rows[0] ?? {});
+    return { actor_id: input.actor_id, identity: identityFrom(result.rows[0] ?? {}), record };
+  }
+
   async getFile(input: { actor_id: string; allowed_project_ids: readonly string[]; identity: SnapshotIdentity; path: string }) {
     await this.authorize({ ...input, project_id: input.identity.project_id });
     const result = await this.pool.query(

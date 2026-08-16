@@ -78,6 +78,36 @@ export function createBranchSnapshotModule(ports: { repository_port: BranchSnaps
         changed_paths: [...toRecord.changed_paths].sort()
       };
     },
+    async getSnapshotByVersionRef(raw) {
+      const request = scopeSchema.extend({ branch_name: id, project_version: id }).strict().parse(snapshotPlain(raw));
+      authorize(request);
+      const response = z.object({ actor_id: id, identity: identitySchema, record: branchSnapshotRecordSchema }).strict().nullable()
+        .parse(snapshotPlain(await ports.repository_port.getSnapshotByVersionRef({
+          actor_id: request.actor_id, allowed_project_ids: request.accessible_project_ids,
+          project_id: request.project_id, branch_name: request.branch_name, project_version: request.project_version
+        })));
+      if (response === null) return null;
+      if (response.actor_id !== request.actor_id || response.identity.project_id !== request.project_id ||
+          response.identity.branch_name !== request.branch_name || response.identity.project_version !== request.project_version) {
+        throw new Error("BRANCH_SNAPSHOT_PORT_IDENTITY_MISMATCH");
+      }
+      return { identity: response.identity, record: validateRecord(response.record, request) };
+    },
+    async getSnapshotPredecessor(raw) {
+      const request = scopeSchema.extend({ identity: identitySchema }).strict().parse(snapshotPlain(raw));
+      authorize(request);
+      if (request.identity.project_id !== request.project_id) throw new Error("BRANCH_SNAPSHOT_IDENTITY_MISMATCH");
+      const response = z.object({ actor_id: id, identity: identitySchema, record: branchSnapshotRecordSchema }).strict().nullable()
+        .parse(snapshotPlain(await ports.repository_port.getSnapshotPredecessor({
+          actor_id: request.actor_id, allowed_project_ids: request.accessible_project_ids, identity: request.identity
+        })));
+      if (response === null) return null;
+      if (response.actor_id !== request.actor_id || response.identity.project_id !== request.project_id ||
+          response.identity.branch_name !== request.identity.branch_name) {
+        throw new Error("BRANCH_SNAPSHOT_PORT_IDENTITY_MISMATCH");
+      }
+      return { identity: response.identity, record: validateRecord(response.record, request) };
+    },
     async previewRestore(raw) {
       const request = scopeSchema.extend({ client_id: id, intent: restoreBranchFilesIntentSchema }).strict().parse(snapshotPlain(raw)); authorize(request); const intent = request.intent;
       if (intent.project_id !== request.project_id) throw new Error("BRANCH_SNAPSHOT_IDENTITY_MISMATCH");

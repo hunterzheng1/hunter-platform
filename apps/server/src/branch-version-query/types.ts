@@ -46,6 +46,8 @@ export interface BranchVersionQueryAdapter {
   >;
   detail(serializedRequest: unknown, serializedLocator: unknown): Promise<BranchVersionDetailResult>;
   diff(serializedRequest: unknown, serializedLocator: unknown): Promise<BranchVersionDetailResult>;
+  /** version_records 详情：仅凭 detail_id（版本引用编码）在服务端解析 locator 并返回与前任快照的 diff。 */
+  queryDetail(serializedRequest: unknown): Promise<BranchVersionDetailResult>;
   previewRestore(serialized: unknown): Promise<
     | { ok: true; value: RestoreBranchFilesPreviewReceipt }
     | { ok: false; reason_code: "BRANCH_FILES_RESTORE_PREVIEW_INVALID" | "BRANCH_VERSION_SOURCE_INVALID" }

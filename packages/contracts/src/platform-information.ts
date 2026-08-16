@@ -212,6 +212,8 @@ const versionRecordItemSchema = z.object({
   file_count: z.number().int().nonnegative(),
   changed_file_count: z.number().int().nonnegative(),
   diff_ref: idSchema,
+  /** 服务端签发的详情定位符（版本引用编码），detail 请求原样回传；v1 增量字段，旧数据可能缺失。 */
+  detail_id: idSchema.optional(),
   sort_key: sortKeySchema
 }).strict();
 

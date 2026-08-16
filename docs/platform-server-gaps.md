@@ -95,11 +95,9 @@
 - **第二层（数据源）**：~~roadmap 阶段 13 明示"仍未接入"~~。**2026-08-08 代码审计更正——文档已滞后于代码**：branch snapshot 生产写入者已接入 push commit 事务（`main.ts:79` + `remote-sync-pg/http-service.ts:851`）；项目知识真相源 `knowledge_ingest_entries` 与变更记录 `change_archive_packages` 均有真实写入路径；导出 HTTP create/download 也已接路由（`routes.ts:433/500`）。
 - **仍存缺口（2026-08-08 审计 + 修复后更新）**：
   - ~~branchVersion 适配器从未被生产组合~~ → **已修复（同日）**：`production.ts` 在 pool 可用时即组合 `createBranchVersionQueryAdapter(createBranchSnapshotModule(...))`（PgBranchSnapshotPort 兼任 repository/blob/cursor-verifier，恢复冲突端口诚实返回空集）。「分支文件」「版本记录」列表因此可用。测试 production 7/7 + routes 31/31 + adapter 12/12 通过；server 全量套件 1045 通过（仅 1 个需测试库的集成套件因缺 `HUNTER_HARNESS_TEST_DATABASE_URL` 环境跳过失败，与本改动无关）。
-  - `branch_files` / `version_records` 的**详情路由仍 503**（"trusted detail locator is not wired"，`platform-information/routes.ts:561`）。**工作包分解（已勘察）**：
-    1. page item 投影缺 `detail_id` 与完整 identity（无 manifest_hash）——需改 `packages/contracts` 的 page item schema（增量字段）；
-    2. 服务端定位方案二选一：a) 按 `(project_id, branch_name, project_version, artifact_id, commit_sha)` 反查快照重建 identity（repository 加 `getSnapshotByVersionRef`，不改契约但 detail_id 规则要冻结）；b) list 投影时用 cursor authority 的 HMAC 签发签名 locator（更贴现有 fail-closed 风格）；
-    3. 路由移除 503、按视图走 `adapter.diff` / `adapter.detail`；
-    4. 前端 `VersionRecordsInformationPanel` 用 item 的 detail_id 打开 diff 视图；branch_files 的文件内容还需先暴露 files 列表子路由（`adapter.listFiles` 已实现但无 HTTP 路由）。
+  - `branch_files` / `version_records` 的**详情路由**：
+    - ~~version_records 详情 503~~ → **已实现（同日）**：采用"反查定位"方案——`versionRecordItemSchema` 增量 `detail_id`（optional，兼容冻结 fixture）；编码 `vr_<branch>~<project_version>`（"~" 是 git refname 非法字符）；repository 新增 `getSnapshotByVersionRef`（命中表唯一约束）+ `getSnapshotPredecessor`（diff 的 from 端，pg + memory 双实现）；adapter 新增 `queryDetail` 在服务端解析 locator → 与前任快照 diff；路由接通；前端版本记录项可点击打开 diff 视图（缺 detail_id 的旧数据保持只读卡）。测试：adapter 14/14、routes 32/32、production 7/7 等受影响 79 项全过。
+    - `branch_files` 文件级详情仍 503：需要 files 列表子路由（`adapter.listFiles` 已实现但无 HTTP 路由）+ 路径级 locator，列为后续工作包。
   - 06A 知识队列**完整链路勘察结论**（不是"start 一下"，缺 4 环）：
     1. **生产者缺失**：归档上传路由（`archive/package-ingest.ts` → `putChangeArchivePackage`）不调 `pipeline.acceptArchive`，队列永远为空——需在路由侧事务入队；
     2. **dequeue 缺失**：`JobRepository` 只有按 job_id claim，无 `listQueued*`（ports + pg + memory 三处实现）；

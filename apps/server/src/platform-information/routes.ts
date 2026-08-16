@@ -558,7 +558,8 @@ export function registerPlatformInformationRoutes(
     const view = viewResult.data;
     const { actor, requestId } = await authenticated(request, repository, policies[view].scope);
     await bindProject(repository, actor.actorId, projectId);
-    if (view === "branch_files" || view === "version_records") {
+    if (view === "branch_files") {
+      // 文件级详情需要 files 子路由 + 路径级签名 locator（见 docs/platform-server-gaps.md S11），暂保持诚实 503。
       unavailable("trusted detail locator is not wired");
     }
     if (adapters === undefined) unavailable("platform information adapters are not configured");
@@ -569,7 +570,9 @@ export function registerPlatformInformationRoutes(
       ? await requireAdapter(adapters.projectMaterials, "project materials").detail(serialized)
       : view === "project_knowledge"
         ? await requireAdapter(adapters.projectKnowledge, "project knowledge").queryDetail(serialized)
-        : await requireAdapter(adapters.changeRecords, "change records").queryDetail(serialized);
+        : view === "version_records"
+          ? await requireAdapter(adapters.branchVersion, "branch version").queryDetail(serialized)
+          : await requireAdapter(adapters.changeRecords, "change records").queryDetail(serialized);
     if (!result.ok) routeFailure(result.reason_code, "detail");
     if ("mode" in result && result.mode === "legacy_read_only") {
       routeFailure("PLATFORM_INFORMATION_LEGACY_READ_ONLY", "detail");
