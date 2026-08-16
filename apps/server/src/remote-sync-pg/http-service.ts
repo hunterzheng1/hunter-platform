@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
@@ -158,6 +158,37 @@ function receiptFromJson(value: unknown): RemoteSyncPushReceiptHttp {
   const parsed = remoteSyncPushReceiptHttpSchema.safeParse(jsonObject(value));
   if (!parsed.success) fail("REMOTE_UNAVAILABLE");
   return parsed.data;
+}
+
+function managedPullPath(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0 || value.startsWith("/") ||
+      value.includes("\\") || value.includes("\0") || value.split("/").includes("..") ||
+      value === ".harness" || value.startsWith(".harness/")) {
+    fail("REMOTE_UNAVAILABLE");
+  }
+  return value;
+}
+
+async function previousPullPaths(workspaceRoot: string, source: RemoteSyncSourceRef): Promise<Set<string>> {
+  try {
+    const parsed = JSON.parse(await readFile(join(workspaceRoot, ".harness", "state", "remote-sync-manifest.json"), "utf8")) as unknown;
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) fail("REMOTE_UNAVAILABLE");
+    const value = parsed as Record<string, unknown>;
+    if (value.source !== undefined && !sameSource(sourceFromJson(value.source), source)) {
+      fail("REMOTE_UNAVAILABLE");
+    }
+    if (value.files === undefined) return new Set();
+    if (!Array.isArray(value.files)) fail("REMOTE_UNAVAILABLE");
+    return new Set(value.files.map((item) => managedPullPath(
+      item !== null && typeof item === "object" && !Array.isArray(item)
+        ? (item as Record<string, unknown>).path
+        : item
+    )));
+  } catch (error) {
+    if (error instanceof PgRemoteSyncHttpError) throw error;
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return new Set();
+    fail("REMOTE_UNAVAILABLE");
+  }
 }
 
 async function transaction<T>(pool: Pool, operation: (client: PoolClient) => Promise<T>): Promise<T> {
@@ -962,7 +993,10 @@ export function createPgRemoteSyncHttpService(options: PgRemoteSyncHttpServiceOp
         branch_name: input.source.branch_name,
       }));
       const operations: TransactionOperation[] = [];
+      const previousPaths = await previousPullPaths(workspaceRoot, input.source);
+      const currentPaths = new Set<string>();
       for (const file of snapshot.files) {
+        currentPaths.add(managedPullPath(file.path));
         const blob = await client.query<{ content_bytes: Buffer }>(
           "SELECT content_bytes FROM branch_snapshot_blobs WHERE content_hash=$1",
           [file.content_hash]
@@ -973,6 +1007,9 @@ export function createPgRemoteSyncHttpService(options: PgRemoteSyncHttpServiceOp
           fail("REMOTE_UNAVAILABLE");
         }
         operations.push({ operation: "modify", path: file.path, content: new Uint8Array(bytes) });
+      }
+      for (const path of [...previousPaths].sort((left, right) => left.localeCompare(right))) {
+        if (!currentPaths.has(path)) operations.push({ operation: "delete", path });
       }
       const transactionId = `remote_pull_${idSuffix({
         source: input.source,
@@ -1004,7 +1041,17 @@ export function createPgRemoteSyncHttpService(options: PgRemoteSyncHttpServiceOp
       });
       await mkdir(join(workspaceRoot, ".harness", "state"), { recursive: true });
       await writeFile(join(workspaceRoot, ".harness", "state", "remote-sync-manifest.json"),
-        JSON.stringify({ source: input.source, revision: snapshot.revision, manifest_hash: snapshot.manifest_hash }), "utf8");
+        JSON.stringify({
+          source: input.source,
+          revision: snapshot.revision,
+          manifest_hash: snapshot.manifest_hash,
+          files: snapshot.files.map((file) => ({
+            path: file.path,
+            content_hash: file.content_hash,
+            size: file.size,
+            ...(file.content_kind === undefined ? {} : { content_kind: file.content_kind })
+          }))
+        }), "utf8");
       await client.query(
         `INSERT INTO remote_sync_http_pulls
           (project_id,branch_name,actor_id,idempotency_key,payload_hash,receipt_json,created_at)
