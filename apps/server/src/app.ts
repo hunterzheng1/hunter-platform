@@ -2950,6 +2950,102 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     }
   );
 
+  // 06B-3 T0-4 冻结的 canonical Archive publish seam（stage 02 ArchiveSyncReceipt）。
+  // legacy /archive-package 保持旧语义；本路由不复用其收据形状，不反向冒充。
+  app.post(
+    "/api/v1/projects/:projectId/archives:ingest",
+    async (request, reply) => {
+      const { actor, requestId } = await authenticated(request, repository, "archive:write");
+      const { projectId } = request.params as { projectId: string };
+      const protocolHeader = (name: string): string => {
+        const value = request.headers[name];
+        if (typeof value !== "string" || value.trim() === "" || value.length > 240) {
+          throw new ServerDomainError(400, "ARCHIVE_INGEST_INPUT_INVALID", `missing or invalid ${name}`);
+        }
+        return value;
+      };
+      const archiveRequestId = protocolHeader("x-archive-request-id");
+      const archiveId = protocolHeader("x-archive-id");
+      const changeKey = protocolHeader("x-archive-change-key");
+      requireArchiveChangeKey(changeKey);
+      const schemaVersion = protocolHeader("x-archive-schema-version");
+      if (schemaVersion !== "1") {
+        throw new ServerDomainError(400, "ARCHIVE_INGEST_INPUT_INVALID", "archive_schema_version must be 1");
+      }
+      const packageSha256 = protocolHeader("x-archive-package-sha256");
+      if (!/^sha256:[a-f0-9]{64}$/u.test(packageSha256)) {
+        throw new ServerDomainError(400, "ARCHIVE_INGEST_INPUT_INVALID", "package_sha256 must be sha256 hex");
+      }
+      const protocolIdempotency = protocolHeader("x-archive-idempotency-key");
+      // 传输绑定：服务端自行推导 idempotency 并与协议头比对，拒绝冒充
+      const derivedIdempotency = sha256Bytes(Buffer.from(canonicalJson({
+        project_id: projectId,
+        change_key: changeKey,
+        archive_schema_version: 1,
+        package_sha256: packageSha256,
+        archive_id: archiveId
+      }), "utf8"));
+      if (derivedIdempotency !== protocolIdempotency) {
+        throw new ServerDomainError(409, "ARCHIVE_INGEST_IDENTITY_MISMATCH",
+          "idempotency key does not match derived identity");
+      }
+      const contentType = request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase();
+      if (contentType !== "application/zip" || !Buffer.isBuffer(request.body)) {
+        throw new ServerDomainError(415, "ARCHIVE_MEDIA_TYPE_UNSUPPORTED",
+          "archives:ingest must use application/zip");
+      }
+      const bytes = request.body as Buffer;
+      if (sha256Bytes(bytes) !== packageSha256) {
+        throw new ServerDomainError(422, "ARCHIVE_PACKAGE_HASH_MISMATCH",
+          "package bytes do not match declared package_sha256");
+      }
+      const result = await mutation(request, repository, actor, requestId, async () => {
+        // v2 包的耐久存储：blob + 归档行（幂等）。不走 legacy 内容验证管道
+        // （那是 core-v1 manifest/role 格式，v2 验证职责在客户端 outbox/verifier）。
+        // knowledge 索引是后台职责（06B-3：嵌套失败不回滚 receipt）。
+        await storage.putBlob(packageSha256, bytes);
+        const stored = await repository.putChangeArchivePackage({
+          actorId: actor.actorId,
+          projectId,
+          changeKey,
+          packageSha256,
+          manifestSha256: sha256Bytes(canonicalJson({ archive_id: archiveId, package_sha256: packageSha256 })),
+          coreContentSha256: [packageSha256],
+          storedFiles: 1
+        });
+        const project = await repository.getProject(actor.actorId, projectId);
+        if (project.latestProjectVersion === null) {
+          throw new ServerDomainError(409, "ARCHIVE_VERSION_UNAVAILABLE",
+            "project has no artifact version anchor yet");
+        }
+        const syncReceipt = {
+          schema_version: 1 as const,
+          request_id: archiveRequestId,
+          idempotency_key: derivedIdempotency,
+          project_id: projectId,
+          archive_id: archiveId,
+          change_key: changeKey,
+          package_sha256: packageSha256,
+          archive_status: "stored" as const,
+          // as-of 版本语义：项目当前 artifact 版本（ingest 本身不制造新版本）
+          project_version: project.latestProjectVersion,
+          stored_at: stored.record.updatedAt,
+          retryable: false as const
+        };
+        return { statusCode: 201, body: syncReceipt };
+      }, undefined, {
+        actorId: "internal:archives-ingest",
+        method: "ARCHIVE",
+        path: "/internal/archives-ingest/project",
+        key: `${projectId}:${derivedIdempotency.slice(7, 39)}`
+      });
+      // mutation 框架会用传输 request_id 覆写 body.request_id；协议 request_id
+      // 是 06B-3 adapter 的绑定字段，必须恢复（含幂等 replay 路径）
+      result.body = { ...result.body, request_id: archiveRequestId };
+      return send(reply, requestId, result);
+    }
+  );
+
   app.get("/api/v1/projects/:projectId/changes/:changeKey/archive", async (request, reply) => {
     const { actor, requestId } = await authenticated(request, repository, "files:read");
     const { projectId, changeKey } = request.params as { projectId: string; changeKey: string };
