@@ -87,7 +87,8 @@ import {
 import {
   archiveRootPrefix,
   buildChangeArchive,
-  resolveArchiveContentPath
+  resolveArchiveContentPath,
+  validateArchiveChangeKey
 } from "./archive/change-archive.js";
 import {
   archivePackageReceipt,
@@ -478,6 +479,14 @@ async function authenticated(
     assertProjectKeyScope(request, projectScope, projectId);
   }
   return { actor, requestId: routeRequestId(request) };
+}
+
+function requireArchiveChangeKey(changeKey: string): string {
+  try {
+    return validateArchiveChangeKey(changeKey);
+  } catch {
+    throw new ServerDomainError(400, "ARCHIVE_CHANGE_KEY_INVALID", "archive change key is invalid");
+  }
 }
 
 async function ownerAuthenticated(
@@ -2817,6 +2826,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     async (request, reply) => {
       const { actor, requestId } = await authenticated(request, repository, "push");
       const { projectId, changeKey } = request.params as { projectId: string; changeKey: string };
+      requireArchiveChangeKey(changeKey);
       const contentType = request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase();
       if (contentType !== "application/zip" || !Buffer.isBuffer(request.body)) {
         throw new ServerDomainError(
@@ -2873,6 +2883,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     async (request, reply) => {
       const { actor, requestId } = await authenticated(request, repository, "files:read");
       const { projectId, changeKey } = request.params as { projectId: string; changeKey: string };
+      requireArchiveChangeKey(changeKey);
       const record = await repository.getChangeArchivePackage(actor.actorId, projectId, changeKey);
       reply.header("X-Request-Id", requestId);
       return { ...archivePackageReceipt(record), request_id: requestId };
@@ -2884,6 +2895,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     async (request, reply) => {
       const { actor, requestId } = await authenticated(request, repository, "files:read");
       const { projectId, changeKey } = request.params as { projectId: string; changeKey: string };
+      requireArchiveChangeKey(changeKey);
       const record = await repository.getChangeArchivePackage(actor.actorId, projectId, changeKey);
       const bytes = await storage.getBlob(record.packageSha256);
       if (sha256Bytes(bytes) !== record.packageSha256) {
@@ -2903,6 +2915,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   app.get("/api/v1/projects/:projectId/changes/:changeKey/archive", async (request, reply) => {
     const { actor, requestId } = await authenticated(request, repository, "files:read");
     const { projectId, changeKey } = request.params as { projectId: string; changeKey: string };
+    requireArchiveChangeKey(changeKey);
     await repository.getProject(actor.actorId, projectId);
     const files = await repository.listProjectFiles(actor.actorId, projectId);
     const prefix = archiveRootPrefix(changeKey);
@@ -2923,6 +2936,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   app.get("/api/v1/projects/:projectId/changes/:changeKey/archive/content", async (request, reply) => {
     const { actor, requestId } = await authenticated(request, repository, "files:read");
     const { projectId, changeKey } = request.params as { projectId: string; changeKey: string };
+    requireArchiveChangeKey(changeKey);
     await repository.getProject(actor.actorId, projectId);
     const query = z.object({
       path: z.string().min(1)

@@ -4,7 +4,8 @@ import {
   buildChangeArchive,
   deriveArchiveKind,
   deriveArchiveTier,
-  resolveArchiveContentPath
+  resolveArchiveContentPath,
+  validateArchiveChangeKey
 } from "../src/archive/change-archive.js";
 
 describe("change archive mapping (S3)", () => {
@@ -46,5 +47,11 @@ describe("change archive mapping (S3)", () => {
     expect(() => resolveArchiveContentPath("auth-change", "../secret")).toThrow();
     expect(resolveArchiveContentPath("auth-change", "reports/final/summary-data.json"))
       .toBe(".harness/archive/auth-change/reports/final/summary-data.json");
+  });
+
+  it("validates portable change keys before archive path resolution", () => {
+    expect(validateArchiveChangeKey("auth-change")).toBe("auth-change");
+    expect(() => validateArchiveChangeKey("../outside")).toThrow("ARCHIVE_CHANGE_KEY_INVALID");
+    expect(() => validateArchiveChangeKey("a\\b")).toThrow("ARCHIVE_CHANGE_KEY_INVALID");
   });
 });
