@@ -168,7 +168,6 @@ const knowledgeScheduler = startKnowledgePipelineScheduler({
   owner_id: `knowledge-scheduler:${randomUUID()}`,
   on_error: (error) => { app.log.error({ error }, "knowledge pipeline scheduler tick failed"); }
 });
-app.addHook("onClose", async () => { await knowledgeScheduler.close(); });
 
 // Keep private upload attempts and unreferenced CAS objects bounded in the
 // production process. The service owns the DB/CAS fences; this loop only
@@ -233,6 +232,7 @@ async function shutdown(signal: string): Promise<void> {
   app.log.info({ signal }, "shutting down");
   clearInterval(maintenanceTimer);
   await maintenancePromise?.catch((error) => app.log.error({ error }, "remote content upload maintenance shutdown failed"));
+  await knowledgeScheduler.close();
   await app.close();
   await remoteContentUpload.close();
   await remoteSync.close();
