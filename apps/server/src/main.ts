@@ -21,6 +21,18 @@ import { createRemoteContentUploadResolver } from "./remote-content-upload-pg/re
 import { createPgRemoteSyncArchiveV2 } from "./remote-sync-archive-pg/index.js";
 import { createBranchSnapshotProducer } from "./branch-snapshots/producer.js";
 import { createPgRemoteSyncCommitPort, createPgRemoteSyncHttpService } from "./remote-sync-pg/index.js";
+import { createPgKnowledgePipelinePorts } from "./knowledge-pipeline/pg.js";
+import {
+  createKnowledgePipeline,
+  createKnowledgeExtractor,
+  createKnowledgePipelineWorkerHost,
+  startKnowledgePipelineScheduler,
+  memoryArchiveValidationEvidence
+} from "./knowledge-pipeline/index.js";
+import {
+  createArchivePackageVerifier,
+  createChangeProjectionWorker
+} from "./change-projection-worker/index.js";
 
 async function secret(name: string, required: boolean): Promise<string | undefined> {
   const value = process.env[name];
@@ -89,6 +101,39 @@ const platformInformation = await createProductionPlatformInformationFromEnviron
   platformInformationExportRoot: process.env.HUNTER_PLATFORM_INFORMATION_EXPORT_ROOT
     ?? `${artifactRoot}/platform-information-exports`,
 });
+
+// 06A 知识队列生产链路：pg 端口 + 管线 + 双 worker + 调度器。
+// 生产者入队在归档上传路由（app.ts）；调度器只发现与分派，lease/ack 在 worker 内部。
+const knowledgePipelineClock = (): string => new Date().toISOString();
+const knowledgePipelinePorts = createPgKnowledgePipelinePorts(pool);
+const knowledgePipeline = createKnowledgePipeline({
+  archive_store: knowledgePipelinePorts.archive_store,
+  archive_validation: memoryArchiveValidationEvidence,
+  job_repository: knowledgePipelinePorts.job_repository,
+  knowledge_index: knowledgePipelinePorts.knowledge_index,
+  knowledge_commit: knowledgePipelinePorts.knowledge_commit,
+  clock: knowledgePipelineClock
+});
+const changeProjectionWorker = createChangeProjectionWorker({
+  task_port: knowledgePipelinePorts.job_repository,
+  archive_store: knowledgePipelinePorts.archive_store,
+  commit_port: knowledgePipelinePorts.change_projection_commit,
+  archive_verifier: createArchivePackageVerifier(),
+  verification_limits: {
+    max_package_bytes: 50 * 1024 * 1024,
+    max_file_count: 101,
+    max_file_bytes: 10 * 1024 * 1024,
+    max_uncompressed_bytes: 50 * 1024 * 1024,
+    max_compression_ratio: 100
+  },
+  clock: knowledgePipelineClock,
+  lease_duration_ms: 60_000
+});
+const knowledgeWorkerHost = createKnowledgePipelineWorkerHost({
+  change_projection_worker: changeProjectionWorker,
+  knowledge_pipeline_worker: knowledgePipeline.worker,
+  knowledge_extractor: createKnowledgeExtractor({ archive_store: knowledgePipelinePorts.archive_store })
+});
 if (bootstrapToken !== undefined && bootstrapToken !== "") {
   await repository.createActorWithToken({
     actorId: process.env.HUNTER_HARNESS_BOOTSTRAP_ACTOR ?? "actor_owner",
@@ -112,9 +157,18 @@ const app = await createServer({
   remoteSyncArchive,
   branchSnapshotProducer,
   platformInformation,
+  knowledgePipeline,
   npmCredentialEncryptionKey,
   logger: true
 });
+
+const knowledgeScheduler = startKnowledgePipelineScheduler({
+  host: knowledgeWorkerHost,
+  job_repository: knowledgePipelinePorts.job_repository,
+  owner_id: `knowledge-scheduler:${randomUUID()}`,
+  on_error: (error) => { app.log.error({ error }, "knowledge pipeline scheduler tick failed"); }
+});
+app.addHook("onClose", async () => { await knowledgeScheduler.close(); });
 
 // Keep private upload attempts and unreferenced CAS objects bounded in the
 // production process. The service owns the DB/CAS fences; this loop only

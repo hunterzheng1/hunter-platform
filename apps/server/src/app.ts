@@ -70,6 +70,12 @@ import multipart from "@fastify/multipart";
 import AdmZip from "adm-zip";
 
 import { MemoryAiJobStore, type AiJobStore } from "./ai/ai-job-store.js";
+import { validateArchivePackage, type KnowledgePipeline } from "./knowledge-pipeline/index.js";
+
+/** 06A 队列管线的版本标识（服务端侧提取管线 v1；与 CLI 侧提取器版本独立演进）。 */
+const KNOWLEDGE_PIPELINE_EXTRACTOR_VERSION = "server-extractor-v1";
+const KNOWLEDGE_PIPELINE_PROMPT_VERSION = "server-prompt-v1";
+const KNOWLEDGE_PIPELINE_INDEX_SCHEMA_VERSION = "server-knowledge-index-v1";
 import { CodexAppServerService, type CodexAiService } from "./ai/codex-app-server.js";
 import { createLlmClient } from "./ai/llm-factory.js";
 import { loadAiSecret, writeAiSecret } from "./ai/secret-loader.js";
@@ -190,6 +196,8 @@ export interface CreateServerOptions {
   remoteSyncArchive?: RemoteSyncArchiveHttpServicePort;
   /** Transaction-bound Remote Sync → Branch Snapshot producer. */
   branchSnapshotProducer?: BranchSnapshotProducer;
+  /** 06A knowledge queue pipeline. 归档上传成功后事务入队（best-effort，失败仅告警不阻塞上传）。 */
+  knowledgePipeline?: KnowledgePipeline;
   /** Required trust dependencies for Stage 13 branch-monitor reads. Absent means explicit 503. */
   branchMonitorTrust?: {
     readonly eventBundleReader: PlanQualityEventBundleReaderPort;
@@ -2854,6 +2862,36 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
           maxChunkBytes: config.maxChunkBytes,
           projectLockHeld: true
         });
+        // 06A 知识队列入队（best-effort）：失败只告警，旧 in-process 投影仍是当前主路径。
+        if (options.knowledgePipeline !== undefined) {
+          try {
+            const manifestEntry = new AdmZip(request.body as Buffer).getEntry("archive-manifest.json");
+            if (manifestEntry !== null) {
+              const validated = validateArchivePackage({
+                package_bytes: new Uint8Array(request.body as Buffer),
+                manifest_bytes: new Uint8Array(manifestEntry.getData()),
+                limits: {
+                  max_package_bytes: config.maxProposalBytes,
+                  max_file_count: config.maxUploadFiles + 1,
+                  max_file_bytes: config.maxFileBytes,
+                  max_uncompressed_bytes: config.maxProposalBytes,
+                  max_compression_ratio: 100
+                },
+                validated_at: new Date().toISOString()
+              });
+              await options.knowledgePipeline.acceptArchive({
+                schema_version: 1,
+                request_id: requestId,
+                validated_package: validated,
+                extractor_version: KNOWLEDGE_PIPELINE_EXTRACTOR_VERSION,
+                prompt_version: KNOWLEDGE_PIPELINE_PROMPT_VERSION,
+                index_schema_version: KNOWLEDGE_PIPELINE_INDEX_SCHEMA_VERSION
+              });
+            }
+          } catch (error) {
+            request.log.warn({ err: error }, "knowledge queue enqueue failed; in-process projection remains authoritative");
+          }
+        }
         await writeAudit(repository, {
           actorId: actor.actorId,
           projectId,

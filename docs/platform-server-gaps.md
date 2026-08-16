@@ -98,13 +98,14 @@
   - `branch_files` / `version_records` 的**详情路由**：
     - ~~version_records 详情 503~~ → **已实现（同日）**：采用"反查定位"方案——`versionRecordItemSchema` 增量 `detail_id`（optional，兼容冻结 fixture）；编码 `vr_<branch>~<project_version>`（"~" 是 git refname 非法字符）；repository 新增 `getSnapshotByVersionRef`（命中表唯一约束）+ `getSnapshotPredecessor`（diff 的 from 端，pg + memory 双实现）；adapter 新增 `queryDetail` 在服务端解析 locator → 与前任快照 diff；路由接通；前端版本记录项可点击打开 diff 视图（缺 detail_id 的旧数据保持只读卡）。
     - ~~branch_files 文件级详情 503~~ → **已实现（同日）**：契约新增 `list_files` 操作（`GET .../information/branch_files/{detail_id}/files`，fixture 与 schemas 镜像同步）与 `PlatformInformationBranchFilesPage`；快照项签发 `bf_<branch>~<version>`（展开文件清单），文件项签发 `bff_<branch>~<version>~<path>`（detail 路由经 `queryDetail` 服务端重建可信 locator 后走既有 `adapter.detail`，字节哈希核验）；前端快照卡可展开文件行、点文件看内容。测试：contracts 117/117、adapter 16/16、routes 34/34、web 面板 19/19。
-  - 06A 知识队列**投产链路状态（2026-08-08 更新，缺 3 环 + 新发现 1 环）**：
-    1. **生产者缺失**：归档上传路由（`archive/package-ingest.ts` → `putChangeArchivePackage`）不调 `pipeline.acceptArchive`，队列永远为空——需在路由侧事务入队（还要从 ingest 内部构造 `ValidatedArchivePackage` + `ArchiveValidationEvidencePort` 生产实现）；
-    2. ~~dequeue 缺失~~ → **已实现**：`JobRepository.listQueuedKnowledgeJobs/listQueuedChangeProjectionJobs`（ports + pg + memory 三实现，按入队时间升序），pipeline 测试 47/47 含 dequeue 用例；
-    3. **调度器缺失**：需要 poll 循环（批量取队列 → `worker-host.run`，lease/ack 已在 worker 内部）+ main.ts 启停；
-    4. **extractor 缺失**：`KnowledgeExtractorPort` 无任何生产实现（输入只有 job，需自带 archive 读取 + 裁决，可复用 `semantic/knowledge-*` 逻辑）；
-    5. **verifier 缺失（新发现）**：change projection 队列还需 `ArchivePackageVerifierPort` 生产实现（复验归档包字节），无实现。
-    生产投影仍走旧 in-process 全量重建（可用，非阻塞）。
+  - 06A 知识队列**已投产（2026-08-08 全环接通）**：
+    1. ~~生产者~~ → 归档上传路由在 `ingestArchivePackage` 成功后 `validateArchivePackage` 复验并 `pipeline.acceptArchive` 事务入队（best-effort：入队失败仅告警，旧 in-process 投影仍是当前权威路径）；版本标识冻结为 `server-extractor-v1/server-prompt-v1/server-knowledge-index-v1`；evidence 端口复用 `memoryArchiveValidationEvidence`（同进程 WeakSet 证明"刚通过冻结校验器"）；
+    2. ~~dequeue~~ → `listQueuedKnowledgeJobs/listQueuedChangeProjectionJobs`（ports+pg+memory 三实现）；
+    3. ~~调度器~~ → `knowledge-pipeline/scheduler.ts`（周期 dequeue 两队列 → host.dispatch；只做发现+分派，lease/ack 在 worker 内部；close 幂等），main.ts 启动并在 onClose 优雅停止；
+    4. ~~extractor~~ → `knowledge-pipeline/extractor.ts`：读归档知识候选，按与入库裁决同一阈值 0.82 自动放行产出 drafts；不重打分、不发明知识；
+    5. ~~verifier~~ → 复用 `change-projection-worker` 现成的 `createArchivePackageVerifier()`（此前只是未接线）。
+    组合：main.ts 全套 pg 端口 + pipeline + changeProjectionWorker + workerHost + scheduler。测试：scheduler/extractor 4、pipeline 47、worker-host 19 全过。
+    **遗留说明**：① 旧归档不回填（仅新上传入队；历史回填属阶段 14 迁移脚本）；② 队列投影与旧 in-process 投影并行，旧路径仍为权威，队列路径稳定后再切换。
   - roadmap 阶段 14：
     - ~~平台 CI~~ → **已实现**：`.github/workflows/check.yml`（linux 全量含 pg 服务容器跑集成测试；windows lint/typecheck/单测）；
     - ~~端到端冒烟~~ → **已实现**：`apps/server/test/acceptance-smoke.e2e.test.ts`（真实 HTTP + 真实快照模块 + 真实适配器 + 内存存储，覆盖版本 diff/文件清单/文件内容/非法定位符 fail-closed 全链路）；
