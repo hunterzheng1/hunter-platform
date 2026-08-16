@@ -138,7 +138,10 @@ describe("project-scoped API keys (P2)", () => {
     const writeUpload = await app.inject({
       method: "POST",
       url: `/api/v1/projects/${projectId}/branches/main/remote-sync/content-upload`,
-      headers: { authorization: "Bearer " + writeKey.apiKey }
+      headers: {
+        authorization: "Bearer " + writeKey.apiKey,
+        "content-type": "application/zip"
+      }
     });
     expect(writeUpload.statusCode).toBe(503);
     expect(writeUpload.json().error.code).toBe("REMOTE_UNAVAILABLE");

@@ -549,9 +549,16 @@ describe("private directory authority Module", () => {
     const hostileLeaf = new Proxy({}, { get() { executions += 1; throw new Error("trap"); } });
     await expect(listControlledEntries(proof, hostileLeaf)).rejects.toThrow("leaf");
     expect(executions).toBe(0);
-    await expect(rename(childAuthority.root, `${childAuthority.root}-moved`)).rejects.toMatchObject({
-      code: expect.stringMatching(/EPERM|EBUSY|EACCES/u),
-    });
+    const movedChild = `${childAuthority.root}-moved`;
+    if (process.platform === "win32") {
+      await expect(rename(childAuthority.root, movedChild)).rejects.toMatchObject({
+        code: expect.stringMatching(/EPERM|EBUSY|EACCES/u),
+      });
+    } else {
+      await expect(rename(childAuthority.root, movedChild)).resolves.toBeUndefined();
+      await expect(listControlledEntries(proof, "receipts")).rejects.toThrow("authority");
+      await rename(movedChild, childAuthority.root);
+    }
     await closePrivateDirectoryAuthority(proof);
     await expect(listControlledEntries(proof, "receipts")).rejects.toThrow("authority");
   });

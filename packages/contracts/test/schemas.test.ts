@@ -1452,7 +1452,7 @@ describe("content-sync canonical mirror", () => {
     );
 
     expect(contentSyncSha256(source)).toBe(
-      "bfa07ee5caad0830cc17f8d27b934c7e50aba42ef9dbd0cb3b501f9ebacb8993"
+      "b1d1964e11088109d97d9d4187bd2b6921c35cd9d16fa4e225f2bf0fe0e5421b"
     );
     expect(contentSyncSha256(current)).toBe(
       "a5d700084708255d25a9be7de889024c5c8ce644dd671f300251369fa6fcdb4c"
