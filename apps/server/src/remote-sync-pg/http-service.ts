@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import {
   canonicalJson,
+  classifyContentPath,
   remoteSyncLeaseSchema,
   remoteSyncSourceRefSchema,
   remoteSyncPreparedPushSchema,
@@ -20,6 +21,7 @@ import {
   type RemoteSyncPushStatus,
   type RemoteSyncPullReceipt,
   type RemoteSyncRemoteSnapshot,
+  type RemoteSyncOperation,
   type RemoteSyncSourceRef,
   type RemoteSyncContentChunk,
 } from "@hunter-harness/contracts";
@@ -167,6 +169,12 @@ function managedPullPath(value: unknown): string {
     fail("REMOTE_UNAVAILABLE");
   }
   return value;
+}
+
+function pullContentKind(path: string, explicit: RemoteSyncRemoteSnapshot["files"][number]["content_kind"]): RemoteSyncOperation["content_kind"] {
+  if (explicit !== undefined) return explicit;
+  const classification = classifyContentPath({ schema_version: 1, path });
+  return "content_kind" in classification ? classification.content_kind : "branch_file";
 }
 
 async function previousPullPaths(workspaceRoot: string, source: RemoteSyncSourceRef): Promise<Set<string>> {
@@ -1011,6 +1019,22 @@ export function createPgRemoteSyncHttpService(options: PgRemoteSyncHttpServiceOp
       for (const path of [...previousPaths].sort((left, right) => left.localeCompare(right))) {
         if (!currentPaths.has(path)) operations.push({ operation: "delete", path });
       }
+      const appliedOperations = [
+        ...snapshot.files.map((file) => ({
+          path: file.path,
+          content_kind: pullContentKind(file.path, file.content_kind),
+          action: "modify" as const,
+          remote_hash: file.content_hash
+        })),
+        ...[...previousPaths]
+          .filter((path) => !currentPaths.has(path))
+          .sort((left, right) => left.localeCompare(right))
+          .map((path) => ({
+            path,
+            content_kind: pullContentKind(path, undefined),
+            action: "delete" as const
+          }))
+      ];
       const transactionId = `remote_pull_${idSuffix({
         source: input.source,
         idempotency_key: input.idempotency_key,
@@ -1035,7 +1059,7 @@ export function createPgRemoteSyncHttpService(options: PgRemoteSyncHttpServiceOp
         manifest_hash: snapshot.manifest_hash,
         project_version: snapshot.project_version,
         no_changes: operations.length === 0,
-        applied: [],
+        applied: appliedOperations,
         skipped: [],
         retryable: [],
       });
