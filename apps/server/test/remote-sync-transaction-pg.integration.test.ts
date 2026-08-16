@@ -87,4 +87,21 @@ postgresDescribe("Remote Sync transaction adapter PostgreSQL integration", () =>
     ["prj_remote_sync_tx_pg"]);
     expect(counts.rows[0]).toEqual({ versions: 1, artifacts: 1, snapshots: 1, receipts: 1 });
   });
+
+  it("rejects fail-open or wrong-typed durable HTTP source identities", async () => {
+    await expect(pool.query(
+      `INSERT INTO remote_sync_http_active_leases
+        (project_id,branch_name,actor_id,lease_id,lease_token,generation,expires_at,source_json,created_at,updated_at)
+       VALUES ($1,'main',$2,'lease_invalid',$3,1,clock_timestamp()+interval '1 minute',$4::jsonb,clock_timestamp(),clock_timestamp())`,
+      ["prj_remote_sync_tx_pg", "actor_remote_sync_tx_pg", `lease_${"A".repeat(43)}`,
+        JSON.stringify({ project_id: 7, branch_name: "main", actor_id: "actor_remote_sync_tx_pg" })],
+    )).rejects.toMatchObject({ code: "23514" });
+    await expect(pool.query(
+      `INSERT INTO remote_sync_http_active_leases
+        (project_id,branch_name,actor_id,lease_id,lease_token,generation,expires_at,source_json,created_at,updated_at)
+       VALUES ($1,'main',$2,'lease_missing',$3,1,clock_timestamp()+interval '1 minute',$4::jsonb,clock_timestamp(),clock_timestamp())`,
+      ["prj_remote_sync_tx_pg", "actor_remote_sync_tx_pg", `lease_${"B".repeat(43)}`,
+        JSON.stringify({ project_id: "prj_remote_sync_tx_pg", branch_name: "main" })],
+    )).rejects.toMatchObject({ code: "23514" });
+  });
 });

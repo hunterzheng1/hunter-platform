@@ -103,6 +103,54 @@ describe("project-scoped API keys (P2)", () => {
     });
   });
 
+  it("issues the formal platform:read scope", async () => {
+    const { apiKey } = await issueKey(["platform:read"]);
+    const info = await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/key-info",
+      headers: { authorization: "Bearer " + apiKey }
+    });
+    expect(info.statusCode).toBe(200);
+    expect(info.json()).toMatchObject({ project_id: projectId, scopes: ["platform:read"] });
+  });
+
+  it("issues archive scopes and enforces read versus write upload access", async () => {
+    const readKey = await issueKey(["archive:read"]);
+    const readStatus = await app.inject({
+      method: "GET",
+      url: `/api/v1/projects/${projectId}/branches/main/remote-sync/content-upload/status`,
+      headers: {
+        authorization: "Bearer " + readKey.apiKey,
+        "idempotency-key": `sha256:${"a".repeat(64)}`
+      }
+    });
+    expect(readStatus.statusCode).toBe(503);
+    expect(readStatus.json().error.code).toBe("REMOTE_UNAVAILABLE");
+    const readUpload = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectId}/branches/main/remote-sync/content-upload`,
+      headers: { authorization: "Bearer " + readKey.apiKey }
+    });
+    expect(readUpload.statusCode).toBe(403);
+    expect(readUpload.json().error.code).toBe("PROJECT_KEY_SCOPE");
+
+    const writeKey = await issueKey(["archive:write"]);
+    const writeUpload = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectId}/branches/main/remote-sync/content-upload`,
+      headers: { authorization: "Bearer " + writeKey.apiKey }
+    });
+    expect(writeUpload.statusCode).toBe(503);
+    expect(writeUpload.json().error.code).toBe("REMOTE_UNAVAILABLE");
+    const writeStatus = await app.inject({
+      method: "GET",
+      url: `/api/v1/projects/${projectId}/branches/main/remote-sync/content-upload/status`,
+      headers: { authorization: "Bearer " + writeKey.apiKey }
+    });
+    expect(writeStatus.statusCode).toBe(403);
+    expect(writeStatus.json().error.code).toBe("PROJECT_KEY_SCOPE");
+  });
+
   it("allows knowledge:read only for the key's bound project", async () => {
     const { apiKey } = await issueKey(["knowledge:read"]);
 

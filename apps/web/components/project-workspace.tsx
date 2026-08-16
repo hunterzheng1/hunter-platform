@@ -13,13 +13,25 @@ import {
 } from "../lib/api";
 import { classifyManagedFile, isProposalEditable } from "../lib/file-policy";
 import { ProjectApiKeysPanel } from "./project-api-keys";
+import {
+  BranchFilesInformationPanel,
+  ChangeRecordsInformationPanel,
+  ProjectKnowledgeInformationPanel,
+  ProjectMaterialsInformationPanel,
+  VersionRecordsInformationPanel
+} from "./project-information-panels";
 import { useI18n } from "../lib/i18n";
-import { runPreservingWindowScroll, suppressMouseFocusScroll } from "../lib/preserve-scroll";
+import { runPreservingWindowScroll } from "../lib/preserve-scroll";
 import { ProjectSemanticPanels } from "./project-semantic-panels";
 import { ProjectVersionsPanel } from "./project-versions-panel";
 import { RunsMonitor } from "./runs-monitor";
+import {
+  ProjectWorkspaceShell,
+  WorkspaceFilterBar,
+  WorkspaceState,
+  type ProjectWorkspaceSection
+} from "./project-workspace-shell";
 import { Icon } from "./ui/icons";
-import { Skeleton } from "./ui/Skeleton";
 import { ToastFeedback, useToast } from "./ui/Toast";
 
 interface WorkspaceData {
@@ -29,9 +41,20 @@ interface WorkspaceData {
   overview: SemanticOverview | null;
 }
 
-type DraftAction = "add" | "modify" | "rename" | "delete";
-type WorkspaceTab = "monitor" | "files" | "knowledge" | "versions" | "keys";
+interface ProjectFileContentCacheEntry {
+  project_id: string;
+  project_version: string;
+  content_sha256: string;
+  content: string;
+}
 
+function contentCacheMatches(entry: ProjectFileContentCacheEntry | undefined, file: ProjectFileMetadata, projectId: string): boolean {
+  return entry?.project_id === projectId &&
+    entry.project_version === file.project_version &&
+    entry.content_sha256 === file.content_sha256;
+}
+
+type DraftAction = "add" | "modify" | "rename" | "delete";
 interface Draft {
   action: DraftAction;
   path: string;
@@ -53,7 +76,15 @@ const COPY = {
   zh: {
     back: "返回项目列表",
     eyebrow: "项目工作台",
-    tabs: { workbench: "工作台", monitor: "分支监控", files: "文件", knowledge: "项目知识", reports: "摘要报告", versions: "版本记录", keys: "API 密钥" },
+    tabs: { monitor: "分支监控", branchFiles: "分支文件", materials: "项目资料", knowledge: "项目知识", changes: "变更记录", versions: "版本记录", apiKeys: "API 密钥" },
+    loading: "正在加载项目工作台",
+    pendingMaterialsTitle: "项目资料查询正在接入",
+    pendingMaterialsDescription: "规则、架构事实、架构约束、指令和配置将在查询 Adapter 接通后显示。",
+    pendingChangesTitle: "变更记录查询正在接入",
+    pendingChangesDescription: "设计、计划、测试场景、变更总结和归档状态将在查询 Adapter 接通后显示。",
+    pendingSectionTitle: "此工作台查询正在接入",
+    pendingSectionDescription: "查询 Adapter 接通前不会展示模拟的生产数据。",
+    technicalDetails: "技术详情",
     healthy: "项目状态正常",
     healthyHint: "文件快照、知识索引和版本记录已同步到最新保存。",
     noVersion: "尚未生成项目版本",
@@ -103,7 +134,15 @@ const COPY = {
   en: {
     back: "Back to projects",
     eyebrow: "Project workbench",
-    tabs: { workbench: "Workbench", monitor: "Branch monitor", files: "Files", knowledge: "Project knowledge", reports: "Summary report", versions: "Version history", keys: "API keys" },
+    tabs: { monitor: "Branch monitor", branchFiles: "Branch files", materials: "Project materials", knowledge: "Project knowledge", changes: "Changes", versions: "Version history", apiKeys: "API keys" },
+    loading: "Loading project workspace",
+    pendingMaterialsTitle: "Project materials query is being connected",
+    pendingMaterialsDescription: "Rules, architecture facts and constraints, instructions, and configuration will appear after the query adapter is connected.",
+    pendingChangesTitle: "Changes query is being connected",
+    pendingChangesDescription: "Designs, plans, test scenarios, change summaries, and archive status will appear after the query adapter is connected.",
+    pendingSectionTitle: "This workspace query is being connected",
+    pendingSectionDescription: "No simulated production data is shown before the query adapter is connected.",
+    technicalDetails: "Technical details",
     healthy: "Project is healthy",
     healthyHint: "The file snapshot, knowledge index, and version history are synchronized.",
     noVersion: "No project version yet",
@@ -213,6 +252,7 @@ function DirectoryTree({
   onSelect,
   folderCountLabel,
   treeLabel,
+  disabled = false,
   depth = 0
 }: {
   node: TreeNode;
@@ -222,6 +262,7 @@ function DirectoryTree({
   onSelect: (file: ProjectFileMetadata) => void;
   folderCountLabel: (count: number) => string;
   treeLabel: string;
+  disabled?: boolean;
   depth?: number;
 }) {
   const directories = [...node.directories.values()].sort((left, right) => left.name.localeCompare(right.name));
@@ -238,7 +279,7 @@ function DirectoryTree({
             if (nextOpen !== isOpen) onOpenChange(directory.path, nextOpen);
           }}
         >
-          <summary>
+          <summary data-touch-target="true">
             <span className="project-tree-folder" aria-hidden="true" />
             <span className="project-tree-name">{directory.name}</span>
             <span className="project-tree-count">{folderCountLabel(count)}</span>
@@ -251,6 +292,7 @@ function DirectoryTree({
             onSelect={onSelect}
             folderCountLabel={folderCountLabel}
             treeLabel={treeLabel}
+            disabled={disabled}
             depth={depth + 1}
           />
         </details>
@@ -260,6 +302,8 @@ function DirectoryTree({
       <li key={file.path}>
         <button
           type="button"
+          data-touch-target="true"
+          disabled={disabled}
           aria-label={file.path}
           className={selectedPath === file.path ? "selected" : ""}
           onClick={() => onSelect(file)}
@@ -274,14 +318,15 @@ function DirectoryTree({
 }
 
 async function loadWorkspace(api: HunterApi, projectId: string): Promise<WorkspaceData> {
-  if (api.listProjectFiles === undefined) throw new Error("project file API unavailable");
+  const useLegacyWorkspaceLists = api.listPlatformInformation === undefined;
+  if (useLegacyWorkspaceLists && api.listProjectFiles === undefined) throw new Error("project file API unavailable");
   const [project, artifacts, snapshot, overview] = await Promise.all([
     api.getProject(projectId),
-    api.listProjectArtifacts(projectId),
-    api.listProjectFiles(projectId),
+    useLegacyWorkspaceLists ? api.listProjectArtifacts(projectId) : Promise.resolve([]),
+    useLegacyWorkspaceLists ? api.listProjectFiles?.(projectId) : Promise.resolve(null),
     api.getProjectSemanticOverview?.(projectId).catch(() => null) ?? Promise.resolve(null)
   ]);
-  return { project, artifacts, files: snapshot.items, overview };
+  return { project, artifacts, files: snapshot?.items ?? [], overview };
 }
 
 export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId: string }) {
@@ -289,10 +334,10 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
   const toast = useToast();
   const copy = COPY[lang];
   const [data, setData] = useState<WorkspaceData | null>(null);
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>("monitor");
+  const [activeTab, setActiveTab] = useState<ProjectWorkspaceSection>("monitor");
   const [knowledgeActivated, setKnowledgeActivated] = useState(false);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const [contentByPath, setContentByPath] = useState<Map<string, string>>(new Map());
+  const [contentByPath, setContentByPath] = useState<Map<string, ProjectFileContentCacheEntry>>(new Map());
   const [loadingContent, setLoadingContent] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [query, setQuery] = useState("");
@@ -301,6 +346,7 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const contentRequest = useRef(0);
+  const workspaceRequest = useRef(0);
 
   useEffect(() => {
     setActiveTab("monitor");
@@ -308,20 +354,25 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
   }, [api, projectId]);
 
   useEffect(() => {
+    const request = ++workspaceRequest.current;
+    contentRequest.current += 1;
     let active = true;
     setData(null);
     setError(null);
     setSelectedPath(null);
     setOpenPaths(new Set());
     setContentByPath(new Map());
+    setLoadingContent(false);
+    setDraft(null);
+    setBusy(false);
     setQuery("");
     setFilter("all");
     void loadWorkspace(api, projectId).then((next) => {
-      if (active) setData(next);
+      if (active && request === workspaceRequest.current) setData(next);
     }).catch((reason: unknown) => {
-      if (active) setError(userError(reason, copy));
+      if (active && request === workspaceRequest.current) setError(userError(reason, copy));
     });
-    return () => { active = false; };
+    return () => { active = false; workspaceRequest.current += 1; };
   }, [api, projectId, copy]);
 
   const selected = useMemo(
@@ -329,7 +380,10 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
     [data, selectedPath]
   );
   const selectedPolicy = selected === null ? null : classifyManagedFile(selected.path);
-  const selectedContent = selectedPath === null ? undefined : contentByPath.get(selectedPath);
+  const selectedCache = selected === null ? undefined : contentByPath.get(selected.path);
+  const selectedContent = selected === null || !contentCacheMatches(selectedCache, selected, projectId)
+    ? undefined
+    : selectedCache?.content;
   const editableFiles = data?.files.filter((file) => isProposalEditable(classifyManagedFile(file.path))).length ?? 0;
   const visibleFiles = useMemo(() => {
     if (data === null) return [];
@@ -344,6 +398,9 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
   const latestArtifact = data?.artifacts.find((artifact) => artifact.artifact_id === data.project.latest_artifact_id)
     ?? data?.artifacts[0]
     ?? null;
+  const usesInformationApi = api.listPlatformInformation !== undefined;
+  const fileCount = usesInformationApi ? data?.project.current_file_count ?? "—" : data?.files.length ?? 0;
+  const editableFileCount: number | string = usesInformationApi ? "—" : editableFiles;
 
   useEffect(() => {
     if (query.trim() !== "") {
@@ -371,22 +428,38 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
   }
 
   async function choose(file: ProjectFileMetadata): Promise<void> {
+    if (busy) return;
+    setError(null);
     setSelectedPath(file.path);
     setDraft(null);
-    if (contentByPath.has(file.path) || api.getProjectFileContent === undefined) return;
+    if (contentCacheMatches(contentByPath.get(file.path), file, projectId) || api.getProjectFileContent === undefined) return;
     const request = ++contentRequest.current;
     setLoadingContent(true);
     try {
       const loaded = await api.getProjectFileContent(projectId, file.path);
-      setContentByPath((current) => new Map(current).set(file.path, loaded.content));
+      const matches = loaded.project_id === projectId &&
+        loaded.path === file.path &&
+        loaded.project_version === file.project_version &&
+        loaded.content_sha256 === file.content_sha256;
+      if (request === contentRequest.current && matches) {
+        setContentByPath((current) => new Map(current).set(file.path, {
+          project_id: loaded.project_id,
+          project_version: loaded.project_version,
+          content_sha256: loaded.content_sha256,
+          content: loaded.content
+        }));
+      } else if (request === contentRequest.current) {
+        setError(copy.loadFailed);
+      }
     } catch (reason) {
-      setError(userError(reason, copy));
+      if (request === contentRequest.current) setError(userError(reason, copy));
     } finally {
       if (request === contentRequest.current) setLoadingContent(false);
     }
   }
 
   function beginAdd(): void {
+    if (busy) return;
     setSelectedPath(null);
     setDraft({
       action: "add",
@@ -397,6 +470,7 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
   }
 
   function beginEdit(action: Exclude<DraftAction, "add">): void {
+    if (busy) return;
     if (selected === null || selectedPolicy === null || !isProposalEditable(selectedPolicy)) return;
     if (action !== "delete" && selectedContent === undefined) return;
     setDraft({
@@ -409,13 +483,31 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
   }
 
   async function refreshWorkspace(preferredPath?: string): Promise<void> {
+    const workspaceGeneration = workspaceRequest.current;
+    const contentGeneration = ++contentRequest.current;
+    setDraft(null);
     const next = await loadWorkspace(api, projectId);
+    if (workspaceGeneration !== workspaceRequest.current) return;
     setData(next);
-    if (preferredPath !== undefined && next.files.some((file) => file.path === preferredPath)) {
+    const nextFile = preferredPath === undefined ? undefined : next.files.find((file) => file.path === preferredPath);
+    if (preferredPath !== undefined && nextFile !== undefined) {
       setSelectedPath(preferredPath);
       if (api.getProjectFileContent !== undefined) {
         const loaded = await api.getProjectFileContent(projectId, preferredPath);
-        setContentByPath((current) => new Map(current).set(preferredPath, loaded.content));
+        const matches = loaded.project_id === projectId &&
+          loaded.path === preferredPath &&
+          loaded.project_version === nextFile.project_version &&
+          loaded.content_sha256 === nextFile.content_sha256;
+        if (workspaceGeneration === workspaceRequest.current && contentGeneration === contentRequest.current && matches) {
+          setContentByPath((current) => new Map(current).set(preferredPath, {
+            project_id: loaded.project_id,
+            project_version: loaded.project_version,
+            content_sha256: loaded.content_sha256,
+            content: loaded.content
+          }));
+        } else if (workspaceGeneration === workspaceRequest.current && contentGeneration === contentRequest.current) {
+          setError(copy.loadFailed);
+        }
       }
     } else {
       setSelectedPath(null);
@@ -423,7 +515,7 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
   }
 
   async function save(): Promise<void> {
-    if (data === null || draft === null) return;
+    if (busy || data === null || draft === null) return;
     const targetPath = draft.action === "rename" ? draft.targetPath.trim() : draft.path.trim();
     const policy = classifyManagedFile(targetPath);
     if (!isProposalEditable(policy) || targetPath === "") return;
@@ -453,29 +545,16 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
     }
   }
 
-  if (error !== null && data === null) return <section className="empty-state">{error}</section>;
+  if (error !== null && data === null) return <WorkspaceState technicalDetailsLabel={copy.technicalDetails} state={{
+    kind: "error",
+    title: copy.loadFailed,
+    description: error
+  }} />;
   if (data === null) {
-    return (
-      <section className="stack governance-page project-workspace-v2" aria-busy="true">
-        <Skeleton variant="text" lines={2} />
-        <div className="project-registry-metrics">
-          <Skeleton variant="metric" />
-          <Skeleton variant="metric" />
-          <Skeleton variant="metric" />
-          <Skeleton variant="metric" />
-        </div>
-        <Skeleton variant="block" />
-      </section>
-    );
+    return <section className="stack governance-page project-workspace-v2">
+      <WorkspaceState technicalDetailsLabel={copy.technicalDetails} state={{ kind: "loading", label: copy.loading }} />
+    </section>;
   }
-
-  const tabs: Array<[WorkspaceTab, string]> = [
-    ["monitor", copy.tabs.monitor],
-    ["files", copy.tabs.files],
-    ["knowledge", copy.tabs.knowledge],
-    ["versions", copy.tabs.versions],
-    ["keys", copy.tabs.keys]
-  ];
   const lastUpdated = data.project.updated_at ?? data.project.created_at;
 
   return <section className="stack governance-page project-workspace-v2">
@@ -496,40 +575,40 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
     </header>
 
     <div className="project-overview-strip">
-      <article><strong>{data.files.length}</strong><span>{copy.fileCount}</span></article>
-      <article><strong>{editableFiles}</strong><span>{copy.editableCount}</span></article>
+      <article><strong>{fileCount}</strong><span>{copy.fileCount}</span></article>
+      <article><strong>{editableFileCount}</strong><span>{copy.editableCount}</span></article>
       <article><strong>{data.overview?.counts.knowledge ?? "—"}</strong><span>{copy.knowledgeCount}</span></article>
       <article><strong>{data.overview?.counts.edges ?? "—"}</strong><span>{copy.relations}</span></article>
     </div>
 
-    <div className="project-tabs" role="tablist" aria-label={copy.eyebrow}>
-      {tabs.map(([id, label]) => <button
-        key={id}
-        type="button"
-        role="tab"
-        aria-selected={activeTab === id}
-        className={activeTab === id ? "selected" : ""}
-        onMouseDown={suppressMouseFocusScroll}
-        onClick={() => runPreservingWindowScroll(() => {
-          if (id === "knowledge") setKnowledgeActivated(true);
-          setActiveTab(id);
-        })}
-      >{label}</button>)}
-    </div>
-
-    {activeTab === "files" ? <div className="project-files-shell">
+    <ProjectWorkspaceShell
+      activeSection={activeTab}
+      ariaLabel={copy.eyebrow}
+      labels={copy.tabs}
+      fallback={<WorkspaceState technicalDetailsLabel={copy.technicalDetails} state={{
+        kind: "processing",
+        title: copy.pendingSectionTitle,
+        description: copy.pendingSectionDescription
+      }} />}
+      onSectionChange={(section) => runPreservingWindowScroll(() => {
+        if (section === "knowledge") setKnowledgeActivated(true);
+        setActiveTab(section);
+      })}
+      slots={{
+        monitor: { content: <RunsMonitor api={api} projectId={projectId} /> },
+        branchFiles: { content: api.listPlatformInformation === undefined ? <div className="project-files-shell">
       <aside className="project-files-sidebar">
-        <div className="project-files-heading"><div><p className="eyebrow">{copy.fileTitle}</p><strong>{data.files.length}</strong></div><button type="button" onClick={beginAdd}><Icon name="plus" size={13} /> {copy.newFile}</button></div>
-        <div className="project-file-search"><span><Icon name="search" size={13} /></span><input aria-label={copy.searchFiles} placeholder={copy.searchFiles} value={query} onChange={(event) => setQuery(event.target.value)} /></div>
-        <div className="project-file-filters">
-          {(["all", "editable", "system"] as const).map((value) => <button key={value} type="button" className={filter === value ? "selected" : ""} onClick={() => setFilter(value)}>{value === "all" ? copy.allFiles : value === "editable" ? copy.editableFiles : copy.systemFiles}</button>)}
-        </div>
+        <div className="project-files-heading"><div><p className="eyebrow">{copy.fileTitle}</p><strong>{data.files.length}</strong></div><button type="button" data-touch-target="true" disabled={busy} onClick={beginAdd}><Icon name="plus" size={13} /> {copy.newFile}</button></div>
+        <WorkspaceFilterBar label={copy.searchFiles} placeholder={copy.searchFiles} query={query} onQueryChange={setQuery}>
+          {(["all", "editable", "system"] as const).map((value) => <button key={value} type="button" aria-pressed={filter === value} disabled={busy} className={filter === value ? "selected" : ""} onClick={() => setFilter(value)}>{value === "all" ? copy.allFiles : value === "editable" ? copy.editableFiles : copy.systemFiles}</button>)}
+        </WorkspaceFilterBar>
         <div className="project-tree-toolbar">
-          <button type="button" className="text-button" onClick={() => setOpenPaths(new Set())}>{copy.collapseAll}</button>
+          <button type="button" data-touch-target="true" disabled={busy} className="text-button" onClick={() => setOpenPaths(new Set())}>{copy.collapseAll}</button>
           <button
             type="button"
+            data-touch-target="true"
             className="text-button"
-            disabled={selectedPath === null}
+            disabled={busy || selectedPath === null}
             onClick={() => setOpenPaths(new Set(selectedPath === null ? [] : ancestorDirectoryPaths(selectedPath)))}
           >{copy.expandToSelected}</button>
         </div>
@@ -541,6 +620,7 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
           onSelect={(file) => void choose(file)}
           folderCountLabel={copy.folderCount}
           treeLabel={copy.treeLabel}
+          disabled={busy}
         />}
       </aside>
       <main className="project-file-detail-v2">
@@ -548,32 +628,37 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
         {selected !== null ? <>
           <header className="project-file-detail-header">
             <div><p className="project-file-path">{selected.path}</p><div className="project-file-badges"><span className={selectedPolicy !== null && isProposalEditable(selectedPolicy) ? "editable" : "readonly"}>{selectedPolicy !== null && isProposalEditable(selectedPolicy) ? copy.editable : copy.readOnly}</span><span>{selected.size_bytes} {copy.bytes}</span></div></div>
-            {selectedPolicy !== null && isProposalEditable(selectedPolicy) ? <div className="project-file-actions"><button type="button" disabled={selectedContent === undefined} onClick={() => beginEdit("modify")}>{copy.edit}</button><button type="button" disabled={selectedContent === undefined} onClick={() => beginEdit("rename")}>{copy.rename}</button><button type="button" className="danger" onClick={() => beginEdit("delete")}>{copy.delete}</button></div> : null}
+            {selectedPolicy !== null && isProposalEditable(selectedPolicy) ? <div className="project-file-actions"><button type="button" data-touch-target="true" disabled={busy || selectedContent === undefined} onClick={() => beginEdit("modify")}>{copy.edit}</button><button type="button" data-touch-target="true" disabled={busy || selectedContent === undefined} onClick={() => beginEdit("rename")}>{copy.rename}</button><button type="button" data-touch-target="true" className="danger" disabled={busy} onClick={() => beginEdit("delete")}>{copy.delete}</button></div> : null}
           </header>
           <pre className="project-file-content">{loadingContent && selectedContent === undefined ? copy.loadingContent : selectedContent ?? ""}</pre>
         </> : null}
         {draft !== null ? <section className="project-file-editor">
-          <header><h2>{draft.action === "add" ? copy.newFile : draft.action === "delete" ? copy.confirmDelete : copy.edit}</h2><button type="button" className="icon-button" aria-label={copy.cancel} onClick={() => setDraft(null)}><Icon name="close" size={14} /></button></header>
-          <label>{copy.filePath}<input aria-label={copy.filePath} value={draft.path} disabled={draft.action !== "add"} onChange={(event) => setDraft({ ...draft, path: event.target.value })} /></label>
-          {draft.action === "rename" ? <label>{copy.targetPath}<input aria-label={copy.targetPath} value={draft.targetPath} onChange={(event) => setDraft({ ...draft, targetPath: event.target.value })} /></label> : null}
-          {draft.action === "delete" ? <p className="notice danger">{lang === "zh" ? "删除后会立即生成新版本；可通过历史版本追溯。" : "Deleting creates a new version immediately; prior versions remain traceable."}</p> : <label className="project-editor-content">{copy.fileContent}<textarea aria-label={copy.fileContent} value={draft.content} onChange={(event) => setDraft({ ...draft, content: event.target.value })} /></label>}
-          <div className="actions"><button type="button" disabled={busy} onClick={() => void save()}>{draft.action === "delete" ? copy.confirmDelete : copy.save}</button><button type="button" className="secondary" disabled={busy} onClick={() => setDraft(null)}>{copy.cancel}</button></div>
+          <header><h2>{draft.action === "add" ? copy.newFile : draft.action === "delete" ? copy.confirmDelete : copy.edit}</h2><button type="button" data-touch-target="true" className="icon-button" aria-label={copy.cancel} disabled={busy} onClick={() => setDraft(null)}><Icon name="close" size={14} /></button></header>
+          <label>{copy.filePath}<input aria-label={copy.filePath} value={draft.path} disabled={busy || draft.action !== "add"} onChange={(event) => setDraft({ ...draft, path: event.target.value })} /></label>
+          {draft.action === "rename" ? <label>{copy.targetPath}<input aria-label={copy.targetPath} value={draft.targetPath} disabled={busy} onChange={(event) => setDraft({ ...draft, targetPath: event.target.value })} /></label> : null}
+          {draft.action === "delete" ? <p className="notice danger">{lang === "zh" ? "删除后会立即生成新版本；可通过历史版本追溯。" : "Deleting creates a new version immediately; prior versions remain traceable."}</p> : <label className="project-editor-content">{copy.fileContent}<textarea aria-label={copy.fileContent} value={draft.content} disabled={busy} onChange={(event) => setDraft({ ...draft, content: event.target.value })} /></label>}
+          <div className="actions"><button type="button" data-touch-target="true" disabled={busy} onClick={() => void save()}>{draft.action === "delete" ? copy.confirmDelete : copy.save}</button><button type="button" data-touch-target="true" className="secondary" disabled={busy} onClick={() => setDraft(null)}>{copy.cancel}</button></div>
         </section> : null}
       </main>
-    </div> : null}
-
-    {activeTab === "monitor" ? <RunsMonitor api={api} projectId={projectId} /> : null}
-
-    {knowledgeActivated ? <div hidden={activeTab !== "knowledge"} aria-hidden={activeTab !== "knowledge"}>
-      <ProjectSemanticPanels api={api} projectId={projectId} />
-    </div> : null}
-
-    {activeTab === "versions" ? <ProjectVersionsPanel api={api} artifacts={data.artifacts} lang={lang} /> : null}
-
-    {/* Keep API keys mounted to avoid remount refetch blank flash when switching tabs. */}
-    <div hidden={activeTab !== "keys"} aria-hidden={activeTab !== "keys"}>
-      <ProjectApiKeysPanel projectId={projectId} />
-    </div>
+    </div> : <BranchFilesInformationPanel api={api} projectId={projectId} lang={lang} /> },
+        materials: { content: api.listPlatformInformation === undefined
+          ? <WorkspaceState technicalDetailsLabel={copy.technicalDetails} state={{ kind: "processing", title: copy.pendingMaterialsTitle, description: copy.pendingMaterialsDescription }} />
+          : <ProjectMaterialsInformationPanel api={api} projectId={projectId} lang={lang} /> },
+        ...(knowledgeActivated ? { knowledge: {
+          content: api.listPlatformInformation === undefined
+            ? <ProjectSemanticPanels api={api} projectId={projectId} />
+            : <ProjectKnowledgeInformationPanel api={api} projectId={projectId} lang={lang} />,
+          keepMounted: true
+        } } : {}),
+        changes: { content: api.listPlatformInformation === undefined
+          ? <WorkspaceState technicalDetailsLabel={copy.technicalDetails} state={{ kind: "processing", title: copy.pendingChangesTitle, description: copy.pendingChangesDescription }} />
+          : <ChangeRecordsInformationPanel api={api} projectId={projectId} lang={lang} /> },
+        versions: { content: api.listPlatformInformation === undefined
+          ? <ProjectVersionsPanel api={api} artifacts={data.artifacts} lang={lang} />
+          : <VersionRecordsInformationPanel api={api} projectId={projectId} lang={lang} /> },
+        apiKeys: { content: <ProjectApiKeysPanel projectId={projectId} />, keepMounted: true }
+      }}
+    />
 
     {data === null ? null : <ToastFeedback tone="danger" message={error} />}
   </section>;

@@ -1,8 +1,19 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import { parse as parseYaml } from "yaml";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+
+import type {
+  BranchSnapshotPage,
+  ContentSyncStatuses,
+  KnowledgeCandidate,
+  ProjectContentCandidate,
+  RemoteVersionIdentity,
+  SnapshotFilePage,
+  SnapshotVersionPage
+} from "../src/index.js";
 
 import {
   adapterNameSchema,
@@ -18,21 +29,49 @@ import {
   providerModelSchema,
   apiErrorEnvelopeSchema,
   artifactManifestSchema,
+  branchSnapshotPageSchema,
   canonicalJson,
   checkStatusSchema,
+  conflictResolutionSchema,
+  contentKindSchema,
+  contentScanPolicySchema,
+  contentSyncStatusesSchema,
   draftStateSchema,
   fileOperationSchema,
   filePolicySchema,
   fixActionSchema,
   fixPlanItemSchema,
   fixPlanSchema,
+  getLegacyArchiveCompatibilityResult,
   HARNESS_AGENT_ORDER,
   harnessAgentSchema,
   initConfigSchema,
   knowledgeFrontmatterSchema,
+  knowledgeCandidateSchema,
+  legacyArchiveCompatibilityResultSchema,
+  legacyArchivePackageReceiptSchema,
   mcpToolContractSchema,
   modifyOperationSchema,
   projectConfigSchema,
+  platformInformationContractSchema,
+  PLATFORM_INFORMATION_HTTP_OPERATIONS,
+  platformInformationConfirmRestoreHttpRequestSchema,
+  platformInformationDetailResponseSchema,
+  platformInformationExportResultSchema,
+  platformInformationListHttpQuerySchema,
+  platformInformationPreviewRestoreHttpRequestSchema,
+  platformInformationRetryExtractionHttpRequestSchema,
+  validatePlatformInformationConfirmRestoreHttpRequest,
+  knowledgeExtractionRetryIntentSchema,
+  platformInformationPageSchema,
+  platformInformationQuerySchema,
+  readPlatformInformationContract,
+  verifyPlatformInformationExportResult,
+  restoreBranchFilesConfirmationIntentSchema,
+  restoreBranchFilesIntentSchema,
+  restoreBranchFilesPreviewReceiptSchema,
+  projectContentCandidateSchema,
+  pullPolicySchema,
   publishSkillRequestSchema,
   publishUnifiedSkillRequestSchema,
   registryAgentSchema,
@@ -42,6 +81,7 @@ import {
   registrySkillSummarySchema,
   registrySkillVersionSchema,
   registryTagSchema,
+  remoteVersionIdentitySchema,
   setDefaultAgentRequestSchema,
   skillCheckItemSchema,
   skillCheckResultSchema,
@@ -50,11 +90,16 @@ import {
   skillTargetAgentSchema,
   skillNameSchema,
   skillUsageExampleSchema,
+  snapshotFilePageSchema,
+  snapshotVersionPageSchema,
   sortHarnessAgents,
   apiErrorCodeSchema,
   SKILL_NAME_REGEX,
   SKILL_ERROR_CODE,
   sourceFileSchema,
+  syncActionSchema,
+  syncDirectionSchema,
+  syncScopeSchema,
   workflowFamilySchema,
   publishWorkflowFamilyRequestSchema,
   registryProjectWorkflowBindingSchema,
@@ -71,6 +116,179 @@ describe("active Skill target contracts", () => {
       sourceAgent,
       draftRevision: 1
     }).success).toBe(false);
+  });
+});
+
+describe("stage 13 platform information contract mirror", () => {
+  it("freezes the authenticated HTTP operation contract", () => {
+    expect(PLATFORM_INFORMATION_HTTP_OPERATIONS).toEqual({
+      list: expect.objectContaining({ method: "GET", path: "/api/v1/projects/{project_id}/information/{view}", operation_id: "listPlatformInformation", request_placement: "path_and_query", success_status: 200, success_schema: "PlatformInformationPage" }),
+      export_all: expect.objectContaining({ method: "GET", path: "/api/v1/projects/{project_id}/information/{view}:export-all", operation_id: "exportAllPlatformInformation", request_placement: "path_and_query", success_status: 200, success_schema: "PlatformInformationExportResult" }),
+      create_export: expect.objectContaining({ method: "POST", path: "/api/v1/projects/{project_id}/information/{view}:export", operation_id: "createPlatformInformationExport", success_status: 201, success_schema: "PlatformInformationExportArtifactReceipt" }),
+      download_export: expect.objectContaining({ method: "GET", path: "/api/v1/projects/{project_id}/information/{view}/exports/{export_id}", operation_id: "downloadPlatformInformationExport", success_status: 200, success_schema: null, success_headers: { content_sha256: "X-Content-SHA256", content_disposition: "Content-Disposition" } }),
+      detail: expect.objectContaining({ method: "GET", path: "/api/v1/projects/{project_id}/information/{view}/{detail_id}", operation_id: "getPlatformInformationDetail", request_placement: "path_only", success_status: 200, success_schema: "PlatformInformationDetailResponse" }),
+      preview_restore: expect.objectContaining({ method: "POST", path: "/api/v1/projects/{project_id}/information/branch-files:preview-restore", operation_id: "previewBranchFilesRestore", request_placement: "path_and_json_body", success_schema: "RestoreBranchFilesPreviewReceipt" }),
+      confirm_restore: expect.objectContaining({ method: "POST", path: "/api/v1/projects/{project_id}/information/branch-files:confirm-restore", operation_id: "confirmBranchFilesRestore", request_placement: "path_and_json_body", success_schema: "RestoreBranchFilesConfirmedIntent" }),
+      retry_extraction: expect.objectContaining({ method: "POST", path: "/api/v1/projects/{project_id}/information/knowledge:retry-extraction", operation_id: "retryProjectKnowledgeExtraction", request_placement: "path_and_json_body", success_schema: "KnowledgeExtractionRetryIntent" })
+    });
+    expect(platformInformationListHttpQuerySchema.parse({})).toEqual({ limit: 50, cursor: null });
+    expect(platformInformationListHttpQuerySchema.safeParse({ limit: 25, cursor: null, actor_id: "actor_spoof" }).success).toBe(false);
+    expect(platformInformationRetryExtractionHttpRequestSchema.safeParse({ job_id: "job_knowledge_01", expected_generation: 2, actor_id: "actor_spoof" }).success).toBe(false);
+    const preview = { schema_version: 1, contract_kind: "branch_files_pull_preview_intent", project_id: "prj_demo", source_branch_name: "main", source_commit_sha: "a".repeat(40), source_artifact_id: "artifact_1", source_project_version: "pv_1", scopes: ["branch_files"], selected_paths: ["AGENTS.md"], preview_only: true };
+    expect(platformInformationPreviewRestoreHttpRequestSchema.safeParse(preview).success).toBe(true);
+    expect(platformInformationPreviewRestoreHttpRequestSchema.safeParse({ ...preview, actor_id: "actor_spoof" }).success).toBe(false);
+    expect(platformInformationConfirmRestoreHttpRequestSchema.safeParse({ preview_receipt: {}, confirmation_intent: {} }).success).toBe(false);
+    for (const operation of Object.values(PLATFORM_INFORMATION_HTTP_OPERATIONS)) {
+      expect(operation.request_id_header).toBe("X-Request-Id");
+      expect(operation.errors[401]).toEqual(["AUTH_REQUIRED", "TOKEN_INVALID", "SESSION_INVALID"]);
+    }
+    expect(PLATFORM_INFORMATION_HTTP_OPERATIONS.list.auth.project_key_scope_by_view.branch_monitor).toBe("platform:read");
+    expect(apiErrorEnvelopeSchema.safeParse({ error: {
+      code: "PLATFORM_INFORMATION_EXPORT_UNAVAILABLE", message: "export unavailable",
+      request_id: "0198f012-3456-7abc-8def-0123456789ab", details: {},
+    } }).success).toBe(true);
+    expect(PLATFORM_INFORMATION_HTTP_OPERATIONS.confirm_restore).toMatchObject({ validator_id: "validatePlatformInformationConfirmRestoreHttpRequest" });
+    expect(PLATFORM_INFORMATION_HTTP_OPERATIONS.preview_restore.fastify_path).toContain("branch-files::preview-restore");
+  });
+
+  it("matches the independently frozen HTTP descriptor fixture", async () => {
+    const frozen = JSON.parse(await readFile(new URL("./fixtures/platform-information-http-v1-current.json", import.meta.url), "utf8"));
+    expect(PLATFORM_INFORMATION_HTTP_OPERATIONS).toEqual(frozen);
+  });
+
+  it("validates confirm restore only through the serialized semantic entrypoint", async () => {
+    const current = JSON.parse(await readFile(new URL("./fixtures/platform-information-v1-current.json", import.meta.url), "utf8")) as Record<string, unknown>;
+    const body = { preview_receipt: current.restore_preview_receipt, confirmation_intent: current.restore_confirmation_intent };
+    expect(validatePlatformInformationConfirmRestoreHttpRequest(JSON.stringify(body), { project_id: "prj_demo", client_id: "platform_console" })).toMatchObject({ ok: true });
+    expect(validatePlatformInformationConfirmRestoreHttpRequest(JSON.stringify(body), { project_id: "prj_other", client_id: "platform_console" })).toEqual({ ok: false, reason_code: "BRANCH_FILES_PULL_CONFIRMATION_MISMATCH" });
+    expect(validatePlatformInformationConfirmRestoreHttpRequest(JSON.stringify({ ...body, confirmation_intent: { ...(body.confirmation_intent as object), preview_hash: `sha256:${"f".repeat(64)}` } }), { project_id: "prj_demo", client_id: "platform_console" })).toEqual({ ok: false, reason_code: "BRANCH_FILES_PULL_CONFIRMATION_MISMATCH" });
+    let traps = 0;
+    const hostile = new Proxy({}, { get() { traps += 1; throw new Error("trap"); } });
+    expect(validatePlatformInformationConfirmRestoreHttpRequest(hostile, { project_id: "prj_demo", client_id: "platform_console" })).toEqual({ ok: false, reason_code: "BRANCH_FILES_PULL_CONFIRMATION_INVALID" });
+    expect(traps).toBe(0);
+  });
+
+  it("parses current fixtures and keeps legacy payloads read-only", async () => {
+    const current = JSON.parse(await readFile(fileURLToPath(new URL(
+      "./fixtures/platform-information-v1-current.json", import.meta.url
+    )), "utf8")) as Record<string, unknown>;
+    const legacy = JSON.parse(await readFile(fileURLToPath(new URL(
+      "./fixtures/platform-information-v0-legacy.json", import.meta.url
+    )), "utf8")) as Record<string, unknown>;
+
+    for (const query of current.queries as unknown[]) {
+      expect(platformInformationQuerySchema.safeParse(query).success).toBe(true);
+      expect(platformInformationContractSchema.safeParse(query).success).toBe(true);
+    }
+    for (const page of current.pages as unknown[]) {
+      expect(platformInformationPageSchema.safeParse(page).success).toBe(true);
+    }
+    const monitorPage = (current.pages as Array<Record<string, unknown>>)[0] as Record<string, unknown>;
+    expect(platformInformationPageSchema.safeParse({
+      ...monitorPage,
+      page_state: "ready",
+      items: [{
+        item_kind: "branch_monitor",
+        lifecycle_kind: "change",
+        run_id: "run_01",
+        branch_name: "feature/monitor",
+        change_key: "change_monitor",
+        run_status: "running",
+        current_phase: "sync",
+        started_at: "2026-08-13T01:00:00Z",
+        ended_at: null,
+        duration_ms: null,
+        last_event_at: "2026-08-13T01:00:00Z",
+        sort_key: "2026-08-13T01:00:00Z|run_01"
+      }]
+    }).success).toBe(false);
+    expect(platformInformationPageSchema.safeParse(current.knowledge_failed_page).success).toBe(true);
+    expect(knowledgeExtractionRetryIntentSchema.safeParse(current.knowledge_retry_intent).success).toBe(true);
+    expect(restoreBranchFilesIntentSchema.safeParse(current.restore_intent).success).toBe(true);
+    expect(restoreBranchFilesPreviewReceiptSchema.safeParse(current.restore_preview_receipt).success).toBe(true);
+    expect(restoreBranchFilesConfirmationIntentSchema.safeParse(current.restore_confirmation_intent).success).toBe(true);
+    expect(platformInformationExportResultSchema.safeParse(current.export_result).success).toBe(true);
+    expect(platformInformationDetailResponseSchema.safeParse({
+      schema_version: 1,
+      contract_kind: "detail_response",
+      view: "project_materials",
+      project_id: "prj_demo",
+      detail_id: "material_rules",
+      detail: {
+        detail_kind: "project_material",
+        content: "# canonical rule projection",
+        content_hash: `sha256:${"b".repeat(64)}`,
+        media_type: "text/markdown"
+      }
+    }).success).toBe(true);
+    expect(readPlatformInformationContract(JSON.stringify(legacy))).toMatchObject({
+      ok: true, mode: "legacy_read_only", source_schema_version: 0
+    });
+    expect(readPlatformInformationContract(JSON.stringify({ ...legacy, unexpected: true }))).toEqual({
+      ok: false, reason_code: "PLATFORM_INFORMATION_CONTRACT_INVALID"
+    });
+  });
+
+  it("verifies complete null-start export walks against their trusted query", async () => {
+    const current = JSON.parse(await readFile(new URL(
+      "./fixtures/platform-information-v1-current.json", import.meta.url
+    ), "utf8")) as Record<string, unknown>;
+    const proof = current.export_result as Record<string, unknown>;
+    const query = (current.queries as unknown[])[3];
+    expect(platformInformationExportResultSchema.safeParse(proof).success).toBe(true);
+    expect(platformInformationExportResultSchema.safeParse({
+      ...proof,
+      pages: [{ request_cursor: null, response_next_cursor: null, result_count: 3 }],
+      exported_count: 3
+    }).success).toBe(true);
+    expect(verifyPlatformInformationExportResult(JSON.stringify(proof), query)).toMatchObject({
+      ok: true, value: { exported_count: 28 }
+    });
+    const range = proof.range as Record<string, unknown>;
+    const queryScope = range.query_scope as Record<string, unknown>;
+    expect(verifyPlatformInformationExportResult(JSON.stringify({
+      ...proof,
+      range: { ...range, query_scope: { ...queryScope, actor_id: "actor_2" } }
+    }), query)).toEqual({
+      ok: false, reason_code: "PLATFORM_INFORMATION_EXPORT_RANGE_MISMATCH"
+    });
+  });
+
+  it("rejects incomplete, discontinuous, repeated-terminal, and incorrect export proofs", async () => {
+    const current = JSON.parse(await readFile(new URL(
+      "./fixtures/platform-information-v1-current.json", import.meta.url
+    ), "utf8")) as Record<string, unknown>;
+    const proof = current.export_result as Record<string, unknown>;
+    const cursor25 = "pic_a25vd2xlZGdlOjI1";
+    const cursor50 = "pic_a25vd2xlZGdlOjUw";
+    const invalidPages: unknown[][] = [
+      [{ request_cursor: null, response_next_cursor: cursor25, result_count: 25 }],
+      [
+        { request_cursor: null, response_next_cursor: cursor25, result_count: 25 },
+        { request_cursor: cursor50, response_next_cursor: null, result_count: 3 }
+      ],
+      [
+        { request_cursor: null, response_next_cursor: null, result_count: 25 },
+        { request_cursor: null, response_next_cursor: null, result_count: 3 }
+      ]
+    ];
+    for (const pages of invalidPages) {
+      expect(platformInformationExportResultSchema.safeParse({
+        ...proof,
+        pages,
+        exported_count: pages.reduce((sum, page) =>
+          sum + (page as { result_count: number }).result_count, 0)
+      }).success).toBe(false);
+    }
+    expect(platformInformationExportResultSchema.safeParse({
+      ...proof, exported_count: 27
+    }).success).toBe(false);
+    let traps = 0;
+    const hostile = new Proxy({}, { get() { traps += 1; throw new Error("trap"); } });
+    expect(verifyPlatformInformationExportResult(hostile, (current.queries as unknown[])[3])).toEqual({
+      ok: false, reason_code: "PLATFORM_INFORMATION_EXPORT_SERIALIZED_JSON_REQUIRED"
+    });
+    expect(traps).toBe(0);
   });
 });
 
@@ -282,6 +500,7 @@ describe("shared contracts", () => {
     expect(canonicalJson({ z: 1, a: { y: 2, b: 3 } }))
       .toBe('{"a":{"b":3,"y":2},"z":1}');
   });
+
 });
 
 describe("skill frontmatter schema (UT-001~004, UT-002b RED#1)", () => {
@@ -1209,5 +1428,125 @@ describe("mcp tool contract schema (UT-010~012)", () => {
 
   it("rejects unknown fields (strict)", () => {
     expect(mcpToolContractSchema.safeParse({ ...validContract, extra: 1 }).success).toBe(false);
+  });
+});
+
+const contentSyncSha256 = (bytes: Uint8Array): string =>
+  createHash("sha256").update(bytes).digest("hex");
+
+async function readContentSyncFixture(name: string): Promise<Record<string, unknown>> {
+  return JSON.parse(await readFile(
+    new URL(`./fixtures/${name}`, import.meta.url),
+    "utf8"
+  )) as Record<string, unknown>;
+}
+
+describe("content-sync canonical mirror", () => {
+  it("locks the Harness canonical source and shared fixture bytes", async () => {
+    const source = await readFile(new URL("../src/content-sync.ts", import.meta.url));
+    const current = await readFile(
+      new URL("./fixtures/content-sync-v1-current.json", import.meta.url)
+    );
+    const legacy = await readFile(
+      new URL("./fixtures/content-sync-v0-legacy.json", import.meta.url)
+    );
+
+    expect(contentSyncSha256(source)).toBe(
+      "bfa07ee5caad0830cc17f8d27b934c7e50aba42ef9dbd0cb3b501f9ebacb8993"
+    );
+    expect(contentSyncSha256(current)).toBe(
+      "a5d700084708255d25a9be7de889024c5c8ce644dd671f300251369fa6fcdb4c"
+    );
+    expect(contentSyncSha256(legacy)).toBe(
+      "5945db02c0fb5906d76d0ed85f82ccfb84c49d6c366780214f7052fa1656992a"
+    );
+  });
+
+  it("keeps exact v1 enums and parses current status and candidate projections", async () => {
+    const fixture = await readContentSyncFixture("content-sync-v1-current.json");
+    const enums = fixture.enums as Record<string, unknown>;
+    expect(contentKindSchema.options).toEqual([
+      "config", "rule", "architecture", "instruction", "branch_file",
+      "change_document", "archive_package", "knowledge_entry",
+      "knowledge_candidate", "project_content_candidate"
+    ]);
+    expect(syncScopeSchema.options).toEqual([
+      "config", "rules", "architecture", "instructions", "branch_files", "archive"
+    ]);
+    expect(syncDirectionSchema.options).toEqual(["push", "pull"]);
+    expect(syncActionSchema.options).toEqual([
+      "add", "modify", "delete", "restore", "rename", "no_change"
+    ]);
+    expect(conflictResolutionSchema.options).toEqual([
+      "keep_local", "accept_remote", "skip", "cancel"
+    ]);
+    expect(pullPolicySchema.options).toEqual([
+      "regular", "explicit_source_only", "not_pullable"
+    ]);
+    expect(contentScanPolicySchema.options).toEqual(["required", "skip_content_scan"]);
+    expect(enums.content_kind).toEqual(contentKindSchema.options);
+
+    const statuses = contentSyncStatusesSchema.parse(fixture.statuses);
+    const candidates = fixture.candidates as Record<string, unknown>;
+    const projectCandidate = projectContentCandidateSchema.parse(
+      candidates.project_content_candidate
+    );
+    const knowledgeCandidate = knowledgeCandidateSchema.parse(candidates.knowledge_candidate);
+    expectTypeOf(statuses).toEqualTypeOf<ContentSyncStatuses>();
+    expectTypeOf(projectCandidate).toEqualTypeOf<ProjectContentCandidate>();
+    expectTypeOf(knowledgeCandidate).toEqualTypeOf<KnowledgeCandidate>();
+    expect(statuses).toMatchObject({
+      archive_status: { status: "uploading" },
+      change_index_status: { status: "indexing" },
+      knowledge_extraction_status: { status: "extracting" },
+      managed_snapshot_status: { status: "conflict" }
+    });
+    expect(projectCandidate.candidate_id).toMatch(/^pcc_/u);
+    expect(knowledgeCandidate.candidate_id).toMatch(/^kc_/u);
+  });
+
+  it("projects strict remote identity and bounded snapshot pages", async () => {
+    const fixture = await readContentSyncFixture("content-sync-v1-current.json");
+    const identity = remoteVersionIdentitySchema.parse(fixture.remote_version_identity);
+    const branches = branchSnapshotPageSchema.parse(fixture.branch_snapshots_page);
+    const versions = snapshotVersionPageSchema.parse(fixture.snapshot_versions_page);
+    const files = snapshotFilePageSchema.parse(fixture.snapshot_files_page);
+    expectTypeOf(identity).toEqualTypeOf<RemoteVersionIdentity>();
+    expectTypeOf(branches).toEqualTypeOf<BranchSnapshotPage>();
+    expectTypeOf(versions).toEqualTypeOf<SnapshotVersionPage>();
+    expectTypeOf(files).toEqualTypeOf<SnapshotFilePage>();
+    expect(files.items.map((item) => item.path)).toEqual([
+      ".harness/project.yaml", ".harness/rules/security.md", "AGENTS.md"
+    ]);
+
+    for (const [schema, value] of [
+      [remoteVersionIdentitySchema, fixture.remote_version_identity],
+      [branchSnapshotPageSchema, fixture.branch_snapshots_page],
+      [snapshotVersionPageSchema, fixture.snapshot_versions_page],
+      [snapshotFilePageSchema, fixture.snapshot_files_page]
+    ] as const) {
+      expect(schema.safeParse({ ...(value as object), unexpected: true }).success).toBe(false);
+    }
+    expect(branchSnapshotPageSchema.safeParse({
+      items: Array.from({ length: 101 }, () => branches.items[0])
+    }).success).toBe(false);
+  });
+
+  it("accepts legacy runtime receipts without inferring split statuses", async () => {
+    const fixture = await readContentSyncFixture("content-sync-v0-legacy.json");
+    const receipts = legacyArchivePackageReceiptSchema.array().parse(fixture.receipts);
+    const expected = fixture.compatibility_results as unknown[];
+    expect(receipts.map((receipt) => receipt.knowledge_status)).toEqual([
+      "indexing", "ready", "failed"
+    ]);
+    for (const [index, receipt] of receipts.entries()) {
+      const compatibility = getLegacyArchiveCompatibilityResult(receipt);
+      expect(legacyArchiveCompatibilityResultSchema.parse(expected[index]))
+        .toEqual(compatibility);
+      expect(compatibility.complete_v1_statuses).toBe(false);
+      expect(compatibility.change_index_status.availability).toBe("unavailable");
+      expect(compatibility.knowledge_extraction_status.availability).toBe("unavailable");
+      expect(compatibility.managed_snapshot_status.availability).toBe("unavailable");
+    }
   });
 });

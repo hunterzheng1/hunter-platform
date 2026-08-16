@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "source_kind": "platform_information_export_page",
+  "request": {
+    "schema_version": 1,
+    "contract_kind": "query",
+    "view": "project_knowledge",
+    "project_id": "prj_demo",
+    "query_scope": {
+      "actor_id": "actor_1",
+      "accessible_project_ids": ["prj_demo"],
+      "content_types": ["knowledge_entry"]
+    },
+    "limit": 2,
+    "cursor": null,
+    "cursor_verification": "server_port_required",
+    "sort": "extracted_at_desc_knowledge_id_asc"
+  },
+  "page": {
+    "schema_version": 1,
+    "contract_kind": "page",
+    "view": "project_knowledge",
+    "project_id": "prj_demo",
+    "page_state": "empty",
+    "sort": "extracted_at_desc_knowledge_id_asc",
+    "items": [],
+    "next_cursor": null,
+    "failures": []
+  },
+  "items_sha": "sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+  "proof_sha": "sha256:debd197785ddc40d37134e0baf2bcff13971ce00fb145c7c58bc1a704ae0cdcc"
+}

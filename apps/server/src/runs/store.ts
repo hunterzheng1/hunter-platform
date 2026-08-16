@@ -1,3 +1,5 @@
+import type { PlanEvent } from "@hunter-harness/contracts";
+
 /**
  * P4 Run monitoring store — three-state model (run / connection / sync).
  * Inspired by kb-sdd progress monitoring, slimmed for Hunter Harness.
@@ -12,11 +14,17 @@ export type ConnectionStatus =
   | "idle"
   | "closed";
 export type SyncCompleteness = "complete" | "pending" | "gapped" | "degraded";
+export type RunLifecycleKind = "change" | "legacy_unmarked";
+
+export type StoredPlanEvent = PlanEvent;
 
 export interface RunRecord {
   runId: string;
   projectId: string;
   changeKey: string;
+  lifecycleKind: RunLifecycleKind;
+  branchName: string | null;
+  sourceVersion: string | null;
   title: string | null;
   runStatus: RunStatus;
   connectionStatus: ConnectionStatus;
@@ -41,6 +49,7 @@ export interface RunEventRecord {
   phase: string | null;
   occurredAt: string;
   payload: Record<string, unknown>;
+  planEvent: StoredPlanEvent | null;
   receivedAt: string;
 }
 
@@ -100,6 +109,7 @@ export interface IngestEventInput {
   phase?: string;
   occurredAt: string;
   payload: Record<string, unknown>;
+  planEvent?: StoredPlanEvent;
 }
 
 export type IngestItemStatus =
@@ -121,6 +131,9 @@ export interface RunStore {
     projectId: string;
     changeKey: string;
     title?: string;
+    lifecycleKind: RunLifecycleKind;
+    branchName: string | null;
+    sourceVersion: string | null;
   }): Promise<RunRecord>;
   ingestBatch(input: {
     projectId: string;
@@ -136,12 +149,28 @@ export interface RunStore {
     limit?: number;
     cursor?: string | null;
     status?: string;
+    lifecycleKind?: RunLifecycleKind;
   }): Promise<{ items: RunRecord[]; nextCursor: string | null; total: number }>;
   getRun(projectId: string, runId: string): Promise<RunRecord | null>;
   listEvents(
     runId: string,
     options?: { afterCursor?: number; limit?: number }
   ): Promise<RunEventRecord[]>;
+}
+
+export function decodeRunCursor(cursor: string | null | undefined): number {
+  if (cursor === null || cursor === undefined || cursor === "") return 0;
+  const decoded = Buffer.from(cursor, "base64url").toString("utf8");
+  const candidate = decoded.startsWith("run-offset:") ? decoded.slice("run-offset:".length) : decoded;
+  const offset = Number.parseInt(candidate, 10);
+  if (!Number.isSafeInteger(offset) || offset < 0 || String(offset) !== candidate) {
+    throw new Error("INVALID_CURSOR");
+  }
+  return offset;
+}
+
+export function encodeRunCursor(offset: number): string {
+  return Buffer.from(`run-offset:${offset}`).toString("base64url");
 }
 
 export function sanitizeEventPayload(
@@ -159,6 +188,11 @@ export function deriveRunStatus(
   eventType: string,
   payload: Record<string, unknown>
 ): RunStatus {
+  if (eventType === "phase_started") return "running";
+  if (eventType === "validation_failed") return "failed";
+  if (eventType === "phase_ended") {
+    return current === "failed" || current === "partial" ? current : "succeeded";
+  }
   if (eventType === "phase.start") return "running";
   if (eventType === "workflow.end" || eventType === "run.end") {
     const status = String(payload.status ?? "OK").toUpperCase();
@@ -177,6 +211,47 @@ export function deriveRunStatus(
   return current === "succeeded" || current === "failed" || current === "partial"
     ? current
     : "running";
+}
+
+export function isRunTerminalEvent(eventType: string): boolean {
+  return eventType === "workflow.end" || eventType === "run.end" ||
+    eventType === "phase.end" || eventType === "phase_ended";
+}
+
+export function deriveCanonicalRunAggregate(events: readonly RunEventRecord[]): Pick<
+  RunRecord,
+  "startedAt" | "lastEventAt" | "currentPhase" | "runStatus" | "endedAt" | "serverCursor"
+> {
+  const phases = ["plan", "run", "test", "review", "package", "apidoc", "submit", "merge", "archive"];
+  const ordered = [...events].sort((left, right) => {
+    if (left.planEvent !== null && right.planEvent !== null) {
+      return phases.indexOf(left.planEvent.phase) - phases.indexOf(right.planEvent.phase) ||
+        left.planEvent.attempt - right.planEvent.attempt ||
+        left.planEvent.producer_seq - right.planEvent.producer_seq || left.eventId.localeCompare(right.eventId);
+    }
+    return left.serverCursor - right.serverCursor || left.eventId.localeCompare(right.eventId);
+  });
+  let runStatus: RunStatus = "running";
+  let currentPhase: string | null = null;
+  for (const event of ordered) {
+    currentPhase = event.phase ?? currentPhase;
+    runStatus = deriveRunStatus(runStatus, event.eventType, {
+      ...event.payload,
+      phase: event.phase
+    });
+  }
+  const last = ordered.at(-1) ?? null;
+  const terminal = runStatus === "running"
+    ? null
+    : ordered.findLast((event) => isRunTerminalEvent(event.eventType)) ?? null;
+  return {
+    startedAt: ordered[0]?.occurredAt ?? null,
+    lastEventAt: last?.occurredAt ?? null,
+    currentPhase,
+    runStatus,
+    endedAt: terminal?.occurredAt ?? null,
+    serverCursor: events.reduce((maximum, event) => Math.max(maximum, event.serverCursor), 0)
+  };
 }
 
 export interface RunPhaseSummary {
@@ -711,6 +786,9 @@ export function publicRun(
     run_id: run.runId,
     project_id: run.projectId,
     change_key: run.changeKey,
+    lifecycle_kind: run.lifecycleKind,
+    branch_name: run.branchName,
+    source_version: run.sourceVersion,
     title: run.title,
     run_status: run.runStatus,
     connection_status: connectionStatus,

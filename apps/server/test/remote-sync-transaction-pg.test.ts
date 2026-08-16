@@ -61,6 +61,7 @@ class FakeClient {
   readonly state = {
     receipt: null as Record<string, unknown> | null,
     pointer: null as Record<string, unknown> | null,
+    activeLease: null as Record<string, unknown> | null,
     committed: false,
   };
   failOnFileInsert = false;
@@ -82,6 +83,7 @@ class FakeClient {
       if (this.beforeTransaction !== null) {
         this.state.receipt = this.beforeTransaction.receipt;
         this.state.pointer = this.beforeTransaction.pointer;
+        this.state.activeLease = this.beforeTransaction.activeLease;
         this.state.committed = this.beforeTransaction.committed;
         this.beforeTransaction = null;
       }
@@ -91,6 +93,11 @@ class FakeClient {
       return this.state.receipt === null || this.state.receipt.idempotency_key !== values?.[2]
         ? { rowCount: 0, rows: [] }
         : { rowCount: 1, rows: [this.state.receipt] };
+    }
+    if (/FROM remote_sync_http_active_leases/u.test(text)) {
+      return this.state.activeLease === null
+        ? { rowCount: 0, rows: [] }
+        : { rowCount: 1, rows: [this.state.activeLease] };
     }
     if (/FROM remote_sync_branch_pointers/u.test(text)) {
       return this.state.pointer === null ? { rowCount: 0, rows: [] } : { rowCount: 1, rows: [this.state.pointer] };
@@ -249,6 +256,41 @@ describe("PostgreSQL Remote Sync transaction adapter", () => {
     await expect(snapshotConflict.commitSnapshot(input())).resolves.toEqual({
       outcome: "conflict", reason_code: "BRANCH_SNAPSHOT_IDENTITY_CONFLICT"
     });
+  });
+
+  it("fences a stale prepared lease before any snapshot write after release and reacquire", async () => {
+    const client = new FakeClient();
+    const stale = input();
+    const staleLease = {
+      schema_version: 1 as const,
+      lease_id: "lease_old",
+      lease_token: `lease_${"A".repeat(43)}`,
+      generation: 1,
+      project_id: stale.source.project_id,
+      branch_name: stale.source.branch_name,
+      actor_id: stale.source.actor_id,
+      expires_at: "2026-08-15T02:00:00.000Z",
+    };
+    const fenced = { ...stale, lease_fence: staleLease };
+    client.state.activeLease = {
+      lease_id: "lease_new",
+      lease_token: `lease_${"B".repeat(43)}`,
+      generation: 2,
+      expires_at: "2026-08-15T03:00:00.000Z",
+      source_json: JSON.stringify(stale.source),
+    };
+    const port = createPgRemoteSyncCommitPort({
+      pool: poolFor(client) as never,
+      now: () => new Date("2026-08-15T01:00:00.000Z"),
+    });
+
+    await expect(port.commitSnapshot(fenced)).resolves.toEqual({
+      outcome: "conflict",
+      reason_code: "BRANCH_SNAPSHOT_LEASE_FENCED",
+    });
+    expect(client.queries.some((query) => /INSERT INTO (branch_snapshots|remote_sync_artifacts|remote_sync_versions|remote_sync_branch_pointers|remote_sync_commit_receipts)/u.test(query.text))).toBe(false);
+    expect(client.queries.findIndex((query) => /remote_sync_http_active_leases/u.test(query.text)))
+      .toBeGreaterThan(client.queries.findIndex((query) => /pg_advisory_xact_lock/u.test(query.text)));
   });
 
   it.each([

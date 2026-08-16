@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 0,
+  "projectId": "prj_demo",
+  "page": "files",
+  "items": [
+    { "path": ".harness/state/runs/run_legacy/events.ndjson", "content": "legacy monitor input is read-only" }
+  ]
+}

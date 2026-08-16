@@ -223,4 +223,100 @@ describe("run monitoring (P4)", () => {
     expect((await heartbeat("番茄钟计时器")).json().run.title).toBe("番茄钟计时器");
     expect((await heartbeat("pomodoro-timer")).json().run.title).toBe("番茄钟计时器");
   });
+
+  it("persists canonical change identity and rejects run-id drift", async () => {
+    const canonical = {
+      protocol_version: "hunter-progress-sync/v1",
+      run_id: "run_stage12_http",
+      change_key: "stage12_http",
+      lifecycle_kind: "change",
+      branch_name: "feature/stage12-http",
+      source_version: "plan-event-bundle/v1",
+      events: [{
+        event_id: `plan_event:${"a".repeat(64)}`,
+        producer_seq: 1,
+        event_type: "phase_started",
+        phase: "plan",
+        attempt: 1,
+        occurred_at: "2026-08-13T10:00:00Z",
+        idempotency_key: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        summary_zh: "规划阶段已开始",
+        payload: {}
+      }]
+    };
+    const accepted = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectId}/runs/events:batch`,
+      headers: { authorization: "Bearer api-token" },
+      payload: canonical
+    });
+    expect(accepted.statusCode).toBe(200);
+    expect(accepted.json().run).toMatchObject({
+      lifecycle_kind: "change",
+      branch_name: "feature/stage12-http",
+      source_version: "plan-event-bundle/v1"
+    });
+    for (const payload of [
+      { ...canonical, run_id: "run_branch_too_long", change_key: "branch_too_long",
+        branch_name: "b".repeat(513) },
+      { ...canonical, run_id: "run_summary_too_long", change_key: "summary_too_long",
+        events: [{ ...canonical.events[0], event_id: `plan_event:${"b".repeat(64)}`,
+          summary_zh: "摘".repeat(2049) }] },
+      { ...canonical, run_id: "run_ref_too_long", change_key: "ref_too_long",
+        events: [{ ...canonical.events[0], event_id: `plan_event:${"c".repeat(64)}`,
+          detail_ref: "r".repeat(513) }] }
+    ]) {
+      const rejected = await app.inject({ method: "POST",
+        url: `/api/v1/projects/${projectId}/runs/events:batch`,
+        headers: { authorization: "Bearer api-token" }, payload });
+      expect(rejected.statusCode).toBe(400);
+    }
+
+    const drift = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectId}/runs/events:batch`,
+      headers: { authorization: "Bearer api-token" },
+      payload: { ...canonical, branch_name: "feature/hostile-drift", events: [] }
+    });
+    expect(drift.statusCode).toBe(409);
+    expect(await runStore.getRun(projectId, "run_stage12_http")).toMatchObject({
+      branchName: "feature/stage12-http"
+    });
+  });
+
+  it("derives Stage 12 terminal status from machine event types", async () => {
+    const base = {
+      protocol_version: "hunter-progress-sync/v1",
+      run_id: "run_stage12_terminal",
+      change_key: "stage12_terminal",
+      lifecycle_kind: "change",
+      branch_name: "feature/stage12-terminal",
+      source_version: "plan-event-bundle/v1"
+    };
+    let identity = 0;
+    const event = (_event_id: string, producer_seq: number, event_type: string) => ({
+      event_id: `plan_event:${(++identity).toString(16).padStart(64, "0")}`,
+      producer_seq, event_type, phase: "plan", attempt: 1,
+      occurred_at: `2026-08-13T10:00:0${producer_seq}Z`,
+      idempotency_key: `sha256:${producer_seq.toString(16).padStart(64, "0")}`,
+      payload: {}
+    });
+    const success = await app.inject({ method: "POST",
+      url: `/api/v1/projects/${projectId}/runs/events:batch`,
+      headers: { authorization: "Bearer api-token" },
+      payload: { ...base, events: [event("plan_event:start_terminal", 1, "phase_started"),
+        event("plan_event:end_terminal", 2, "phase_ended")] } });
+    expect(success.json().run).toMatchObject({ run_status: "succeeded", current_phase: "plan" });
+
+    const retryFailed = await app.inject({ method: "POST",
+      url: `/api/v1/projects/${projectId}/runs/events:batch`,
+      headers: { authorization: "Bearer api-token" },
+      payload: { ...base, run_id: "run_stage12_failed", change_key: "stage12_failed",
+        events: [event("plan_event:start_failed", 1, "phase_started"),
+          event("plan_event:validation_failed", 2, "validation_failed"),
+          event("plan_event:end_failed", 3, "phase_ended")] } });
+    expect(retryFailed.json().run).toMatchObject({
+      run_status: "failed", ended_at: "2026-08-13T10:00:03Z"
+    });
+  });
 });

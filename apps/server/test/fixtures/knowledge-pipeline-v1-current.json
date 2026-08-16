@@ -1,0 +1,60 @@
+{
+  "request_id": "archive_request:dfed6b39e027af82074c2571249e0574c20c885426c9cbc4315898d1360b475e",
+  "project_id": "prj_06a_fixture",
+  "change_key": "knowledge-pipeline-v1",
+  "archive_id": "arc_06a_fixture",
+  "project_version": "pv_06a_fixture",
+  "package_schema_version": 2,
+  "archive_schema_version": 2,
+  "extractor_version": "extractor-v1",
+  "prompt_version": "prompt-v1",
+  "index_schema_version": "knowledge-index-v1",
+  "expected_change_projection": {
+    "schema_version": 1,
+    "status": "queued",
+    "attempt": 1,
+    "project_generation": 1,
+    "generation": 1
+  },
+  "knowledge_candidates": [
+    {
+      "schema_version": 1,
+      "candidate_id": "kc_06a_fixture",
+      "source_change_key": "knowledge-pipeline-v1",
+      "content_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "confidence": 0.9,
+      "provenance": {
+        "source_kind": "archive",
+        "source_ref": "arc_06a_fixture",
+        "producer": "archive-engine",
+        "producer_version": "2",
+        "created_at": "2026-08-13T01:00:00.000Z"
+      },
+      "source_refs": ["summary/change-summary.json#decision-1"],
+      "summary": "Use a generation fence before publishing extracted knowledge.",
+      "reusability_scope": "Server-side asynchronous indexing",
+      "status": "pending"
+    }
+  ],
+  "project_content_candidates": [
+    {
+      "schema_version": 1,
+      "candidate_id": "pcc_06a_fixture",
+      "source_change_key": "knowledge-pipeline-v1",
+      "content_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "confidence": 0.8,
+      "provenance": {
+        "source_kind": "archive",
+        "source_ref": "arc_06a_fixture",
+        "producer": "archive-engine",
+        "producer_version": "2",
+        "created_at": "2026-08-13T01:00:00.000Z"
+      },
+      "candidate_type": "rule",
+      "evidence_refs": ["attestations/verification.json#queue-test"],
+      "rationale": "Protect newer index generations from stale workers.",
+      "proposed_content": "Publish knowledge only through a generation-aware index port.",
+      "status": "pending"
+    }
+  ]
+}

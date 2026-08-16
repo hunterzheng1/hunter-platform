@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 0,
+  "projectId": "prj_stage13",
+  "page": "files",
+  "items": [
+    { "path": "AGENTS.md", "content": "legacy body remains read-only" }
+  ]
+}

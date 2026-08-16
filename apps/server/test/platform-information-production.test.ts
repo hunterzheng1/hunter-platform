@@ -1,0 +1,105 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Pool } from "pg";
+
+import { createProductionPlatformInformationFromEnvironment } from
+  "../src/platform-information/production.js";
+import { MemoryRunStore } from "../src/runs/memory-store.js";
+
+describe("production Platform Information export lifecycle", () => {
+  const roots: string[] = [];
+  afterEach(async () => {
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
+  it("holds one database-wide export owner and releases it only after CAS close", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "hunter-export-production-"));
+    roots.push(parent);
+    const releaseOwner = vi.fn();
+    const releaseRejected = vi.fn();
+    const ownerQuery = vi.fn().mockResolvedValueOnce({ rows: [{ locked: true }] })
+      .mockResolvedValue({ rows: [{ unlocked: true }] });
+    const rejectedQuery = vi.fn().mockResolvedValue({ rows: [{ locked: false }] });
+    const connect = vi.fn()
+      .mockResolvedValueOnce({ query: ownerQuery, release: releaseOwner })
+      .mockResolvedValueOnce({ query: rejectedQuery, release: releaseRejected });
+    const pool = { connect } as unknown as Pool;
+    const options = { pool, runStore: new MemoryRunStore(),
+      platformInformationExportRoot: join(parent, "cas") };
+
+    const active = await createProductionPlatformInformationFromEnvironment(options);
+    await expect(createProductionPlatformInformationFromEnvironment(options))
+      .rejects.toThrow("PLATFORM_INFORMATION_EXPORT_SINGLE_INSTANCE_REQUIRED");
+    expect(releaseRejected).toHaveBeenCalledOnce();
+    expect(releaseOwner).not.toHaveBeenCalled();
+
+    await active.export_close?.();
+    expect(ownerQuery).toHaveBeenLastCalledWith("SELECT pg_advisory_unlock($1,$2)",
+      [0x48554e54, 0x45585054]);
+    expect(releaseOwner).toHaveBeenCalledOnce();
+  });
+
+  it("composes project knowledge independently with its own cursor secret", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    const pool = { query } as unknown as Pool;
+    const adapters = await createProductionPlatformInformationFromEnvironment({
+      pool,
+      runStore: new MemoryRunStore(),
+      environment: {
+        HUNTER_PROJECT_KNOWLEDGE_CURSOR_SECRET: "knowledge-secret-012345678901234"
+      }
+    });
+
+    expect(adapters.projectKnowledge).toBeDefined();
+    const result = await adapters.projectKnowledge?.queryPage(JSON.stringify({
+      schema_version: 1,
+      contract_kind: "query",
+      view: "project_knowledge",
+      project_id: "prj_knowledge",
+      query_scope: {
+        actor_id: "actor_knowledge",
+        accessible_project_ids: ["prj_knowledge"],
+        content_types: ["knowledge_entry"]
+      },
+      limit: 10,
+      cursor: null,
+      cursor_verification: "server_port_required",
+      sort: "extracted_at_desc_knowledge_id_asc"
+    }));
+    expect(result).toMatchObject({ ok: true, value: { page_state: "empty" } });
+    expect(query).toHaveBeenCalledOnce();
+  });
+
+  it("composes archive-backed change records without claiming document readiness", async () => {
+    const query = vi.fn().mockResolvedValue({ rows: [] });
+    const adapters = await createProductionPlatformInformationFromEnvironment({
+      pool: { query } as unknown as Pool,
+      runStore: new MemoryRunStore(),
+      environment: {
+        HUNTER_CHANGE_RECORDS_CURSOR_SECRET: "change-secret-012345678901234567"
+      }
+    });
+
+    expect(adapters.changeRecords).toBeDefined();
+    const result = await adapters.changeRecords?.queryPage(JSON.stringify({
+      schema_version: 1,
+      contract_kind: "query",
+      view: "change_records",
+      project_id: "prj_change",
+      query_scope: {
+        actor_id: "actor_change",
+        accessible_project_ids: ["prj_change"],
+        content_types: ["change_document", "archive_package", "project_content_candidate"]
+      },
+      limit: 10,
+      cursor: null,
+      cursor_verification: "server_port_required",
+      sort: "archived_at_desc_change_key_asc"
+    }));
+    expect(result).toMatchObject({ ok: true, value: { page_state: "empty" } });
+    expect(query).toHaveBeenCalledOnce();
+  });
+});

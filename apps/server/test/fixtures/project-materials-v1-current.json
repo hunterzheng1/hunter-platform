@@ -1,0 +1,75 @@
+{
+  "query": {
+    "schema_version": 1,
+    "contract_kind": "query",
+    "view": "project_materials",
+    "project_id": "prj_alpha",
+    "query_scope": {
+      "actor_id": "actor_alpha",
+      "accessible_project_ids": ["prj_alpha"],
+      "content_types": ["config", "rule", "architecture", "instruction"]
+    },
+    "limit": 5,
+    "cursor": null,
+    "cursor_verification": "server_port_required",
+    "sort": "category_asc_path_asc_version_desc"
+  },
+  "source_page": {
+    "schema_version": 1,
+    "project_id": "prj_alpha",
+    "page_state": "ready",
+    "items": [
+      {
+        "material_id": "material_constraint",
+        "content_type": "rule",
+        "category": "architecture_constraint",
+        "path": ".harness/rules/architecture.md",
+        "blob_hash": "sha256:2eb6d308378bcc92621e5396ffc6398ce0eed15c896d60504010f4c25cf78189",
+        "snapshot_version": "pv_0002",
+        "source_branch_name": "trunk",
+        "source_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sort_key": "architecture_constraint|.harness/rules/architecture.md|pv_0002"
+      },
+      {
+        "material_id": "material_map",
+        "content_type": "architecture",
+        "category": "architecture_map",
+        "path": ".harness/codebase/map/ARCHITECTURE.md",
+        "blob_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "snapshot_version": "pv_0002",
+        "source_branch_name": "trunk",
+        "source_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sort_key": "architecture_map|.harness/codebase/map/ARCHITECTURE.md|pv_0002"
+      }
+    ],
+    "next_cursor": "pmc_0123456789abcdef",
+    "failures": []
+  },
+  "detail_request": {
+    "schema_version": 1,
+    "contract_kind": "detail_request",
+    "view": "project_materials",
+    "project_id": "prj_alpha",
+    "query_scope": {
+      "actor_id": "actor_alpha",
+      "accessible_project_ids": ["prj_alpha"],
+      "content_types": ["config", "rule", "architecture", "instruction"]
+    },
+    "detail_id": "material_constraint"
+  },
+  "source_detail": {
+    "schema_version": 1,
+    "project_id": "prj_alpha",
+    "material_id": "material_constraint",
+    "content_type": "rule",
+    "category": "architecture_constraint",
+    "path": ".harness/rules/architecture.md",
+    "blob_hash": "sha256:2eb6d308378bcc92621e5396ffc6398ce0eed15c896d60504010f4c25cf78189",
+    "snapshot_version": "pv_0002",
+    "source_branch_name": "trunk",
+    "source_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "content": "# Architecture constraints\n\nDependencies point inward.\n",
+    "content_hash": "sha256:2eb6d308378bcc92621e5396ffc6398ce0eed15c896d60504010f4c25cf78189",
+    "media_type": "text/markdown"
+  }
+}

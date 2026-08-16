@@ -34,12 +34,21 @@ import type {
   NpmReleaseResponse,
   SemanticDocument,
   SemanticEdge,
-  SemanticOverview
+  SemanticOverview,
+  PlatformInformationPage,
+  PlatformInformationDetailResponse,
+  RestoreBranchFilesIntent,
+  RestoreBranchFilesPreviewReceipt,
+  RestoreBranchFilesConfirmationIntent,
+  RestoreBranchFilesConfirmedIntent,
+  PlatformInformationRetryExtractionHttpRequest,
+  KnowledgeExtractionRetryIntent
 } from "@hunter-harness/contracts";
 
 import { bootstrapSkills } from "./catalog";
 import { findDemoSourceSkill, sapFieldMapper } from "./demo-skills/sap-field-mapper";
 import { ApiClientError } from "./api";
+import { platformInformationErrorStatus, type PlatformInformationOperationName } from "./platform-information-api";
 import { mockChangeArchive } from "./mock-archive";
 import type {
   AiJobState,
@@ -744,6 +753,15 @@ function demoReadOnly(): never {
   throw new ApiClientError(403, "DEMO_READ_ONLY", "Demo mode is read-only and did not write server state.");
 }
 
+function platformInformationDemoUnavailable(
+  operationName: PlatformInformationOperationName,
+  message: string,
+): never {
+  const status = platformInformationErrorStatus(operationName, "PLATFORM_INFORMATION_UNAVAILABLE");
+  if (status === null) throw new Error(message);
+  throw new ApiClientError(status, "PLATFORM_INFORMATION_UNAVAILABLE", message);
+}
+
 function demoChecksToResult(checks: readonly SkillCheckItem[]): SkillCheckResult {
   const items: SkillCheckItem[] = checks.map((c) => ({
     id: c.id,
@@ -897,6 +915,64 @@ export class MockApiClient implements HunterApi {
   }>();
 
   async getDashboardOverview(): Promise<DashboardOverview> { return delay(clone(MOCK_DASHBOARD)); }
+
+  async listPlatformInformation(
+    projectId: string,
+    view: PlatformInformationPage["view"],
+  ): Promise<PlatformInformationPage> {
+    const sortByView: Record<PlatformInformationPage["view"], PlatformInformationPage["sort"]> = {
+      branch_monitor: "last_event_at_desc_run_id_asc",
+      branch_files: "uploaded_at_desc_snapshot_version_asc",
+      project_materials: "category_asc_path_asc_version_desc",
+      project_knowledge: "extracted_at_desc_knowledge_id_asc",
+      change_records: "archived_at_desc_change_key_asc",
+      version_records: "uploaded_at_desc_snapshot_version_asc",
+    };
+    return delay({
+      schema_version: 1,
+      contract_kind: "page",
+      view,
+      project_id: projectId,
+      page_state: "processing",
+      sort: sortByView[view],
+      items: [],
+      next_cursor: null,
+      failures: [],
+    });
+  }
+
+  async getPlatformInformationDetail(
+    _projectId: string,
+    _view: PlatformInformationPage["view"],
+    _detailId: string,
+  ): Promise<PlatformInformationDetailResponse> {
+    void _projectId; void _view; void _detailId;
+    return platformInformationDemoUnavailable("detail", "Platform information detail is unavailable in demo mode.");
+  }
+
+  async previewBranchFilesRestore(
+    _projectId: string,
+    _intent: RestoreBranchFilesIntent,
+  ): Promise<RestoreBranchFilesPreviewReceipt> {
+    void _projectId; void _intent;
+    return platformInformationDemoUnavailable("preview_restore", "Branch restore is unavailable in demo mode.");
+  }
+
+  async confirmBranchFilesRestore(
+    _projectId: string,
+    _body: { preview_receipt: RestoreBranchFilesPreviewReceipt; confirmation_intent: RestoreBranchFilesConfirmationIntent },
+  ): Promise<RestoreBranchFilesConfirmedIntent> {
+    void _projectId; void _body;
+    return platformInformationDemoUnavailable("confirm_restore", "Branch restore confirmation is unsupported in demo mode.");
+  }
+
+  async retryProjectKnowledgeExtraction(
+    _projectId: string,
+    _body: PlatformInformationRetryExtractionHttpRequest,
+  ): Promise<KnowledgeExtractionRetryIntent> {
+    void _projectId; void _body;
+    return platformInformationDemoUnavailable("retry_extraction", "Knowledge extraction retry is unavailable in demo mode.");
+  }
 
   async listSkills(): Promise<RegistrySkillDetail[]> {
     return delay(clone(MOCK_SKILLS));

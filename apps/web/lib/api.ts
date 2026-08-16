@@ -45,10 +45,25 @@ import {
   type WorkflowFamilyVersionSummary,
   type SemanticDocument,
   type SemanticEdge,
-  type SemanticOverview
+  type SemanticOverview,
+  PLATFORM_INFORMATION_HTTP_OPERATIONS,
+  type PlatformInformationPage,
+  type PlatformInformationDetailResponse,
+  type RestoreBranchFilesIntent,
+  type RestoreBranchFilesPreviewReceipt,
+  type RestoreBranchFilesConfirmationIntent,
+  type RestoreBranchFilesConfirmedIntent,
+  type PlatformInformationRetryExtractionHttpRequest,
+  type KnowledgeExtractionRetryIntent
 } from "@hunter-harness/contracts";
 
 import type { WebFileKind } from "./file-policy";
+import {
+  buildPlatformInformationListQuery,
+  buildPlatformInformationPath,
+  platformInformationErrorStatus,
+  platformInformationWire,
+} from "./platform-information-api";
 
 // 异步 AI 检查 job 状态（GET /api/v1/ai-jobs/:id 响应；与 server AiJobStore 对齐）
 export interface AiJobState {
@@ -416,6 +431,28 @@ export interface HunterApi {
     entryId: string,
     status: string
   ): Promise<{ entry_id: string; status: string; updated_at: string }>;
+  listPlatformInformation?(
+    projectId: string,
+    view: PlatformInformationPage["view"],
+    query?: { limit?: number; cursor?: string | null },
+  ): Promise<PlatformInformationPage>;
+  getPlatformInformationDetail?(
+    projectId: string,
+    view: PlatformInformationPage["view"],
+    detailId: string,
+  ): Promise<PlatformInformationDetailResponse>;
+  previewBranchFilesRestore?(
+    projectId: string,
+    intent: RestoreBranchFilesIntent,
+  ): Promise<RestoreBranchFilesPreviewReceipt>;
+  confirmBranchFilesRestore?(
+    projectId: string,
+    body: { preview_receipt: RestoreBranchFilesPreviewReceipt; confirmation_intent: RestoreBranchFilesConfirmationIntent },
+  ): Promise<RestoreBranchFilesConfirmedIntent>;
+  retryProjectKnowledgeExtraction?(
+    projectId: string,
+    body: PlatformInformationRetryExtractionHttpRequest,
+  ): Promise<KnowledgeExtractionRetryIntent>;
   listProjectRuns?(
     projectId: string,
     options?: { limit?: number; cursor?: string | null; status?: string }
@@ -808,6 +845,138 @@ export class HttpHunterApi implements HunterApi {
       "GET", "/api/v1/skills" + (query.size === 0 ? "" : "?" + query.toString())
     );
     return result.items;
+  }
+
+  private parsePlatformInformationResponse<T>(
+    operationName: keyof typeof PLATFORM_INFORMATION_HTTP_OPERATIONS,
+    schema: { safeParse(value: unknown): { success: true; data: T } | { success: false } },
+    value: unknown,
+  ): T {
+    const parsed = schema.safeParse(value);
+    if (!parsed.success) {
+      throw this.platformInformationClientError(
+        operationName,
+        "PLATFORM_INFORMATION_UNAVAILABLE",
+        "Platform information response did not match its contract.",
+      );
+    }
+    return parsed.data;
+  }
+
+  private platformInformationClientError(
+    operationName: keyof typeof PLATFORM_INFORMATION_HTTP_OPERATIONS,
+    code: string,
+    message: string,
+  ): ApiClientError {
+    const status = platformInformationErrorStatus(operationName, code);
+    if (status === null) throw new Error("platform information descriptor is missing client error " + code);
+    return new ApiClientError(status, code, message);
+  }
+
+  private async requestPlatformInformation(
+    operationName: keyof typeof PLATFORM_INFORMATION_HTTP_OPERATIONS,
+    path: string,
+    body?: unknown,
+  ): Promise<unknown> {
+    const operation = PLATFORM_INFORMATION_HTTP_OPERATIONS[operationName];
+    try {
+      return await this.request<unknown>(operation.method, path, body);
+    } catch (error) {
+      if (!(error instanceof ApiClientError) || error.status === 0) throw error;
+      if (platformInformationErrorStatus(operationName, error.code) !== error.status) {
+        throw new Error("platform information server returned an error outside its operation contract", { cause: error });
+      }
+      throw error;
+    }
+  }
+
+  async listPlatformInformation(
+    projectId: string,
+    view: PlatformInformationPage["view"],
+    input: { limit?: number; cursor?: string | null } = {},
+  ): Promise<PlatformInformationPage> {
+    const query = buildPlatformInformationListQuery(input);
+    if (query === null) throw this.platformInformationClientError("list", "VALIDATION_FAILED", "Platform information query is invalid.");
+    const path = buildPlatformInformationPath("list", { project_id: projectId, view });
+    const result = await this.requestPlatformInformation("list", path + "?" + query.toString());
+    return this.parsePlatformInformationResponse("list", platformInformationWire.listResponse, result);
+  }
+
+  async getPlatformInformationDetail(
+    projectId: string,
+    view: PlatformInformationPage["view"],
+    detailId: string,
+  ): Promise<PlatformInformationDetailResponse> {
+    const path = buildPlatformInformationPath("detail", { project_id: projectId, view, detail_id: detailId });
+    const result = await this.requestPlatformInformation("detail", path);
+    return this.parsePlatformInformationResponse("detail", platformInformationWire.detailResponse, result);
+  }
+
+  async previewBranchFilesRestore(
+    projectId: string,
+    intent: RestoreBranchFilesIntent,
+  ): Promise<RestoreBranchFilesPreviewReceipt> {
+    const body = platformInformationWire.previewRequest.safeParse(intent);
+    if (!body.success || body.data.project_id !== projectId) {
+      throw this.platformInformationClientError("preview_restore", "BRANCH_FILES_RESTORE_PREVIEW_INVALID", "Branch files restore preview is invalid.");
+    }
+    const path = buildPlatformInformationPath("preview_restore", { project_id: projectId });
+    const result = await this.requestPlatformInformation("preview_restore", path, body.data);
+    return this.parsePlatformInformationResponse("preview_restore", platformInformationWire.previewResponse, result);
+  }
+
+  async confirmBranchFilesRestore(
+    projectId: string,
+    body: { preview_receipt: RestoreBranchFilesPreviewReceipt; confirmation_intent: RestoreBranchFilesConfirmationIntent },
+  ): Promise<RestoreBranchFilesConfirmedIntent> {
+    let serialized: string;
+    try {
+      serialized = JSON.stringify(body);
+    } catch {
+      throw this.platformInformationClientError(
+        "confirm_restore",
+        "BRANCH_FILES_PULL_CONFIRMATION_INVALID",
+        "Branch files restore confirmation is invalid.",
+      );
+    }
+    const parsedBody = platformInformationWire.confirmRequest.safeParse(JSON.parse(serialized) as unknown);
+    if (!parsedBody.success) {
+      throw this.platformInformationClientError(
+        "confirm_restore",
+        "BRANCH_FILES_PULL_CONFIRMATION_INVALID",
+        "Branch files restore confirmation is invalid.",
+      );
+    }
+    const stableBody = parsedBody.data;
+    // Browser validation proves body-internal consistency only. The Server adds
+    // the authenticated actor as the authoritative client_id outer anchor.
+    const validated = platformInformationWire.confirmSemanticRequest(serialized, {
+      project_id: projectId,
+      client_id: stableBody.preview_receipt.source_ref.client_id,
+    });
+    if (!validated.ok) {
+      throw this.platformInformationClientError(
+        "confirm_restore",
+        validated.reason_code,
+        "Branch files restore confirmation is invalid.",
+      );
+    }
+    const path = buildPlatformInformationPath("confirm_restore", { project_id: projectId });
+    const result = await this.requestPlatformInformation("confirm_restore", path, stableBody);
+    return this.parsePlatformInformationResponse("confirm_restore", platformInformationWire.confirmResponse, result);
+  }
+
+  async retryProjectKnowledgeExtraction(
+    projectId: string,
+    input: PlatformInformationRetryExtractionHttpRequest,
+  ): Promise<KnowledgeExtractionRetryIntent> {
+    const body = platformInformationWire.retryRequest.safeParse(input);
+    if (!body.success) {
+      throw this.platformInformationClientError("retry_extraction", "KNOWLEDGE_EXTRACTION_RETRY_REQUEST_INVALID", "Knowledge extraction retry request is invalid.");
+    }
+    const path = buildPlatformInformationPath("retry_extraction", { project_id: projectId });
+    const result = await this.requestPlatformInformation("retry_extraction", path, body.data);
+    return this.parsePlatformInformationResponse("retry_extraction", platformInformationWire.retryResponse, result);
   }
 
   async getSkillCatalogOrder(): Promise<SkillCatalogOrder> {

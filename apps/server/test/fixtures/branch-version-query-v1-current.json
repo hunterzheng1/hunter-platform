@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "contract_kind": "query",
+  "view": "branch_files",
+  "project_id": "prj_stage13",
+  "query_scope": {
+    "actor_id": "actor_owner",
+    "accessible_project_ids": ["prj_stage13"],
+    "content_types": ["branch_file"]
+  },
+  "limit": 20,
+  "cursor": null,
+  "cursor_verification": "server_port_required",
+  "sort": "uploaded_at_desc_snapshot_version_asc"
+}

@@ -1,5 +1,9 @@
+import { canonicalJson } from "@hunter-harness/contracts";
+
 import {
-  deriveRunStatus,
+  deriveCanonicalRunAggregate,
+  decodeRunCursor,
+  encodeRunCursor,
   type IngestEventInput,
   type IngestItemResult,
   type RunEventRecord,
@@ -17,9 +21,17 @@ export class MemoryRunStore implements RunStore {
     projectId: string;
     changeKey: string;
     title?: string;
+    lifecycleKind: "change" | "legacy_unmarked";
+    branchName: string | null;
+    sourceVersion: string | null;
   }): Promise<RunRecord> {
     const existing = this.runs.get(input.runId);
     if (existing !== undefined) {
+      if (existing.projectId !== input.projectId || existing.changeKey !== input.changeKey ||
+          existing.lifecycleKind !== input.lifecycleKind || existing.branchName !== input.branchName ||
+          existing.sourceVersion !== input.sourceVersion) {
+        throw new Error("RUN_IDENTITY_CONFLICT");
+      }
       const candidate = input.title?.trim();
       if (
         existing.projectId === input.projectId &&
@@ -39,12 +51,15 @@ export class MemoryRunStore implements RunStore {
       runId: input.runId,
       projectId: input.projectId,
       changeKey: input.changeKey,
+      lifecycleKind: input.lifecycleKind,
+      branchName: input.branchName,
+      sourceVersion: input.sourceVersion,
       title: input.title ?? input.changeKey,
       runStatus: "running",
       connectionStatus: "offline",
       syncCompleteness: "pending",
       currentPhase: null,
-      startedAt: now,
+      startedAt: null,
       endedAt: null,
       lastEventAt: null,
       lastHeartbeatAt: null,
@@ -81,9 +96,8 @@ export class MemoryRunStore implements RunStore {
         (row) => row.projectId === input.projectId && row.eventId === event.eventId
       );
       if (byId !== undefined) {
-        const same =
-          byId.producerSeq === event.producerSeq &&
-          byId.eventType === event.eventType;
+        const same = byId.producerSeq === event.producerSeq && byId.eventType === event.eventType &&
+          (run.lifecycleKind !== "change" || canonicalJson(byId.planEvent) === canonicalJson(event.planEvent));
         items.push({
           id: event.eventId,
           status: same ? "duplicate_accepted" : "id_conflict",
@@ -93,7 +107,9 @@ export class MemoryRunStore implements RunStore {
         continue;
       }
       const bySeq = this.events.find(
-        (row) => row.runId === input.runId && row.producerSeq === event.producerSeq
+        (row) => row.runId === input.runId && row.producerSeq === event.producerSeq &&
+          (run.lifecycleKind !== "change" || row.planEvent?.phase === event.planEvent?.phase &&
+            row.planEvent?.attempt === event.planEvent?.attempt)
       );
       if (bySeq !== undefined) {
         items.push({
@@ -115,21 +131,10 @@ export class MemoryRunStore implements RunStore {
         phase: event.phase ?? null,
         occurredAt: event.occurredAt,
         payload: event.payload,
+        planEvent: event.planEvent ?? null,
         receivedAt: now
       };
       this.events.push(record);
-      run.serverCursor = this.cursor;
-      run.lastEventAt = event.occurredAt;
-      run.currentPhase = event.phase ?? run.currentPhase;
-      run.runStatus = deriveRunStatus(run.runStatus, event.eventType, {
-        ...event.payload,
-        phase: event.phase
-      });
-      if (run.runStatus === "running") {
-        run.endedAt = null;
-      } else if (run.endedAt === null) {
-        run.endedAt = event.occurredAt;
-      }
       run.connectionStatus = "online";
       run.syncCompleteness = "pending";
       run.updatedAt = now;
@@ -141,11 +146,11 @@ export class MemoryRunStore implements RunStore {
       });
     }
     // Contiguous seq from 1 ⇒ complete; otherwise pending/gapped.
-    const seqs = this.events
-      .filter((row) => row.runId === input.runId)
-      .map((row) => row.producerSeq)
-      .sort((a, b) => a - b);
-    run.syncCompleteness = isContiguous(seqs) ? "complete" : "gapped";
+    const runEvents = this.events.filter((row) => row.runId === input.runId);
+    Object.assign(run, deriveCanonicalRunAggregate(
+      runEvents
+    ));
+    run.syncCompleteness = isContiguous(runEvents) ? "complete" : "gapped";
     return { items, run };
   }
 
@@ -166,21 +171,20 @@ export class MemoryRunStore implements RunStore {
     limit?: number;
     cursor?: string | null;
     status?: string;
+    lifecycleKind?: "change" | "legacy_unmarked";
   } = {}): Promise<{ items: RunRecord[]; nextCursor: string | null; total: number }> {
     const limit = options.limit ?? 50;
-    const offset = options.cursor === null || options.cursor === undefined || options.cursor === ""
-      ? 0
-      : Number.parseInt(Buffer.from(options.cursor, "base64url").toString("utf8"), 10);
-    if (!Number.isSafeInteger(offset) || offset < 0) {
-      throw new Error("INVALID_CURSOR");
-    }
+    const offset = decodeRunCursor(options.cursor);
     const filtered = [...this.runs.values()]
       .filter((run) => run.projectId === projectId)
       .filter((run) => options.status === undefined || run.runStatus === options.status)
+      .filter((run) => options.lifecycleKind === undefined || run.lifecycleKind === options.lifecycleKind)
       .sort((a, b) => {
-        const left = a.startedAt ?? a.lastEventAt ?? a.createdAt;
-        const right = b.startedAt ?? b.lastEventAt ?? b.createdAt;
-        return right.localeCompare(left) || b.runId.localeCompare(a.runId);
+        if (a.lastEventAt === null && b.lastEventAt !== null) return 1;
+        if (a.lastEventAt !== null && b.lastEventAt === null) return -1;
+        const timeDifference = Date.parse(b.lastEventAt ?? "") - Date.parse(a.lastEventAt ?? "");
+        if (Number.isFinite(timeDifference) && timeDifference !== 0) return timeDifference;
+        return a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0;
       });
     const items = filtered.slice(offset, offset + limit);
     const nextOffset = offset + items.length;
@@ -188,7 +192,7 @@ export class MemoryRunStore implements RunStore {
       items,
       total: filtered.length,
       nextCursor: nextOffset < filtered.length
-        ? Buffer.from(String(nextOffset)).toString("base64url")
+        ? encodeRunCursor(nextOffset)
         : null
     };
   }
@@ -212,11 +216,18 @@ export class MemoryRunStore implements RunStore {
   }
 }
 
-function isContiguous(seqs: number[]): boolean {
-  if (seqs.length === 0) return true;
-  if (seqs[0] !== 1) return false;
-  for (let i = 1; i < seqs.length; i += 1) {
-    if ((seqs[i] ?? 0) !== (seqs[i - 1] ?? 0) + 1) return false;
+function isContiguous(events: RunEventRecord[]): boolean {
+  const groups = new Map<string, number[]>();
+  for (const event of events) {
+    const key = event.planEvent === null ? "legacy" : `${event.planEvent.phase}:${event.planEvent.attempt}`;
+    groups.set(key, [...(groups.get(key) ?? []), event.producerSeq]);
+  }
+  for (const seqs of groups.values()) {
+    seqs.sort((a, b) => a - b);
+    if (seqs[0] !== 1) return false;
+    for (let i = 1; i < seqs.length; i += 1) {
+      if ((seqs[i] ?? 0) !== (seqs[i - 1] ?? 0) + 1) return false;
+    }
   }
   return true;
 }

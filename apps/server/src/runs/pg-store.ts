@@ -1,7 +1,10 @@
 import type { Pool, QueryResultRow } from "pg";
+import { canonicalJson } from "@hunter-harness/contracts";
 
 import {
-  deriveRunStatus,
+  deriveCanonicalRunAggregate,
+  decodeRunCursor,
+  encodeRunCursor,
   type IngestEventInput,
   type IngestItemResult,
   type RunEventRecord,
@@ -13,10 +16,16 @@ import {
 } from "./store.js";
 
 function runFrom(row: QueryResultRow): RunRecord {
+  const markedChange = row.lifecycle_kind === "change" &&
+    typeof row.branch_name === "string" && row.branch_name.length > 0 &&
+    row.source_version === "plan-event-bundle/v1";
   return {
     runId: String(row.run_id),
     projectId: String(row.project_id),
     changeKey: String(row.change_key),
+    lifecycleKind: markedChange ? "change" : "legacy_unmarked",
+    branchName: markedChange ? String(row.branch_name) : null,
+    sourceVersion: markedChange ? String(row.source_version) : null,
     title: row.title == null ? null : String(row.title),
     runStatus: String(row.run_status) as RunStatus,
     connectionStatus: String(row.connection_status) as ConnectionStatus,
@@ -45,6 +54,7 @@ function eventFrom(row: QueryResultRow): RunEventRecord {
     phase: row.phase == null ? null : String(row.phase),
     occurredAt: new Date(row.occurred_at).toISOString(),
     payload: (row.payload ?? {}) as Record<string, unknown>,
+    planEvent: row.plan_event == null ? null : row.plan_event as RunEventRecord["planEvent"],
     receivedAt: new Date(row.received_at).toISOString()
   };
 }
@@ -57,33 +67,34 @@ export class PgRunStore implements RunStore {
     projectId: string;
     changeKey: string;
     title?: string;
+    lifecycleKind: "change" | "legacy_unmarked";
+    branchName: string | null;
+    sourceVersion: string | null;
   }): Promise<RunRecord> {
     const result = await this.pool.query(
-      `INSERT INTO runs(run_id, project_id, change_key, title, started_at)
-       VALUES ($1, $2, $3, $4, now())
-       ON CONFLICT (run_id) DO UPDATE SET
-         title = CASE
-           WHEN runs.project_id = EXCLUDED.project_id
-             AND runs.change_key = EXCLUDED.change_key
-             AND (runs.title IS NULL OR runs.title = runs.change_key)
-             AND EXCLUDED.title IS NOT NULL
-             AND EXCLUDED.title <> EXCLUDED.change_key
-           THEN EXCLUDED.title
-           ELSE runs.title
-         END,
-         updated_at = CASE
-           WHEN runs.project_id = EXCLUDED.project_id
-             AND runs.change_key = EXCLUDED.change_key
-             AND (runs.title IS NULL OR runs.title = runs.change_key)
-             AND EXCLUDED.title IS NOT NULL
-             AND EXCLUDED.title <> EXCLUDED.change_key
-           THEN now()
-           ELSE runs.updated_at
-         END
+      `INSERT INTO runs(run_id, project_id, change_key, title, started_at,
+         lifecycle_kind, branch_name, source_version)
+       VALUES ($1, $2, $3, $4, NULL, $5, $6, $7)
+       ON CONFLICT (run_id) DO UPDATE SET run_id = runs.run_id
        RETURNING *`,
-      [input.runId, input.projectId, input.changeKey, input.title ?? input.changeKey]
+      [input.runId, input.projectId, input.changeKey, input.title ?? input.changeKey,
+        input.lifecycleKind, input.branchName, input.sourceVersion]
     );
-    return runFrom(result.rows[0] ?? {});
+    let run = runFrom(result.rows[0] ?? {});
+    if (run.projectId !== input.projectId || run.changeKey !== input.changeKey ||
+        run.lifecycleKind !== input.lifecycleKind || run.branchName !== input.branchName ||
+        run.sourceVersion !== input.sourceVersion) throw new Error("RUN_IDENTITY_CONFLICT");
+    const candidate = input.title?.trim();
+    if ((run.title === null || run.title === run.changeKey) && candidate !== undefined &&
+        candidate !== "" && candidate !== input.changeKey) {
+      const promoted = await this.pool.query(
+        `UPDATE runs SET title = $2, updated_at = now()
+         WHERE run_id = $1 AND (title IS NULL OR title = change_key) RETURNING *`,
+        [input.runId, candidate]
+      );
+      run = runFrom(promoted.rows[0] ?? result.rows[0] ?? {});
+    }
+    return run;
   }
 
   async ingestBatch(input: {
@@ -118,7 +129,8 @@ export class PgRunStore implements RunStore {
         );
         if ((existing.rowCount ?? 0) > 0) {
           const row = eventFrom(existing.rows[0] ?? {});
-          const same = row.producerSeq === event.producerSeq && row.eventType === event.eventType;
+          const same = row.producerSeq === event.producerSeq && row.eventType === event.eventType &&
+            (run.lifecycleKind !== "change" || canonicalJson(row.planEvent) === canonicalJson(event.planEvent));
           items.push({
             id: event.eventId,
             status: same ? "duplicate_accepted" : "id_conflict",
@@ -128,8 +140,10 @@ export class PgRunStore implements RunStore {
           continue;
         }
         const seqConflict = await client.query(
-          `SELECT 1 FROM run_events WHERE run_id = $1 AND producer_seq = $2`,
-          [input.runId, event.producerSeq]
+          `SELECT 1 FROM run_events WHERE run_id = $1 AND producer_seq = $2
+             AND ($3::boolean = false OR phase = $4 AND (plan_event->>'attempt')::bigint = $5)`,
+          [input.runId, event.producerSeq, run.lifecycleKind === "change", event.planEvent?.phase ?? null,
+            event.planEvent?.attempt ?? null]
         );
         if ((seqConflict.rowCount ?? 0) > 0) {
           items.push({
@@ -142,8 +156,8 @@ export class PgRunStore implements RunStore {
         }
         const inserted = await client.query(
           `INSERT INTO run_events(
-             project_id, run_id, event_id, producer_seq, event_type, phase, occurred_at, payload
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)
+             project_id, run_id, event_id, producer_seq, event_type, phase, occurred_at, payload, plan_event
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb)
            RETURNING *`,
           [
             input.projectId,
@@ -153,32 +167,11 @@ export class PgRunStore implements RunStore {
             event.eventType,
             event.phase ?? null,
             event.occurredAt,
-            JSON.stringify(event.payload)
+            JSON.stringify(event.payload),
+            event.planEvent === undefined ? null : JSON.stringify(event.planEvent)
           ]
         );
         const record = eventFrom(inserted.rows[0] ?? {});
-        const nextStatus = deriveRunStatus(run.runStatus, event.eventType, {
-          ...event.payload,
-          phase: event.phase
-        });
-        const updated = await client.query(
-          `UPDATE runs SET
-             server_cursor = $2,
-             last_event_at = $3,
-             current_phase = COALESCE($4, current_phase),
-             run_status = $5,
-             ended_at = CASE
-               WHEN $5 = 'running' THEN NULL
-               WHEN $5 <> 'running' AND ended_at IS NULL THEN $3::timestamptz
-               ELSE ended_at
-             END,
-             connection_status = 'online',
-             updated_at = now()
-           WHERE run_id = $1
-           RETURNING *`,
-          [input.runId, record.serverCursor, event.occurredAt, event.phase ?? null, nextStatus]
-        );
-        run = runFrom(updated.rows[0] ?? {});
         items.push({
           id: event.eventId,
           status: "accepted",
@@ -187,16 +180,22 @@ export class PgRunStore implements RunStore {
         });
       }
 
-      const seqs = await client.query(
-        `SELECT producer_seq FROM run_events WHERE run_id = $1 ORDER BY producer_seq`,
+      const eventRows = await client.query(
+        `SELECT * FROM run_events WHERE run_id = $1 ORDER BY server_cursor`,
         [input.runId]
       );
-      const values = seqs.rows.map((row) => Number(row.producer_seq));
-      const completeness = isContiguous(values) ? "complete" : "gapped";
+      const storedEvents = eventRows.rows.map(eventFrom);
+      const completeness = isContiguous(storedEvents) ? "complete" : "gapped";
+      const aggregate = deriveCanonicalRunAggregate(storedEvents);
       const final = await client.query(
-        `UPDATE runs SET sync_completeness = $2, updated_at = now()
+        `UPDATE runs SET sync_completeness = $2, server_cursor = $3::bigint,
+           started_at = $4::timestamptz, last_event_at = $5::timestamptz,
+           current_phase = $6, run_status = $7, ended_at = $8::timestamptz,
+           connection_status = CASE WHEN $3::bigint > 0 THEN 'online' ELSE connection_status END,
+           updated_at = now()
          WHERE run_id = $1 RETURNING *`,
-        [input.runId, completeness]
+        [input.runId, completeness, aggregate.serverCursor, aggregate.startedAt,
+          aggregate.lastEventAt, aggregate.currentPhase, aggregate.runStatus, aggregate.endedAt]
       );
       run = runFrom(final.rows[0] ?? {});
       await client.query("COMMIT");
@@ -230,39 +229,46 @@ export class PgRunStore implements RunStore {
     limit?: number;
     cursor?: string | null;
     status?: string;
+    lifecycleKind?: "change" | "legacy_unmarked";
   } = {}): Promise<{ items: RunRecord[]; nextCursor: string | null; total: number }> {
     const limit = options.limit ?? 50;
-    const offset = options.cursor === null || options.cursor === undefined || options.cursor === ""
-      ? 0
-      : Number.parseInt(Buffer.from(options.cursor, "base64url").toString("utf8"), 10);
-    if (!Number.isSafeInteger(offset) || offset < 0) {
-      throw new Error("INVALID_CURSOR");
+    const offset = decodeRunCursor(options.cursor);
+    const countParameters: unknown[] = [projectId];
+    const countClauses = ["project_id = $1"];
+    if (options.status !== undefined) {
+      countParameters.push(options.status);
+      countClauses.push(`run_status = $${countParameters.length}`);
     }
-    const hasStatus = options.status !== undefined;
+    if (options.lifecycleKind !== undefined) {
+      countParameters.push(options.lifecycleKind);
+      countClauses.push(`lifecycle_kind = $${countParameters.length}`);
+    }
     const count = await this.pool.query(
-      hasStatus
-        ? `SELECT COUNT(*)::int AS total FROM runs WHERE project_id = $1 AND run_status = $2`
-        : `SELECT COUNT(*)::int AS total FROM runs WHERE project_id = $1`,
-      hasStatus ? [projectId, options.status] : [projectId]
+      `SELECT COUNT(*)::int AS total FROM runs WHERE ${countClauses.join(" AND ")}`,
+      countParameters
     );
+    const pageParameters: unknown[] = [projectId, limit + 1, offset];
+    const pageClauses = ["project_id = $1"];
+    if (options.status !== undefined) {
+      pageParameters.push(options.status);
+      pageClauses.push(`run_status = $${pageParameters.length}`);
+    }
+    if (options.lifecycleKind !== undefined) {
+      pageParameters.push(options.lifecycleKind);
+      pageClauses.push(`lifecycle_kind = $${pageParameters.length}`);
+    }
     const result = await this.pool.query(
-      hasStatus
-        ? `SELECT * FROM runs
-           WHERE project_id = $1 AND run_status = $4
-           ORDER BY COALESCE(started_at, last_event_at, created_at) DESC, run_id DESC
-           LIMIT $2 OFFSET $3`
-        : `SELECT * FROM runs
-           WHERE project_id = $1
-           ORDER BY COALESCE(started_at, last_event_at, created_at) DESC, run_id DESC
-           LIMIT $2 OFFSET $3`,
-      hasStatus ? [projectId, limit + 1, offset, options.status] : [projectId, limit + 1, offset]
+      `SELECT * FROM runs WHERE ${pageClauses.join(" AND ")}
+       ORDER BY last_event_at DESC NULLS LAST, run_id COLLATE "C" ASC
+       LIMIT $2 OFFSET $3`,
+      pageParameters
     );
     const rows = result.rows.slice(0, limit);
     return {
       items: rows.map(runFrom),
       total: Number(count.rows[0]?.total ?? 0),
       nextCursor: result.rows.length > limit
-        ? Buffer.from(String(offset + limit)).toString("base64url")
+        ? encodeRunCursor(offset + limit)
         : null
     };
   }
@@ -290,11 +296,18 @@ export class PgRunStore implements RunStore {
   }
 }
 
-function isContiguous(seqs: number[]): boolean {
-  if (seqs.length === 0) return true;
-  if (seqs[0] !== 1) return false;
-  for (let i = 1; i < seqs.length; i += 1) {
-    if ((seqs[i] ?? 0) !== (seqs[i - 1] ?? 0) + 1) return false;
+function isContiguous(events: RunEventRecord[]): boolean {
+  const groups = new Map<string, number[]>();
+  for (const event of events) {
+    const key = event.planEvent === null ? "legacy" : `${event.planEvent.phase}:${event.planEvent.attempt}`;
+    groups.set(key, [...(groups.get(key) ?? []), event.producerSeq]);
+  }
+  for (const seqs of groups.values()) {
+    seqs.sort((a, b) => a - b);
+    if (seqs[0] !== 1) return false;
+    for (let i = 1; i < seqs.length; i += 1) {
+      if ((seqs[i] ?? 0) !== (seqs[i - 1] ?? 0) + 1) return false;
+    }
   }
   return true;
 }

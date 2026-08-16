@@ -11,6 +11,7 @@ const platformPackageTestFiles = [
   "packages/contracts/test/plan-event-contracts.test.ts",
   "packages/contracts/test/platform-information-export-contracts.test.ts",
   "packages/contracts/test/remote-content-upload-http-contracts.test.ts",
+  "packages/contracts/test/remote-sync-http-contracts.test.ts",
   "packages/contracts/test/remote-sync-archive-http-contracts.test.ts",
   "packages/contracts/test/schemas.test.ts",
   "packages/contracts/test/skill-package.test.ts",

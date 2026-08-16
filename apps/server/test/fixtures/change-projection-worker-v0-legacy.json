@@ -1,0 +1,6 @@
+{
+  "schema_version": 0,
+  "read_only": true,
+  "package_schema_version": 1,
+  "reason_code": "CHANGE_PROJECTION_LEGACY_READ_ONLY"
+}

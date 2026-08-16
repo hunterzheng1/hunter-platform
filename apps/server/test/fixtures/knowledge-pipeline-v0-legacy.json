@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "archive_id": "arc_legacy_06a",
+  "project_id": "prj_legacy_06a",
+  "change_key": "legacy-knowledge-status",
+  "package_sha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "manifest_sha256": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "artifact_id": null,
+  "archive_status": "durable",
+  "knowledge_status": "ready",
+  "stored_files": 1,
+  "uploaded_at": "2026-08-13T01:00:00.000Z",
+  "request_id": "018f4f20-8d69-7b9f-8000-000000000006"
+}

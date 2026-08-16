@@ -37,7 +37,7 @@ export function requestProjectKey(request: FastifyRequest): ProjectApiKeyRecord 
 export function assertProjectKeyScope(
   request: FastifyRequest,
   scope: ProjectKeyScope,
-  projectId?: string
+  projectId: string
 ): void {
   const key = requestProjectKey(request);
   if (key === undefined) return;
@@ -46,7 +46,7 @@ export function assertProjectKeyScope(
       required_scope: scope
     });
   }
-  if (projectId !== undefined && projectId !== key.projectId) {
+  if (projectId !== key.projectId) {
     throw new ServerDomainError(403, "PROJECT_KEY_MISMATCH", "API key is bound to another project");
   }
 }

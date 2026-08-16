@@ -129,6 +129,56 @@ describe("BranchSnapshotProducer", () => {
     expect(calls).toBe(0);
   });
 
+  it("closes delete and rename source paths without fabricating tombstone files", async () => {
+    let observed: Parameters<BranchSnapshotCommitPort["commitSnapshot"]>[0] | undefined;
+    const port: BranchSnapshotCommitPort = {
+      async commitSnapshot(value) {
+        observed = value;
+        return { outcome: "new", record: {
+          ...value.seed,
+          files: value.seed.files.map(({ content, ...entry }) => { void content; return entry; }),
+        } };
+      },
+    };
+    const value = input();
+    value.removed_paths = ["OLD.md"];
+    value.changed_paths = ["AGENTS.md", "OLD.md"];
+
+    const result = await createBranchSnapshotProducer({ commit_port: port }).publish(value);
+
+    expect(result.outcome).toBe("new");
+    expect(observed?.seed.files.map((file) => file.path)).toEqual(["AGENTS.md"]);
+    expect(observed?.seed.changed_paths).toEqual(["AGENTS.md", "OLD.md"]);
+  });
+
+  it("forwards an exact internal lease fence to the authoritative commit transaction", async () => {
+    let observed: Parameters<BranchSnapshotCommitPort["commitSnapshot"]>[0] | undefined;
+    const port: BranchSnapshotCommitPort = {
+      async commitSnapshot(value) {
+        observed = value;
+        return { outcome: "new", record: {
+          ...value.seed,
+          files: value.seed.files.map(({ content, ...entry }) => { void content; return entry; }),
+        } };
+      },
+    };
+    const value = input();
+    value.lease_fence = {
+      schema_version: 1,
+      lease_id: "lease_" + "a".repeat(43),
+      lease_token: "lease_" + "b".repeat(43),
+      generation: 3,
+      project_id: value.source.project_id,
+      branch_name: value.source.branch_name,
+      actor_id: value.source.actor_id,
+      expires_at: "2026-08-15T01:10:00.000Z",
+    };
+
+    await createBranchSnapshotProducer({ commit_port: port }).publish(value);
+
+    expect(observed?.lease_fence).toEqual(value.lease_fence);
+  });
+
   it("rejects missing commit identity and metadata instead of inferring legacy values", async () => {
     let calls = 0;
     const port: BranchSnapshotCommitPort = {

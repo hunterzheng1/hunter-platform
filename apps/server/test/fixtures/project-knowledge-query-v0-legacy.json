@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 0,
+  "projectId": "prj_knowledge",
+  "page": "files",
+  "items": [{
+    "path": "knowledge/legacy.md",
+    "content": "legacy knowledge content"
+  }]
+}

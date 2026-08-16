@@ -1,0 +1,365 @@
+import { readFile } from "node:fs/promises";
+import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
+
+import type { Pool } from "pg";
+import {
+  canonicalJson,
+  type KnowledgeExtractionRetryIntentHashPort,
+  type PlatformInformationExportHashPort,
+  type PlatformInformationPage,
+  type PlatformInformationQuery,
+} from "@hunter-harness/contracts";
+
+import { PgBranchSnapshotPort } from "../branch-snapshots/pg.js";
+import { createBranchMonitorQueryAdapter } from "../branch-monitor-query/index.js";
+import {
+  ProjectMaterialsCursorAuthority,
+  PgProjectMaterialsSource,
+  createProjectMaterialsQueryAdapter
+} from "../project-materials/index.js";
+import {
+  ChangeRecordsCursorAuthority,
+  createChangeRecordsQueryAdapter,
+  PgChangeArchiveSource
+} from "../change-records-query/index.js";
+import {
+  createProjectKnowledgeQueryAdapter,
+  PgProjectKnowledgeRetryAuthority,
+  PgProjectKnowledgeSource,
+  ProjectKnowledgeCursorAuthority
+} from "../project-knowledge-query/index.js";
+import { createRunStoreBranchMonitorSource } from "../runs/branch-monitor-source.js";
+import { createProductionBranchMonitorTrust } from "../runs/production-branch-monitor-trust.js";
+import { createStage12MonitorVerifierAdapter } from "../runs/stage12-monitor-verifier.js";
+import type { RunStore } from "../runs/store.js";
+import {
+  createLocalPlatformInformationExportArtifactPort,
+  createPlatformInformationExportModule,
+  PgPlatformInformationExportRecordPort,
+  type PlatformInformationExportPageSourcePort,
+} from "../platform-information-export/index.js";
+import type { PlatformInformationAdapters } from "./routes.js";
+
+export interface ProductionPlatformInformationOptions {
+  readonly runStore: RunStore;
+  readonly branchMonitorCursorSecret: string | undefined;
+  /** The independent signing secret for project-materials cursors. */
+  readonly projectMaterialsCursorSecret?: string;
+  /** The shared production pool used by branch snapshots and materials. */
+  readonly pool?: Pool;
+  /** The independent signing secret for project-knowledge cursors. */
+  readonly projectKnowledgeCursorSecret?: string;
+  /** The independent signing secret for archive-backed change cursors. */
+  readonly changeRecordsCursorSecret?: string;
+}
+
+export interface ProductionPlatformInformationEnvironmentOptions {
+  readonly runStore: RunStore;
+  readonly pool?: Pool;
+  readonly environment?: Readonly<Record<string, string | undefined>>;
+  readonly readSecretFile?: (path: string) => Promise<string>;
+  /** Root for the durable export CAS. When absent, export HTTP remains unavailable. */
+  readonly platformInformationExportRoot?: string;
+  readonly platformInformationExportLifetimeMs?: number;
+}
+
+function nodeHashPort(): PlatformInformationExportHashPort {
+  return {
+    sha256(bytes) {
+      return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+    },
+    create_sha256() {
+      const hash = createHash("sha256");
+      return {
+        update(chunk: Uint8Array) { hash.update(chunk); },
+        digest() { return `sha256:${hash.digest("hex")}`; },
+      };
+    },
+  };
+}
+
+function nodeKnowledgeRetryHashPort(): KnowledgeExtractionRetryIntentHashPort {
+  return {
+    sha256(serialized) {
+      return `sha256:${createHash("sha256").update(serialized, "utf8").digest("hex")}`;
+    }
+  };
+}
+
+function exportPageSource(adapters: PlatformInformationAdapters): PlatformInformationExportPageSourcePort {
+  return {
+    async read_page(query: PlatformInformationQuery): Promise<string> {
+      let result;
+      if (query.view === "project_materials") {
+        const adapter = adapters.projectMaterials;
+        if (adapter === undefined) throw new Error("PLATFORM_INFORMATION_EXPORT_SOURCE_UNAVAILABLE");
+        result = await adapter.query(JSON.stringify(query));
+      } else if (query.view === "branch_monitor") {
+        const adapter = adapters.branchMonitor;
+        if (adapter === undefined) throw new Error("PLATFORM_INFORMATION_EXPORT_SOURCE_UNAVAILABLE");
+        result = await adapter.queryPage(JSON.stringify(query));
+      } else {
+        throw new Error("PLATFORM_INFORMATION_EXPORT_SOURCE_UNAVAILABLE");
+      }
+      if (!result.ok) throw new Error(result.reason_code);
+      const page = result.value as PlatformInformationPage;
+      const itemsSha = `sha256:${createHash("sha256").update(canonicalJson(page.items)).digest("hex")}`;
+      const proofPayload = {
+        schema_version: 1,
+        source_kind: "platform_information_export_page" as const,
+        request: query,
+        page,
+        items_sha: itemsSha,
+      };
+      const proofSha = `sha256:${createHash("sha256").update(canonicalJson(proofPayload)).digest("hex")}`;
+      return canonicalJson({ ...proofPayload, proof_sha: proofSha });
+    },
+  };
+}
+
+/**
+ * Composes only Platform Information views backed by complete production
+ * dependencies. Views without a durable source remain absent so their routes
+ * fail closed with PLATFORM_INFORMATION_UNAVAILABLE.
+ */
+export function createProductionPlatformInformation(
+  options: ProductionPlatformInformationOptions
+): PlatformInformationAdapters {
+  const trust = createProductionBranchMonitorTrust(options.branchMonitorCursorSecret);
+  const branchMonitor = trust === undefined
+    ? undefined
+    : createBranchMonitorQueryAdapter({
+        source_port: createRunStoreBranchMonitorSource(options.runStore, trust.cursorPort),
+        stage12_verifier_port: createStage12MonitorVerifierAdapter({
+          eventBundleReader: trust.eventBundleReader,
+          runStore: options.runStore
+        }),
+        cursor_verifier: trust.cursorPort
+      });
+
+  let projectMaterials: PlatformInformationAdapters["projectMaterials"];
+  if (options.projectMaterialsCursorSecret !== undefined) {
+    if (options.pool === undefined) {
+      throw new Error("PROJECT_MATERIALS_PRODUCTION_DEPENDENCY_MISSING");
+    }
+    const cursorAuthority = new ProjectMaterialsCursorAuthority(
+      Buffer.from(options.projectMaterialsCursorSecret, "utf8")
+    );
+    const snapshotPort = new PgBranchSnapshotPort(options.pool);
+    const source = new PgProjectMaterialsSource({
+      pool: options.pool,
+      blob_reader: snapshotPort,
+      cursor_authority: cursorAuthority
+    });
+    projectMaterials = createProjectMaterialsQueryAdapter({
+      source,
+      cursor_verifier: cursorAuthority
+    });
+  }
+
+  let projectKnowledge: PlatformInformationAdapters["projectKnowledge"];
+  if (options.projectKnowledgeCursorSecret !== undefined) {
+    if (options.pool === undefined) {
+      throw new Error("PROJECT_KNOWLEDGE_PRODUCTION_DEPENDENCY_MISSING");
+    }
+    const cursorAuthority = new ProjectKnowledgeCursorAuthority(
+      Buffer.from(options.projectKnowledgeCursorSecret, "utf8")
+    );
+    const source = new PgProjectKnowledgeSource({
+      pool: options.pool,
+      cursor_authority: cursorAuthority
+    });
+    const retryAuthority = new PgProjectKnowledgeRetryAuthority(options.pool);
+    projectKnowledge = createProjectKnowledgeQueryAdapter({
+      source_port: source,
+      cursor_verifier: cursorAuthority,
+      retry_intent_hash_port: nodeKnowledgeRetryHashPort(),
+      retry_authority_port: retryAuthority
+    });
+  }
+
+  let changeRecords: PlatformInformationAdapters["changeRecords"];
+  if (options.changeRecordsCursorSecret !== undefined) {
+    if (options.pool === undefined) {
+      throw new Error("CHANGE_RECORDS_PRODUCTION_DEPENDENCY_MISSING");
+    }
+    const cursorAuthority = new ChangeRecordsCursorAuthority(
+      Buffer.from(options.changeRecordsCursorSecret, "utf8")
+    );
+    const source = new PgChangeArchiveSource({
+      pool: options.pool,
+      cursor_authority: cursorAuthority
+    });
+    changeRecords = createChangeRecordsQueryAdapter({
+      source_port: source,
+      reference_port: source,
+      cursor_verifier: cursorAuthority
+    });
+  }
+
+  return Object.freeze({
+    ...(branchMonitor === undefined ? {} : { branchMonitor }),
+    ...(projectMaterials === undefined ? {} : { projectMaterials }),
+    ...(projectKnowledge === undefined ? {} : { projectKnowledge }),
+    ...(changeRecords === undefined ? {} : { changeRecords })
+  });
+}
+
+export async function createProductionPlatformInformationFromEnvironment(
+  options: ProductionPlatformInformationEnvironmentOptions
+): Promise<PlatformInformationAdapters> {
+  const environment = options.environment ?? process.env;
+  const direct = environment.HUNTER_BRANCH_MONITOR_CURSOR_SECRET?.trim();
+  let branchMonitorCursorSecret = direct === "" ? undefined : direct;
+
+  if (branchMonitorCursorSecret === undefined) {
+    const secretFile = environment.HUNTER_BRANCH_MONITOR_CURSOR_SECRET_FILE?.trim();
+    if (secretFile !== undefined && secretFile !== "") {
+      const readSecretFile = options.readSecretFile ?? (
+        async (path: string): Promise<string> => await readFile(path, "utf8")
+      );
+      const fileValue = (await readSecretFile(secretFile)).trim();
+      if (fileValue === "") {
+        throw new Error("HUNTER_BRANCH_MONITOR_CURSOR_SECRET_FILE is empty");
+      }
+      branchMonitorCursorSecret = fileValue;
+    }
+  }
+
+  const materialDirect = environment.HUNTER_PROJECT_MATERIALS_CURSOR_SECRET?.trim();
+  let projectMaterialsCursorSecret = materialDirect === "" ? undefined : materialDirect;
+  if (projectMaterialsCursorSecret === undefined) {
+    const secretFile = environment.HUNTER_PROJECT_MATERIALS_CURSOR_SECRET_FILE?.trim();
+    if (secretFile !== undefined && secretFile !== "") {
+      const readSecretFile = options.readSecretFile ?? (
+        async (path: string): Promise<string> => await readFile(path, "utf8")
+      );
+      const fileValue = (await readSecretFile(secretFile)).trim();
+      if (fileValue === "") {
+        throw new Error("HUNTER_PROJECT_MATERIALS_CURSOR_SECRET_FILE is empty");
+      }
+      projectMaterialsCursorSecret = fileValue;
+    }
+  }
+
+  const knowledgeDirect = environment.HUNTER_PROJECT_KNOWLEDGE_CURSOR_SECRET?.trim();
+  let projectKnowledgeCursorSecret = knowledgeDirect === "" ? undefined : knowledgeDirect;
+  if (projectKnowledgeCursorSecret === undefined) {
+    const secretFile = environment.HUNTER_PROJECT_KNOWLEDGE_CURSOR_SECRET_FILE?.trim();
+    if (secretFile !== undefined && secretFile !== "") {
+      const readSecretFile = options.readSecretFile ?? (
+        async (path: string): Promise<string> => await readFile(path, "utf8")
+      );
+      const fileValue = (await readSecretFile(secretFile)).trim();
+      if (fileValue === "") {
+        throw new Error("HUNTER_PROJECT_KNOWLEDGE_CURSOR_SECRET_FILE is empty");
+      }
+      projectKnowledgeCursorSecret = fileValue;
+    }
+  }
+
+  const changeDirect = environment.HUNTER_CHANGE_RECORDS_CURSOR_SECRET?.trim();
+  let changeRecordsCursorSecret = changeDirect === "" ? undefined : changeDirect;
+  if (changeRecordsCursorSecret === undefined) {
+    const secretFile = environment.HUNTER_CHANGE_RECORDS_CURSOR_SECRET_FILE?.trim();
+    if (secretFile !== undefined && secretFile !== "") {
+      const readSecretFile = options.readSecretFile ?? (
+        async (path: string): Promise<string> => await readFile(path, "utf8")
+      );
+      const fileValue = (await readSecretFile(secretFile)).trim();
+      if (fileValue === "") {
+        throw new Error("HUNTER_CHANGE_RECORDS_CURSOR_SECRET_FILE is empty");
+      }
+      changeRecordsCursorSecret = fileValue;
+    }
+  }
+
+  const base = createProductionPlatformInformation({
+    runStore: options.runStore,
+    branchMonitorCursorSecret,
+    ...(options.pool === undefined ? {} : { pool: options.pool }),
+    ...(projectMaterialsCursorSecret === undefined ? {} : { projectMaterialsCursorSecret }),
+    ...(projectKnowledgeCursorSecret === undefined ? {} : { projectKnowledgeCursorSecret }),
+    ...(changeRecordsCursorSecret === undefined ? {} : { changeRecordsCursorSecret })
+  });
+  if (options.platformInformationExportRoot === undefined) return base;
+  if (options.pool === undefined) throw new Error("PLATFORM_INFORMATION_EXPORT_PRODUCTION_DEPENDENCY_MISSING");
+  const singleton = await options.pool.connect();
+  const locked = await singleton.query<{ locked: boolean }>(
+    "SELECT pg_try_advisory_lock($1,$2) AS locked", [0x48554e54, 0x45585054],
+  );
+  if (locked.rows[0]?.locked !== true) {
+    singleton.release();
+    throw new Error("PLATFORM_INFORMATION_EXPORT_SINGLE_INSTANCE_REQUIRED");
+  }
+  let artifactPort: Awaited<ReturnType<typeof createLocalPlatformInformationExportArtifactPort>>;
+  try {
+    artifactPort = await createLocalPlatformInformationExportArtifactPort({
+      root: options.platformInformationExportRoot,
+      ...(options.platformInformationExportLifetimeMs === undefined ? {} : {
+        lifetime_ms: options.platformInformationExportLifetimeMs,
+      }),
+    });
+  } catch (error) {
+    await singleton.query("SELECT pg_advisory_unlock($1,$2)", [0x48554e54, 0x45585054]).catch(() => undefined);
+    singleton.release();
+    throw error;
+  }
+  const exportModule = createPlatformInformationExportModule({
+    page_source: exportPageSource(base),
+    artifact_port: artifactPort,
+    hash_port: nodeHashPort(),
+  });
+  const exportRecords = new PgPlatformInformationExportRecordPort(options.pool);
+  const gcWorkerId = `worker_export_gc_${process.pid}`;
+  let gcRunning = false;
+  let gcSettlement: Promise<void> = Promise.resolve();
+  const collectExpired = async (): Promise<void> => {
+    if (gcRunning) return;
+    gcRunning = true;
+    try {
+      let cursor: string | null = null;
+      do {
+        const now = new Date();
+        const claimed = await exportRecords.claimExpired({
+          now: now.toISOString(), limit: 100, cursor, worker_id: gcWorkerId,
+          lease_until: new Date(now.getTime() + 60_000).toISOString(),
+        });
+        if (claimed.status === "empty") break;
+        const ack = await exportRecords.ackExpired({ batch_id: claimed.batch_id, worker_id: gcWorkerId });
+        if (ack.status !== "acked" && ack.status !== "already_acked") break;
+        cursor = claimed.next_cursor;
+      } while (cursor !== null);
+    } finally {
+      gcRunning = false;
+    }
+  };
+  const gcTimer = setInterval(() => {
+    gcSettlement = collectExpired().catch(() => undefined);
+  }, 60_000);
+  gcTimer.unref();
+  let closePromise: Promise<void> | null = null;
+  const close = (): Promise<void> => {
+    if (closePromise !== null) return closePromise;
+    clearInterval(gcTimer);
+    closePromise = (async () => {
+      try {
+        await gcSettlement;
+        await artifactPort.close();
+      } finally {
+        await singleton.query("SELECT pg_advisory_unlock($1,$2)",
+          [0x48554e54, 0x45585054]).catch(() => undefined);
+        singleton.release();
+      }
+    })();
+    return closePromise;
+  };
+  return Object.freeze({
+    ...base,
+    export_module: exportModule,
+    export_records: exportRecords,
+    export_download: artifactPort,
+    export_close: close,
+  });
+}

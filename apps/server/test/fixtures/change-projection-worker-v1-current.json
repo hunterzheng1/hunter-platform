@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "documents": [
+    { "source_path": "plans/change-current-test-scenarios.md", "document_type": "test_scenarios" },
+    { "source_path": "plans/implementation.md", "document_type": "plan" },
+    { "source_path": "spec/design.md", "document_type": "design" },
+    { "source_path": "summary/change-summary.json", "document_type": "change_summary" }
+  ]
+}

@@ -1,0 +1,79 @@
+{
+  "query": {
+    "schema_version": 1,
+    "contract_kind": "query",
+    "view": "project_knowledge",
+    "project_id": "prj_knowledge",
+    "query_scope": {
+      "actor_id": "actor_owner",
+      "accessible_project_ids": ["prj_knowledge"],
+      "content_types": ["knowledge_entry"]
+    },
+    "limit": 25,
+    "cursor": null,
+    "cursor_verification": "server_port_required",
+    "sort": "extracted_at_desc_knowledge_id_asc"
+  },
+  "detail_request": {
+    "schema_version": 1,
+    "contract_kind": "detail_request",
+    "view": "project_knowledge",
+    "project_id": "prj_knowledge",
+    "query_scope": {
+      "actor_id": "actor_owner",
+      "accessible_project_ids": ["prj_knowledge"],
+      "content_types": ["knowledge_entry"]
+    },
+    "detail_id": "knowledge.auth.boundary"
+  },
+  "source_page": {
+    "schema_version": 1,
+    "source_kind": "project_knowledge_page",
+    "actor_id": "actor_owner",
+    "project_id": "prj_knowledge",
+    "accessible_project_ids": ["prj_knowledge"],
+    "content_types": ["knowledge_entry"],
+    "sort": "extracted_at_desc_knowledge_id_asc",
+    "request_cursor": null,
+    "page_state": "ready",
+    "entries": [{
+      "entry_origin": "explicit",
+      "knowledge_id": "knowledge.auth.boundary",
+      "display_title": "认证边界",
+      "lifecycle_status": "active",
+      "source_change_key": "auth-hardening",
+      "source_refs": ["doc_auth_summary"],
+      "extracted_at": "2026-08-12T08:00:00.000Z",
+      "relationship_refs": ["knowledge.auth.session"]
+    }],
+    "next_cursor": null,
+    "failures": []
+  },
+  "source_detail": {
+    "schema_version": 1,
+    "source_kind": "project_knowledge_detail",
+    "actor_id": "actor_owner",
+    "project_id": "prj_knowledge",
+    "accessible_project_ids": ["prj_knowledge"],
+    "content_types": ["knowledge_entry"],
+    "sort": "extracted_at_desc_knowledge_id_asc",
+    "request_cursor": null,
+    "detail_id": "knowledge.auth.boundary",
+    "entry_origin": "explicit",
+    "knowledge_id": "knowledge.auth.boundary",
+    "display_title": "认证边界",
+    "source_change_key": "auth-hardening",
+    "source_refs": ["doc_auth_summary"],
+    "content": "认证令牌只在服务端边界解析。",
+    "content_hash": "sha256:9aba182c0fb9f00b6f465d9dd6f75c4bb81c7abe3998c696ab7521cf1ac607d1",
+    "media_type": "text/markdown"
+  },
+  "retry_request": {
+    "schema_version": 1,
+    "contract_kind": "knowledge_extraction_retry_request",
+    "actor_id": "actor_owner",
+    "project_id": "prj_knowledge",
+    "job_id": "job_knowledge_archive-001",
+    "expected_generation": 3
+  }
+}
