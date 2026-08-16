@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   PLATFORM_INFORMATION_HTTP_OPERATIONS,
   REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS,
+  REMOTE_SYNC_HTTP_OPERATIONS,
   REMOTE_SYNC_ARCHIVE_HTTP_OPERATIONS,
   archiveIngestReceiptSchema,
   branchSnapshotSchema,
@@ -32,6 +33,7 @@ interface OpenApiSchemaNode {
   $ref?: string;
   additionalProperties?: boolean;
   const?: string | number | boolean;
+  default?: string | number | boolean;
   definitions?: Record<string, OpenApiSchemaNode>;
   description?: string;
   enum?: string[];
@@ -106,6 +108,7 @@ describe("OpenAPI v1 contract", () => {
         "x-hunter-auth-source"?: string;
         "x-hunter-project-allowlist-source"?: string;
         "x-hunter-project-key-scope"?: string;
+        "x-hunter-error-codes"?: Record<string, string[]>;
         parameters?: Array<{ name?: string; in?: string; required?: boolean; schema?: { type?: string; minLength?: number; maxLength?: number } }>;
         requestBody?: { content?: Record<string, unknown> };
         responses?: Record<string, { content?: Record<string, { schema?: { $ref?: string } }> }>;
@@ -113,6 +116,8 @@ describe("OpenAPI v1 contract", () => {
     };
     const upload = document.paths[REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS.upload_content.path]?.post;
     const status = document.paths[REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS.upload_status.path]?.get;
+    const fileUpload = document.paths[REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS.upload_remote_sync_file.path]?.post;
+    const fileStatus = document.paths[REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS.remote_sync_file_status.path]?.get;
 
     expect(upload).toMatchObject({
       operationId: REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS.upload_content.operation_id,
@@ -133,6 +138,21 @@ describe("OpenAPI v1 contract", () => {
     });
     expect(status?.responses?.["200"]?.content?.["application/json"]?.schema?.$ref)
       .toBe("#/components/schemas/RemoteContentUploadHttpStatus");
+    expect(fileUpload).toMatchObject({
+      operationId: REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS.upload_remote_sync_file.operation_id,
+      "x-hunter-project-key-scope": "files:write",
+      requestBody: { content: { "application/octet-stream": expect.anything() } },
+    });
+    expect(fileStatus).toMatchObject({
+      operationId: REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS.remote_sync_file_status.operation_id,
+      "x-hunter-project-key-scope": "files:read",
+    });
+    for (const descriptor of Object.values(REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS)) {
+      const operation = document.paths[descriptor.path]?.[descriptor.method.toLowerCase()];
+      expect(operation?.["x-hunter-error-codes"]).toEqual(Object.fromEntries(
+        Object.entries(descriptor.errors).map(([code, values]) => [code, [...values]]),
+      ));
+    }
   });
 
   it("documents every optional source binding on archive lookup operations", async () => {
@@ -297,10 +317,22 @@ describe("OpenAPI v1 contract", () => {
       "/api/v1/projects/{project_id}/artifacts",
       "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/content-upload",
       "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/content-upload/status",
+      "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/file-upload",
+      "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/file-upload/status",
       "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/archive/status",
       "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/archive/{operation_id}/receipt",
       "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/archive:commit",
       "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/archive:prepare",
+      "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/leases",
+      "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/leases/{lease_id}:release",
+      "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/leases/{lease_id}:renew",
+      "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/pull",
+      "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/push:commit",
+      "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/push:prepare",
+      "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/push/status",
+      "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/push/{prepare_id}/receipt",
+      "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/snapshot",
+      "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/snapshots/{snapshot_id}/content",
       "/api/v1/projects/{project_id}/changes/{change_key}/archive-package",
       "/api/v1/projects/{project_id}/changes/{change_key}/archive-package/download",
       "/api/v1/projects/{project_id}/information/branch-files:confirm-restore",
@@ -863,6 +895,87 @@ describe("remote archive v2 OpenAPI contracts", () => {
       "RemoteSyncArchiveCommitHttpRequest", "RemoteSyncArchiveCommitHttpResponse", "RemoteSyncArchiveStatusHttpResponse",
       "RemoteSyncArchiveReceiptHttpResponse"
     ]));
+  });
+});
+
+describe("Remote Sync HTTP OpenAPI contracts", () => {
+  it("keeps every descriptor path, auth, status, request-id, and error allowlist in exact parity", async () => {
+    const document = parseYaml(await readFile(
+      new URL("../openapi/hunter-harness-v1.yaml", import.meta.url), "utf8",
+    )) as { paths: Record<string, Record<string, Record<string, unknown>>> };
+    for (const descriptor of Object.values(REMOTE_SYNC_HTTP_OPERATIONS)) {
+      const operation = document.paths[descriptor.path]?.[descriptor.method.toLowerCase()];
+      expect(operation).toBeDefined();
+      expect(operation?.operationId).toBe(descriptor.operation_id);
+      expect(operation?.["x-hunter-auth-source"]).toBe("authenticated_principal");
+      expect(operation?.["x-hunter-project-allowlist-source"]).toBe("server_authority");
+      expect(operation?.["x-hunter-project-key-scope"]).toBe(descriptor.auth.project_key_scope);
+      expect(operation?.["x-hunter-error-codes"]).toEqual(Object.fromEntries(
+        Object.entries(descriptor.errors).map(([status, codes]) => [status, [...codes]]),
+      ));
+      const responses = operation?.responses as Record<string, { headers?: Record<string, unknown> }>;
+      expect(Object.keys(responses).map(Number).sort((left, right) => left - right)).toEqual(
+        [...new Set([
+          descriptor.success_status,
+          ...(Object.hasOwn(descriptor, "replay_status") ? [(descriptor as { replay_status: number }).replay_status] : []),
+          ...Object.keys(descriptor.errors).map(Number),
+        ])].sort((left, right) => left - right),
+      );
+      expect(responses[String(descriptor.success_status)]?.headers).toHaveProperty("X-Request-Id");
+      expect(Object.hasOwn(operation ?? {}, "requestBody")).toBe(descriptor.request_placement === "path_and_json_body");
+    }
+  });
+
+  it("accepts a concrete non-empty upload-ref prepare and publishes the durable 10 MiB boundary", async () => {
+    const document = parseYaml(await readFile(
+      new URL("../openapi/hunter-harness-v1.yaml", import.meta.url), "utf8",
+    )) as OpenApiDocument;
+    const validator = await createOpenApiBodyValidator(document, "RemoteSyncPushPrepareHttpRequest");
+    const contentHash = `sha256:${"a".repeat(64)}`;
+    const source = {
+      project_id: "prj_openapi_remote_sync",
+      branch_name: "feature/contracts",
+      actor_id: "actor_openapi",
+      commit_sha: "a".repeat(40),
+      client_id: "cli_openapi",
+      change_key: "change_openapi",
+    };
+    const lease = {
+      schema_version: 1,
+      lease_id: "lease_openapi",
+      lease_token: `lease_${"A".repeat(43)}`,
+      generation: 1,
+      project_id: source.project_id,
+      branch_name: source.branch_name,
+      actor_id: source.actor_id,
+      expires_at: "2026-08-15T02:00:00.000Z",
+    };
+    expect(await validator.accepts({
+      source,
+      lease,
+      expected_revision: "revision_0001",
+      preview_hash: contentHash,
+      idempotency_key: "push-openapi",
+      payload_hash: contentHash,
+      files: [{
+        path: "src/index.ts",
+        content_hash: contentHash,
+        size: 1,
+        content_kind: "branch_file",
+        upload_ref: { ref_id: `bounded_upload:${"A".repeat(43)}`, sha256: contentHash, size_bytes: 1 },
+      }],
+      operations: [{ path: "src/index.ts", content_kind: "branch_file", action: "modify", remote_hash: contentHash }],
+      skipped: [],
+    })).toBe(true);
+    const schemas = document.components.schemas as Record<string, OpenApiSchemaNode>;
+    expect(schemas.RemoteSyncRemoteFileMetadata?.properties?.size?.maximum).toBe(10_485_760);
+    expect(schemas.RemoteSyncPushFileMetadataHttp).toMatchObject({
+      additionalProperties: false,
+      required: ["path", "content_hash", "size"],
+      properties: { upload_ref: { $ref: "#/components/schemas/RemoteContentUploadHttpRef" } },
+    });
+    expect(schemas.RemoteSyncLeaseAcquireHttpRequest?.properties?.ttl_ms).toMatchObject({ default: 60_000 });
+    await validator.app.close();
   });
 });
 

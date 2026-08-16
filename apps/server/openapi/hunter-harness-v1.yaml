@@ -1422,6 +1422,16 @@ paths:
       x-hunter-project-allowlist-source: server_authority
       x-hunter-project-key-scope: archive:write
       x-hunter-body-transport: single_bounded_stream
+      x-hunter-error-codes:
+        "400": [VALIDATION_FAILED, REMOTE_CONTENT_UPLOAD_INPUT_INVALID, REMOTE_CONTENT_UPLOAD_STREAM_INVALID, REMOTE_CONTENT_UPLOAD_HASH_MISMATCH, REMOTE_CONTENT_UPLOAD_SIZE_MISMATCH]
+        "401": [AUTH_REQUIRED, TOKEN_INVALID, SESSION_INVALID]
+        "403": [PROJECT_INFORMATION_FORBIDDEN, PROJECT_KEY_SCOPE, PROJECT_KEY_MISMATCH]
+        "409": [REMOTE_CONTENT_UPLOAD_IDEMPOTENCY_CONFLICT]
+        "410": [REMOTE_CONTENT_UPLOAD_EXPIRED]
+        "413": [REMOTE_CONTENT_UPLOAD_TOO_LARGE]
+        "415": [REMOTE_CONTENT_UPLOAD_MEDIA_TYPE_UNSUPPORTED]
+        "499": [REMOTE_CONTENT_UPLOAD_ABORTED]
+        "503": [REMOTE_UNAVAILABLE]
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - name: branch_name
@@ -1484,6 +1494,11 @@ paths:
       x-hunter-auth-source: authenticated_principal
       x-hunter-project-allowlist-source: server_authority
       x-hunter-project-key-scope: archive:read
+      x-hunter-error-codes:
+        "400": [VALIDATION_FAILED, REMOTE_CONTENT_UPLOAD_INPUT_INVALID, REMOTE_CONTENT_UPLOAD_STREAM_INVALID, REMOTE_CONTENT_UPLOAD_HASH_MISMATCH, REMOTE_CONTENT_UPLOAD_SIZE_MISMATCH]
+        "401": [AUTH_REQUIRED, TOKEN_INVALID, SESSION_INVALID]
+        "403": [PROJECT_INFORMATION_FORBIDDEN, PROJECT_KEY_SCOPE, PROJECT_KEY_MISMATCH, REMOTE_CONTENT_UPLOAD_SCOPE_MISMATCH]
+        "503": [REMOTE_UNAVAILABLE]
       parameters:
         - $ref: "#/components/parameters/ProjectId"
         - name: branch_name
@@ -1507,6 +1522,120 @@ paths:
       responses:
         "200":
           description: Stored, expired, or unknown status for this complete scoped identity
+          headers: { X-Request-Id: { $ref: "#/components/headers/RequestId" } }
+          content: { application/json: { schema: { $ref: "#/components/schemas/RemoteContentUploadHttpStatus" } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/file-upload:
+    post:
+      operationId: stageRemoteSyncFileUpload
+      summary: Stage one bounded raw file stream for Remote Sync push
+      x-hunter-auth-source: authenticated_principal
+      x-hunter-project-allowlist-source: server_authority
+      x-hunter-project-key-scope: files:write
+      x-hunter-body-transport: single_bounded_stream
+      x-hunter-error-codes:
+        "400": [VALIDATION_FAILED, REMOTE_CONTENT_UPLOAD_INPUT_INVALID, REMOTE_CONTENT_UPLOAD_STREAM_INVALID, REMOTE_CONTENT_UPLOAD_HASH_MISMATCH, REMOTE_CONTENT_UPLOAD_SIZE_MISMATCH]
+        "401": [AUTH_REQUIRED, TOKEN_INVALID, SESSION_INVALID]
+        "403": [PROJECT_INFORMATION_FORBIDDEN, PROJECT_KEY_SCOPE, PROJECT_KEY_MISMATCH]
+        "409": [REMOTE_CONTENT_UPLOAD_IDEMPOTENCY_CONFLICT]
+        "410": [REMOTE_CONTENT_UPLOAD_EXPIRED]
+        "413": [REMOTE_CONTENT_UPLOAD_TOO_LARGE]
+        "415": [REMOTE_CONTENT_UPLOAD_MEDIA_TYPE_UNSUPPORTED]
+        "499": [REMOTE_CONTENT_UPLOAD_ABORTED]
+        "503": [REMOTE_UNAVAILABLE]
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: branch_name
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 160 }
+        - $ref: "#/components/parameters/RequestId"
+        - name: Content-Length
+          in: header
+          required: true
+          schema: { type: string, pattern: "^[1-9][0-9]{0,8}$", maxLength: 9 }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+        - name: X-Content-SHA256
+          in: header
+          required: true
+          schema: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+        - name: X-Upload-Expires-In-Ms
+          in: header
+          required: true
+          schema: { type: string, pattern: "^[1-9][0-9]{0,8}$", maxLength: 9 }
+        - name: X-Commit-SHA
+          in: header
+          schema: { type: string, minLength: 1, maxLength: 240 }
+        - name: X-Client-Id
+          in: header
+          schema: { type: string, minLength: 1, maxLength: 240 }
+        - name: X-Change-Key
+          in: header
+          schema: { type: string, minLength: 1, maxLength: 240 }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary, maxLength: 536870912 }
+      responses:
+        "201":
+          description: New bounded Remote Sync file upload
+          headers: { X-Request-Id: { $ref: "#/components/headers/RequestId" } }
+          content: { application/json: { schema: { $ref: "#/components/schemas/RemoteContentUploadHttpResult" } } }
+        "200":
+          description: Idempotent replay of the same raw file upload
+          headers: { X-Request-Id: { $ref: "#/components/headers/RequestId" } }
+          content: { application/json: { schema: { $ref: "#/components/schemas/RemoteContentUploadHttpResult" } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "410": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "415": { $ref: "#/components/responses/Error" }
+        "499": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/file-upload/status:
+    get:
+      operationId: getRemoteSyncFileUploadStatus
+      summary: Resolve one raw Remote Sync file upload identity
+      x-hunter-auth-source: authenticated_principal
+      x-hunter-project-allowlist-source: server_authority
+      x-hunter-project-key-scope: files:read
+      x-hunter-error-codes:
+        "400": [VALIDATION_FAILED, REMOTE_CONTENT_UPLOAD_INPUT_INVALID, REMOTE_CONTENT_UPLOAD_STREAM_INVALID, REMOTE_CONTENT_UPLOAD_HASH_MISMATCH, REMOTE_CONTENT_UPLOAD_SIZE_MISMATCH]
+        "401": [AUTH_REQUIRED, TOKEN_INVALID, SESSION_INVALID]
+        "403": [PROJECT_INFORMATION_FORBIDDEN, PROJECT_KEY_SCOPE, PROJECT_KEY_MISMATCH, REMOTE_CONTENT_UPLOAD_SCOPE_MISMATCH]
+        "503": [REMOTE_UNAVAILABLE]
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: branch_name
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 160 }
+        - $ref: "#/components/parameters/RequestId"
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+        - name: X-Commit-SHA
+          in: header
+          schema: { type: string, minLength: 1, maxLength: 240 }
+        - name: X-Client-Id
+          in: header
+          schema: { type: string, minLength: 1, maxLength: 240 }
+        - name: X-Change-Key
+          in: header
+          schema: { type: string, minLength: 1, maxLength: 240 }
+      responses:
+        "200":
+          description: Stored, expired, or unknown raw file upload status
           headers: { X-Request-Id: { $ref: "#/components/headers/RequestId" } }
           content: { application/json: { schema: { $ref: "#/components/schemas/RemoteContentUploadHttpStatus" } } }
         "400": { $ref: "#/components/responses/Error" }
@@ -1690,6 +1819,390 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/leases:
+    post:
+      operationId: acquireRemoteSyncLease
+      x-hunter-auth-source: authenticated_principal
+      x-hunter-project-allowlist-source: server_authority
+      x-hunter-project-key-scope: files:write
+      x-hunter-error-codes:
+        "400": [VALIDATION_FAILED]
+        "401": [AUTH_REQUIRED, TOKEN_INVALID, SESSION_INVALID]
+        "403": [PROJECT_INFORMATION_FORBIDDEN, PROJECT_KEY_SCOPE, PROJECT_KEY_MISMATCH]
+        "409": [SYNC_LEASE_BUSY, SYNC_IDEMPOTENCY_CONFLICT]
+        "422": [SYNC_LEASE_INVALID]
+        "503": [REMOTE_UNAVAILABLE]
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: branch_name
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 160 }
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/RemoteSyncLeaseAcquireHttpRequest" } } }
+      responses:
+        "201": { description: New lease, headers: { X-Request-Id: { $ref: "#/components/headers/RequestId" } }, content: { application/json: { schema: { $ref: "#/components/schemas/RemoteSyncLeaseHttpResponse" } } } }
+        "200": { description: Replayed lease, headers: { X-Request-Id: { $ref: "#/components/headers/RequestId" } }, content: { application/json: { schema: { $ref: "#/components/schemas/RemoteSyncLeaseHttpResponse" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/leases/{lease_id}:renew:
+    post:
+      operationId: renewRemoteSyncLease
+      x-hunter-auth-source: authenticated_principal
+      x-hunter-project-allowlist-source: server_authority
+      x-hunter-project-key-scope: files:write
+      x-hunter-error-codes:
+        "400": [VALIDATION_FAILED]
+        "401": [AUTH_REQUIRED, TOKEN_INVALID, SESSION_INVALID]
+        "403": [PROJECT_INFORMATION_FORBIDDEN, PROJECT_KEY_SCOPE, PROJECT_KEY_MISMATCH]
+        "409": [SYNC_IDEMPOTENCY_CONFLICT, SYNC_LEASE_FENCED, SYNC_LEASE_SCOPE_MISMATCH]
+        "410": [SYNC_LEASE_EXPIRED]
+        "422": [SYNC_LEASE_INVALID]
+        "503": [REMOTE_UNAVAILABLE]
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: branch_name
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 160 }
+        - name: lease_id
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 128 }
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/RemoteSyncLeaseRenewHttpRequest" } } }
+      responses:
+        "200": { description: Renewed lease, headers: { X-Request-Id: { $ref: "#/components/headers/RequestId" } }, content: { application/json: { schema: { $ref: "#/components/schemas/RemoteSyncLeaseHttpResponse" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "410": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/leases/{lease_id}:release:
+    post:
+      operationId: releaseRemoteSyncLease
+      x-hunter-auth-source: authenticated_principal
+      x-hunter-project-allowlist-source: server_authority
+      x-hunter-project-key-scope: files:write
+      x-hunter-error-codes:
+        "400": [VALIDATION_FAILED]
+        "401": [AUTH_REQUIRED, TOKEN_INVALID, SESSION_INVALID]
+        "403": [PROJECT_INFORMATION_FORBIDDEN, PROJECT_KEY_SCOPE, PROJECT_KEY_MISMATCH]
+        "409": [SYNC_IDEMPOTENCY_CONFLICT, SYNC_LEASE_FENCED, SYNC_LEASE_SCOPE_MISMATCH]
+        "410": [SYNC_LEASE_EXPIRED]
+        "422": [SYNC_LEASE_INVALID]
+        "503": [REMOTE_UNAVAILABLE]
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: branch_name
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 160 }
+        - name: lease_id
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 128 }
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/RemoteSyncLeaseReleaseHttpRequest" } } }
+      responses:
+        "200": { description: Released lease, headers: { X-Request-Id: { $ref: "#/components/headers/RequestId" } }, content: { application/json: { schema: { $ref: "#/components/schemas/RemoteSyncLeaseReleaseHttpResponse" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "410": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/snapshot:
+    get:
+      operationId: getRemoteSyncSnapshot
+      x-hunter-auth-source: authenticated_principal
+      x-hunter-project-allowlist-source: server_authority
+      x-hunter-project-key-scope: files:read
+      x-hunter-error-codes:
+        "400": [VALIDATION_FAILED]
+        "401": [AUTH_REQUIRED, TOKEN_INVALID, SESSION_INVALID]
+        "403": [PROJECT_INFORMATION_FORBIDDEN, PROJECT_KEY_SCOPE, PROJECT_KEY_MISMATCH]
+        "404": [SYNC_SNAPSHOT_NOT_FOUND]
+        "503": [REMOTE_UNAVAILABLE]
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: branch_name
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 160 }
+        - name: expected_revision
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 160 }
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200": { description: Current remote snapshot, headers: { X-Request-Id: { $ref: "#/components/headers/RequestId" } }, content: { application/json: { schema: { $ref: "#/components/schemas/RemoteSyncRemoteSnapshotHttpResponse" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/snapshots/{snapshot_id}/content:
+    get:
+      operationId: streamRemoteSyncContent
+      x-hunter-auth-source: authenticated_principal
+      x-hunter-project-allowlist-source: server_authority
+      x-hunter-project-key-scope: files:read
+      x-hunter-error-codes:
+        "400": [VALIDATION_FAILED, SYNC_STREAM_INVALID]
+        "401": [AUTH_REQUIRED, TOKEN_INVALID, SESSION_INVALID]
+        "403": [PROJECT_INFORMATION_FORBIDDEN, PROJECT_KEY_SCOPE, PROJECT_KEY_MISMATCH]
+        "404": [SYNC_SNAPSHOT_NOT_FOUND]
+        "409": [SYNC_PREVIEW_STALE]
+        "413": [SYNC_STREAM_TOO_LARGE]
+        "499": [SYNC_STREAM_ABORTED]
+        "503": [REMOTE_UNAVAILABLE]
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: branch_name
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 160 }
+        - name: snapshot_id
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 160 }
+        - name: path
+          in: query
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 1024 }
+        - name: expected_revision
+          in: query
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 160 }
+        - name: chunk_size
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 1048576 }
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: Bounded binary content
+          headers:
+            X-Request-Id: { $ref: "#/components/headers/RequestId" }
+            X-Content-SHA256: { schema: { type: string, pattern: "^sha256:[a-f0-9]{64}$" } }
+            X-Remote-Snapshot-Id: { schema: { type: string, minLength: 1, maxLength: 160 } }
+            X-Remote-Revision: { schema: { type: string, minLength: 1, maxLength: 160 } }
+          content: { application/octet-stream: { schema: { type: string, format: binary, maxLength: 10485760 } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "499": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/push:prepare:
+    post:
+      operationId: prepareRemoteSyncPush
+      x-hunter-auth-source: authenticated_principal
+      x-hunter-project-allowlist-source: server_authority
+      x-hunter-project-key-scope: files:write
+      x-hunter-error-codes:
+        "400": [VALIDATION_FAILED, SYNC_STREAM_INVALID]
+        "401": [AUTH_REQUIRED, TOKEN_INVALID, SESSION_INVALID]
+        "403": [PROJECT_INFORMATION_FORBIDDEN, PROJECT_KEY_SCOPE, PROJECT_KEY_MISMATCH]
+        "409": [SYNC_IDEMPOTENCY_CONFLICT, SYNC_LEASE_BUSY, SYNC_LEASE_FENCED, SYNC_LEASE_SCOPE_MISMATCH, SYNC_PREVIEW_STALE]
+        "410": [SYNC_LEASE_EXPIRED]
+        "413": [SYNC_STREAM_TOO_LARGE]
+        "422": [SYNC_LEASE_INVALID]
+        "503": [REMOTE_UNAVAILABLE]
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: branch_name
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 160 }
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/RemoteSyncPushPrepareHttpRequest" } } }
+      responses:
+        "201": { description: Prepared push, headers: { X-Request-Id: { $ref: "#/components/headers/RequestId" } }, content: { application/json: { schema: { $ref: "#/components/schemas/RemoteSyncPushPrepareHttpResponse" } } } }
+        "200": { description: Replayed push, headers: { X-Request-Id: { $ref: "#/components/headers/RequestId" } }, content: { application/json: { schema: { $ref: "#/components/schemas/RemoteSyncPushPrepareHttpResponse" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "410": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/push:commit:
+    post:
+      operationId: commitRemoteSyncPush
+      x-hunter-auth-source: authenticated_principal
+      x-hunter-project-allowlist-source: server_authority
+      x-hunter-project-key-scope: files:write
+      x-hunter-error-codes:
+        "400": [VALIDATION_FAILED]
+        "401": [AUTH_REQUIRED, TOKEN_INVALID, SESSION_INVALID]
+        "403": [PROJECT_INFORMATION_FORBIDDEN, PROJECT_KEY_SCOPE, PROJECT_KEY_MISMATCH]
+        "404": [SYNC_PREPARE_NOT_FOUND]
+        "409": [SYNC_IDEMPOTENCY_CONFLICT, SYNC_LEASE_FENCED, SYNC_LEASE_SCOPE_MISMATCH, SYNC_COMMIT_AMBIGUOUS, SYNC_PREVIEW_STALE]
+        "410": [SYNC_LEASE_EXPIRED, SYNC_PREPARE_EXPIRED]
+        "503": [REMOTE_UNAVAILABLE]
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: branch_name
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 160 }
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/RemoteSyncPushCommitHttpRequest" } } }
+      responses:
+        "200": { description: Durable push receipt, headers: { X-Request-Id: { $ref: "#/components/headers/RequestId" } }, content: { application/json: { schema: { $ref: "#/components/schemas/RemoteSyncPushCommitHttpResponse" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "410": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/push/status:
+    get:
+      operationId: getRemoteSyncPushStatus
+      x-hunter-auth-source: authenticated_principal
+      x-hunter-project-allowlist-source: server_authority
+      x-hunter-project-key-scope: files:write
+      x-hunter-error-codes:
+        "400": [VALIDATION_FAILED]
+        "401": [AUTH_REQUIRED, TOKEN_INVALID, SESSION_INVALID]
+        "403": [PROJECT_INFORMATION_FORBIDDEN, PROJECT_KEY_SCOPE, PROJECT_KEY_MISMATCH]
+        "404": [SYNC_PREPARE_NOT_FOUND]
+        "503": [REMOTE_UNAVAILABLE]
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: branch_name
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 160 }
+        - name: idempotency_key
+          in: query
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 240 }
+        - name: commit_sha
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 240 }
+        - name: client_id
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 240 }
+        - name: change_key
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 240 }
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200": { description: Push status, headers: { X-Request-Id: { $ref: "#/components/headers/RequestId" } }, content: { application/json: { schema: { $ref: "#/components/schemas/RemoteSyncPushStatusHttpResponse" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/push/{prepare_id}/receipt:
+    get:
+      operationId: getRemoteSyncPushReceipt
+      x-hunter-auth-source: authenticated_principal
+      x-hunter-project-allowlist-source: server_authority
+      x-hunter-project-key-scope: files:write
+      x-hunter-error-codes:
+        "400": [VALIDATION_FAILED]
+        "401": [AUTH_REQUIRED, TOKEN_INVALID, SESSION_INVALID]
+        "403": [PROJECT_INFORMATION_FORBIDDEN, PROJECT_KEY_SCOPE, PROJECT_KEY_MISMATCH]
+        "404": [SYNC_PREPARE_NOT_FOUND]
+        "503": [REMOTE_UNAVAILABLE]
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: branch_name
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 160 }
+        - name: prepare_id
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 160 }
+        - name: commit_sha
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 240 }
+        - name: client_id
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 240 }
+        - name: change_key
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 240 }
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200": { description: Durable push receipt, headers: { X-Request-Id: { $ref: "#/components/headers/RequestId" } }, content: { application/json: { schema: { $ref: "#/components/schemas/RemoteSyncPushReceiptHttpResponse" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/pull:
+    post:
+      operationId: pullRemoteSync
+      x-hunter-auth-source: authenticated_principal
+      x-hunter-project-allowlist-source: server_authority
+      x-hunter-project-key-scope: files:read
+      x-hunter-error-codes:
+        "400": [VALIDATION_FAILED]
+        "401": [AUTH_REQUIRED, TOKEN_INVALID, SESSION_INVALID]
+        "403": [PROJECT_INFORMATION_FORBIDDEN, PROJECT_KEY_SCOPE, PROJECT_KEY_MISMATCH]
+        "409": [SYNC_IDEMPOTENCY_CONFLICT, SYNC_PREVIEW_STALE]
+        "413": [SYNC_STREAM_TOO_LARGE]
+        "422": [SYNC_PULL_WORKSPACE_FAILED]
+        "503": [REMOTE_UNAVAILABLE]
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - name: branch_name
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 160 }
+        - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/RemoteSyncPullHttpRequest" } } }
+      responses:
+        "200": { description: Replayed pull receipt, headers: { X-Request-Id: { $ref: "#/components/headers/RequestId" } }, content: { application/json: { schema: { $ref: "#/components/schemas/RemoteSyncPullHttpResponse" } } } }
+        "201": { description: New pull receipt, headers: { X-Request-Id: { $ref: "#/components/headers/RequestId" } }, content: { application/json: { schema: { $ref: "#/components/schemas/RemoteSyncPullHttpResponse" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
   /api/v1/projects/{project_id}/semantic/overview:
     get:
@@ -4909,6 +5422,260 @@ components:
           type: integer
         column:
           type: integer
+    RemoteSyncSourceRef:
+      type: object
+      additionalProperties: false
+      required: [project_id, branch_name, actor_id]
+      properties:
+        project_id: { type: string, pattern: "^prj_[A-Za-z0-9_-]{1,156}$" }
+        branch_name: { type: string, minLength: 1, maxLength: 160 }
+        actor_id: { type: string, minLength: 1, maxLength: 160 }
+        commit_sha: { type: string, minLength: 1, maxLength: 160 }
+        client_id: { type: string, pattern: "^cli_.{0,156}$" }
+        change_key: { type: string, minLength: 1, maxLength: 160 }
+    RemoteSyncLease:
+      type: object
+      additionalProperties: false
+      required: [schema_version, lease_id, lease_token, generation, project_id, branch_name, actor_id, expires_at]
+      properties:
+        schema_version: { type: integer, const: 1 }
+        lease_id: { type: string, pattern: "^lease_[A-Za-z0-9_-]{1,127}$" }
+        lease_token: { type: string, pattern: "^lease_[A-Za-z0-9_-]{43}$" }
+        generation: { type: integer, minimum: 1 }
+        project_id: { type: string, pattern: "^prj_[A-Za-z0-9_-]{1,156}$" }
+        branch_name: { type: string, minLength: 1, maxLength: 160 }
+        actor_id: { type: string, minLength: 1, maxLength: 160 }
+        expires_at: { type: string, format: date-time }
+    RemoteSyncLeaseAcquireHttpRequest:
+      type: object
+      additionalProperties: false
+      required: [source]
+      properties:
+        source: { $ref: "#/components/schemas/RemoteSyncSourceRef" }
+        ttl_ms: { type: integer, minimum: 1, maximum: 600000, default: 60000 }
+    RemoteSyncLeaseRenewHttpRequest:
+      type: object
+      additionalProperties: false
+      required: [lease]
+      properties:
+        lease: { $ref: "#/components/schemas/RemoteSyncLease" }
+        ttl_ms: { type: integer, minimum: 1, maximum: 600000, default: 60000 }
+    RemoteSyncLeaseReleaseHttpRequest:
+      type: object
+      additionalProperties: false
+      required: [lease]
+      properties:
+        lease: { $ref: "#/components/schemas/RemoteSyncLease" }
+    RemoteSyncLeaseHttpResponse:
+      type: object
+      additionalProperties: false
+      required: [lease, outcome]
+      properties:
+        lease: { $ref: "#/components/schemas/RemoteSyncLease" }
+        outcome: { type: string, enum: [new, replay] }
+    RemoteSyncLeaseReleaseHttpResponse:
+      type: object
+      additionalProperties: false
+      required: [outcome]
+      properties:
+        outcome: { type: string, enum: [new, replay] }
+    RemoteSyncRemoteFileMetadata:
+      type: object
+      additionalProperties: false
+      required: [path, content_hash, size]
+      properties:
+        path: { type: string, minLength: 1, maxLength: 1024 }
+        content_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+        size: { type: integer, minimum: 0, maximum: 10485760 }
+        content_kind: { type: string, enum: [config, rule, architecture, instruction, branch_file, change_document, archive_package, knowledge_entry, knowledge_candidate, project_content_candidate] }
+    RemoteSyncRemoteSnapshot:
+      type: object
+      additionalProperties: false
+      required: [source, snapshot_id, revision, project_version, commit_sha, artifact_id, manifest_hash, files]
+      properties:
+        source: { $ref: "#/components/schemas/RemoteSyncSourceRef" }
+        snapshot_id: { type: string, minLength: 1, maxLength: 160 }
+        revision: { type: string, minLength: 1, maxLength: 160 }
+        project_version: { type: [string, "null"], pattern: "^pv_[A-Za-z0-9_-]{1,159}$" }
+        commit_sha: { type: [string, "null"], minLength: 1, maxLength: 160 }
+        artifact_id: { type: [string, "null"], pattern: "^art_[A-Za-z0-9_-]{1,159}$" }
+        manifest_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+        files: { type: array, maxItems: 100000, items: { $ref: "#/components/schemas/RemoteSyncRemoteFileMetadata" } }
+    RemoteSyncRemoteSnapshotHttpResponse:
+      $ref: "#/components/schemas/RemoteSyncRemoteSnapshot"
+    RemoteSyncContentStreamHttpChunk:
+      type: object
+      additionalProperties: false
+      required: [sequence, offset, size, chunk_hash, final]
+      properties:
+        sequence: { type: integer, minimum: 0 }
+        offset: { type: integer, minimum: 0 }
+        size: { type: integer, minimum: 0, maximum: 1048576 }
+        chunk_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+        final: { type: boolean }
+    RemoteSyncOperation:
+      type: object
+      additionalProperties: false
+      required: [path, content_kind, action]
+      properties:
+        path: { type: string, minLength: 1, maxLength: 1024 }
+        source_path: { type: string, minLength: 1, maxLength: 1024 }
+        content_kind: { type: string, enum: [config, rule, architecture, instruction, branch_file, change_document, archive_package, knowledge_entry, knowledge_candidate, project_content_candidate] }
+        action: { type: string, enum: [add, modify, delete, restore, rename, no_change] }
+        local_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+        remote_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+        base_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+    RemoteSyncPushFileMetadataHttp:
+      type: object
+      additionalProperties: false
+      required: [path, content_hash, size]
+      properties:
+        path: { type: string, minLength: 1, maxLength: 1024 }
+        content_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+        size: { type: integer, minimum: 0, maximum: 10485760 }
+        content_kind: { type: string, enum: [config, rule, architecture, instruction, branch_file, change_document, archive_package, knowledge_entry, knowledge_candidate, project_content_candidate] }
+        upload_ref: { $ref: "#/components/schemas/RemoteContentUploadHttpRef" }
+    RemoteSyncLeaseScopedSource:
+      type: object
+      additionalProperties: false
+      required: [source, expected_revision]
+      properties:
+        source: { $ref: "#/components/schemas/RemoteSyncSourceRef" }
+        expected_revision: { type: string, minLength: 1, maxLength: 160 }
+    RemoteSyncPushPrepareHttpRequest:
+      type: object
+      additionalProperties: false
+      required: [source, lease, expected_revision, preview_hash, idempotency_key, payload_hash, files, operations, skipped]
+      properties:
+        source: { $ref: "#/components/schemas/RemoteSyncSourceRef" }
+        lease: { $ref: "#/components/schemas/RemoteSyncLease" }
+        expected_revision: { type: string, minLength: 1, maxLength: 160 }
+        preview_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+        idempotency_key: { type: string, minLength: 1, maxLength: 240 }
+        payload_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+        files: { type: array, maxItems: 100000, items: { $ref: "#/components/schemas/RemoteSyncPushFileMetadataHttp" } }
+        operations: { type: array, maxItems: 100000, items: { $ref: "#/components/schemas/RemoteSyncOperation" } }
+        skipped: { type: array, maxItems: 100000, items: { $ref: "#/components/schemas/RemoteSyncOperation" } }
+    RemoteSyncPreparedPush:
+      type: object
+      additionalProperties: false
+      required: [schema_version, prepare_id, source, lease_id, lease_token, lease_generation, expected_revision, preview_hash, idempotency_key, payload_hash, state, expires_at]
+      properties:
+        schema_version: { type: integer, const: 1 }
+        prepare_id: { type: string, minLength: 1, maxLength: 160 }
+        source: { $ref: "#/components/schemas/RemoteSyncSourceRef" }
+        lease_id: { type: string, pattern: "^lease_[A-Za-z0-9_-]{1,127}$" }
+        lease_token: { type: string, pattern: "^lease_[A-Za-z0-9_-]{43}$" }
+        lease_generation: { type: integer, minimum: 1 }
+        expected_revision: { type: string, minLength: 1, maxLength: 160 }
+        preview_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+        idempotency_key: { type: string, minLength: 1, maxLength: 240 }
+        payload_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+        state: { type: string, const: prepared }
+        expires_at: { type: string, format: date-time }
+    RemoteSyncPushPrepareHttpResponse:
+      oneOf:
+        - type: object
+          required: [outcome, value]
+          properties: { outcome: { type: string, const: new }, value: { $ref: "#/components/schemas/RemoteSyncPreparedPush" } }
+        - type: object
+          required: [outcome, value]
+          properties: { outcome: { type: string, const: replay }, value: { $ref: "#/components/schemas/RemoteSyncPreparedPush" } }
+        - type: object
+          required: [outcome, error]
+          properties: { outcome: { type: string, const: conflict }, error: { $ref: "#/components/schemas/RemoteSyncIdempotencyConflict" } }
+    RemoteSyncPushCommitHttpRequest:
+      type: object
+      additionalProperties: false
+      required: [prepare_id, lease, idempotency_key, payload_hash]
+      properties:
+        prepare_id: { type: string, minLength: 1, maxLength: 160 }
+        lease: { $ref: "#/components/schemas/RemoteSyncLease" }
+        idempotency_key: { type: string, minLength: 1, maxLength: 240 }
+        payload_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+    RemoteSyncPushReceipt:
+      type: object
+      additionalProperties: false
+      required: [schema_version, prepare_id, source, idempotency_key, payload_hash, preview_hash, project_version, artifact_id, commit_sha, manifest_hash, no_changes, applied, skipped, retryable]
+      properties:
+        schema_version: { type: integer, const: 1 }
+        prepare_id: { type: string, minLength: 1, maxLength: 160 }
+        source: { $ref: "#/components/schemas/RemoteSyncSourceRef" }
+        idempotency_key: { type: string, minLength: 1, maxLength: 240 }
+        payload_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+        preview_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+        project_version: { type: [string, "null"], pattern: "^pv_[A-Za-z0-9_-]{1,159}$" }
+        artifact_id: { type: [string, "null"], pattern: "^art_[A-Za-z0-9_-]{1,159}$" }
+        commit_sha: { type: [string, "null"], minLength: 1, maxLength: 160 }
+        manifest_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+        no_changes: { type: boolean }
+        applied: { type: array, maxItems: 100000, items: { $ref: "#/components/schemas/RemoteSyncOperation" } }
+        skipped: { type: array, maxItems: 100000, items: { $ref: "#/components/schemas/RemoteSyncOperation" } }
+        retryable: { type: array, maxItems: 100000, items: { $ref: "#/components/schemas/RemoteSyncOperation" } }
+    RemoteSyncPushCommitHttpResponse:
+      oneOf:
+        - type: object
+          required: [outcome, value]
+          properties: { outcome: { type: string, enum: [new, replay] }, value: { $ref: "#/components/schemas/RemoteSyncPushReceipt" } }
+        - type: object
+          required: [outcome, error]
+          properties: { outcome: { type: string, const: conflict }, error: { $ref: "#/components/schemas/RemoteSyncIdempotencyConflict" } }
+    RemoteSyncPushStatusHttpResponse:
+      type: object
+      additionalProperties: false
+      required: [source, state, prepare_id, idempotency_key, payload_hash]
+      properties:
+        source: { $ref: "#/components/schemas/RemoteSyncSourceRef" }
+        state: { type: string, enum: [prepared, committing, committed, failed, unknown] }
+        prepare_id: { type: string, minLength: 1, maxLength: 160 }
+        idempotency_key: { type: string, minLength: 1, maxLength: 240 }
+        payload_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+        receipt: { $ref: "#/components/schemas/RemoteSyncPushReceipt" }
+    RemoteSyncPushReceiptHttpResponse:
+      $ref: "#/components/schemas/RemoteSyncPushCommitHttpResponse"
+    RemoteSyncPullHttpRequest:
+      type: object
+      additionalProperties: false
+      required: [source, actor_id, idempotency_key]
+      properties:
+        source: { $ref: "#/components/schemas/RemoteSyncSourceRef" }
+        actor_id: { type: string, minLength: 1, maxLength: 160 }
+        idempotency_key: { type: string, minLength: 1, maxLength: 240 }
+        payload_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+    RemoteSyncPullReceipt:
+      type: object
+      additionalProperties: false
+      required: [schema_version, source, idempotency_key, payload_hash, remote_revision, local_transaction, commit_sha, artifact_id, manifest_hash, project_version, no_changes, applied, skipped, retryable]
+      properties:
+        schema_version: { type: integer, const: 1 }
+        source: { $ref: "#/components/schemas/RemoteSyncSourceRef" }
+        idempotency_key: { type: string, minLength: 1, maxLength: 240 }
+        payload_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+        remote_revision: { type: string, minLength: 1, maxLength: 160 }
+        local_transaction: { type: string, const: committed }
+        commit_sha: { type: [string, "null"], minLength: 1, maxLength: 160 }
+        artifact_id: { type: [string, "null"], pattern: "^art_[A-Za-z0-9_-]{1,159}$" }
+        manifest_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
+        project_version: { type: [string, "null"], pattern: "^pv_[A-Za-z0-9_-]{1,159}$" }
+        no_changes: { type: boolean }
+        applied: { type: array, maxItems: 100000, items: { $ref: "#/components/schemas/RemoteSyncOperation" } }
+        skipped: { type: array, maxItems: 100000, items: { $ref: "#/components/schemas/RemoteSyncOperation" } }
+        retryable: { type: array, maxItems: 100000, items: { $ref: "#/components/schemas/RemoteSyncOperation" } }
+    RemoteSyncPullHttpResponse:
+      oneOf:
+        - type: object
+          required: [outcome, value]
+          properties: { outcome: { type: string, enum: [new, replay] }, value: { $ref: "#/components/schemas/RemoteSyncPullReceipt" } }
+        - type: object
+          required: [outcome, error]
+          properties: { outcome: { type: string, const: conflict }, error: { $ref: "#/components/schemas/RemoteSyncIdempotencyConflict" } }
+    RemoteSyncIdempotencyConflict:
+      type: object
+      additionalProperties: false
+      required: [code, retryable]
+      properties:
+        code: { type: string, const: SYNC_IDEMPOTENCY_CONFLICT }
+        retryable: { type: boolean }
     RemoteContentUploadHttpSource:
       type: object
       additionalProperties: false
@@ -4942,7 +5709,7 @@ components:
         upload_id: { type: string, pattern: "^remote_content_upload:[A-Za-z0-9_-]{43}$" }
         source: { $ref: "#/components/schemas/RemoteContentUploadHttpSource" }
         idempotency_key: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
-        purpose: { type: string, const: remote_archive }
+        purpose: { type: string, enum: [remote_archive, remote_sync_file] }
         content_sha256: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
         size_bytes: { type: integer, minimum: 1, maximum: 536870912 }
         upload_ref: { $ref: "#/components/schemas/RemoteContentUploadHttpRef" }
