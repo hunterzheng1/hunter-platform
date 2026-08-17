@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 import AdmZip from "adm-zip";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createServer } from "../src/app.js";
 import { MemoryRepository } from "../src/repositories/memory.js";
@@ -202,5 +202,162 @@ describe("archives:ingest HTTP contract (06B-3 T0-4)", () => {
     });
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({ error: { code: "ARCHIVE_INGEST_INPUT_INVALID" } });
+  });
+});
+
+describe("archives:ingest knowledge enqueue (06B-3 补齐)", () => {
+  const token = "ingest-enqueue-token";
+  let app: Awaited<ReturnType<typeof createServer>>;
+  let repository: MemoryRepository;
+  let storage: MemoryArtifactStorage;
+  let projectId = "prj_ingest_enqueue";
+  const changeKey = "change-ingest-enqueue";
+  const archiveId = "arc_ingest_enqueue";
+  const requestId = "req-ingest-enqueue";
+
+  function buildValidV2Zip(): Buffer {
+    const fileContents = new Map<string, Buffer>([
+      ["summary/change-summary.json", Buffer.from(JSON.stringify({ summary: "enqueue" }))],
+      ["attestations/verification.json", Buffer.from(JSON.stringify({ verified: true }))],
+      ["candidates/knowledge.json", Buffer.from(JSON.stringify([]))],
+      ["candidates/project-content.json", Buffer.from(JSON.stringify([]))]
+    ]);
+    const manifest = {
+      schema_version: 2,
+      project_id: projectId,
+      change_key: changeKey,
+      archive_id: archiveId,
+      project_version: "pv_ingest_enqueue",
+      package_schema_version: 2,
+      archive_schema_version: 2,
+      file_count: fileContents.size,
+      files: [...fileContents.entries()].map(([path, content]) => ({
+        path,
+        content_sha256: sha256(content),
+        size_bytes: content.byteLength
+      }))
+    };
+    const zip = new AdmZip();
+    for (const [path, content] of fileContents) zip.addFile(path, content);
+    zip.addFile("archive-manifest.json", Buffer.from(JSON.stringify(manifest)));
+    return zip.toBuffer();
+  }
+
+  function protocolHeaders(zip: Buffer) {
+    const packageSha256 = sha256(zip);
+    const idempotency = sha256(canonicalJson({
+      project_id: projectId,
+      change_key: changeKey,
+      archive_schema_version: 1,
+      package_sha256: packageSha256,
+      archive_id: archiveId
+    }));
+    return {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/zip",
+      "idempotency-key": crypto.randomUUID(),
+      "x-archive-request-id": requestId,
+      "x-archive-id": archiveId,
+      "x-archive-change-key": changeKey,
+      "x-archive-schema-version": "1",
+      "x-archive-package-sha256": packageSha256,
+      "x-archive-idempotency-key": idempotency,
+      "x-archive-logical-slot": sha256(canonicalJson({
+        project_id: projectId, change_key: changeKey, archive_schema_version: 1
+      }))
+    };
+  }
+
+  // 播种 artifact 版本锚点（ingest 的 as-of project_version 前置）
+  async function seedVersionAnchor(): Promise<void> {
+    const { fileOperationSchema } = await import("@hunter-harness/contracts");
+    const { sha256Bytes: sb } = await import("@hunter-harness/core");
+    const content = new TextEncoder().encode("seed");
+    const contentSha = sb(content);
+    await storage.putBlob(contentSha, content);
+    const project = await repository.getProject("actor_ingest_enqueue", projectId);
+    const session = await repository.createProposalSession({
+      actorId: "actor_ingest_enqueue",
+      projectId,
+      baseProjectVersion: project.latestProjectVersion,
+      baseManifestHash: sb(JSON.stringify([])),
+      operations: [fileOperationSchema.parse({
+        operation: "add",
+        path: ".harness/seed.json",
+        file_kind: "user_editable",
+        content_sha256: contentSha,
+        size_bytes: content.byteLength
+      })],
+      scanOverrides: [],
+      status: "open",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      maxChunkBytes: 1024 * 1024
+    });
+    await repository.finalizeSessionAutoApprove(session);
+  }
+
+  async function setup(acceptArchive: (input: unknown) => Promise<unknown>): Promise<void> {
+    repository = new MemoryRepository();
+    await repository.createActorWithToken({ actorId: "actor_ingest_enqueue", token });
+    const project = await repository.createProject({
+      actorId: "actor_ingest_enqueue", displayName: "ingest-enqueue"
+    });
+    projectId = project.projectId;
+    storage = new MemoryArtifactStorage();
+    app = await createServer({
+      repository,
+      storage,
+      knowledgePipeline: { acceptArchive } as never
+    });
+    await seedVersionAnchor();
+  }
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  it("enqueues change projection and knowledge extraction after durable storage", async () => {
+    const acceptArchive = vi.fn(async () => ({}));
+    await setup(acceptArchive);
+    const zip = buildValidV2Zip();
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectId}/archives:ingest`,
+      headers: protocolHeaders(zip),
+      payload: zip
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(acceptArchive).toHaveBeenCalledTimes(1);
+    const [call] = acceptArchive.mock.calls as [[{
+      validated_package: { project_id: string; change_key: string; archive_id: string };
+    }]];
+    expect(call[0].validated_package).toMatchObject({
+      project_id: projectId,
+      change_key: changeKey,
+      archive_id: archiveId
+    });
+  });
+
+  it("keeps the stored receipt when knowledge enqueue fails", async () => {
+    await setup(async () => {
+      throw new Error("pipeline-down");
+    });
+    const zip = buildValidV2Zip();
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectId}/archives:ingest`,
+      headers: protocolHeaders(zip),
+      payload: zip
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toMatchObject({
+      archive_status: "stored",
+      archive_id: archiveId,
+      retryable: false
+    });
   });
 });

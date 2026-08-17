@@ -3054,6 +3054,46 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
       // mutation 框架会用传输 request_id 覆写 body.request_id；协议 request_id
       // 是 06B-3 adapter 的绑定字段，必须恢复（含幂等 replay 路径）
       result.body = { ...result.body, request_id: archiveRequestId };
+      // 06B-3 补齐：耐久存储后 best-effort 入队变更投影/知识提取任务（对齐 legacy
+      // /archive-package 语义）。嵌套失败只告警不回滚 receipt；manifest 身份与
+      // 路由绑定不一致时跳过，避免把任务挂到错误项目。
+      if (options.knowledgePipeline !== undefined) {
+        try {
+          const manifestEntry = new AdmZip(request.body as Buffer).getEntry("archive-manifest.json");
+          if (manifestEntry !== null) {
+            const validated = validateArchivePackage({
+              package_bytes: new Uint8Array(request.body as Buffer),
+              manifest_bytes: new Uint8Array(manifestEntry.getData()),
+              limits: {
+                max_package_bytes: config.maxProposalBytes,
+                max_file_count: config.maxUploadFiles + 1,
+                max_file_bytes: config.maxFileBytes,
+                max_uncompressed_bytes: config.maxProposalBytes,
+                max_compression_ratio: 100
+              },
+              validated_at: new Date().toISOString()
+            });
+            if (validated.project_id === projectId && validated.change_key === changeKey) {
+              await options.knowledgePipeline.acceptArchive({
+                schema_version: 1,
+                request_id: requestId,
+                validated_package: validated,
+                extractor_version: KNOWLEDGE_PIPELINE_EXTRACTOR_VERSION,
+                prompt_version: KNOWLEDGE_PIPELINE_PROMPT_VERSION,
+                index_schema_version: KNOWLEDGE_PIPELINE_INDEX_SCHEMA_VERSION
+              });
+            } else {
+              request.log.warn(
+                { manifest_project: validated.project_id, manifest_change: validated.change_key },
+                "archives:ingest manifest identity differs from route binding; knowledge enqueue skipped"
+              );
+            }
+          }
+        } catch (error) {
+          request.log.warn({ err: error },
+            "knowledge queue enqueue failed after archives:ingest; receipt remains authoritative");
+        }
+      }
       return send(reply, requestId, result);
     }
   );

@@ -9,7 +9,7 @@ import { Icon } from "./ui/icons";
 import { Modal } from "./ui/Modal";
 import { ToastFeedback } from "./ui/Toast";
 
-const SCOPES = ["push", "knowledge:read", "knowledge:write", "progress:write", "platform:read", "files:read", "archive:read", "archive:write"] as const;
+const SCOPES = ["push", "knowledge:read", "knowledge:write", "progress:write", "platform:read", "files:read", "files:write", "archive:read", "archive:write"] as const;
 
 interface KeyItem {
   key_id: string;
@@ -71,8 +71,9 @@ const COPY = {
       "knowledge:write": "向项目知识库写入内容",
       "platform:read": "读取项目工作台与分支监控",
       "progress:write": "上报运行事件 / 心跳（运行监控）",
-      "files:read": "读取项目文件快照"
-      ,"archive:read": "读取远端归档上传状态",
+      "files:read": "读取项目文件快照",
+      "files:write": "推送/拉取项目文件（RemoteSync）",
+      "archive:read": "读取远端归档上传状态",
       "archive:write": "上传远端归档内容"
     } as Record<(typeof SCOPES)[number], string>
   },
@@ -125,8 +126,9 @@ const COPY = {
       "knowledge:write": "Write knowledge entries (ingest)",
       "platform:read": "Read project workspace and branch monitoring",
       "progress:write": "Report run events / heartbeats (run monitor)",
-      "files:read": "Read project file snapshots"
-      ,"archive:read": "Read remote archive upload status",
+      "files:read": "Read project file snapshots",
+      "files:write": "Push/pull project files (RemoteSync)",
+      "archive:read": "Read remote archive upload status",
       "archive:write": "Upload remote archive content"
     } as Record<(typeof SCOPES)[number], string>
   }
