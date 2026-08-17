@@ -116,6 +116,36 @@ describe("ProjectWorkspace", () => {
     expect(listProjectArtifacts).toHaveBeenCalledOnce();
   });
 
+  it("groups legacy archive files into branch options without exposing technical directory levels", async () => {
+    const archiveFiles: ProjectFileMetadata[] = [
+      { ...files[0] as ProjectFileMetadata, path: ".harness/archive/alpha-feature/spec/design.md" },
+      { ...files[1] as ProjectFileMetadata, path: ".harness/archive/alpha-feature/plans/test.md" },
+      { ...files[0] as ProjectFileMetadata, path: ".harness/archive/beta-fix/reports/final/summary.json" }
+    ];
+    render(<ProjectWorkspace api={api({
+      listPlatformInformation: vi.fn(async (): Promise<PlatformInformationPage> => ({
+        schema_version: 1, contract_kind: "page", view: "branch_files", project_id: "prj_one",
+        page_state: "empty", sort: "uploaded_at_desc_snapshot_version_asc", items: [], next_cursor: null, failures: []
+      })),
+      listProjectFiles: vi.fn(async () => ({ project_id: "prj_one", project_version: "pv_one", total: 3, items: archiveFiles }))
+    })} projectId="prj_one" />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "分支文件" }));
+    expect(await screen.findByRole("button", { name: /alpha-feature/ })).toBeInTheDocument();
+    const beta = screen.getByRole("button", { name: /beta-fix/ });
+    expect(beta).toBeInTheDocument();
+    expect(screen.getByText("spec/design.md")).toBeInTheDocument();
+    fireEvent.click(beta);
+    expect(await screen.findByText("reports/final/summary.json")).toBeInTheDocument();
+    expect(screen.queryByText("spec/design.md")).not.toBeInTheDocument();
+    expect(screen.queryByText(".harness")).not.toBeInTheDocument();
+    expect(screen.queryByText("archive")).not.toBeInTheDocument();
+    const css = readFileSync(resolve(process.cwd(), "apps/web/app/globals.css"), "utf8");
+    expect(css).toMatch(/\.archive-branches-shell\s*\{/u);
+    expect(css).toMatch(/\.archive-branch-options button\.active\s*\{/u);
+    expect(css).toMatch(/@media \(max-width: 760px\)[\s\S]*\.archive-branches-shell/u);
+  });
+
   it("keeps bounded platform projections authoritative when a branch snapshot exists", async () => {
     const listProjectFiles = vi.fn(async () => ({ project_id: "prj_one", project_version: "pv_one", total: 2, items: files }));
     const listProjectArtifacts = vi.fn(async () => []);

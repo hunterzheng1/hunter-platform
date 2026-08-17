@@ -8442,6 +8442,48 @@ aside.external-skill-detail-rail {
 .project-empty-copy { padding: 24px; color: var(--muted); text-align: center; }
 
 .project-files-shell { display: grid; grid-template-columns: minmax(290px, 360px) minmax(0, 1fr); min-height: 680px; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); }
+
+.archive-branches-shell { min-height: 620px; }
+.archive-branches-panel { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-md); background: color-mix(in srgb, var(--panel) 92%, var(--bg) 8%); }
+.archive-branches-panel .runs-list-head { display: flex; min-height: 58px; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.archive-branches-panel .runs-list-head h2 { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--text-heading); font-size: 14px; }
+.archive-branches-panel .runs-list-count { min-width: 22px; padding: 2px 7px; border: 1px solid var(--line); border-radius: var(--radius-full); color: var(--muted); font-size: 10px; text-align: center; }
+.archive-branch-options { padding: 8px; }
+.archive-branch-options button { min-height: 98px; gap: 8px; padding: 12px; border-color: var(--line-dim); background: var(--bg-raised); transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out); }
+.archive-branch-options button:hover { transform: translateY(-1px); }
+.archive-branch-options button.active { border-color: color-mix(in srgb, var(--accent) 62%, var(--line)); background: color-mix(in srgb, var(--accent) 8%, var(--panel)); box-shadow: inset 3px 0 0 var(--accent); }
+.archive-branch-options .run-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 9px; align-items: center; }
+.archive-branch-options .run-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 14%, transparent); }
+.archive-branch-options .run-title-stack { min-width: 0; }
+.archive-branch-options .run-title-stack strong { display: block; overflow: hidden; color: var(--text-heading); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.archive-branch-options .run-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 9px; }
+.archive-branch-options .run-chip { padding: 2px 6px; border-radius: var(--radius-full); background: color-mix(in srgb, var(--success) 12%, var(--panel)); color: var(--success); font-size: 8px; font-weight: 700; }
+.archive-branch-options .run-time time { overflow: hidden; max-width: 150px; text-overflow: ellipsis; white-space: nowrap; }
+.archive-branch-detail { min-height: 620px; align-content: start; padding: 18px; }
+.archive-branch-detail .runs-detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding-bottom: 14px; border-bottom: 1px solid var(--line-dim); }
+.archive-branch-detail .runs-detail-head h2 { margin: 0; color: var(--text-heading); font-size: 18px; letter-spacing: -.02em; }
+.archive-branch-detail .runs-mono { margin: 4px 0 0; color: var(--muted); font: 10px/1.4 var(--font-mono); }
+.archive-branch-stats { grid-template-columns: repeat(2, minmax(0, 180px)); }
+.archive-branch-stats .runs-status-chip { background: var(--bg-raised); }
+.archive-branch-stats strong { color: var(--text-heading); font-size: 14px; }
+.archive-branch-files { display: grid; gap: 9px; }
+.archive-branch-files h3 { margin: 0; color: var(--text-heading); font-size: 12px; }
+.archive-branch-files ul { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 7px; margin: 0; padding: 0; list-style: none; }
+.archive-branch-files button { display: grid; width: 100%; min-height: 48px; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 9px 11px; border: 1px solid var(--line-dim); border-radius: var(--radius-sm); background: var(--bg-raised); color: var(--text); text-align: left; }
+.archive-branch-files button:hover, .archive-branch-files button.selected { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: color-mix(in srgb, var(--accent) 7%, var(--panel)); }
+.archive-branch-files code { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.archive-branch-files small { color: var(--muted); font-size: 9px; white-space: nowrap; }
+.archive-file-placeholder { min-height: 180px; border: 1px dashed var(--line); border-radius: var(--radius-md); }
+.archive-file-content { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--bg-raised); }
+.archive-file-content > header { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.archive-file-content .project-file-content { max-height: 420px; min-height: 180px; margin: 0; border: 0; border-radius: 0; }
+
+@media (max-width: 760px) {
+  .archive-branches-shell { grid-template-columns: 1fr; min-height: 0; }
+  .archive-branches-panel { max-height: 360px; }
+  .archive-branch-detail { min-height: 480px; }
+  .archive-branch-files ul { grid-template-columns: 1fr; }
+}
 .project-files-sidebar { display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 90%, var(--bg) 10%); }
 .project-files-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 19px; border-bottom: 1px solid var(--line); }
 .project-files-heading > div { display: flex; align-items: center; gap: 9px; }

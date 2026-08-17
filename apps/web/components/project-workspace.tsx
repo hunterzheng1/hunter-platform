@@ -71,6 +71,33 @@ interface TreeNode {
   files: ProjectFileMetadata[];
 }
 
+interface ArchiveBranchGroup {
+  name: string;
+  files: Array<{ file: ProjectFileMetadata; relativePath: string }>;
+  updatedAt: string;
+}
+
+function archiveBranchGroups(files: readonly ProjectFileMetadata[]): ArchiveBranchGroup[] | null {
+  if (files.length === 0) return null;
+  const groups = new Map<string, ArchiveBranchGroup>();
+  for (const file of files) {
+    const match = /^\.harness\/archive\/([^/]+)\/(.+)$/u.exec(file.path);
+    if (match === null) return null;
+    const [, name, relativePath] = match;
+    if (name === undefined || relativePath === undefined) return null;
+    const current = groups.get(name) ?? { name, files: [], updatedAt: file.updated_at };
+    current.files.push({ file, relativePath });
+    if (file.updated_at > current.updatedAt) current.updatedAt = file.updated_at;
+    groups.set(name, current);
+  }
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      files: group.files.sort((left, right) => left.relativePath.localeCompare(right.relativePath))
+    }))
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt) || left.name.localeCompare(right.name));
+}
+
 const EMPTY_MANIFEST_HASH = "sha256:" + "0".repeat(64);
 
 const COPY = {
@@ -103,6 +130,12 @@ const COPY = {
     noVersions: "保存第一个文件后，这里会出现版本记录。",
     changedFiles: (count: number) => `${count} 个文件变更`,
     fileTitle: "项目文件",
+    archiveBranches: "归档分支",
+    archived: "已归档",
+    branchFileCount: (count: number) => `${count} 个文件`,
+    branchUpdated: "最近更新",
+    branchFilesTitle: "分支文件",
+    openBranch: (name: string) => `打开分支 ${name}`,
     newFile: "新建文件",
     searchFiles: "搜索文件或目录",
     collapseAll: "全部折叠",
@@ -163,6 +196,12 @@ const COPY = {
     noVersions: "Version history appears after the first file is saved.",
     changedFiles: (count: number) => `${count} file changes`,
     fileTitle: "Project files",
+    archiveBranches: "Archived branches",
+    archived: "Archived",
+    branchFileCount: (count: number) => `${count} files`,
+    branchUpdated: "Last updated",
+    branchFilesTitle: "Branch files",
+    openBranch: (name: string) => `Open branch ${name}`,
     newFile: "New file",
     searchFiles: "Search files or folders",
     collapseAll: "Collapse all",
@@ -353,6 +392,7 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
   const [data, setData] = useState<WorkspaceData | null>(null);
   const [activeTab, setActiveTab] = useState<ProjectWorkspaceSection>("monitor");
   const [knowledgeActivated, setKnowledgeActivated] = useState(false);
+  const [selectedArchiveBranch, setSelectedArchiveBranch] = useState<string | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [contentByPath, setContentByPath] = useState<Map<string, ProjectFileContentCacheEntry>>(new Map());
   const [loadingContent, setLoadingContent] = useState(false);
@@ -368,6 +408,7 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
   useEffect(() => {
     setActiveTab("monitor");
     setKnowledgeActivated(false);
+    setSelectedArchiveBranch(null);
   }, [api, projectId]);
 
   useEffect(() => {
@@ -412,6 +453,11 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
     });
   }, [data, query, filter]);
   const tree = useMemo(() => buildTree(visibleFiles), [visibleFiles]);
+  const archiveBranches = useMemo(() => archiveBranchGroups(data?.files ?? []), [data?.files]);
+  const activeArchiveBranch = archiveBranches?.find((branch) => branch.name === selectedArchiveBranch)
+    ?? archiveBranches?.[0]
+    ?? null;
+  const activeArchiveFile = activeArchiveBranch?.files.find((entry) => entry.file.path === selectedPath) ?? null;
   const latestArtifact = data?.artifacts.find((artifact) => artifact.artifact_id === data.project.latest_artifact_id)
     ?? data?.artifacts[0]
     ?? null;
@@ -614,7 +660,50 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
       })}
       slots={{
         monitor: { content: <RunsMonitor api={api} projectId={projectId} /> },
-        branchFiles: { content: usesLegacyWorkspaceLists ? <div className="project-files-shell">
+        branchFiles: { content: archiveBranches !== null && activeArchiveBranch !== null ? <div className="runs-split archive-branches-shell">
+      <aside className="runs-list-panel archive-branches-panel">
+        <div className="runs-list-head"><h2>{copy.archiveBranches}<span className="runs-list-count">{archiveBranches.length}</span></h2></div>
+        <ul className="runs-list archive-branch-options">
+          {archiveBranches.map((branch) => <li key={branch.name}><button
+            type="button"
+            className={activeArchiveBranch.name === branch.name ? "active" : ""}
+            aria-label={copy.openBranch(branch.name)}
+            onClick={() => {
+              contentRequest.current += 1;
+              setSelectedArchiveBranch(branch.name);
+              setSelectedPath(null);
+              setDraft(null);
+              setLoadingContent(false);
+            }}
+          >
+            <span className="run-row"><i className="run-dot run-dot-success" aria-hidden="true" /><span className="run-title-stack"><strong title={branch.name}>{branch.name}</strong></span></span>
+            <span className="run-meta"><span className="run-chip run-chip-success">{copy.archived}</span><span>{copy.branchFileCount(branch.files.length)}</span></span>
+            <span className="run-meta run-time"><span>{copy.branchUpdated}</span><time dateTime={branch.updatedAt}>{new Date(branch.updatedAt).toLocaleString(lang === "zh" ? "zh-CN" : "en-US")}</time></span>
+          </button></li>)}
+        </ul>
+      </aside>
+      <main className="runs-detail archive-branch-detail">
+        <div className="runs-detail-head"><div><h2>{activeArchiveBranch.name}</h2><p className="runs-mono">{copy.archived}</p></div></div>
+        <div className="runs-status-grid archive-branch-stats">
+          <div className="runs-status-chip tone-success"><small>{copy.branchFilesTitle}</small><strong>{activeArchiveBranch.files.length}</strong></div>
+          <div className="runs-status-chip tone-neutral"><small>{copy.branchUpdated}</small><strong>{new Date(activeArchiveBranch.updatedAt).toLocaleDateString(lang === "zh" ? "zh-CN" : "en-US")}</strong></div>
+        </div>
+        <section className="archive-branch-files" aria-label={copy.branchFilesTitle}>
+          <h3>{copy.branchFilesTitle}</h3>
+          <ul>{activeArchiveBranch.files.map(({ file, relativePath }) => <li key={file.path}><button
+            type="button"
+            className={selectedPath === file.path ? "selected" : ""}
+            aria-label={relativePath}
+            title={relativePath}
+            onClick={() => void choose(file)}
+          ><code>{relativePath}</code><small>{file.size_bytes} {copy.bytes}</small></button></li>)}</ul>
+        </section>
+        {activeArchiveFile === null ? <div className="project-file-placeholder archive-file-placeholder"><Icon name="file" size={24} /><h3>{copy.chooseFile}</h3></div> : <section className="archive-file-content">
+          <header><div><p className="project-file-path">{activeArchiveFile.relativePath}</p><div className="project-file-badges"><span className="readonly">{copy.readOnly}</span><span>{activeArchiveFile.file.size_bytes} {copy.bytes}</span></div></div></header>
+          <pre className="project-file-content">{loadingContent && selectedContent === undefined ? copy.loadingContent : selectedContent ?? ""}</pre>
+        </section>}
+      </main>
+    </div> : usesLegacyWorkspaceLists ? <div className="project-files-shell">
       <aside className="project-files-sidebar">
         <div className="project-files-heading"><div><p className="eyebrow">{copy.fileTitle}</p><strong>{data.files.length}</strong></div><button type="button" data-touch-target="true" disabled={busy} onClick={beginAdd}><Icon name="plus" size={13} /> {copy.newFile}</button></div>
         <WorkspaceFilterBar label={copy.searchFiles} placeholder={copy.searchFiles} query={query} onQueryChange={setQuery}>
