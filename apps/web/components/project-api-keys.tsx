@@ -18,12 +18,17 @@ interface KeyItem {
   created_at: string;
   revoked_at: string | null;
   last_used_at: string | null;
+  revealable?: boolean;
 }
 
 const COPY = {
   zh: {
     title: "项目 API 密钥",
-    lede: "密钥供本机 hunter-harness CLI 连接平台使用。明文仅显示一次，请立即复制。",
+    lede: "密钥供本机 hunter-harness CLI 连接平台使用。支持再次查看（仅创建时未启用可恢复存储的旧密钥除外）。",
+    reveal: "查看",
+    revealUnavailable: "旧密钥不可再次查看",
+    copyKey: "复制",
+    keyCopied: "已复制。",
     steps: [
       "填写用途标签",
       "勾选权限范围",
@@ -92,6 +97,10 @@ const COPY = {
     copy: "Copy",
     copied: "Copied",
     empty: "No keys issued yet.",
+    reveal: "Reveal",
+    revealUnavailable: "Legacy keys cannot be revealed",
+    copyKey: "Copy",
+    keyCopied: "Copied.",
     revoke: "Revoke",
     revokeConfirm: "Revoke this key? This cannot be undone.",
     revokeConfirmTitle: "Revoke API key",
@@ -133,6 +142,8 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
   const [loading, setLoading] = useState(false);
   const [plaintext, setPlaintext] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [revealed, setRevealed] = useState<Record<string, string>>({});
+  const [revealBusy, setRevealBusy] = useState<string | null>(null);
   const [commandCopied, setCommandCopied] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [messageTone, setMessageTone] = useState<"error" | "success">("error");
@@ -195,6 +206,34 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
     setLabelError(nextLabelError);
     setScopeError(nextScopeError);
     return nextLabelError === null && nextScopeError === null;
+  }
+
+  async function handleReveal(item: KeyItem): Promise<void> {
+    if (token === null) return;
+    setRevealBusy(item.key_id);
+    try {
+      const response = await fetch(`/api/v1/projects/${projectId}/api-keys/${item.key_id}/reveal`, {
+        method: "POST",
+        headers: { Accept: "application/json", Authorization: "Bearer " + token }
+      });
+      if (!response.ok) {
+        showError(copy.failed);
+        return;
+      }
+      const payload = (await response.json()) as { api_key: string };
+      setRevealed((current) => ({ ...current, [item.key_id]: payload.api_key }));
+    } catch {
+      showError(copy.failed);
+    } finally {
+      setRevealBusy(null);
+    }
+  }
+
+  async function handleCopyRevealed(item: KeyItem): Promise<void> {
+    const value = revealed[item.key_id];
+    if (value === undefined) return;
+    await navigator.clipboard.writeText(value);
+    showSuccess(copy.keyCopied);
   }
 
   async function handleCreate(): Promise<void> {
@@ -419,9 +458,31 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
                   {item.revoked_at !== null ? (
                     <span className="api-key-revoked-label">{copy.revoked}</span>
                   ) : (
-                    <button type="button" className="danger" onClick={() => setPendingRevoke(item)}>
-                      {copy.revoke}
-                    </button>
+                    <span className="api-key-actions">
+                      {item.revealable === true ? (
+                        revealed[item.key_id] === undefined ? (
+                          <button type="button" className="secondary" disabled={revealBusy === item.key_id}
+                            onClick={() => void handleReveal(item)}>
+                            {copy.reveal}
+                          </button>
+                        ) : (
+                          <>
+                            <code className="api-key-plaintext">{revealed[item.key_id]}</code>
+                            <button type="button" className="secondary"
+                              onClick={() => void handleCopyRevealed(item)}>
+                              {copy.copyKey}
+                            </button>
+                          </>
+                        )
+                      ) : (
+                        <span className="api-key-revoked-label" title={copy.revealUnavailable}>
+                          {copy.revealUnavailable}
+                        </span>
+                      )}
+                      <button type="button" className="danger" onClick={() => setPendingRevoke(item)}>
+                        {copy.revoke}
+                      </button>
+                    </span>
                   )}
                 </td>
               </tr>

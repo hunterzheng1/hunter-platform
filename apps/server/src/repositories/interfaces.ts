@@ -106,6 +106,11 @@ export interface ProjectApiKeyRecord {
   createdAt: string;
   revokedAt: string | null;
   lastUsedAt: string | null;
+  /**
+   * AES-256-GCM 密文（v1.<iv>.<tag>.<ct> base64 段）。为 null 表示该 key 创建时
+   * 未配置 HUNTER_HARNESS_CREDENTIAL_KEY，永远无法再次查看明文。
+   */
+  keyCiphertext: string | null;
 }
 
 export interface ProjectRecord {
@@ -382,6 +387,7 @@ export interface ServerRepository extends TransactionRepository {
     actorId: string;
     label: string;
     scopes: ProjectKeyScope[];
+    keyCiphertext?: string | null;
   }): Promise<ProjectApiKeyRecord>;
   listProjectApiKeys(projectId: string): Promise<ProjectApiKeyRecord[]>;
   /** Returns false when the key does not exist or is already revoked. */

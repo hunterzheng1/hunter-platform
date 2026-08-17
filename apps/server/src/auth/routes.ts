@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createCipheriv, createDecipheriv, randomBytes, randomUUID } from "node:crypto";
 
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
@@ -22,9 +22,15 @@ import {
   verifyPassword
 } from "./accounts.js";
 import { authenticateRequest, bearerToken, requestProjectKey } from "./tokens.js";
+import { writeAudit } from "../audit/audit.js";
 
 export interface AuthRoutesOptions {
   repository: ServerRepository;
+  /**
+   * 项目 API key 明文的 AES-256-GCM 包裹密钥（与 npm 凭证同一 env 派生）。
+   * null = 功能关闭：新建 key 不再存密文，reveal 一律 409。
+   */
+  projectKeyEncryptionKey?: Uint8Array | null;
   /** Session lifetime; default 30 days. */
   sessionTtlMs?: number;
   /** Invite code lifetime; default 7 days. */
@@ -58,8 +64,30 @@ function publicProjectKey(key: ProjectApiKeyRecord): Record<string, unknown> {
     scopes: key.scopes,
     created_at: key.createdAt,
     revoked_at: key.revokedAt,
-    last_used_at: key.lastUsedAt
+    last_used_at: key.lastUsedAt,
+    revealable: key.keyCiphertext !== null
   };
+}
+
+const PROJECT_KEY_CIPHER = "aes-256-gcm";
+
+function encryptProjectKey(plaintext: string, key: Uint8Array): string {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv(PROJECT_KEY_CIPHER, Buffer.from(key), iv);
+  const ciphertext = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+  return ["v1", iv.toString("base64"), cipher.getAuthTag().toString("base64"),
+    ciphertext.toString("base64")].join(".");
+}
+
+function decryptProjectKey(packed: string, key: Uint8Array): string {
+  const parts = packed.split(".");
+  if (parts.length !== 4 || parts[0] !== "v1") {
+    throw new ServerDomainError(500, "KEY_CIPHERTEXT_INVALID", "stored key ciphertext is malformed");
+  }
+  const [, iv, authTag, ciphertext] = parts as [string, string, string, string];
+  const decipher = createDecipheriv(PROJECT_KEY_CIPHER, Buffer.from(key), Buffer.from(iv, "base64"));
+  decipher.setAuthTag(Buffer.from(authTag, "base64"));
+  return Buffer.concat([decipher.update(Buffer.from(ciphertext, "base64")), decipher.final()]).toString("utf8");
 }
 
 function publicUser(user: UserRecord, ownerActorId: string): Record<string, unknown> {
@@ -198,15 +226,17 @@ export function registerAuthRoutes(app: FastifyInstance, options: AuthRoutesOpti
     await repository.getProject(user.actorId, projectId);
     const body = createKeySchema.parse(request.body);
     const plaintext = generateProjectApiKey();
+    const wrapKey = options.projectKeyEncryptionKey ?? null;
     const record = await repository.createProjectApiKey({
       keyId: "key_" + randomUUID().replaceAll("-", ""),
       keyHash: projectApiKeyHash(plaintext),
       projectId,
       actorId: user.actorId,
       label: body.label,
-      scopes: body.scopes as ProjectKeyScope[]
+      scopes: body.scopes as ProjectKeyScope[],
+      keyCiphertext: wrapKey === null ? null : encryptProjectKey(plaintext, wrapKey)
     });
-    // Plaintext is returned exactly once; only the hash is stored.
+    // 哈希用于认证；密文（配置了包裹密钥时）支持已登录用户再次查看
     return reply.code(201).send({
       ...publicProjectKey(record),
       api_key: plaintext
@@ -219,6 +249,32 @@ export function registerAuthRoutes(app: FastifyInstance, options: AuthRoutesOpti
     await repository.getProject(user.actorId, projectId);
     const keys = await repository.listProjectApiKeys(projectId);
     return { items: keys.map((key) => publicProjectKey(key)) };
+  });
+
+  // 再次查看明文：仅登录会话可用（泄漏的项目 key 不能自我揭示），并写审计
+  app.post("/api/v1/projects/:projectId/api-keys/:keyId/reveal", async (request) => {
+    const { user } = await requireSessionUser(request, repository);
+    const { projectId, keyId } = request.params as { projectId: string; keyId: string };
+    await repository.getProject(user.actorId, projectId);
+    const keys = await repository.listProjectApiKeys(projectId);
+    const key = keys.find((item) => item.keyId === keyId && item.revokedAt === null);
+    if (key === undefined) {
+      throw new ServerDomainError(404, "KEY_NOT_FOUND", "API key not found or already revoked");
+    }
+    const wrapKey = options.projectKeyEncryptionKey ?? null;
+    if (key.keyCiphertext === null || wrapKey === null) {
+      throw new ServerDomainError(409, "KEY_NOT_REVEALABLE",
+        "该密钥创建时未启用可恢复存储，无法再次查看；请吊销后新建");
+    }
+    await writeAudit(repository, {
+      actorId: user.actorId,
+      projectId,
+      action: "project_api_key.revealed",
+      targetId: keyId,
+      requestId: request.id,
+      details: { label: key.label }
+    });
+    return { key_id: keyId, api_key: decryptProjectKey(key.keyCiphertext, wrapKey) };
   });
 
   app.delete("/api/v1/projects/:projectId/api-keys/:keyId", async (request) => {

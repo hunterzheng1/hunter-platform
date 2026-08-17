@@ -213,6 +213,7 @@ export interface CreateServerOptions {
   npmPublishConfig?: ReturnType<typeof loadNpmPublishConfig>;
   npmCredentialPersistence?: NpmCredentialPersistence;
   npmCredentialEncryptionKey?: Uint8Array | null;
+  projectKeyEncryptionKey?: Uint8Array | null;
   npmCredentialVerifier?: (token: string, scope: string) => Promise<{ username: string }>;
   /** External Skill ?? fetch ??????? */
   externalFetch?: typeof fetch;
@@ -1035,7 +1036,8 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   // P2 auth: username/password login -> hhs_ session token (Bearer-compatible).
   registerAuthRoutes(app, {
     repository,
-    ownerActorId
+    ownerActorId,
+    projectKeyEncryptionKey: options.projectKeyEncryptionKey ?? null
   });
 
   app.get("/api/v1/system/npm-publishing", async (request, reply) => {

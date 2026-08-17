@@ -244,3 +244,111 @@ describe("project-scoped API keys (P2)", () => {
     expect(denied.statusCode).toBe(403);
   });
 });
+
+
+describe("API key reveal（可恢复查看）", () => {
+  let repository: MemoryRepository;
+  let sessionToken: string;
+  let projectId: string;
+
+  async function boot(withKey: boolean) {
+    repository = new MemoryRepository();
+    const app = await createServer({
+      repository,
+      storage: new MemoryArtifactStorage(),
+      ...(withKey ? { projectKeyEncryptionKey: new Uint8Array(32).fill(7) } : {})
+    });
+    await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/register",
+      payload: { username: "owner", password: "super-secret-1" }
+    });
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/v1/auth/login",
+      payload: { username: "owner", password: "super-secret-1" }
+    });
+    sessionToken = login.json().token as string;
+    const { uuidV7: uuid } = await import("@hunter-harness/core");
+    const resolve = await app.inject({
+      method: "POST",
+      url: "/api/v1/projects:resolve",
+      headers: {
+        authorization: "Bearer " + sessionToken,
+        "x-request-id": uuid(),
+        "idempotency-key": uuid()
+      },
+      payload: {
+        schema_version: 1,
+        local_project_key: uuid(),
+        display_name: "demo",
+        requested_project_id: null,
+        client_id: "cli_reveal_test"
+      }
+    });
+    projectId = resolve.json().project_id as string;
+    return app;
+  }
+
+  it("配置包裹密钥：创建后可再次查看同一明文", async () => {
+    const app = await boot(true);
+    const created = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectId}/api-keys`,
+      headers: { authorization: "Bearer " + sessionToken },
+      payload: { label: "reveal me", scopes: ["push"] }
+    });
+    expect(created.statusCode).toBe(201);
+    const body = created.json() as { key_id: string; api_key: string; revealable: boolean };
+    expect(body.revealable).toBe(true);
+
+    const revealed = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectId}/api-keys/${body.key_id}/reveal`,
+      headers: { authorization: "Bearer " + sessionToken }
+    });
+    expect(revealed.statusCode).toBe(200);
+    expect(revealed.json()).toMatchObject({ key_id: body.key_id, api_key: body.api_key });
+    await app.close();
+  });
+
+  it("未配置包裹密钥：revealable=false 且 reveal 返回 409", async () => {
+    const app = await boot(false);
+    const created = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectId}/api-keys`,
+      headers: { authorization: "Bearer " + sessionToken },
+      payload: { label: "legacy", scopes: ["push"] }
+    });
+    const body = created.json() as { key_id: string; revealable: boolean };
+    expect(body.revealable).toBe(false);
+
+    const revealed = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectId}/api-keys/${body.key_id}/reveal`,
+      headers: { authorization: "Bearer " + sessionToken }
+    });
+    expect(revealed.statusCode).toBe(409);
+    expect(revealed.json()).toMatchObject({ error: { code: "KEY_NOT_REVEALABLE" } });
+    await app.close();
+  });
+
+  it("项目 API key 不能用于揭示（仅登录会话）", async () => {
+    const app = await boot(true);
+    const created = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectId}/api-keys`,
+      headers: { authorization: "Bearer " + sessionToken },
+      payload: { label: "guard", scopes: ["push"] }
+    });
+    const body = created.json() as { key_id: string; api_key: string };
+
+    const revealed = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectId}/api-keys/${body.key_id}/reveal`,
+      headers: { authorization: "Bearer " + body.api_key }
+    });
+    expect([401, 403]).toContain(revealed.statusCode);
+    await app.close();
+  });
+});

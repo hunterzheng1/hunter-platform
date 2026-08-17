@@ -208,6 +208,7 @@ export class MemoryRepository implements ServerRepository {
     actorId: string;
     label: string;
     scopes: ProjectKeyScope[];
+    keyCiphertext?: string | null;
   }): Promise<ProjectApiKeyRecord> {
     const record: ProjectApiKeyRecord = {
       keyId: input.keyId,
@@ -217,7 +218,8 @@ export class MemoryRepository implements ServerRepository {
       scopes: [...input.scopes],
       createdAt: new Date().toISOString(),
       revokedAt: null,
-      lastUsedAt: null
+      lastUsedAt: null,
+      keyCiphertext: input.keyCiphertext ?? null
     };
     this.projectApiKeys.set(input.keyHash, record);
     return record;

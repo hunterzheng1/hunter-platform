@@ -159,6 +159,7 @@ const app = await createServer({
   platformInformation,
   knowledgePipeline,
   npmCredentialEncryptionKey,
+  projectKeyEncryptionKey: npmCredentialEncryptionKey,
   logger: true
 });
 
