@@ -309,6 +309,11 @@ describe("API key reveal（可恢复查看）", () => {
     });
     expect(revealed.statusCode).toBe(200);
     expect(revealed.json()).toMatchObject({ key_id: body.key_id, api_key: body.api_key });
+    const audit = await repository.listAuditEvents();
+    const revealEvent = audit.find((event) => event.action === "project_api_key.revealed");
+    expect(revealEvent?.requestId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu
+    );
     await app.close();
   });
 

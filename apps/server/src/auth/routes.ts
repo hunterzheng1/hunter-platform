@@ -56,6 +56,15 @@ const createKeySchema = z.object({
   scopes: z.array(z.enum(PROJECT_KEY_SCOPES)).min(1)
 }).strict();
 
+function auditRequestId(request: FastifyRequest): string {
+  const header = request.headers["x-request-id"];
+  if (header === undefined) return randomUUID();
+  if (typeof header !== "string" || !z.uuid().safeParse(header).success) {
+    throw new ServerDomainError(400, "VALIDATION_FAILED", "X-Request-Id is invalid");
+  }
+  return header;
+}
+
 function publicProjectKey(key: ProjectApiKeyRecord): Record<string, unknown> {
   return {
     key_id: key.keyId,
@@ -271,7 +280,7 @@ export function registerAuthRoutes(app: FastifyInstance, options: AuthRoutesOpti
       projectId,
       action: "project_api_key.revealed",
       targetId: keyId,
-      requestId: request.id,
+      requestId: auditRequestId(request),
       details: { label: key.label }
     });
     return { key_id: keyId, api_key: decryptProjectKey(key.keyCiphertext, wrapKey) };
