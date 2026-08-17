@@ -29,10 +29,11 @@ describe("ProjectApiKeysPanel", () => {
 
     await waitFor(() => expect(screen.getByText(/尚未签发|No keys issued/i)).toBeTruthy());
     const checkboxes = screen.getAllByRole("checkbox");
-    expect(checkboxes).toHaveLength(8);
+    expect(checkboxes).toHaveLength(9);
     for (const checkbox of checkboxes) {
       expect(checkbox).toBeChecked();
     }
+    expect(screen.getByText("files:write")).toBeVisible();
     expect(screen.getByText("archive:read")).toBeVisible();
     expect(screen.getByText("archive:write")).toBeVisible();
   });

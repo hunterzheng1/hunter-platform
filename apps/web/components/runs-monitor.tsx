@@ -180,17 +180,23 @@ function derivePhaseSteps(events: RunEventSummary[], run: RunSummary, now: numbe
         latestPreparation
       };
     }
-    if (finished) return {
-      name,
-      state: "done" as const,
-      durationMs,
-      attemptCount,
-      activeAttempt,
-      preparationAttemptCount,
-      activePreparation,
-      blockedPreparationCount,
-      latestPreparation
-    };
+    if (finished) {
+      // 只给真正执行过的阶段涂绿：事件流里出现过的阶段算执行过；
+      // 没有任何上报痕迹的阶段（例如只跑到 plan 的 run 里的 run/test/archive）
+      // 保持未开始，不能跟着 run 的终态一起变绿。
+      const executed = observed.has(name);
+      return {
+        name,
+        state: executed ? ("done" as const) : ("pending" as const),
+        durationMs,
+        attemptCount,
+        activeAttempt,
+        preparationAttemptCount,
+        activePreparation,
+        blockedPreparationCount,
+        latestPreparation
+      };
+    }
     let state: PhaseState;
     if (currentIndex === -1) {
       // 还没有任何阶段上报：运行中则第一个阶段视为进行中，否则全部未开始

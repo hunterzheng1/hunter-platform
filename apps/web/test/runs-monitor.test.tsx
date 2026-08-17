@@ -96,6 +96,47 @@ describe("RunsMonitor", () => {
     }
   });
 
+  it("paints only executed phases green when a run finished after just the plan phase", async () => {
+    // 回归：plan 结束即 phase_ended → run succeeded，但 run/test/.../archive
+    // 从未上报，不得跟着 run 终态一起涂绿。
+    const planOnly: RunSummary = {
+      ...run("run_plan_only", "只执行了规划阶段", "2026-08-09T14:00:00.000Z"),
+      run_status: "succeeded",
+      current_phase: "plan",
+      planned_phases: ["plan", "run", "test", "review", "submit", "merge", "archive"],
+      phases: []
+    };
+    const planEvent: RunEventSummary = {
+      server_cursor: 1,
+      run_id: "run_plan_only",
+      event_id: "plan_event:plan_ended",
+      producer_seq: 1,
+      event_type: "phase_ended",
+      phase: "plan",
+      occurred_at: "2026-08-09T14:05:00.000Z",
+      payload: {}
+    };
+    const api = {
+      listProjectRuns: vi.fn(async () => ({ items: [planOnly], total: 1, next_cursor: null })),
+      listProjectRunEvents: vi.fn(async () => ({ items: [planEvent], next_cursor: 0 })),
+      streamProjectRunEvents: vi.fn(async () => ({ abort: vi.fn() }))
+    } as unknown as HunterApi;
+
+    render(<RunsMonitor api={api} projectId="prj_one" />);
+
+    const plan = await waitFor(() => {
+      const node = document.querySelector('.phase-step[data-phase="plan"]');
+      expect(node).not.toBeNull();
+      return node as HTMLElement;
+    });
+    expect(plan).toHaveAttribute("data-state", "done");
+    for (const name of ["run", "test", "archive"]) {
+      const node = document.querySelector(`.phase-step[data-phase="${name}"]`);
+      expect(node, `${name} 阶段不应被涂绿`).not.toBeNull();
+      expect(node).toHaveAttribute("data-state", "pending");
+    }
+  });
+
   it("shows a blocked fixback preparation without changing completed coding time", async () => {
     const blocked: RunSummary = {
       ...run("run_fixback_blocked", "修复回流测试", "2026-08-08T02:00:00.000Z"),
