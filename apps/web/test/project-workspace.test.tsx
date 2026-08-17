@@ -118,9 +118,10 @@ describe("ProjectWorkspace", () => {
 
   it("presents archived branches with localized names, prioritized file groups, and rendered Markdown", async () => {
     const archiveFiles: ProjectFileMetadata[] = [
-      { ...files[0] as ProjectFileMetadata, path: ".harness/archive/kb-config-upload-binding/spec/design.md" },
-      { ...files[1] as ProjectFileMetadata, path: ".harness/archive/kb-config-upload-binding/plans/implementation-plan.md" },
-      { ...files[0] as ProjectFileMetadata, path: ".harness/archive/kb-config-upload-binding/reports/final/summary.json" },
+      { ...files[0] as ProjectFileMetadata, path: ".harness/archive/kb-config-upload-binding/spec/kb-config-upload-binding-design.md" },
+      { ...files[1] as ProjectFileMetadata, path: ".harness/archive/kb-config-upload-binding/plans/kb-config-upload-binding-plan.md" },
+      { ...files[0] as ProjectFileMetadata, path: ".harness/archive/kb-config-upload-binding/reports/final/summary-data.json" },
+      { ...files[0] as ProjectFileMetadata, path: ".harness/archive/kb-config-upload-binding/change-context.json" },
       { ...files[0] as ProjectFileMetadata, path: ".harness/archive/required-indicators-raw-config/notes.md" }
     ];
     render(<ProjectWorkspace api={api({
@@ -128,7 +129,7 @@ describe("ProjectWorkspace", () => {
         schema_version: 1, contract_kind: "page", view: "branch_files", project_id: "prj_one",
         page_state: "empty", sort: "uploaded_at_desc_snapshot_version_asc", items: [], next_cursor: null, failures: []
       })),
-      listProjectFiles: vi.fn(async () => ({ project_id: "prj_one", project_version: "pv_one", total: 4, items: archiveFiles })),
+      listProjectFiles: vi.fn(async () => ({ project_id: "prj_one", project_version: "pv_one", total: 5, items: archiveFiles })),
       listProjectRuns: vi.fn(async () => ({
         items: [{
           run_id: "run_required", project_id: "prj_one", change_key: "required-indicators-raw-config",
@@ -141,7 +142,19 @@ describe("ProjectWorkspace", () => {
       getProjectFileContent: vi.fn(async (_projectId, path) => ({
         ...(archiveFiles.find((file) => file.path === path) as ProjectFileMetadata),
         project_id: "prj_one",
-        content: path.endsWith(".md") ? "# 设计方案\n\n- 支持配置上传\n- 保留审计记录\n\n![远程示意图](https://example.invalid/tracker.png)\n\n[相关文档](./related.md)" : "{}"
+        content: path.endsWith("summary-data.json")
+          ? JSON.stringify({
+              schemaVersion: "2.0", changeName: "kb-config-upload-binding", businessGoal: "支持配置上传绑定",
+              finalStatus: "passed", releaseEligible: true, riskTier: "low",
+              verification: { tests: { passed: 18, failed: 0 }, build: "passed" },
+              changedFiles: Array.from({ length: 130 }, (_, index) => index === 0 ? "apps/server/src/config.ts" : `files/change-${index}.ts`),
+              knownRisks: []
+            })
+          : path.endsWith("change-context.json")
+            ? JSON.stringify({ schemaVersion: 1, displayTitle: "知识库配置上传绑定", ownership: { owner: "team-platform" } })
+            : path.endsWith(".md")
+              ? "# 设计方案\n\n- 支持配置上传\n- 保留审计记录\n\n![远程示意图](https://example.invalid/tracker.png)\n\n[相关文档](./related.md)"
+              : "{}"
       }))
     })} projectId="prj_one" />);
 
@@ -161,9 +174,9 @@ describe("ProjectWorkspace", () => {
     expect(planHeading.closest("details")).toHaveAttribute("open");
     expect(specHeading.closest("details")).toHaveAttribute("open");
     expect(reportHeading.closest("details")).not.toHaveAttribute("open");
-    expect(screen.getByText("implementation-plan.md")).toBeInTheDocument();
+    expect(screen.getByText("plan.md")).toBeInTheDocument();
     expect(screen.getByText("plans")).toBeInTheDocument();
-    expect(screen.queryByText("plans/implementation-plan.md")).not.toBeInTheDocument();
+    expect(screen.queryByText("kb-config-upload-binding-plan.md")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /打开文件.*design\.md/ }));
     expect(await screen.findByRole("heading", { name: "设计方案" })).toBeInTheDocument();
@@ -172,15 +185,60 @@ describe("ProjectWorkspace", () => {
     expect(screen.queryByRole("img", { name: "远程示意图" })).not.toBeInTheDocument();
     expect(screen.getByText(/^远程图片未自动加载/u)).toBeInTheDocument();
     expect(screen.getByText("相关文档").closest("a")).toBeNull();
-    expect(screen.getByRole("button", { name: "打开文件 spec/design.md" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "打开文件 spec/kb-config-upload-binding-design.md" })).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(reportHeading.closest("summary") as HTMLElement);
+    const reportFileButton = screen.getByRole("button", { name: "打开文件 reports/final/summary-data.json" });
+    fireEvent.click(reportFileButton);
+    await waitFor(() => expect(reportFileButton).toHaveAttribute("aria-pressed", "true"));
+    expect(await screen.findByRole("heading", { name: "交付报告概览" })).toBeInTheDocument();
+    expect(screen.getByText("最终状态")).toBeInTheDocument();
+    expect(screen.getByText("支持配置上传绑定")).toBeInTheDocument();
+    expect(screen.queryByText("apps/server/src/config.ts")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("变更文件").closest("summary") as HTMLElement);
+    expect(await screen.findByText("apps/server/src/config.ts")).toBeInTheDocument();
+    expect(screen.queryByText("files/change-129.ts")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /继续显示（剩余 30 项）/ }));
+    expect(await screen.findByText("files/change-129.ts")).toBeInTheDocument();
+
+    const otherHeading = screen.getByText("其他文件");
+    fireEvent.click(otherHeading.closest("summary") as HTMLElement);
+    fireEvent.click(screen.getByRole("button", { name: "打开文件 change-context.json" }));
+    expect(await screen.findByRole("heading", { name: "JSON 阅读视图" })).toBeInTheDocument();
+    expect(screen.getByText("显示标题")).toBeInTheDocument();
+    expect(screen.getAllByText("知识库配置上传绑定").some((node) => node.classList.contains("json-string"))).toBe(true);
+
     expect(screen.queryByText(".harness")).not.toBeInTheDocument();
     expect(screen.queryByText("archive")).not.toBeInTheDocument();
 
     const css = readFileSync(resolve(process.cwd(), "apps/web/app/globals.css"), "utf8");
-    expect(css).toMatch(/\.archive-branch-browser\s*\{/u);
+    expect(css).toMatch(/\.archive-branch-browser\s*\{[^}]*grid-template-columns:\s*minmax\(180px,\s*24%\)/u);
     expect(css).toMatch(/\.archive-file-group\s*\{/u);
     expect(css).toMatch(/\.archive-markdown\s*\{/u);
     expect(css).toMatch(/@media \(max-width: 760px\)[\s\S]*\.archive-branches-shell/u);
+  });
+
+  it("does not download oversized archived JSON in the browser", async () => {
+    const oversized: ProjectFileMetadata = {
+      ...(files[0] as ProjectFileMetadata),
+      path: ".harness/archive/large-report/change-context.json",
+      size_bytes: 2 * 1024 * 1024 + 1
+    };
+    const getProjectFileContent = vi.fn(async () => ({ ...oversized, project_id: "prj_one", content: "{}" }));
+    render(<ProjectWorkspace api={api({
+      listPlatformInformation: vi.fn(async (): Promise<PlatformInformationPage> => ({
+        schema_version: 1, contract_kind: "page", view: "branch_files", project_id: "prj_one",
+        page_state: "empty", sort: "uploaded_at_desc_snapshot_version_asc", items: [], next_cursor: null, failures: []
+      })),
+      listProjectFiles: vi.fn(async () => ({ project_id: "prj_one", project_version: "pv_one", total: 1, items: [oversized] })),
+      getProjectFileContent
+    })} projectId="prj_one" />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "分支文件" }));
+    fireEvent.click(screen.getByText("其他文件").closest("summary") as HTMLElement);
+    fireEvent.click(screen.getByRole("button", { name: "打开文件 change-context.json" }));
+    expect(await screen.findByText("JSON 文件过大")).toBeInTheDocument();
+    expect(getProjectFileContent).not.toHaveBeenCalled();
   });
 
   it("keeps bounded platform projections authoritative when a branch snapshot exists", async () => {

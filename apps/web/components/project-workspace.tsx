@@ -140,6 +140,113 @@ function archiveFileParts(relativePath: string): { name: string; directory: stri
   return { name: segments.at(-1) ?? relativePath, directory: segments.slice(0, -1).join(" / ") };
 }
 
+function archiveFileDisplayName(branchName: string, fileName: string): string {
+  const prefix = `${branchName}-`;
+  const shortened = fileName.startsWith(prefix) ? fileName.slice(prefix.length) : fileName;
+  return shortened === "" ? fileName : shortened;
+}
+
+type ReadableJson = null | boolean | number | string | ReadableJson[] | { [key: string]: ReadableJson };
+type JsonParseResult = { ok: true; value: ReadableJson } | { ok: false };
+
+const JSON_RENDER_PAGE_SIZE = 100;
+const JSON_RENDER_MAX_DEPTH = 12;
+const JSON_BROWSER_MAX_BYTES = 2 * 1024 * 1024;
+
+function parseReadableJson(content: string | undefined): JsonParseResult {
+  if (content === undefined) return { ok: false };
+  try {
+    return { ok: true, value: JSON.parse(content) as ReadableJson };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function jsonObject(value: ReadableJson): value is { [key: string]: ReadableJson } {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+const JSON_LABELS_ZH: Readonly<Record<string, string>> = {
+  schemaVersion: "结构版本", changeName: "变更标识", displayTitle: "显示标题", businessGoal: "业务目标",
+  finalStatus: "最终状态", finalStatusReasons: "状态说明", releaseEligible: "可发布", riskTier: "风险等级",
+  verification: "验证结果", changedFiles: "变更文件", knownRisks: "已知风险", reviewSummary: "评审摘要",
+  reviewFindings: "评审发现", stageStatus: "阶段状态", timeline: "时间线", durations: "耗时",
+  efficiency: "效率", releaseDecision: "发布决策", manualActions: "手工操作", maintenanceNotes: "维护说明",
+  artifacts: "交付物", ownership: "归属信息", plannedPhases: "计划阶段", lifecycle: "生命周期",
+  build: "构建", tests: "测试", passed: "通过", failed: "失败", owner: "负责人"
+};
+
+function humanizeJsonKey(key: string, lang: "zh" | "en"): string {
+  if (lang === "zh" && JSON_LABELS_ZH[key] !== undefined) return JSON_LABELS_ZH[key];
+  const words = key.replace(/([a-z0-9])([A-Z])/gu, "$1 $2").replaceAll("_", " ").replaceAll("-", " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+function jsonCollectionSummary(value: ReadableJson, lang: "zh" | "en"): string {
+  if (Array.isArray(value)) return lang === "zh" ? `${value.length} 项` : `${value.length} items`;
+  if (jsonObject(value)) return lang === "zh" ? `${Object.keys(value).length} 个字段` : `${Object.keys(value).length} fields`;
+  return "";
+}
+
+function JsonScalar({ value, lang }: { value: null | boolean | number | string; lang: "zh" | "en" }) {
+  if (value === null) return <span className="json-null">—</span>;
+  if (typeof value === "boolean") return <span className={`json-boolean ${value ? "positive" : "negative"}`}>{lang === "zh" ? value ? "是" : "否" : String(value)}</span>;
+  if (typeof value === "number") return <span className="json-number">{value.toLocaleString(lang === "zh" ? "zh-CN" : "en-US")}</span>;
+  return <span className="json-string">{value}</span>;
+}
+
+function JsonLazySection({ name, value, lang, depth }: { name: string; value: ReadableJson[] | { [key: string]: ReadableJson }; lang: "zh" | "en"; depth: number }) {
+  const [open, setOpen] = useState(false);
+  return <details className="json-section" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <summary><span><strong>{humanizeJsonKey(name, lang)}</strong><code>{name}</code></span><small>{jsonCollectionSummary(value, lang)}</small></summary>
+    {open ? <JsonCollection value={value} lang={lang} depth={depth + 1} /> : null}
+  </details>;
+}
+
+function JsonCollection({ value, lang, depth = 0, skip = new Set<string>() }: { value: ReadableJson[] | { [key: string]: ReadableJson }; lang: "zh" | "en"; depth?: number; skip?: ReadonlySet<string> }) {
+  const [visibleCount, setVisibleCount] = useState(JSON_RENDER_PAGE_SIZE);
+  useEffect(() => setVisibleCount(JSON_RENDER_PAGE_SIZE), [value]);
+  if (depth >= JSON_RENDER_MAX_DEPTH) {
+    return <p className="json-render-limit">{lang === "zh" ? "内容层级过深，已停止继续展开。" : "Maximum display depth reached."}</p>;
+  }
+  if (Array.isArray(value)) {
+    const visible = value.slice(0, visibleCount);
+    const remaining = value.length - visible.length;
+    return <><ol className="json-array">{visible.map((item, index) => <li key={index}>
+      {Array.isArray(item) || jsonObject(item)
+        ? <JsonLazySection name={lang === "zh" ? `第 ${index + 1} 项` : `Item ${index + 1}`} value={item} lang={lang} depth={depth} />
+        : <JsonScalar value={item} lang={lang} />}
+    </li>)}</ol>{remaining > 0 ? <button type="button" className="json-load-more" onClick={() => setVisibleCount((count) => count + JSON_RENDER_PAGE_SIZE)}>{lang === "zh" ? `继续显示（剩余 ${remaining} 项）` : `Show more (${remaining} remaining)`}</button> : null}</>;
+  }
+  const entries = Object.entries(value).filter(([key]) => !skip.has(key));
+  const visible = entries.slice(0, visibleCount);
+  const remaining = entries.length - visible.length;
+  return <><div className="json-object">{visible.map(([key, item]) =>
+    Array.isArray(item) || jsonObject(item)
+      ? <JsonLazySection key={key} name={key} value={item} lang={lang} depth={depth} />
+      : <div className="json-field" key={key}><div className="json-field-label"><span>{humanizeJsonKey(key, lang)}</span><code>{key}</code></div><div className="json-field-value"><JsonScalar value={item} lang={lang} /></div></div>
+  )}</div>{remaining > 0 ? <button type="button" className="json-load-more" onClick={() => setVisibleCount((count) => count + JSON_RENDER_PAGE_SIZE)}>{lang === "zh" ? `继续显示（剩余 ${remaining} 项）` : `Show more (${remaining} remaining)`}</button> : null}</>;
+}
+
+function JsonDocument({ value, lang, report }: { value: ReadableJson; lang: "zh" | "en"; report: boolean }) {
+  const title = report ? (lang === "zh" ? "交付报告概览" : "Delivery report overview") : (lang === "zh" ? "JSON 阅读视图" : "JSON reading view");
+  const summaryKeys = report
+    ? ["changeName", "businessGoal", "finalStatus", "releaseEligible", "riskTier", "schemaVersion"]
+    : ["displayTitle", "changeName", "schemaVersion"];
+  const summary = jsonObject(value) ? summaryKeys.flatMap((key) => {
+    const item = value[key];
+    return item === null || typeof item === "boolean" || typeof item === "number" || typeof item === "string" ? [{ key, item }] : [];
+  }) : [];
+  const renderedSummaryKeys = new Set(summary.map(({ key }) => key));
+  return <article className={`archive-json ${report ? "report" : "generic"}`}>
+    <header><div><p className="eyebrow">{report ? (lang === "zh" ? "结构化报告" : "Structured report") : "JSON"}</p><h3>{title}</h3></div></header>
+    {summary.length === 0 ? null : <div className="json-summary-grid">{summary.map(({ key, item }) => <section key={key}><small>{humanizeJsonKey(key, lang)}</small><JsonScalar value={item} lang={lang} /></section>)}</div>}
+    <div className="json-document-body">{Array.isArray(value) || jsonObject(value)
+      ? <JsonCollection value={value} lang={lang} skip={renderedSummaryKeys} />
+      : <JsonScalar value={value} lang={lang} />}</div>
+  </article>;
+}
+
 function archiveBranchGroups(files: readonly ProjectFileMetadata[]): ArchiveBranchGroup[] | null {
   if (files.length === 0) return null;
   const groups = new Map<string, ArchiveBranchGroup>();
@@ -535,6 +642,11 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
   const selectedContent = selected === null || !contentCacheMatches(selectedCache, selected, projectId)
     ? undefined
     : selectedCache?.content;
+  const selectedJsonTooLarge = selected !== null && /\.json$/iu.test(selected.path) && selected.size_bytes > JSON_BROWSER_MAX_BYTES;
+  const selectedJson = useMemo(
+    () => selected !== null && /\.json$/iu.test(selected.path) && !selectedJsonTooLarge ? parseReadableJson(selectedContent) : { ok: false } as const,
+    [selected, selectedContent, selectedJsonTooLarge]
+  );
   const editableFiles = data?.files.filter((file) => isProposalEditable(classifyManagedFile(file.path))).length ?? 0;
   const visibleFiles = useMemo(() => {
     if (data === null) return [];
@@ -590,6 +702,11 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
     setError(null);
     setSelectedPath(file.path);
     setDraft(null);
+    if (/\.json$/iu.test(file.path) && file.size_bytes > JSON_BROWSER_MAX_BYTES) {
+      contentRequest.current += 1;
+      setLoadingContent(false);
+      return;
+    }
     if (contentCacheMatches(contentByPath.get(file.path), file, projectId) || api.getProjectFileContent === undefined) return;
     const request = ++contentRequest.current;
     setLoadingContent(true);
@@ -808,7 +925,7 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
                   aria-pressed={selectedPath === file.path}
                   title={relativePath}
                   onClick={() => void choose(file)}
-                ><span className="archive-file-identity"><strong>{parts.name}</strong>{parts.directory === "" ? null : <small>{parts.directory}</small>}</span><small>{file.size_bytes} {copy.bytes}</small></button></li>;
+                ><span className="archive-file-identity"><strong>{archiveFileDisplayName(activeArchiveBranch.name, parts.name)}</strong>{parts.directory === "" ? null : <small>{parts.directory}</small>}</span><small>{file.size_bytes} {copy.bytes}</small></button></li>;
               })}</ul>
             </details>)}
           </nav>
@@ -825,7 +942,7 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
                       ? <a href={href}>{children}</a>
                       : <span className="archive-markdown-relative-link" title={href}>{children}</span>
                 }}
-              >{selectedContent ?? ""}</ReactMarkdown></article> : <pre className="project-file-content">{selectedContent ?? ""}</pre>}
+              >{selectedContent ?? ""}</ReactMarkdown></article> : selectedJsonTooLarge ? <div className="json-too-large"><strong>{lang === "zh" ? "JSON 文件过大" : "JSON file is too large"}</strong><p>{lang === "zh" ? "为避免浏览器卡顿，超过 2 MB 的 JSON 不在页面中展开。" : "JSON files over 2 MB are not expanded in the browser."}</p></div> : /\.json$/iu.test(activeArchiveFile.relativePath) && selectedJson.ok ? <JsonDocument value={selectedJson.value} lang={lang} report={/(^|\/)reports\/final\/summary-data\.json$/iu.test(activeArchiveFile.relativePath)} /> : <pre className="project-file-content">{selectedContent ?? ""}</pre>}
             </section>}
           </div>
         </div>
