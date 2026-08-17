@@ -231,22 +231,35 @@ describe("transaction recovery", () => {
   });
 
   it("rolls back only the explicitly selected committed transaction", async () => {
-    const root = await mkdtemp(join(tmpdir(), "hunter-exact-rollback-"));
-    await writeFile(join(root, "one.md"), "before");
-    await runTransaction(root, [
-      { operation: "modify", path: "one.md", content: "first" }
-    ], { id: "tx_first", kind: "update" });
-    await runTransaction(root, [
-      { operation: "modify", path: "one.md", content: "second" }
-    ], { id: "tx_second", kind: "update" });
+    // global-temp 将 durable recovery 重定向到测试临时根以防泄漏，但本用例验证的
+    // 是本地 rollback 槽只保留最新 committed update 的语义；临时关闭 durable
+    // discovery，避免已清理的旧事务从外部恢复索引重新进入候选集合。
+    const previousRecoveryRoot = process.env.HUNTER_HARNESS_RECOVERY_ROOT;
+    delete process.env.HUNTER_HARNESS_RECOVERY_ROOT;
+    try {
+      const root = await mkdtemp(join(tmpdir(), "hunter-exact-rollback-"));
+      await writeFile(join(root, "one.md"), "before");
+      await runTransaction(root, [
+        { operation: "modify", path: "one.md", content: "first" }
+      ], { id: "tx_first", kind: "update" });
+      await runTransaction(root, [
+        { operation: "modify", path: "one.md", content: "second" }
+      ], { id: "tx_second", kind: "update" });
 
-    await expect(
-      rollbackCommittedUpdate(root, "tx_first")
-    ).rejects.toThrow(/not available/i);
-    const result = await rollbackCommittedUpdate(root, "tx_second");
+      await expect(
+        rollbackCommittedUpdate(root, "tx_first")
+      ).rejects.toThrow(/not available/i);
+      const result = await rollbackCommittedUpdate(root, "tx_second");
 
-    expect(result.status).toBe("committed");
-    expect(await readFile(join(root, "one.md"), "utf8")).toBe("first");
+      expect(result.status).toBe("committed");
+      expect(await readFile(join(root, "one.md"), "utf8")).toBe("first");
+    } finally {
+      if (previousRecoveryRoot === undefined) {
+        delete process.env.HUNTER_HARNESS_RECOVERY_ROOT;
+      } else {
+        process.env.HUNTER_HARNESS_RECOVERY_ROOT = previousRecoveryRoot;
+      }
+    }
   });
 
   it("refuses committed rollback when its before snapshot is tampered", async () => {
