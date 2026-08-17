@@ -39,6 +39,7 @@ interface WorkspaceData {
   artifacts: ArtifactSummary[];
   files: ProjectFileMetadata[];
   overview: SemanticOverview | null;
+  branchProjectionAvailable: boolean;
 }
 
 interface ProjectFileContentCacheEntry {
@@ -80,6 +81,8 @@ const COPY = {
     loading: "正在加载项目工作台",
     pendingMaterialsTitle: "项目资料查询正在接入",
     pendingMaterialsDescription: "规则、架构事实、架构约束、指令和配置将在查询 Adapter 接通后显示。",
+    legacyMaterialsTitle: "暂无可信项目资料投影",
+    legacyMaterialsDescription: "当前文件来自普通 artifact 或历史归档，没有 branch snapshot；真实项目文件可在“分支文件”中查看，资料投影将在后续 Remote Sync 生成快照后显示。",
     pendingChangesTitle: "变更记录查询正在接入",
     pendingChangesDescription: "设计、计划、测试场景、变更总结和归档状态将在查询 Adapter 接通后显示。",
     pendingSectionTitle: "此工作台查询正在接入",
@@ -138,6 +141,8 @@ const COPY = {
     loading: "Loading project workspace",
     pendingMaterialsTitle: "Project materials query is being connected",
     pendingMaterialsDescription: "Rules, architecture facts and constraints, instructions, and configuration will appear after the query adapter is connected.",
+    legacyMaterialsTitle: "No trusted project-material projection yet",
+    legacyMaterialsDescription: "Current files came from regular artifacts or historical archives and have no branch snapshot. View the real files under Branch files; material projections appear after a later Remote Sync creates a snapshot.",
     pendingChangesTitle: "Changes query is being connected",
     pendingChangesDescription: "Designs, plans, test scenarios, change summaries, and archive status will appear after the query adapter is connected.",
     pendingSectionTitle: "This workspace query is being connected",
@@ -318,15 +323,27 @@ function DirectoryTree({
 }
 
 async function loadWorkspace(api: HunterApi, projectId: string): Promise<WorkspaceData> {
-  const useLegacyWorkspaceLists = api.listPlatformInformation === undefined;
-  if (useLegacyWorkspaceLists && api.listProjectFiles === undefined) throw new Error("project file API unavailable");
-  const [project, artifacts, snapshot, overview] = await Promise.all([
+  const [project, overview] = await Promise.all([
     api.getProject(projectId),
-    useLegacyWorkspaceLists ? api.listProjectArtifacts(projectId) : Promise.resolve([]),
-    useLegacyWorkspaceLists ? api.listProjectFiles?.(projectId) : Promise.resolve(null),
     api.getProjectSemanticOverview?.(projectId).catch(() => null) ?? Promise.resolve(null)
   ]);
-  return { project, artifacts, files: snapshot?.items ?? [], overview };
+  let branchProjectionAvailable = api.listPlatformInformation !== undefined;
+  if (api.listPlatformInformation !== undefined) {
+    try {
+      const page = await api.listPlatformInformation(projectId, "branch_files", { limit: 1, cursor: null });
+      branchProjectionAvailable = page.items.some((item) => item.item_kind === "branch_snapshot");
+    } catch {
+      // Keep the new panel authoritative on transport/auth failures so it can show the real error.
+      branchProjectionAvailable = true;
+    }
+  }
+  const useLegacyWorkspaceLists = api.listPlatformInformation === undefined || !branchProjectionAvailable;
+  if (useLegacyWorkspaceLists && api.listProjectFiles === undefined) throw new Error("project file API unavailable");
+  const [artifacts, snapshot] = await Promise.all([
+    useLegacyWorkspaceLists ? api.listProjectArtifacts(projectId) : Promise.resolve([]),
+    useLegacyWorkspaceLists ? api.listProjectFiles?.(projectId) : Promise.resolve(null)
+  ]);
+  return { project, artifacts, files: snapshot?.items ?? [], overview, branchProjectionAvailable };
 }
 
 export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId: string }) {
@@ -399,8 +416,9 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
     ?? data?.artifacts[0]
     ?? null;
   const usesInformationApi = api.listPlatformInformation !== undefined;
-  const fileCount = usesInformationApi ? data?.project.current_file_count ?? "—" : data?.files.length ?? 0;
-  const editableFileCount: number | string = usesInformationApi ? "—" : editableFiles;
+  const usesLegacyWorkspaceLists = !usesInformationApi || data?.branchProjectionAvailable === false;
+  const fileCount = usesLegacyWorkspaceLists ? data?.files.length ?? 0 : data?.project.current_file_count ?? "—";
+  const editableFileCount: number | string = usesLegacyWorkspaceLists ? editableFiles : "—";
 
   useEffect(() => {
     if (query.trim() !== "") {
@@ -596,7 +614,7 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
       })}
       slots={{
         monitor: { content: <RunsMonitor api={api} projectId={projectId} /> },
-        branchFiles: { content: api.listPlatformInformation === undefined ? <div className="project-files-shell">
+        branchFiles: { content: usesLegacyWorkspaceLists ? <div className="project-files-shell">
       <aside className="project-files-sidebar">
         <div className="project-files-heading"><div><p className="eyebrow">{copy.fileTitle}</p><strong>{data.files.length}</strong></div><button type="button" data-touch-target="true" disabled={busy} onClick={beginAdd}><Icon name="plus" size={13} /> {copy.newFile}</button></div>
         <WorkspaceFilterBar label={copy.searchFiles} placeholder={copy.searchFiles} query={query} onQueryChange={setQuery}>
@@ -643,9 +661,11 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
     </div> : <BranchFilesInformationPanel api={api} projectId={projectId} lang={lang} /> },
         materials: { content: api.listPlatformInformation === undefined
           ? <WorkspaceState technicalDetailsLabel={copy.technicalDetails} state={{ kind: "processing", title: copy.pendingMaterialsTitle, description: copy.pendingMaterialsDescription }} />
-          : <ProjectMaterialsInformationPanel api={api} projectId={projectId} lang={lang} /> },
+          : usesLegacyWorkspaceLists
+            ? <WorkspaceState technicalDetailsLabel={copy.technicalDetails} state={{ kind: "empty", title: copy.legacyMaterialsTitle, description: copy.legacyMaterialsDescription, technicalDetails: [{ label: "Code", value: "BRANCH_SNAPSHOT_REQUIRED" }] }} />
+            : <ProjectMaterialsInformationPanel api={api} projectId={projectId} lang={lang} /> },
         ...(knowledgeActivated ? { knowledge: {
-          content: api.listPlatformInformation === undefined
+          content: api.listPlatformInformation === undefined || usesLegacyWorkspaceLists && (data.overview?.counts.documents ?? 0) > 0
             ? <ProjectSemanticPanels api={api} projectId={projectId} />
             : <ProjectKnowledgeInformationPanel api={api} projectId={projectId} lang={lang} />,
           keepMounted: true
@@ -653,7 +673,7 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
         changes: { content: api.listPlatformInformation === undefined
           ? <WorkspaceState technicalDetailsLabel={copy.technicalDetails} state={{ kind: "processing", title: copy.pendingChangesTitle, description: copy.pendingChangesDescription }} />
           : <ChangeRecordsInformationPanel api={api} projectId={projectId} lang={lang} /> },
-        versions: { content: api.listPlatformInformation === undefined
+        versions: { content: usesLegacyWorkspaceLists
           ? <ProjectVersionsPanel api={api} artifacts={data.artifacts} lang={lang} />
           : <VersionRecordsInformationPanel api={api} projectId={projectId} lang={lang} /> },
         apiKeys: { content: <ProjectApiKeysPanel projectId={projectId} />, keepMounted: true }

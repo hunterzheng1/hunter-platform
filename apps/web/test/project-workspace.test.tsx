@@ -87,16 +87,20 @@ function api(overrides: Partial<HunterApi> = {}): HunterApi {
 }
 
 describe("ProjectWorkspace", () => {
-  it("does not eagerly fetch legacy full lists when the bounded information API is available", async () => {
-    const listProjectFiles = vi.fn(async () => ({ project_id: "prj_one", project_version: "pv_one", total: 5000, items: files }));
-    const listProjectArtifacts = vi.fn(async () => []);
+  it("falls back to current project files and artifact versions when branch projections are empty", async () => {
+    const listProjectFiles = vi.fn(async () => ({ project_id: "prj_one", project_version: "pv_one", total: 2, items: files }));
+    const listProjectArtifacts = vi.fn(async () => [{
+      artifact_id: "art_one", project_id: "prj_one", project_version: "pv_one",
+      base_project_version: null, proposal_id: "prp_one", changed_item_count: 2,
+      manifest_sha256: sha("a"), created_at: "2026-06-20T00:00:00Z"
+    }]);
     render(<ProjectWorkspace api={api({
       listPlatformInformation: vi.fn(async (): Promise<PlatformInformationPage> => ({
         schema_version: 1,
         contract_kind: "page" as const,
         view: "branch_files" as const,
         project_id: "prj_one",
-        page_state: "processing" as const,
+        page_state: "empty" as const,
         sort: "uploaded_at_desc_snapshot_version_asc" as const,
         items: [],
         next_cursor: null,
@@ -106,7 +110,37 @@ describe("ProjectWorkspace", () => {
       listProjectArtifacts
     })} projectId="prj_one" />);
 
-    expect(await screen.findByRole("tab", { name: "分支文件" })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("tab", { name: "分支文件" }));
+    expect(await screen.findByRole("button", { name: ".harness/knowledge/architecture.md" })).toBeInTheDocument();
+    expect(listProjectFiles).toHaveBeenCalledOnce();
+    expect(listProjectArtifacts).toHaveBeenCalledOnce();
+  });
+
+  it("keeps bounded platform projections authoritative when a branch snapshot exists", async () => {
+    const listProjectFiles = vi.fn(async () => ({ project_id: "prj_one", project_version: "pv_one", total: 2, items: files }));
+    const listProjectArtifacts = vi.fn(async () => []);
+    render(<ProjectWorkspace api={api({
+      listPlatformInformation: vi.fn(async (): Promise<PlatformInformationPage> => ({
+        schema_version: 1,
+        contract_kind: "page" as const,
+        view: "branch_files" as const,
+        project_id: "prj_one",
+        page_state: "ready" as const,
+        sort: "uploaded_at_desc_snapshot_version_asc" as const,
+        items: [{
+          item_kind: "branch_snapshot", branch_name: "feature", snapshot_version: "pv_one",
+          commit_sha: "e".repeat(40), uploaded_at: "2026-08-13T00:00:00Z",
+          file_count: 2, changed_file_count: 1, sort_key: "feature"
+        }],
+        next_cursor: null,
+        failures: []
+      })),
+      listProjectFiles,
+      listProjectArtifacts
+    })} projectId="prj_one" />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "分支文件" }));
+    expect(await screen.findByText("feature")).toBeInTheDocument();
     expect(listProjectFiles).not.toHaveBeenCalled();
     expect(listProjectArtifacts).not.toHaveBeenCalled();
   });
