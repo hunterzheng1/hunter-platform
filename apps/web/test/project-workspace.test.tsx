@@ -121,7 +121,7 @@ describe("ProjectWorkspace", () => {
       { ...files[0] as ProjectFileMetadata, path: ".harness/archive/kb-config-upload-binding/spec/design.md" },
       { ...files[1] as ProjectFileMetadata, path: ".harness/archive/kb-config-upload-binding/plans/implementation-plan.md" },
       { ...files[0] as ProjectFileMetadata, path: ".harness/archive/kb-config-upload-binding/reports/final/summary.json" },
-      { ...files[0] as ProjectFileMetadata, path: ".harness/archive/usage-stats-cli-reporting/notes.md" }
+      { ...files[0] as ProjectFileMetadata, path: ".harness/archive/required-indicators-raw-config/notes.md" }
     ];
     render(<ProjectWorkspace api={api({
       listPlatformInformation: vi.fn(async (): Promise<PlatformInformationPage> => ({
@@ -129,6 +129,15 @@ describe("ProjectWorkspace", () => {
         page_state: "empty", sort: "uploaded_at_desc_snapshot_version_asc", items: [], next_cursor: null, failures: []
       })),
       listProjectFiles: vi.fn(async () => ({ project_id: "prj_one", project_version: "pv_one", total: 4, items: archiveFiles })),
+      listProjectRuns: vi.fn(async () => ({
+        items: [{
+          run_id: "run_required", project_id: "prj_one", change_key: "required-indicators-raw-config",
+          title: "所需指标返回指标原始配置与指标ID", run_status: "completed", connection_status: "offline",
+          sync_completeness: "complete", current_phase: null, started_at: "2026-06-20T00:00:00Z",
+          ended_at: "2026-06-20T01:00:00Z", last_event_at: "2026-06-20T01:00:00Z",
+          last_heartbeat_at: null, server_cursor: 10
+        }], total: 1, next_cursor: null
+      })),
       getProjectFileContent: vi.fn(async (_projectId, path) => ({
         ...(archiveFiles.find((file) => file.path === path) as ProjectFileMetadata),
         project_id: "prj_one",
@@ -139,14 +148,19 @@ describe("ProjectWorkspace", () => {
     fireEvent.click(await screen.findByRole("tab", { name: "分支文件" }));
     const primaryBranch = await screen.findByRole("button", { name: /知识库配置上传绑定.*kb-config-upload-binding/ });
     expect(primaryBranch).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /CLI 使用统计报告.*usage-stats-cli-reporting/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /所需指标返回指标原始配置与指标ID.*required-indicators-raw-config/ })).toBeInTheDocument();
+    expect(screen.queryByText(/requiredindicatorsraw配置/u)).not.toBeInTheDocument();
     expect(screen.queryByText("已归档")).not.toBeInTheDocument();
 
     expect(screen.getByText("实施计划")).toBeInTheDocument();
     expect(screen.getByText("设计规格")).toBeInTheDocument();
     const planHeading = screen.getByText("实施计划");
     const specHeading = screen.getByText("设计规格");
+    const reportHeading = screen.getByText("交付报告");
     expect(planHeading.compareDocumentPosition(specHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(planHeading.closest("details")).toHaveAttribute("open");
+    expect(specHeading.closest("details")).toHaveAttribute("open");
+    expect(reportHeading.closest("details")).not.toHaveAttribute("open");
     expect(screen.getByText("implementation-plan.md")).toBeInTheDocument();
     expect(screen.getByText("plans")).toBeInTheDocument();
     expect(screen.queryByText("plans/implementation-plan.md")).not.toBeInTheDocument();
@@ -163,6 +177,7 @@ describe("ProjectWorkspace", () => {
     expect(screen.queryByText("archive")).not.toBeInTheDocument();
 
     const css = readFileSync(resolve(process.cwd(), "apps/web/app/globals.css"), "utf8");
+    expect(css).toMatch(/\.archive-branch-browser\s*\{/u);
     expect(css).toMatch(/\.archive-file-group\s*\{/u);
     expect(css).toMatch(/\.archive-markdown\s*\{/u);
     expect(css).toMatch(/@media \(max-width: 760px\)[\s\S]*\.archive-branches-shell/u);

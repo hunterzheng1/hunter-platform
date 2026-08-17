@@ -42,6 +42,7 @@ interface WorkspaceData {
   files: ProjectFileMetadata[];
   overview: SemanticOverview | null;
   branchProjectionAvailable: boolean;
+  runTitles: Map<string, string>;
 }
 
 interface ProjectFileContentCacheEntry {
@@ -120,7 +121,9 @@ const BRANCH_WORDS_ZH: Readonly<Record<string, string>> = {
   stats: "统计", upload: "上传", usage: "使用"
 };
 
-function branchDisplayName(branchName: string, lang: "zh" | "en"): string {
+function branchDisplayName(branchName: string, lang: "zh" | "en", runTitle?: string): string {
+  const title = runTitle?.trim();
+  if (title !== undefined && title !== "" && title !== branchName) return title;
   const words = branchName.split(/[-_/]+/u).filter(Boolean);
   if (lang === "en") {
     return words.map((word, index) => {
@@ -456,7 +459,21 @@ async function loadWorkspace(api: HunterApi, projectId: string): Promise<Workspa
     useLegacyWorkspaceLists ? api.listProjectArtifacts(projectId) : Promise.resolve([]),
     useLegacyWorkspaceLists ? api.listProjectFiles?.(projectId) : Promise.resolve(null)
   ]);
-  return { project, artifacts, files: snapshot?.items ?? [], overview, branchProjectionAvailable };
+  const runTitles = new Map<string, string>();
+  if (snapshot !== null && snapshot !== undefined && archiveBranchGroups(snapshot.items) !== null && api.listProjectRuns !== undefined) {
+    try {
+      const runs = await api.listProjectRuns(projectId, { limit: 100, cursor: null });
+      for (const run of runs.items) {
+        const title = run.title?.trim();
+        if (title !== undefined && title !== "" && title !== run.change_key && !runTitles.has(run.change_key)) {
+          runTitles.set(run.change_key, title);
+        }
+      }
+    } catch {
+      // Archive files remain readable when run-monitor titles are unavailable.
+    }
+  }
+  return { project, artifacts, files: snapshot?.items ?? [], overview, branchProjectionAvailable, runTitles };
 }
 
 export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId: string }) {
@@ -467,6 +484,7 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
   const [activeTab, setActiveTab] = useState<ProjectWorkspaceSection>("monitor");
   const [knowledgeActivated, setKnowledgeActivated] = useState(false);
   const [selectedArchiveBranch, setSelectedArchiveBranch] = useState<string | null>(null);
+  const [openArchiveCategories, setOpenArchiveCategories] = useState<Set<ArchiveFileCategory>>(() => new Set(["plan", "spec"]));
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [contentByPath, setContentByPath] = useState<Map<string, ProjectFileContentCacheEntry>>(new Map());
   const [loadingContent, setLoadingContent] = useState(false);
@@ -483,6 +501,7 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
     setActiveTab("monitor");
     setKnowledgeActivated(false);
     setSelectedArchiveBranch(null);
+    setOpenArchiveCategories(new Set(["plan", "spec"]));
   }, [api, projectId]);
 
   useEffect(() => {
@@ -740,7 +759,7 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
         <div className="runs-list-head"><div><h2>{copy.archiveBranches}<span className="runs-list-count">{archiveBranches.length}</span></h2><p>{copy.archiveBranchesHint}</p></div></div>
         <ul className="runs-list archive-branch-options">
           {archiveBranches.map((branch) => {
-            const displayName = branchDisplayName(branch.name, lang);
+            const displayName = branchDisplayName(branch.name, lang, data.runTitles.get(branch.name));
             return <li key={branch.name}><button
               type="button"
               className={activeArchiveBranch.name === branch.name ? "active" : ""}
@@ -749,6 +768,7 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
               onClick={() => {
                 contentRequest.current += 1;
                 setSelectedArchiveBranch(branch.name);
+                setOpenArchiveCategories(new Set(["plan", "spec"]));
                 setSelectedPath(null);
                 setDraft(null);
                 setLoadingContent(false);
@@ -761,41 +781,54 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
         </ul>
       </aside>
       <main className="runs-detail archive-branch-detail">
-        <div className="runs-detail-head"><div><h2>{branchDisplayName(activeArchiveBranch.name, lang)}</h2><p className="runs-mono">{activeArchiveBranch.name}</p></div></div>
-        <div className="runs-status-grid archive-branch-stats">
-          <div className="runs-status-chip tone-neutral"><small>{copy.branchFilesTitle}</small><strong>{activeArchiveBranch.files.length}</strong></div>
-          <div className="runs-status-chip tone-neutral"><small>{copy.branchUpdated}</small><strong>{new Date(activeArchiveBranch.updatedAt).toLocaleDateString(lang === "zh" ? "zh-CN" : "en-US")}</strong></div>
+        <div className="runs-detail-head"><div><h2>{branchDisplayName(activeArchiveBranch.name, lang, data.runTitles.get(activeArchiveBranch.name))}</h2><p className="runs-mono">{activeArchiveBranch.name}</p></div><div className="archive-branch-meta"><span>{copy.branchFileCount(activeArchiveBranch.files.length)}</span><time dateTime={activeArchiveBranch.updatedAt}>{copy.branchUpdated}：{new Date(activeArchiveBranch.updatedAt).toLocaleDateString(lang === "zh" ? "zh-CN" : "en-US")}</time></div></div>
+        <div className="archive-branch-browser">
+          <nav className="archive-branch-files" aria-label={copy.branchFilesTitle}>
+            {activeArchiveGroups.map((group) => <details
+              className={`archive-file-group category-${group.category}`}
+              key={group.category}
+              open={openArchiveCategories.has(group.category)}
+              onToggle={(event) => {
+                const shouldOpen = event.currentTarget.open;
+                setOpenArchiveCategories((current) => {
+                  if (current.has(group.category) === shouldOpen) return current;
+                  const next = new Set(current);
+                  if (shouldOpen) next.add(group.category); else next.delete(group.category);
+                  return next;
+                });
+              }}
+            >
+              <summary><span><h3>{copy.categoryLabels[group.category]}</h3><small>{copy.categoryHints[group.category]}</small></span><strong>{group.files.length}</strong></summary>
+              <ul>{group.files.map(({ file, relativePath }) => {
+                const parts = archiveFileParts(relativePath);
+                return <li key={file.path}><button
+                  type="button"
+                  className={selectedPath === file.path ? "selected" : ""}
+                  aria-label={copy.openFile(relativePath)}
+                  aria-pressed={selectedPath === file.path}
+                  title={relativePath}
+                  onClick={() => void choose(file)}
+                ><span className="archive-file-identity"><strong>{parts.name}</strong>{parts.directory === "" ? null : <small>{parts.directory}</small>}</span><small>{file.size_bytes} {copy.bytes}</small></button></li>;
+              })}</ul>
+            </details>)}
+          </nav>
+          <div className="archive-content-pane">
+            {activeArchiveFile === null ? <div className="project-file-placeholder archive-file-placeholder"><Icon name="file" size={24} /><h3>{copy.chooseArchiveFile}</h3></div> : <section className="archive-file-content">
+              <header><div><p className="project-file-name">{archiveFileParts(activeArchiveFile.relativePath).name}</p><p className="project-file-path">{archiveFileParts(activeArchiveFile.relativePath).directory}</p><div className="project-file-badges"><span className="readonly">{copy.archiveReadOnly}</span><span>{activeArchiveFile.file.size_bytes} {copy.bytes}</span>{/\.mdx?$/iu.test(activeArchiveFile.relativePath) ? <span>{copy.markdownPreview}</span> : null}</div></div></header>
+              {loadingContent && selectedContent === undefined ? <p className="archive-content-loading">{copy.loadingContent}</p> : /\.mdx?$/iu.test(activeArchiveFile.relativePath) ? <article className="archive-markdown"><ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  img: ({ alt }) => <span className="archive-markdown-image-blocked" role="note">{copy.remoteImageBlocked}{alt === undefined || alt === "" ? null : `：${alt}`}</span>,
+                  a: ({ href, children }) => href?.startsWith("http://") === true || href?.startsWith("https://") === true
+                    ? <a href={href} target="_blank" rel="noreferrer noopener">{children}</a>
+                    : href?.startsWith("#") === true
+                      ? <a href={href}>{children}</a>
+                      : <span className="archive-markdown-relative-link" title={href}>{children}</span>
+                }}
+              >{selectedContent ?? ""}</ReactMarkdown></article> : <pre className="project-file-content">{selectedContent ?? ""}</pre>}
+            </section>}
+          </div>
         </div>
-        <section className="archive-branch-files" aria-label={copy.branchFilesTitle}>
-          {activeArchiveGroups.map((group) => <section className={`archive-file-group category-${group.category}`} key={group.category}>
-            <header><div><h3>{copy.categoryLabels[group.category]}</h3><span>{copy.categoryHints[group.category]}</span></div><strong>{group.files.length}</strong></header>
-            <ul>{group.files.map(({ file, relativePath }) => {
-              const parts = archiveFileParts(relativePath);
-              return <li key={file.path}><button
-                type="button"
-                className={selectedPath === file.path ? "selected" : ""}
-                aria-label={copy.openFile(relativePath)}
-                aria-pressed={selectedPath === file.path}
-                title={relativePath}
-                onClick={() => void choose(file)}
-              ><span className="archive-file-identity"><strong>{parts.name}</strong>{parts.directory === "" ? null : <small>{parts.directory}</small>}</span><small>{file.size_bytes} {copy.bytes}</small></button></li>;
-            })}</ul>
-          </section>)}
-        </section>
-        {activeArchiveFile === null ? <div className="project-file-placeholder archive-file-placeholder"><Icon name="file" size={24} /><h3>{copy.chooseArchiveFile}</h3></div> : <section className="archive-file-content">
-          <header><div><p className="project-file-name">{archiveFileParts(activeArchiveFile.relativePath).name}</p><p className="project-file-path">{archiveFileParts(activeArchiveFile.relativePath).directory}</p><div className="project-file-badges"><span className="readonly">{copy.archiveReadOnly}</span><span>{activeArchiveFile.file.size_bytes} {copy.bytes}</span>{/\.mdx?$/iu.test(activeArchiveFile.relativePath) ? <span>{copy.markdownPreview}</span> : null}</div></div></header>
-          {loadingContent && selectedContent === undefined ? <p className="archive-content-loading">{copy.loadingContent}</p> : /\.mdx?$/iu.test(activeArchiveFile.relativePath) ? <article className="archive-markdown"><ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={{
-              img: ({ alt }) => <span className="archive-markdown-image-blocked" role="note">{copy.remoteImageBlocked}{alt === undefined || alt === "" ? null : `：${alt}`}</span>,
-              a: ({ href, children }) => href?.startsWith("http://") === true || href?.startsWith("https://") === true
-                ? <a href={href} target="_blank" rel="noreferrer noopener">{children}</a>
-                : href?.startsWith("#") === true
-                  ? <a href={href}>{children}</a>
-                  : <span className="archive-markdown-relative-link" title={href}>{children}</span>
-            }}
-          >{selectedContent ?? ""}</ReactMarkdown></article> : <pre className="project-file-content">{selectedContent ?? ""}</pre>}
-        </section>}
       </main>
     </div> : usesLegacyWorkspaceLists ? <div className="project-files-shell">
       <aside className="project-files-sidebar">
