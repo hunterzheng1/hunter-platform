@@ -29,7 +29,7 @@ import type { Pool, PoolClient, QueryResultRow } from "pg";
 import { runTransaction, type TransactionOperation } from "@hunter-harness/core";
 
 import type { BranchSnapshotProducer } from "../branch-snapshots/producer.js";
-import { branchSnapshotRecordSchema, validateSnapshotManifest } from "../branch-snapshots/module.js";
+import { branchSnapshotRecordSchema, remoteSyncManifestHash, validateSnapshotManifest } from "../branch-snapshots/module.js";
 import type { BranchSnapshotRecord } from "../branch-snapshots/types.js";
 import { materializeRemoteSyncPushFiles } from "./push-files.js";
 import type {
@@ -80,31 +80,6 @@ function hash(value: unknown): `sha256:${string}` {
 
 function compareCodepoint(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
-}
-
-/**
- * Manifest hash for the remote-sync snapshot endpoint, aligned with the CLI's
- * `manifestHashEntries` in `packages/core/src/remote-sync/v1.ts`. The snapshot
- * endpoint returns files in the CLI shape `{path, content_hash, size,
- * content_kind?}` — no `media_type`/`action` — so the stored hash must be
- * computed over the same shape or the CLI's integrity check rejects every
- * non-empty snapshot with SYNC_PULL_WORKSPACE_FAILED. Branch-snapshots keeps
- * its own richer `canonicalSnapshotFileRefs`; do not unify them.
- */
-function remoteSyncManifestHash(files: readonly {
-  path: string;
-  content_hash: string;
-  size: number;
-  content_kind?: string;
-}[]): `sha256:${string}` {
-  const sorted = [...files].sort((left, right) => compareCodepoint(left.path, right.path));
-  const projected = sorted.map((file) => ({
-    path: file.path,
-    content_hash: file.content_hash,
-    size: file.size,
-    ...(file.content_kind === undefined ? {} : { content_kind: file.content_kind })
-  }));
-  return hash(projected);
 }
 
 function remoteSyncPayloadHash(input: RemoteSyncPushPrepareHttpRequest): string {

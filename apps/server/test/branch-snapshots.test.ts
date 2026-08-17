@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { platformInformationPageSchema, platformInformationQuerySchema, validateBranchFilesPullConfirmation } from "@hunter-harness/contracts";
 import { describe, expect, it } from "vitest";
-import { createBranchSnapshotModule, MemoryBranchSnapshotPort, readBranchSnapshot, type BranchSnapshotSeed, type SnapshotIdentity } from "../src/branch-snapshots/index.js";
+import { createBranchSnapshotModule, MemoryBranchSnapshotPort, readBranchSnapshot, remoteSyncManifestHash, type BranchSnapshotSeed, type SnapshotIdentity } from "../src/branch-snapshots/index.js";
 
 const digest = (value: string): string => `sha256:${createHash("sha256").update(value).digest("hex")}`;
 function seed(overrides: Partial<BranchSnapshotSeed> = {}): BranchSnapshotSeed {
@@ -111,6 +111,17 @@ describe("BranchSnapshotModule", () => {
     const source = seed(); const record = MemoryBranchSnapshotPort.fromSnapshots([source]).repositoryRecords()[0];
     expect(record).toBeDefined();
     expect(readBranchSnapshot(JSON.stringify({ ...record, manifest_hash: digest("wrong") }))).toEqual({ ok: false, reason_code: "BRANCH_SNAPSHOT_INVALID" });
+  });
+
+  it("accepts the CLI-shaped remote-sync manifest hash as an alternate canonicalization", () => {
+    // 880ed52 起 remote-sync commit 按 CLI 简版形状落库；validateSnapshotManifest
+    // 必须同时接受富字段与 CLI 简版，否则 push:commit 被误判 INPUT_INVALID → 503。
+    const source = seed(); const record = MemoryBranchSnapshotPort.fromSnapshots([source]).repositoryRecords()[0];
+    if (record === undefined) throw new Error("fixture missing");
+    const cliHash = remoteSyncManifestHash(record.files);
+    expect(cliHash).not.toBe(record.manifest_hash);
+    expect(readBranchSnapshot(JSON.stringify({ ...record, manifest_hash: cliHash })))
+      .toMatchObject({ ok: true, mode: "current" });
   });
 
   it("rejects unpaired surrogate content and preserves scalar UTF-8 roundtrip", async () => {

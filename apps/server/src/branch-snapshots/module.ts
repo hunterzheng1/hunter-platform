@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { TextDecoder } from "node:util";
 import { types as nodeTypes } from "node:util";
 import { z } from "zod";
-import { restoreBranchFilesIntentSchema, restoreBranchFilesPreviewReceiptSchema } from "@hunter-harness/contracts";
+import { canonicalJson, restoreBranchFilesIntentSchema, restoreBranchFilesPreviewReceiptSchema } from "@hunter-harness/contracts";
 import type { BlobReadPort, BranchSnapshotRepositoryPort, CursorCapability, CursorVerifierPort, RestoreConflictReadPort } from "./ports.js";
 import type { AuthorizedProjectScope, BranchSnapshotModule, BranchSnapshotReadResult, BranchSnapshotRecord, SnapshotIdentity } from "./types.js";
 
@@ -23,7 +23,31 @@ export function snapshotPlain(value: unknown, depth = 0): unknown { if (value ==
 export function readBranchSnapshot(value: unknown): BranchSnapshotReadResult { if (typeof value !== "string") return { ok: false, reason_code: "BRANCH_SNAPSHOT_SERIALIZED_JSON_REQUIRED" }; if (value.length > 2_000_000) return { ok: false, reason_code: "BRANCH_SNAPSHOT_SERIALIZED_JSON_TOO_LARGE" }; let parsed: unknown; try { parsed = JSON.parse(value) as unknown; } catch { return { ok: false, reason_code: "BRANCH_SNAPSHOT_INVALID" }; } if (parsed !== null && typeof parsed === "object" && ((Object.hasOwn(parsed, "schema_version") && (parsed as { schema_version?: unknown }).schema_version !== 1) || (Object.hasOwn(parsed, "schemaVersion") && (parsed as { schemaVersion?: unknown }).schemaVersion !== 0))) return { ok: false, reason_code: "BRANCH_SNAPSHOT_VERSION_UNSUPPORTED" }; const current = branchSnapshotRecordSchema.safeParse(parsed); if (current.success) { try { return { ok: true, mode: "current", value: validateSnapshotManifest(current.data) }; } catch { return { ok: false, reason_code: "BRANCH_SNAPSHOT_INVALID" }; } } const legacy = legacySchema.safeParse(parsed); if (legacy.success) return { ok: true, mode: "legacy_read_only", value: { ...legacy.data, branch_name: "unmarked" } }; return { ok: false, reason_code: "BRANCH_SNAPSHOT_INVALID" }; }
 
 export function canonicalSnapshotFileRefs(files: readonly z.infer<typeof fileRefSchema>[]): string { return JSON.stringify([...files].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0).map((file) => ({ path: file.path, content_kind: file.content_kind, size: file.size, content_hash: file.content_hash, media_type: file.media_type, ...(file.action === undefined ? {} : { action: file.action }) }))); }
-export function validateSnapshotManifest(record: BranchSnapshotRecord): BranchSnapshotRecord { const actual = `sha256:${createHash("sha256").update(canonicalSnapshotFileRefs(record.files)).digest("hex")}`; if (actual !== record.manifest_hash) throw new Error("BRANCH_SNAPSHOT_MANIFEST_HASH_MISMATCH"); return record; }
+/**
+ * CLI 兼容的简版 manifest 哈希（remote-sync 端点 files 形状 {path, content_hash,
+ * size, content_kind?}，与 Hunter-Harness `manifestHashEntries` 同 canonicalization）。
+ * 880ed52 起 remote-sync commit 路径按此形状落库；branch-snapshots 存量记录仍是
+ * 富字段形状，两种 canonicalization 都视为有效内容绑定。
+ */
+export function remoteSyncManifestHash(files: readonly z.infer<typeof fileRefSchema>[]): string {
+  const projected = [...files]
+    .sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0)
+    .map((file) => ({
+      path: file.path,
+      content_hash: file.content_hash,
+      size: file.size,
+      ...(file.content_kind === undefined ? {} : { content_kind: file.content_kind })
+    }));
+  return `sha256:${createHash("sha256").update(canonicalJson(projected), "utf8").digest("hex")}`;
+}
+
+export function validateSnapshotManifest(record: BranchSnapshotRecord): BranchSnapshotRecord {
+  const rich = `sha256:${createHash("sha256").update(canonicalSnapshotFileRefs(record.files)).digest("hex")}`;
+  if (record.manifest_hash !== rich && record.manifest_hash !== remoteSyncManifestHash(record.files)) {
+    throw new Error("BRANCH_SNAPSHOT_MANIFEST_HASH_MISMATCH");
+  }
+  return record;
+}
 
 const identity = (record: BranchSnapshotRecord): SnapshotIdentity => ({ project_id: record.project_id, branch_name: record.branch_name, commit_sha: record.commit_sha, project_version: record.project_version, artifact_id: record.artifact_id, manifest_hash: record.manifest_hash });
 const summary = (record: BranchSnapshotRecord) => ({ schema_version: record.schema_version, project_id: record.project_id, branch_name: record.branch_name, commit_sha: record.commit_sha, project_version: record.project_version, artifact_id: record.artifact_id, manifest_hash: record.manifest_hash, file_count: record.file_count, changed_file_count: record.changed_file_count, uploaded_at: record.uploaded_at, diff_ref: record.diff_ref });
