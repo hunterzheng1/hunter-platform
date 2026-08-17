@@ -476,7 +476,11 @@ async function authenticated(
       );
     }
     const params = request.params as Record<string, unknown> | null;
-    const projectId = typeof params?.projectId === "string" ? params.projectId : undefined;
+    // 路由无 :projectId 参数时，以 key 自身的绑定项目为准（key 即项目绑定，
+    // 不存在错配空间）；路由带参数时仍强制与 key 绑定项目一致
+    const projectId = typeof params?.projectId === "string" && params.projectId !== ""
+      ? params.projectId
+      : requestProjectKey(request)?.projectId;
     if (projectId === undefined || projectId === "") {
       throw new ServerDomainError(
         403,
@@ -1169,6 +1173,12 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
         requestedProjectId: body.requested_project_id,
         ...(body.recreate === undefined ? {} : { recreate: body.recreate })
       });
+      // 项目绑定 key：resolve 结果必须是 key 的绑定项目（不得借 resolve 越权到他项目）
+      const projectKey = requestProjectKey(request);
+      if (projectKey !== undefined && resolved.project.projectId !== projectKey.projectId) {
+        throw new ServerDomainError(403, "PROJECT_KEY_MISMATCH",
+          "API key is bound to another project");
+      }
       await writeAudit(repository, {
         actorId: actor.actorId,
         projectId: resolved.project.projectId,
