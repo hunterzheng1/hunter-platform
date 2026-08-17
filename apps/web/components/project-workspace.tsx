@@ -3,6 +3,8 @@
 import type { SemanticOverview } from "@hunter-harness/contracts";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import {
   ApiClientError,
@@ -77,6 +79,64 @@ interface ArchiveBranchGroup {
   updatedAt: string;
 }
 
+type ArchiveFileCategory = "plan" | "spec" | "report" | "document" | "other";
+
+interface ArchiveFileGroup {
+  category: ArchiveFileCategory;
+  files: ArchiveBranchGroup["files"];
+}
+
+const ARCHIVE_CATEGORY_ORDER: readonly ArchiveFileCategory[] = ["plan", "spec", "report", "document", "other"];
+
+function archiveFileCategory(relativePath: string): ArchiveFileCategory {
+  const normalized = relativePath.toLowerCase();
+  if (/(^|\/)(plans?|implementation)(\/|$)|(^|[-_.])plan([-_.]|$)/u.test(normalized)) return "plan";
+  if (/(^|\/)(specs?|design)(\/|$)|(^|[-_.])(spec|design)([-_.]|$)/u.test(normalized)) return "spec";
+  if (/(^|\/)(reports?|summary)(\/|$)|(^|[-_.])(report|summary)([-_.]|$)/u.test(normalized)) return "report";
+  if (/\.(md|mdx|txt|adoc)$/u.test(normalized)) return "document";
+  return "other";
+}
+
+function archiveFileGroups(files: ArchiveBranchGroup["files"]): ArchiveFileGroup[] {
+  const groups = new Map<ArchiveFileCategory, ArchiveBranchGroup["files"]>();
+  for (const entry of files) {
+    const category = archiveFileCategory(entry.relativePath);
+    groups.set(category, [...(groups.get(category) ?? []), entry]);
+  }
+  return ARCHIVE_CATEGORY_ORDER.flatMap((category) => {
+    const entries = groups.get(category);
+    return entries === undefined ? [] : [{ category, files: entries }];
+  });
+}
+
+const BRANCH_TITLES_ZH: Readonly<Record<string, string>> = {
+  "kb-config-upload-binding": "知识库配置上传绑定",
+  "usage-stats-cli-reporting": "CLI 使用统计报告"
+};
+
+const BRANCH_WORDS_ZH: Readonly<Record<string, string>> = {
+  ai: "AI", api: "API", binding: "绑定", cli: "CLI", config: "配置", docs: "文档",
+  feature: "功能", fix: "修复", kb: "知识库", report: "报告", reporting: "报告",
+  stats: "统计", upload: "上传", usage: "使用"
+};
+
+function branchDisplayName(branchName: string, lang: "zh" | "en"): string {
+  const words = branchName.split(/[-_/]+/u).filter(Boolean);
+  if (lang === "en") {
+    return words.map((word, index) => {
+      const upper = word.toUpperCase();
+      if (upper === "KB" || upper === "CLI" || upper === "API" || upper === "AI") return upper;
+      return index === 0 ? word.charAt(0).toUpperCase() + word.slice(1) : word;
+    }).join(" ");
+  }
+  return BRANCH_TITLES_ZH[branchName] ?? words.map((word) => BRANCH_WORDS_ZH[word.toLowerCase()] ?? word).join("");
+}
+
+function archiveFileParts(relativePath: string): { name: string; directory: string } {
+  const segments = relativePath.split("/");
+  return { name: segments.at(-1) ?? relativePath, directory: segments.slice(0, -1).join(" / ") };
+}
+
 function archiveBranchGroups(files: readonly ProjectFileMetadata[]): ArchiveBranchGroup[] | null {
   if (files.length === 0) return null;
   const groups = new Map<string, ArchiveBranchGroup>();
@@ -130,12 +190,19 @@ const COPY = {
     noVersions: "保存第一个文件后，这里会出现版本记录。",
     changedFiles: (count: number) => `${count} 个文件变更`,
     fileTitle: "项目文件",
-    archiveBranches: "归档分支",
-    archived: "已归档",
+    archiveBranches: "已上传分支",
+    archiveBranchesHint: "选择分支，查看其中的计划、设计规格与交付文档。",
     branchFileCount: (count: number) => `${count} 个文件`,
     branchUpdated: "最近更新",
-    branchFilesTitle: "分支文件",
+    branchFilesTitle: "文件概览",
+    categoryLabels: { plan: "实施计划", spec: "设计规格", report: "交付报告", document: "相关文档", other: "其他文件" },
+    categoryHints: { plan: "Plan", spec: "Spec", report: "Report", document: "Docs", other: "Other" },
     openBranch: (name: string) => `打开分支 ${name}`,
+    openFile: (name: string) => `打开文件 ${name}`,
+    chooseArchiveFile: "选择一个文件查看内容。计划与设计规格已优先排列。",
+    markdownPreview: "Markdown 阅读视图",
+    archiveReadOnly: "历史文件 · 只读",
+    remoteImageBlocked: "远程图片未自动加载",
     newFile: "新建文件",
     searchFiles: "搜索文件或目录",
     collapseAll: "全部折叠",
@@ -196,12 +263,19 @@ const COPY = {
     noVersions: "Version history appears after the first file is saved.",
     changedFiles: (count: number) => `${count} file changes`,
     fileTitle: "Project files",
-    archiveBranches: "Archived branches",
-    archived: "Archived",
+    archiveBranches: "Uploaded branches",
+    archiveBranchesHint: "Select a branch to review its plans, specifications, and delivery documents.",
     branchFileCount: (count: number) => `${count} files`,
     branchUpdated: "Last updated",
-    branchFilesTitle: "Branch files",
+    branchFilesTitle: "File overview",
+    categoryLabels: { plan: "Implementation plans", spec: "Design specifications", report: "Delivery reports", document: "Related documents", other: "Other files" },
+    categoryHints: { plan: "Plan", spec: "Spec", report: "Report", document: "Docs", other: "Other" },
     openBranch: (name: string) => `Open branch ${name}`,
+    openFile: (name: string) => `Open file ${name}`,
+    chooseArchiveFile: "Choose a file to read. Plans and specifications are shown first.",
+    markdownPreview: "Markdown reading view",
+    archiveReadOnly: "Historical file · read only",
+    remoteImageBlocked: "Remote image not loaded automatically",
     newFile: "New file",
     searchFiles: "Search files or folders",
     collapseAll: "Collapse all",
@@ -458,6 +532,7 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
     ?? archiveBranches?.[0]
     ?? null;
   const activeArchiveFile = activeArchiveBranch?.files.find((entry) => entry.file.path === selectedPath) ?? null;
+  const activeArchiveGroups = activeArchiveBranch === null ? [] : archiveFileGroups(activeArchiveBranch.files);
   const latestArtifact = data?.artifacts.find((artifact) => artifact.artifact_id === data.project.latest_artifact_id)
     ?? data?.artifacts[0]
     ?? null;
@@ -662,45 +737,64 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
         monitor: { content: <RunsMonitor api={api} projectId={projectId} /> },
         branchFiles: { content: archiveBranches !== null && activeArchiveBranch !== null ? <div className="runs-split archive-branches-shell">
       <aside className="runs-list-panel archive-branches-panel">
-        <div className="runs-list-head"><h2>{copy.archiveBranches}<span className="runs-list-count">{archiveBranches.length}</span></h2></div>
+        <div className="runs-list-head"><div><h2>{copy.archiveBranches}<span className="runs-list-count">{archiveBranches.length}</span></h2><p>{copy.archiveBranchesHint}</p></div></div>
         <ul className="runs-list archive-branch-options">
-          {archiveBranches.map((branch) => <li key={branch.name}><button
-            type="button"
-            className={activeArchiveBranch.name === branch.name ? "active" : ""}
-            aria-label={copy.openBranch(branch.name)}
-            onClick={() => {
-              contentRequest.current += 1;
-              setSelectedArchiveBranch(branch.name);
-              setSelectedPath(null);
-              setDraft(null);
-              setLoadingContent(false);
-            }}
-          >
-            <span className="run-row"><i className="run-dot run-dot-success" aria-hidden="true" /><span className="run-title-stack"><strong title={branch.name}>{branch.name}</strong></span></span>
-            <span className="run-meta"><span className="run-chip run-chip-success">{copy.archived}</span><span>{copy.branchFileCount(branch.files.length)}</span></span>
-            <span className="run-meta run-time"><span>{copy.branchUpdated}</span><time dateTime={branch.updatedAt}>{new Date(branch.updatedAt).toLocaleString(lang === "zh" ? "zh-CN" : "en-US")}</time></span>
-          </button></li>)}
+          {archiveBranches.map((branch) => {
+            const displayName = branchDisplayName(branch.name, lang);
+            return <li key={branch.name}><button
+              type="button"
+              className={activeArchiveBranch.name === branch.name ? "active" : ""}
+              aria-label={copy.openBranch(`${displayName} ${branch.name}`)}
+              aria-pressed={activeArchiveBranch.name === branch.name}
+              onClick={() => {
+                contentRequest.current += 1;
+                setSelectedArchiveBranch(branch.name);
+                setSelectedPath(null);
+                setDraft(null);
+                setLoadingContent(false);
+              }}
+            >
+              <span className="run-row"><span className="run-title-stack"><strong title={displayName}>{displayName}</strong><small title={branch.name}>{branch.name}</small></span></span>
+              <span className="run-meta"><span>{copy.branchFileCount(branch.files.length)}</span><time dateTime={branch.updatedAt}>{new Date(branch.updatedAt).toLocaleDateString(lang === "zh" ? "zh-CN" : "en-US")}</time></span>
+            </button></li>;
+          })}
         </ul>
       </aside>
       <main className="runs-detail archive-branch-detail">
-        <div className="runs-detail-head"><div><h2>{activeArchiveBranch.name}</h2><p className="runs-mono">{copy.archived}</p></div></div>
+        <div className="runs-detail-head"><div><h2>{branchDisplayName(activeArchiveBranch.name, lang)}</h2><p className="runs-mono">{activeArchiveBranch.name}</p></div></div>
         <div className="runs-status-grid archive-branch-stats">
-          <div className="runs-status-chip tone-success"><small>{copy.branchFilesTitle}</small><strong>{activeArchiveBranch.files.length}</strong></div>
+          <div className="runs-status-chip tone-neutral"><small>{copy.branchFilesTitle}</small><strong>{activeArchiveBranch.files.length}</strong></div>
           <div className="runs-status-chip tone-neutral"><small>{copy.branchUpdated}</small><strong>{new Date(activeArchiveBranch.updatedAt).toLocaleDateString(lang === "zh" ? "zh-CN" : "en-US")}</strong></div>
         </div>
         <section className="archive-branch-files" aria-label={copy.branchFilesTitle}>
-          <h3>{copy.branchFilesTitle}</h3>
-          <ul>{activeArchiveBranch.files.map(({ file, relativePath }) => <li key={file.path}><button
-            type="button"
-            className={selectedPath === file.path ? "selected" : ""}
-            aria-label={relativePath}
-            title={relativePath}
-            onClick={() => void choose(file)}
-          ><code>{relativePath}</code><small>{file.size_bytes} {copy.bytes}</small></button></li>)}</ul>
+          {activeArchiveGroups.map((group) => <section className={`archive-file-group category-${group.category}`} key={group.category}>
+            <header><div><h3>{copy.categoryLabels[group.category]}</h3><span>{copy.categoryHints[group.category]}</span></div><strong>{group.files.length}</strong></header>
+            <ul>{group.files.map(({ file, relativePath }) => {
+              const parts = archiveFileParts(relativePath);
+              return <li key={file.path}><button
+                type="button"
+                className={selectedPath === file.path ? "selected" : ""}
+                aria-label={copy.openFile(relativePath)}
+                aria-pressed={selectedPath === file.path}
+                title={relativePath}
+                onClick={() => void choose(file)}
+              ><span className="archive-file-identity"><strong>{parts.name}</strong>{parts.directory === "" ? null : <small>{parts.directory}</small>}</span><small>{file.size_bytes} {copy.bytes}</small></button></li>;
+            })}</ul>
+          </section>)}
         </section>
-        {activeArchiveFile === null ? <div className="project-file-placeholder archive-file-placeholder"><Icon name="file" size={24} /><h3>{copy.chooseFile}</h3></div> : <section className="archive-file-content">
-          <header><div><p className="project-file-path">{activeArchiveFile.relativePath}</p><div className="project-file-badges"><span className="readonly">{copy.readOnly}</span><span>{activeArchiveFile.file.size_bytes} {copy.bytes}</span></div></div></header>
-          <pre className="project-file-content">{loadingContent && selectedContent === undefined ? copy.loadingContent : selectedContent ?? ""}</pre>
+        {activeArchiveFile === null ? <div className="project-file-placeholder archive-file-placeholder"><Icon name="file" size={24} /><h3>{copy.chooseArchiveFile}</h3></div> : <section className="archive-file-content">
+          <header><div><p className="project-file-name">{archiveFileParts(activeArchiveFile.relativePath).name}</p><p className="project-file-path">{archiveFileParts(activeArchiveFile.relativePath).directory}</p><div className="project-file-badges"><span className="readonly">{copy.archiveReadOnly}</span><span>{activeArchiveFile.file.size_bytes} {copy.bytes}</span>{/\.mdx?$/iu.test(activeArchiveFile.relativePath) ? <span>{copy.markdownPreview}</span> : null}</div></div></header>
+          {loadingContent && selectedContent === undefined ? <p className="archive-content-loading">{copy.loadingContent}</p> : /\.mdx?$/iu.test(activeArchiveFile.relativePath) ? <article className="archive-markdown"><ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              img: ({ alt }) => <span className="archive-markdown-image-blocked" role="note">{copy.remoteImageBlocked}{alt === undefined || alt === "" ? null : `：${alt}`}</span>,
+              a: ({ href, children }) => href?.startsWith("http://") === true || href?.startsWith("https://") === true
+                ? <a href={href} target="_blank" rel="noreferrer noopener">{children}</a>
+                : href?.startsWith("#") === true
+                  ? <a href={href}>{children}</a>
+                  : <span className="archive-markdown-relative-link" title={href}>{children}</span>
+            }}
+          >{selectedContent ?? ""}</ReactMarkdown></article> : <pre className="project-file-content">{selectedContent ?? ""}</pre>}
         </section>}
       </main>
     </div> : usesLegacyWorkspaceLists ? <div className="project-files-shell">

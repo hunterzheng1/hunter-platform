@@ -116,33 +116,55 @@ describe("ProjectWorkspace", () => {
     expect(listProjectArtifacts).toHaveBeenCalledOnce();
   });
 
-  it("groups legacy archive files into branch options without exposing technical directory levels", async () => {
+  it("presents archived branches with localized names, prioritized file groups, and rendered Markdown", async () => {
     const archiveFiles: ProjectFileMetadata[] = [
-      { ...files[0] as ProjectFileMetadata, path: ".harness/archive/alpha-feature/spec/design.md" },
-      { ...files[1] as ProjectFileMetadata, path: ".harness/archive/alpha-feature/plans/test.md" },
-      { ...files[0] as ProjectFileMetadata, path: ".harness/archive/beta-fix/reports/final/summary.json" }
+      { ...files[0] as ProjectFileMetadata, path: ".harness/archive/kb-config-upload-binding/spec/design.md" },
+      { ...files[1] as ProjectFileMetadata, path: ".harness/archive/kb-config-upload-binding/plans/implementation-plan.md" },
+      { ...files[0] as ProjectFileMetadata, path: ".harness/archive/kb-config-upload-binding/reports/final/summary.json" },
+      { ...files[0] as ProjectFileMetadata, path: ".harness/archive/usage-stats-cli-reporting/notes.md" }
     ];
     render(<ProjectWorkspace api={api({
       listPlatformInformation: vi.fn(async (): Promise<PlatformInformationPage> => ({
         schema_version: 1, contract_kind: "page", view: "branch_files", project_id: "prj_one",
         page_state: "empty", sort: "uploaded_at_desc_snapshot_version_asc", items: [], next_cursor: null, failures: []
       })),
-      listProjectFiles: vi.fn(async () => ({ project_id: "prj_one", project_version: "pv_one", total: 3, items: archiveFiles }))
+      listProjectFiles: vi.fn(async () => ({ project_id: "prj_one", project_version: "pv_one", total: 4, items: archiveFiles })),
+      getProjectFileContent: vi.fn(async (_projectId, path) => ({
+        ...(archiveFiles.find((file) => file.path === path) as ProjectFileMetadata),
+        project_id: "prj_one",
+        content: path.endsWith(".md") ? "# 设计方案\n\n- 支持配置上传\n- 保留审计记录\n\n![远程示意图](https://example.invalid/tracker.png)\n\n[相关文档](./related.md)" : "{}"
+      }))
     })} projectId="prj_one" />);
 
     fireEvent.click(await screen.findByRole("tab", { name: "分支文件" }));
-    expect(await screen.findByRole("button", { name: /alpha-feature/ })).toBeInTheDocument();
-    const beta = screen.getByRole("button", { name: /beta-fix/ });
-    expect(beta).toBeInTheDocument();
-    expect(screen.getByText("spec/design.md")).toBeInTheDocument();
-    fireEvent.click(beta);
-    expect(await screen.findByText("reports/final/summary.json")).toBeInTheDocument();
-    expect(screen.queryByText("spec/design.md")).not.toBeInTheDocument();
+    const primaryBranch = await screen.findByRole("button", { name: /知识库配置上传绑定.*kb-config-upload-binding/ });
+    expect(primaryBranch).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /CLI 使用统计报告.*usage-stats-cli-reporting/ })).toBeInTheDocument();
+    expect(screen.queryByText("已归档")).not.toBeInTheDocument();
+
+    expect(screen.getByText("实施计划")).toBeInTheDocument();
+    expect(screen.getByText("设计规格")).toBeInTheDocument();
+    const planHeading = screen.getByText("实施计划");
+    const specHeading = screen.getByText("设计规格");
+    expect(planHeading.compareDocumentPosition(specHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText("implementation-plan.md")).toBeInTheDocument();
+    expect(screen.getByText("plans")).toBeInTheDocument();
+    expect(screen.queryByText("plans/implementation-plan.md")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /打开文件.*design\.md/ }));
+    expect(await screen.findByRole("heading", { name: "设计方案" })).toBeInTheDocument();
+    expect(screen.getByText("支持配置上传").closest("li")).not.toBeNull();
+    expect(screen.queryByText("# 设计方案")).not.toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "远程示意图" })).not.toBeInTheDocument();
+    expect(screen.getByText(/^远程图片未自动加载/u)).toBeInTheDocument();
+    expect(screen.getByText("相关文档").closest("a")).toBeNull();
+    expect(screen.getByRole("button", { name: "打开文件 spec/design.md" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.queryByText(".harness")).not.toBeInTheDocument();
     expect(screen.queryByText("archive")).not.toBeInTheDocument();
+
     const css = readFileSync(resolve(process.cwd(), "apps/web/app/globals.css"), "utf8");
-    expect(css).toMatch(/\.archive-branches-shell\s*\{/u);
-    expect(css).toMatch(/\.archive-branch-options button\.active\s*\{/u);
+    expect(css).toMatch(/\.archive-file-group\s*\{/u);
+    expect(css).toMatch(/\.archive-markdown\s*\{/u);
     expect(css).toMatch(/@media \(max-width: 760px\)[\s\S]*\.archive-branches-shell/u);
   });
 
