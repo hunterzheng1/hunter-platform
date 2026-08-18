@@ -5,6 +5,7 @@ import {
   classifyContentPath,
   knowledgeCandidateSchema,
   projectContentCandidateSchema,
+  type KnowledgeCandidate,
   type ProjectContentCandidate
 } from "@hunter-harness/contracts";
 import AdmZip from "adm-zip";
@@ -34,12 +35,15 @@ import type {
   RetryChangeProjectionJobInput
 } from "./ports.js";
 import type {
+  ArchivePackageValidationLimits,
   ChangeDocument,
   ChangeProjectionJob,
   KnowledgeExtractionJob,
   KnowledgeResult,
   StoredArchive,
   ValidateArchivePackageInput,
+  ValidateCoreV1ArchivePackageInput,
+  CoreV1ArchiveIdentity,
   ValidatedArchivePackage
 } from "./types.js";
 import {
@@ -214,13 +218,21 @@ function deepFreeze<T>(value: T): T {
  * Deterministic in-memory validation Adapter used until the production archive
  * validator is wired. The Module only accepts the branded value returned here.
  */
-export function validateArchivePackage(
-  input: ValidateArchivePackageInput
-): ValidatedArchivePackage {
-  const limits = input.limits;
+/**
+ * Structural safety pass shared by every package profile: ZIP readability, entry
+ * type, symlinks, encryption, path duplication/case folding, size and
+ * compression-ratio bounds. Only the per-profile path allowlist differs, so it
+ * is injected — every other check stays identical across profiles by
+ * construction rather than by two copies staying in sync.
+ */
+function scanArchiveEntries(
+  packageBytes: Uint8Array,
+  limits: ArchivePackageValidationLimits,
+  validatePath: (path: string) => void
+): { byPath: Map<string, AdmZip.IZipEntry>; uncompressedBytes: number } {
   if (!Number.isInteger(limits.max_package_bytes) || limits.max_package_bytes < 1 ||
-      input.package_bytes.byteLength === 0 ||
-      input.package_bytes.byteLength > limits.max_package_bytes ||
+      packageBytes.byteLength === 0 ||
+      packageBytes.byteLength > limits.max_package_bytes ||
       !Number.isInteger(limits.max_file_count) || limits.max_file_count < 1 ||
       !Number.isInteger(limits.max_file_bytes) || limits.max_file_bytes < 1 ||
       !Number.isInteger(limits.max_uncompressed_bytes) ||
@@ -232,7 +244,7 @@ export function validateArchivePackage(
 
   let zip: AdmZip;
   try {
-    zip = new AdmZip(Buffer.from(input.package_bytes));
+    zip = new AdmZip(Buffer.from(packageBytes));
   } catch {
     invalidArchive("ARCHIVE_ZIP_INVALID");
   }
@@ -248,7 +260,7 @@ export function validateArchivePackage(
     const path = entry.entryName;
     const attributes = Number(entry.header.attr ?? 0);
     const unixType = (attributes >>> 16) & 0xf000;
-    validateCanonicalCoreV2Path(path);
+    validatePath(path);
     if (entry.isDirectory || path.endsWith("/") || unixType === 0x4000) {
       invalidArchive("ARCHIVE_ENTRY_TYPE_FORBIDDEN");
     }
@@ -276,6 +288,18 @@ export function validateArchivePackage(
     byPath.set(path, entry);
     caseFolded.add(folded);
   }
+  return { byPath, uncompressedBytes };
+}
+
+export function validateArchivePackage(
+  input: ValidateArchivePackageInput
+): ValidatedArchivePackage {
+  const { byPath, uncompressedBytes } = scanArchiveEntries(
+    input.package_bytes,
+    input.limits,
+    validateCanonicalCoreV2Path
+  );
+  const limits = input.limits;
 
   const manifestEntry = byPath.get(manifestPath);
   if (manifestEntry === undefined) invalidArchive("ARCHIVE_MANIFEST_MISSING");
@@ -370,6 +394,213 @@ export function validateArchivePackage(
       manifest_sha256: manifestSha256,
       package_schema_version: manifest.package_schema_version,
       archive_schema_version: manifest.archive_schema_version,
+      safe_paths: true,
+      no_symlinks: true,
+      no_encrypted_entries: true,
+      declared_files_verified: true,
+      content_hashes_verified: true,
+      candidate_sources_bound: true,
+      file_count: manifest.files.length,
+      compressed_bytes: packageBytes.byteLength,
+      uncompressed_bytes: uncompressedBytes,
+      validated_at: input.validated_at
+    })
+  };
+  Object.freeze(validated);
+  memoryValidatedPackages.add(validated);
+  return validated;
+}
+
+// --- core-v1: the profile the production archiver actually emits -------------
+// harness/scripts/harness_archive.py builds this shape, and
+// apps/server/src/archive/package-ingest.ts has always validated it. The v2
+// profile above was written for a package format that has no producer, so a
+// production upload used to fail its first gate and the knowledge queue never
+// received a job. Structural safety is identical (shared scanArchiveEntries);
+// what differs is the manifest shape, the path allowlist, and where identity
+// comes from.
+
+const coreV1SummaryPath = "reports/final/summary-data.json";
+const coreV1ExactPaths = new Set([
+  manifestPath,
+  coreV1SummaryPath,
+  knowledgeCandidatesPath,
+  "archive-meta.md",
+  "change-context.json"
+]);
+
+function isCoreV1Path(path: string): boolean {
+  if (coreV1ExactPaths.has(path)) return true;
+  return /^(?:spec|plans)\/[^/]+(?:\/[^/]+)*\.md$/u.test(path);
+}
+
+function validateCanonicalCoreV1Path(path: string): void {
+  if (!safeArchivePath(path)) invalidArchive("ARCHIVE_PATH_UNSAFE");
+  const classification = classifyContentPath({
+    schema_version: 1,
+    path,
+    source_kind: "branch_file"
+  });
+  if ("reason_code" in classification) {
+    invalidArchive(coreV2ExcludedPathReasons.has(classification.reason_code)
+      ? "ARCHIVE_CORE_PATH_FORBIDDEN"
+      : "ARCHIVE_PATH_UNSAFE");
+  }
+  if (!isCoreV1Path(path)) invalidArchive("ARCHIVE_CORE_PATH_FORBIDDEN");
+}
+
+const coreV1ManifestSchema = z.object({
+  schema_version: z.literal(1),
+  profile: z.literal("core-v1"),
+  change_key: z.string().min(1).max(160),
+  created_at: z.string().min(1).max(64),
+  source: z.object({
+    commit: z.string().min(7).max(128).nullable(),
+    tree: z.string().min(7).max(128).nullable()
+  }).strict(),
+  files: z.array(z.object({
+    path: z.string().min(1).max(240),
+    role: z.enum([
+      "summary", "spec", "plan", "knowledge_candidates", "archive_meta", "change_context"
+    ]),
+    media_type: z.enum(["application/json", "text/markdown"]),
+    content_sha256: sha256Schema,
+    size_bytes: z.number().int().nonnegative()
+  }).strict()).min(1)
+}).strict();
+
+/**
+ * A repository-relative provenance reference, optionally with a `#`-suffixed
+ * locator, or an `archive:`-scheme reference. core-v1 candidates cite source
+ * files in the repository rather than entries in the package — that is the
+ * point of the entry (a finding stays locatable at path:line) — so the package
+ * containment check the v2 profile applies cannot be used. What is enforced
+ * instead is that the reference cannot escape the repository.
+ */
+function isBoundCoreV1Reference(reference: string): boolean {
+  if (reference.length < 1 || reference.length > 512) return false;
+  if (reference.startsWith("archive:")) return reference.length > "archive:".length;
+  return safeArchivePath(reference.split("#", 1)[0] ?? reference);
+}
+
+function coreV1Identity(value: unknown): CoreV1ArchiveIdentity {
+  const record = value as Partial<CoreV1ArchiveIdentity> | null;
+  if (record === null || typeof record !== "object") {
+    invalidArchive("ARCHIVE_IDENTITY_INVALID");
+  }
+  const identity = {
+    project_id: record.project_id,
+    change_key: record.change_key,
+    archive_id: record.archive_id,
+    project_version: record.project_version
+  };
+  for (const field of Object.values(identity)) {
+    if (typeof field !== "string" || field.length < 1 || field.length > 512 ||
+        field.trim() !== field ||
+        Array.from(field).some((character) => character.charCodeAt(0) < 32)) {
+      invalidArchive("ARCHIVE_IDENTITY_INVALID");
+    }
+  }
+  return identity as CoreV1ArchiveIdentity;
+}
+
+export function validateCoreV1ArchivePackage(
+  input: ValidateCoreV1ArchivePackageInput
+): ValidatedArchivePackage {
+  const identity = coreV1Identity(input.identity);
+  const { byPath, uncompressedBytes } = scanArchiveEntries(
+    input.package_bytes,
+    input.limits,
+    validateCanonicalCoreV1Path
+  );
+  const limits = input.limits;
+
+  const manifestEntry = byPath.get(manifestPath);
+  if (manifestEntry === undefined) invalidArchive("ARCHIVE_MANIFEST_MISSING");
+  if (!Buffer.from(manifestEntry.getData()).equals(Buffer.from(input.manifest_bytes))) {
+    invalidArchive("ARCHIVE_MANIFEST_MISMATCH");
+  }
+  const manifestResult = coreV1ManifestSchema.safeParse(
+    parseJsonEntry(manifestEntry, "ARCHIVE_MANIFEST_JSON_INVALID")
+  );
+  if (!manifestResult.success) invalidArchive("ARCHIVE_MANIFEST_MISMATCH");
+  const manifest = manifestResult.data;
+  if (manifest.files.length > limits.max_file_count) {
+    invalidArchive("ARCHIVE_MANIFEST_FILE_COUNT_MISMATCH");
+  }
+  // The route owns identity; a manifest claiming a different change must not be
+  // filed under this one.
+  if (manifest.change_key !== identity.change_key) {
+    invalidArchive("ARCHIVE_MANIFEST_IDENTITY_MISMATCH");
+  }
+
+  const declaredPaths = new Set<string>();
+  for (const declared of manifest.files) {
+    if (!safeArchivePath(declared.path) || declared.path === manifestPath ||
+        declaredPaths.has(declared.path)) {
+      invalidArchive("ARCHIVE_MANIFEST_PATH_INVALID");
+    }
+    declaredPaths.add(declared.path);
+    const entry = byPath.get(declared.path);
+    if (entry === undefined) invalidArchive("ARCHIVE_MANIFEST_FILE_MISSING");
+    const content = entry.getData();
+    if (content.byteLength !== declared.size_bytes ||
+        sha256(content) !== declared.content_sha256) {
+      invalidArchive("ARCHIVE_MANIFEST_CONTENT_MISMATCH");
+    }
+  }
+  const dataPaths = [...byPath.keys()].filter((path) => path !== manifestPath);
+  if (dataPaths.some((path) => !declaredPaths.has(path)) ||
+      declaredPaths.size !== dataPaths.length) {
+    invalidArchive("ARCHIVE_UNDECLARED_FILE");
+  }
+  if (!declaredPaths.has(coreV1SummaryPath)) {
+    invalidArchive("ARCHIVE_SUMMARY_MISSING");
+  }
+
+  // Optional by design: archives built before the candidate generator existed
+  // carry none, and a change that yields no knowledge is a valid outcome.
+  // core-v1 has no project-content candidate file at all.
+  const knowledgeEntry = byPath.get(knowledgeCandidatesPath);
+  let knowledgeCandidates: KnowledgeCandidate[] = [];
+  if (knowledgeEntry !== undefined) {
+    const parsed = z.array(knowledgeCandidateSchema).max(1_000).safeParse(
+      parseJsonEntry(knowledgeEntry, "ARCHIVE_KNOWLEDGE_CANDIDATES_JSON_INVALID")
+    );
+    if (!parsed.success) invalidArchive("ARCHIVE_CANDIDATE_SCHEMA_INVALID");
+    knowledgeCandidates = parsed.data;
+  }
+  const unbound = knowledgeCandidates.some((candidate) =>
+    candidate.source_change_key !== identity.change_key ||
+    !isBoundCoreV1Reference(candidate.provenance.source_ref) ||
+    candidate.source_refs.some((reference) => !isBoundCoreV1Reference(reference))
+  );
+  if (unbound) invalidArchive("ARCHIVE_CANDIDATE_SOURCE_UNBOUND");
+
+  const packageBytes = input.package_bytes.slice();
+  const manifestBytes = input.manifest_bytes.slice();
+  const packageSha256 = sha256(packageBytes);
+  const manifestSha256 = sha256(manifestBytes);
+  const validated: ValidatedArchivePackage = {
+    schema_version: 1,
+    project_id: identity.project_id,
+    change_key: identity.change_key,
+    archive_id: identity.archive_id,
+    package_sha256: packageSha256,
+    manifest_sha256: manifestSha256,
+    project_version: identity.project_version,
+    package_schema_version: 1,
+    archive_schema_version: 1,
+    package_bytes: packageBytes,
+    manifest_bytes: manifestBytes,
+    knowledge_candidates: deepFreeze(structuredClone(knowledgeCandidates)),
+    project_content_candidates: deepFreeze([]),
+    validation_receipt: deepFreeze({
+      schema_version: 1,
+      package_sha256: packageSha256,
+      manifest_sha256: manifestSha256,
+      package_schema_version: 1,
+      archive_schema_version: 1,
       safe_paths: true,
       no_symlinks: true,
       no_encrypted_entries: true,
@@ -1420,6 +1651,12 @@ function validatedChangeDocuments(value: unknown): ChangeDocument[] {
   });
 }
 
+/** @see safeChangeDocumentPath */
+export const changeSummaryPaths: ReadonlySet<string> = new Set([
+  "summary/change-summary.json",
+  "reports/final/summary-data.json"
+]);
+
 function safeChangeDocumentPath(
   value: string,
   documentType: string,
@@ -1432,7 +1669,9 @@ function safeChangeDocumentPath(
     source_kind: "branch_file"
   });
   if ("reason_code" in classification) return false;
-  if (documentType === "change_summary") return value === "summary/change-summary.json";
+  // change_summary 有两个合法位置：v2 包在 summary/change-summary.json，
+  // 生产的 core-v1 包在 reports/final/summary-data.json。
+  if (documentType === "change_summary") return changeSummaryPaths.has(value);
   if (documentType === "plan") {
     return /^plans\/(?:[^/]+\/)*[^/]+\.md$/u.test(value) &&
       !/-test-scenarios\.md$/u.test(value);
