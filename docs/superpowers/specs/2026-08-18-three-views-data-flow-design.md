@@ -254,17 +254,111 @@ HUNTER_HARNESS_TEST_DATABASE_URL=postgresql://tdd:tdd@127.0.0.1:55432/tdd
 - platform `packages/contracts`：回到仅剩 3 个预存红（干净树上同样 3 个），本次零新增
 - 两仓库 `lint` + `typecheck`：全绿
 
-**Stream B 剩余：投递层**
+**投递层也已完成**
 
-分类层已允许交付物成为 `branch_file`，但**还需接通"归档时触发推送"**：
+归档收尾的 `auto_push_managed_snapshot`（`harness/scripts/harness_archive.py`）
+此前调 legacy `hunter-harness push`（proposal 管道）——那条路不产生分支快照，
+两个视图都读不到，交付物还会被 policy-never 跳过。这正是 `document_refs` 长期为空的原因。
 
-- `harness-push --scope archive --change <key>` 目前走归档包发布路径，
-  需确认它是否连带把交付物文档作为 branch_file 推送；若否，在归档收尾处触发一次
-  `--scope branch_files` 的定向推送
-- 端到端验证：归档一次 → `branch_files` 出现文档；过程文件不出现
-- 页面分组 PLAN/SPEC/REPORT/DOCS 由路径第 4 段推导（`segments[3]`），无需新增契约字段
+- 改走 `harness-push --scope config,rules,architecture,instructions,branch_files`。
+  显式列五项而非 `all`，含义固定不随 `all` 展开定义漂移
+- 回执解析改为 `summary.applied`（legacy 用 `submitted`）；
+  `unchanged` 改判 `outcome == "no_changes"`——即"仅在有更新时推送"
+- 顺带修掉同函数里 `subprocess.run` 缺 `encoding=` 的隐患（中文 Windows 按 cp936
+  解码 UTF-8 会静默损坏输出并可能让 `json.loads` 失败）
+- `--scope archive` 与其他 scope 互斥、走归档包 ZIP 的独立路由，不受影响
 
-### Stream C / D — 待实施
+**端到端实测（kld-sdd，dry-run 只读）**
+
+31 个文件全部判为 `branch_file`，全在 `plans/` `spec/` `reports/{final,review,test}` 下，
+零过程文件。逐项核对：plans 11 + spec 2 + reports/final 3 + review 10 + test 5 = 31，
+与预览完全吻合。改动前此处为 0（整棵归档树在遍历第一层就被剪枝）。
+
+被正确排除的还包括 `runtime/staging/plans/**` 与
+`.publication-staging/<...>/plans/**` 下的 16 个**重复副本**——只取正本。
+（此前 spec 里写的"47 个交付物"是被这些副本灌水的计数，实际正本为 31。）
+
+**门禁**
+
+- Harness vitest：**155 文件 / 2137 测试全过**
+- Python harness safe profile：归档相关全过；`test_harness_test_guard.py` 在全量跑时
+  出现 `PermissionError [WinError 5]`，单独复跑 48 个全过，属临时目录争抢的环境问题
+- `lint` + `typecheck`：全绿
+
+**页面分组**：PLAN/SPEC/REPORT/DOCS 由路径第 4 段推导（`segments[3]`），无需新增契约字段。
+
+### Stream C — 已完成（2026-08-18）
+
+`sync` 新增 `--push [scopes]`：省略值时推 `config,rules,architecture,instructions`
+（与 push 自身省略 `--scope` 时的默认范围一致），带值时按显式列表推。
+
+判定抽成纯函数 `planSyncPush`（`packages/cli/src/commands/sync.ts`），与体检流程解耦、可单测：
+
+- WARN（退出码 5）放行——最常见的 WARN 是架构地图略陈旧，卡在这里会让选项没法用
+- BLOCKED(7) / FAIL(1) 拒推——项目状态本身不可用，推上去只是把坏状态同步到平台
+- `--check` / `--dry-run` 保持纯只读，即便带 `--push` 也不推
+- 跳过时经 stderr 回显 reasonCode，不静默吞掉
+
+编排放在 `bin.ts` 组合根：sync 退出码先定，推送只在状态可用时追加，两个命令契约不变。
+
+门禁：vitest **156 文件 / 2144 测试全过**；lint + typecheck 全绿。
+
+> ⚠️ 本 Stream 在 `0.2.84` 发布**之后**完成，已发布的 CLI 不含 `sync --push`，需下次发版。
+
+### Stream D — 根因已定位，待实施
+
+原以为是"提取停在 ready"，实测是**两个互相独立的缺陷**，且都不在提取本身。
+
+#### D1：`change_records` 视图把三个字段硬编码成空
+
+`apps/server/src/change-records-query/pg-source.ts:213` 与 `:298`：
+
+```ts
+document_refs: [], document_snapshots: [], candidate_refs: []
+```
+
+该 source（`PgChangeArchiveSource`，经 `platform-information/production.ts:211` 装配，
+是**唯一**生产数据源）只读 legacy 的 `change_archive_packages` 表，**从不查询**
+`knowledge_pipeline_change_documents` 与 `knowledge_pipeline_project_candidates`。
+所以 `document_refs` 与 `candidate_count` 与管道实际产出无关，结构上恒为空——
+与根因 1 同一个家族：视图接在了 legacy 数据源上。
+
+`knowledge_extraction_status` 同样取自 `change_archive_packages.knowledge_status`，
+而非真实的管道作业状态，所以"ready"也不代表提取真的产出了东西。
+
+#### D2：知识管道是闭环，从不桥接到可检索的知识库
+
+`project_knowledge` 视图读 `knowledge_ingest_entries`（`project-knowledge-query/pg-source.ts:256`）。
+该表的唯一写入方是 `repositories/postgres.ts:525` 的 `upsertKnowledgeEntry`，
+其调用点只有两处 HTTP 路由（`app.ts:2613` 的 `POST /knowledge/ingest`
+与 `app.ts:2789` 的 revive）。
+
+而知识管道的产出落在 `knowledge_pipeline_results` / `knowledge_pipeline_project_candidates`，
+这些表**只在 `knowledge-pipeline/pg.ts` 内部读写**，外部无任何消费方。
+两侧之间没有桥。
+
+**这是 bug 不是设计**：`harness/harness-knowledge-ingest/SKILL.md` 明确写
+"知识 ingest 完全由 Hunter Platform 负责……服务端收到后保存原包、安全解包、
+发布核心文件，并根据其中的 Markdown 与摘要重建项目语义索引"，且要求客户端
+不得生成本地索引。即服务端自动入库是既定契约，缺的是实现。
+
+#### 实施顺序建议
+
+D1 先做：自包含、与 Stream A 同型（视图改接正确数据源），可直接 TDD。
+D2 后做：需要新增一条 pipeline results → `knowledge_ingest_entries` 的提交路径，
+面较大，且要考虑幂等与 fence 语义。
+
+### 待决：归档 ZIP 边界与分支文件边界不一致
+
+`harness-knowledge-ingest/SKILL.md` 规定归档 **ZIP 包**只许含
+`reports/final/summary-data.json`、`spec/**/*.md`、`plans/**/*.md`、`archive-meta.md`、
+`change-context.json`，并明确"测试报告、审查报告……不得进入归档包"。
+
+而 Stream B 放行进**分支文件**的范围包含 `reports/review/**` 与 `reports/test/**`。
+
+两者是不同通道——ZIP 喂知识管道（关心体积与核心性），分支文件供人在平台上阅读——
+所以不冲突。但如果希望两条边界一致，需要把 `archiveDeliverableGroups` 收窄为
+`plans` / `spec` + `reports/final`。**此项未擅自改动，留待确认**（Stream B 已随 0.2.84 发布）。
 
 接手要点（已查实，不必重推）：
 
