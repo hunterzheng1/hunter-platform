@@ -430,6 +430,126 @@ describe("Remote Sync PostgreSQL HTTP service", () => {
     await service.close();
   });
 
+  it("merges the parent snapshot into a full effective snapshot on commit", async () => {
+    // 阶段 02 语义：快照 = 最近一次成功上传后的完整有效状态。窄范围 push
+    // 不得让父版本中未触及的文件从最新快照里消失。
+    const input = pushPrepareInput();
+    const parentContent = "guide\n";
+    const parentHash = digest(parentContent);
+    const parentFile = {
+      path: "docs/guide.md",
+      content_kind: "branch_file",
+      size_bytes: parentContent.length,
+      content_hash: parentHash,
+      media_type: "text/markdown",
+      content_bytes: Buffer.from(parentContent, "utf8"),
+    };
+    const pointer = {
+      revision: "1",
+      project_version: "pv_parent",
+      artifact_id: "art_parent",
+      manifest_hash: digest("parent-manifest"),
+      commit_sha: "b".repeat(40),
+      snapshot_json: JSON.stringify({ files: [] }),
+      source_json: JSON.stringify(input.source),
+    };
+    const row = {
+      project_id: input.source.project_id,
+      branch_name: input.source.branch_name,
+      actor_id: input.source.actor_id,
+      idempotency_key: input.idempotency_key,
+      prepare_id: "prepare_parent_merge",
+      source_json: JSON.stringify(input.source),
+      lease_id: input.lease.lease_id,
+      lease_token: input.lease.lease_token,
+      lease_generation: input.lease.generation,
+      expected_revision: input.expected_revision,
+      preview_hash: input.preview_hash,
+      payload_hash: input.payload_hash,
+      request_hash: digest("request-parent-merge"),
+      files_json: JSON.stringify(input.files),
+      operations_json: JSON.stringify(input.operations),
+      skipped_json: "[]",
+      state: "prepared",
+      receipt_json: null,
+      created_at: "2026-08-15T00:00:00.000Z",
+      expires_at: input.lease.expires_at,
+      updated_at: "2026-08-15T00:00:00.000Z",
+    };
+    let producerInput: Record<string, unknown> | undefined;
+    const client = {
+      async query(sql: string) {
+        const normalized = sql.trim();
+        if (normalized === "BEGIN" || normalized === "COMMIT" || normalized === "ROLLBACK" ||
+            normalized.startsWith("SELECT pg_advisory_xact_lock")) return { rows: [], rowCount: 0 };
+        if (normalized.startsWith("SELECT * FROM remote_sync_http_pushes")) return { rows: [row], rowCount: 1 };
+        if (normalized.startsWith("SELECT lease_id,lease_token,generation,expires_at,source_json")) {
+          return { rows: [{ lease_id: input.lease.lease_id, lease_token: input.lease.lease_token,
+            generation: input.lease.generation, expires_at: input.lease.expires_at,
+            source_json: JSON.stringify(input.source) }], rowCount: 1 };
+        }
+        if (normalized.startsWith("SELECT p.revision")) return { rows: [pointer], rowCount: 1 };
+        if (normalized.startsWith("SELECT f.path, f.content_kind, f.size_bytes")) {
+          return { rows: [parentFile], rowCount: 1 };
+        }
+        if (normalized.startsWith("UPDATE remote_sync_http_pushes")) return { rows: [], rowCount: 1 };
+        throw new Error(`unhandled SQL: ${normalized}`);
+      },
+      release() { /* test client */ },
+    };
+    const service = createPgRemoteSyncHttpService({
+      pool: { connect: async () => client } as unknown as Pool,
+      branchSnapshotProducer: {
+        publishWithClient: async (_client: unknown, value: Record<string, unknown>) => {
+          producerInput = value;
+          const suffix = digest(canonicalJson({ prepare_id: row.prepare_id, payload_hash: row.payload_hash })).slice(7, 39);
+          return {
+            outcome: "new" as const,
+            record: {
+              schema_version: 1 as const,
+              project_id: input.source.project_id,
+              branch_name: input.source.branch_name,
+              commit_sha: input.source.commit_sha,
+              project_version: `pv_${suffix}`,
+              artifact_id: `art_${suffix}`,
+              manifest_hash: value.manifest_hash,
+              file_count: (value.files as unknown[]).length,
+              changed_file_count: 1,
+              uploaded_at: "2026-08-15T01:00:00.000Z",
+              diff_ref: `diff_${suffix}`,
+              files: value.files,
+              changed_paths: value.changed_paths,
+            },
+          };
+        },
+      },
+      resolveUpload: async () => (async function* () { yield new Uint8Array([120]); })(),
+      now: () => new Date("2026-08-15T01:00:00.000Z"),
+    });
+
+    const result = await service.commitPush({
+      prepare_id: row.prepare_id,
+      lease: input.lease,
+      idempotency_key: row.idempotency_key,
+      payload_hash: row.payload_hash,
+    });
+
+    expect(result).toMatchObject({ outcome: "new" });
+    expect(producerInput).toBeDefined();
+    const files = producerInput?.files as Array<{ path: string; action: string; content: string }>;
+    expect(files.map((file) => [file.path, file.action])).toEqual([
+      ["docs/guide.md", "no_change"],
+      ["src/index.ts", "modify"],
+    ]);
+    expect(files[0]?.content).toBe(parentContent);
+    expect(producerInput?.changed_paths).toEqual(["src/index.ts"]);
+    expect(producerInput?.removed_paths).toEqual([]);
+    // manifest 必须覆盖合并后的全量文件集（CLI 简版 canonicalization）
+    const { remoteSyncManifestHash } = await import("../src/branch-snapshots/module.js");
+    expect(producerInput?.manifest_hash).toBe(remoteSyncManifestHash(files));
+    await service.close();
+  });
+
   it("rejects committing a prepared L1 push under a reacquired L2 before producer execution", async () => {
     const input = pushPrepareInput();
     const oldLease = input.lease;

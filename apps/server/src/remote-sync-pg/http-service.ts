@@ -30,7 +30,7 @@ import { runTransaction, type TransactionOperation } from "@hunter-harness/core"
 
 import type { BranchSnapshotProducer } from "../branch-snapshots/producer.js";
 import { branchSnapshotRecordSchema, remoteSyncManifestHash, validateSnapshotManifest } from "../branch-snapshots/module.js";
-import type { BranchSnapshotRecord } from "../branch-snapshots/types.js";
+import type { BranchSnapshotRecord, BranchSnapshotSeed } from "../branch-snapshots/types.js";
 import { materializeRemoteSyncPushFiles } from "./push-files.js";
 import type {
   RemoteSyncHttpContentStream,
@@ -329,6 +329,10 @@ function leasePayloadHash(kind: string, value: unknown): `sha256:${string}` {
   return hash({ kind, value });
 }
 
+const SEED_MEDIA_TYPES = new Set([
+  "text/plain", "text/markdown", "application/json", "application/yaml"
+]);
+
 function operationPaths(value: readonly { path: string; action: string }[]): string[] {
   return [...new Set(value.filter((operation) => operation.action !== "no_change")
     .flatMap((operation) => operation.action === "rename" && "source_path" in operation &&
@@ -462,6 +466,68 @@ export function createPgRemoteSyncHttpService(options: PgRemoteSyncHttpServiceOp
       [source.project_id, source.branch_name]
     );
     return result.rows[0];
+  }
+
+  type SeedFile = BranchSnapshotSeed["files"][number];
+
+  // 阶段 02 语义：每个分支保存"最近一次成功上传后的完整有效快照"，不是本次增量。
+  // commit 必须把父快照文件与本次 operations 合并；父文件内容从 Blob 读取并复核完整性。
+  async function loadParentSeedFiles(
+    client: PoolClient,
+    source: RemoteSyncSourceRef
+  ): Promise<Map<string, SeedFile>> {
+    const files = new Map<string, SeedFile>();
+    const pointer = await currentPointer(client, source);
+    if (pointer === undefined) return files;
+    const result = await client.query<{
+      path: string; content_kind: string; size_bytes: number | string;
+      content_hash: string; media_type: string; content_bytes: Buffer;
+    }>(
+      `SELECT f.path, f.content_kind, f.size_bytes, f.content_hash, f.media_type, b.content_bytes
+         FROM branch_snapshot_files f
+         JOIN branch_snapshot_blobs b ON b.content_hash = f.content_hash
+        WHERE f.project_id = $1 AND f.branch_name = $2 AND f.project_version = $3
+          AND f.artifact_id = $4 AND f.manifest_hash = $5 AND f.commit_sha = $6
+        ORDER BY f.path COLLATE "C" ASC`,
+      [source.project_id, source.branch_name, pointer.project_version,
+        pointer.artifact_id, pointer.manifest_hash, pointer.commit_sha]
+    );
+    for (const row of result.rows) {
+      let content: string;
+      try {
+        content = new TextDecoder("utf-8", { fatal: true }).decode(row.content_bytes);
+      } catch {
+        fail("REMOTE_UNAVAILABLE");
+      }
+      const sizeBytes = Number(row.size_bytes);
+      const bytes = Buffer.from(content, "utf8");
+      if (!Number.isSafeInteger(sizeBytes) || bytes.byteLength !== sizeBytes ||
+          `sha256:${createHash("sha256").update(bytes).digest("hex")}` !== row.content_hash ||
+          !SEED_MEDIA_TYPES.has(row.media_type)) {
+        fail("REMOTE_UNAVAILABLE");
+      }
+      files.set(row.path, {
+        path: row.path,
+        content_kind: row.content_kind as SeedFile["content_kind"],
+        size: sizeBytes,
+        content_hash: row.content_hash,
+        media_type: row.media_type as SeedFile["media_type"],
+        action: "no_change",
+        content
+      });
+    }
+    return files;
+  }
+
+  function mergePushSeedFiles(
+    parentFiles: Map<string, SeedFile>,
+    materialized: readonly SeedFile[],
+    operations: RemoteSyncPushPrepareHttpRequest["operations"]
+  ): SeedFile[] {
+    const merged = new Map(parentFiles);
+    for (const path of removedOperationPaths(operations)) merged.delete(path);
+    for (const entry of materialized) merged.set(entry.path, entry);
+    return [...merged.values()].sort((left, right) => compareCodepoint(left.path, right.path));
   }
 
   function remoteSnapshotFromRow(source: RemoteSyncSourceRef, row: PointerRow | undefined): RemoteSyncRemoteSnapshot {
@@ -838,7 +904,9 @@ export function createPgRemoteSyncHttpService(options: PgRemoteSyncHttpServiceOp
             upload_ref: ref, purpose: "remote_sync_file", now: now(), executor: client, allow_expired: true });
         },
       });
-      const manifestRefs = materialized.map((entry) => {
+      const parentFiles = await loadParentSeedFiles(client, prepared.source);
+      const seedFiles = mergePushSeedFiles(parentFiles, materialized, operations);
+      const manifestRefs = seedFiles.map((entry) => {
         const { content, ...ref } = entry;
         void content;
         return ref;
@@ -865,7 +933,7 @@ export function createPgRemoteSyncHttpService(options: PgRemoteSyncHttpServiceOp
         uploaded_at: now(),
         changed_paths: operationPaths(operations),
         removed_paths: removedOperationPaths(operations),
-        files: materialized,
+        files: seedFiles,
       });
       if (producerResult.outcome === "no_changes") fail("REMOTE_UNAVAILABLE");
       if (producerResult.outcome === "conflict") {
