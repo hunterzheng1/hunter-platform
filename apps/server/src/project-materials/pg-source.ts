@@ -313,32 +313,49 @@ export class PgProjectMaterialsSource implements ProjectMaterialsSourcePort {
     });
   }
 
+  // 当前材料快照锚定 remote_sync_branch_pointers —— remote-sync 的 push:commit 在同一事务里
+  // 推进该指针，它是"当前快照"的权威来源，且天然只保留最新版本（每分支一行）。
+  //
+  // 此前锚定 projects.latest_project_version 是死路：该列只由 proposal 管道
+  // （hunter-harness push）用 id("pv_") / id("art_") 各自独立随机写入，而快照的
+  // project_version / artifact_id 由 remote-sync 共享同一个 hash suffix 生成。两侧
+  // 来自互不知晓的生成器，等值 join 在生产中永远不可能成立，视图恒为 processing。
+  //
+  // 分支消歧：本视图是项目级的，而指针是分支级的。按 generation 单调栅栏取最新，
+  // 同 generation 以 branch_name COLLATE "C" 定序，保证确定性。
   async #current(actorId: string, projectId: string): Promise<ProjectMaterialsCurrentIdentity | null | "forbidden"> {
     const current = await this.#pool.query(
-      `SELECT project.latest_project_version AS current_project_version,
-         project.latest_artifact_id AS current_artifact_id,
+      `SELECT pointer.branch_name AS pointer_branch_name,
          snapshot.project_id, snapshot.branch_name, snapshot.commit_sha,
          snapshot.project_version, snapshot.artifact_id, snapshot.manifest_hash
        FROM projects project
+       LEFT JOIN LATERAL (
+         SELECT candidate.branch_name, candidate.project_version, candidate.artifact_id,
+           candidate.manifest_hash, candidate.commit_sha
+         FROM remote_sync_branch_pointers candidate
+         WHERE candidate.project_id = project.project_id
+         ORDER BY candidate.generation DESC, candidate.branch_name COLLATE "C" ASC
+         LIMIT 1
+       ) pointer ON true
        LEFT JOIN branch_snapshots snapshot
          ON snapshot.project_id = project.project_id
-        AND snapshot.project_version = project.latest_project_version
-        AND snapshot.artifact_id = project.latest_artifact_id
+        AND snapshot.branch_name = pointer.branch_name
+        AND snapshot.project_version = pointer.project_version
+        AND snapshot.artifact_id = pointer.artifact_id
+        AND snapshot.manifest_hash = pointer.manifest_hash
+        AND snapshot.commit_sha = pointer.commit_sha
        WHERE project.project_id = $1 AND project.owner_actor_id = $2
-       ORDER BY snapshot.branch_name COLLATE "C" ASC,
-         snapshot.commit_sha COLLATE "C" ASC, snapshot.manifest_hash COLLATE "C" ASC
        LIMIT 2`,
       [projectId, actorId]
     );
     if (current.rowCount === 0) return "forbidden";
     if (current.rowCount !== 1) throw new Error("PROJECT_MATERIALS_SNAPSHOT_AMBIGUOUS");
     const row = current.rows[0];
-    if (row === undefined || row.current_project_version === null ||
-        row.current_artifact_id === null || row.project_id === null) return null;
-    if (typeof row.current_project_version !== "string" || typeof row.current_artifact_id !== "string" ||
-        row.current_project_version !== row.project_version || row.current_artifact_id !== row.artifact_id) {
-      throw new Error("PROJECT_MATERIALS_SNAPSHOT_INVALID");
-    }
+    if (row === undefined) return null;
+    // 指针缺失 = 尚未推送过任何内容，视图仍在等待首次同步。
+    if (row.pointer_branch_name === null) return null;
+    // 指针存在却找不到对应快照 = 数据不一致，不能静默降级成"处理中"。
+    if (row.project_id === null) throw new Error("PROJECT_MATERIALS_SNAPSHOT_INVALID");
     return identityFrom(row, projectId);
   }
 

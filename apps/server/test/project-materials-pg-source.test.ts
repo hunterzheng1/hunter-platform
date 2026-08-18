@@ -153,15 +153,13 @@ function result(rows: readonly Record<string, unknown>[]) {
 }
 
 describe("PgProjectMaterialsSource", () => {
-  it("returns a formal processing page when the project fence has no matching immutable snapshot", async () => {
+  it("returns a formal processing page when no remote-sync branch pointer exists yet", async () => {
     const queries: string[] = [];
     const pool = {
       async query(text: string) {
         queries.push(text);
-        return result([{
-          current_project_version: "pv_0001", current_artifact_id: "art_0001",
-          project_id: null
-        }]);
+        // 尚未推送过任何内容：分支指针缺失，快照身份自然为空。
+        return result([{ pointer_branch_name: null, project_id: null }]);
       }
     } as unknown as Pool;
     const source = new PgProjectMaterialsSource({
@@ -187,6 +185,30 @@ describe("PgProjectMaterialsSource", () => {
       failures: []
     }));
     expect(queries).toHaveLength(1);
+  });
+
+  it("fails closed when a branch pointer references a snapshot that does not exist", async () => {
+    // 指针与快照由 push:commit 在同一事务写入，指针有而快照无只可能是数据损坏，
+    // 不能静默降级成"处理中"——那正是此前锚点失效却表现为 processing 的伪装方式。
+    const source = new PgProjectMaterialsSource({
+      pool: {
+        async query() {
+          return result([{ pointer_branch_name: "main", project_id: null }]);
+        }
+      } as unknown as Pool,
+      blob_reader: { async readBlob() { throw new Error("blob must not be read"); } },
+      cursor_authority: new ProjectMaterialsCursorAuthority(secretBytes())
+    });
+
+    await expect(source.list({
+      actor_id: scope.actor_id,
+      accessible_project_ids: [scope.project_id],
+      project_id: scope.project_id,
+      content_types: ["config", "rule", "architecture", "instruction"],
+      sort: scope.sort,
+      limit: 10,
+      cursor: null
+    })).rejects.toThrow("PROJECT_MATERIALS_SNAPSHOT_INVALID");
   });
 
   it("fails closed at the storage boundary on control characters and lone surrogates", async () => {

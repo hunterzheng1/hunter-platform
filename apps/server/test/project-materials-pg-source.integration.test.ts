@@ -83,10 +83,52 @@ postgresDescribe("PgProjectMaterialsSource real PostgreSQL integration", () => {
         [...Object.values(identity), path, kind, Buffer.byteLength(content), digest(content), mediaType]
       );
     }
+    // 生产真实形态：remote-sync 的 push:commit 在同一事务里写 versions + branch pointer，
+    // 这才是"当前快照"的权威指针。此前本测试直接把 projects.latest_project_version 改成快照的
+    // project_version，伪造了一个生产代码从不维护的不变量——两侧 id 由互不知晓的生成器产生
+    // （proposal 用 id("pv_")/id("art_") 各自随机；remote-sync 用共享 suffix），永远不可能相等。
+    const sourceJson = JSON.stringify({
+      schema_version: 1,
+      project_id: projectId,
+      branch_name: identity.branch_name,
+      commit_sha: identity.commit_sha,
+      actor_id: actorId
+    });
+    const snapshotJson = JSON.stringify({
+      schema_version: 1,
+      project_id: projectId,
+      branch_name: identity.branch_name,
+      project_version: identity.project_version,
+      artifact_id: identity.artifact_id,
+      manifest_hash: identity.manifest_hash,
+      commit_sha: identity.commit_sha
+    });
+    await pool.query(
+      `INSERT INTO remote_sync_versions(project_id, branch_name, project_version, artifact_id,
+         manifest_hash, commit_sha, source_json, payload_hash, idempotency_key, snapshot_json, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10::jsonb, now())`,
+      [projectId, identity.branch_name, identity.project_version, identity.artifact_id,
+        identity.manifest_hash, identity.commit_sha, sourceJson,
+        `sha256:${"a".repeat(64)}`, `idem_materials_${namespace}`, snapshotJson]
+    );
+    await pool.query(
+      `INSERT INTO remote_sync_branch_pointers(project_id, branch_name, revision, generation,
+         project_version, artifact_id, manifest_hash, commit_sha, updated_at)
+       VALUES ($1,$2,$3,1,$4,$5,$6,$7, now())`,
+      [projectId, identity.branch_name, identity.project_version, identity.project_version,
+        identity.artifact_id, identity.manifest_hash, identity.commit_sha]
+    );
+    // proposal 管道（hunter-harness push）推进的 latest_*，与快照身份来自不同生成器。
+    // 视图不得依赖它——种一条真实的 proposal artifact 并让 latest_* 指向它，证明独立性。
+    await pool.query(
+      `INSERT INTO artifacts(artifact_id, project_id, project_version, proposal_id, manifest)
+       VALUES ($1, $2, $3, $4, '{}'::jsonb)`,
+      [`art_proposal_${namespace}`, projectId, `pv_proposal_${namespace}`, proposalId]
+    );
     await pool.query(
       `UPDATE projects SET latest_project_version = $2, latest_artifact_id = $3
        WHERE project_id = $1`,
-      [projectId, identity.project_version, identity.artifact_id]
+      [projectId, `pv_proposal_${namespace}`, `art_proposal_${namespace}`]
     );
   });
 
@@ -95,6 +137,8 @@ postgresDescribe("PgProjectMaterialsSource real PostgreSQL integration", () => {
       "UPDATE projects SET latest_project_version = NULL, latest_artifact_id = NULL WHERE project_id = $1",
       [projectId]
     );
+    await pool.query("DELETE FROM remote_sync_branch_pointers WHERE project_id = $1", [projectId]);
+    await pool.query("DELETE FROM remote_sync_versions WHERE project_id = $1", [projectId]);
     await pool.query("DELETE FROM branch_snapshots WHERE project_id = $1", [projectId]);
     await pool.query("DELETE FROM artifacts WHERE project_id = $1", [projectId]);
     await pool.query("DELETE FROM proposals WHERE project_id = $1", [projectId]);
@@ -186,10 +230,8 @@ postgresDescribe("PgProjectMaterialsSource real PostgreSQL integration", () => {
       material_id: first.items[0]?.material_id ?? "missing"
     })).resolves.toBeNull();
 
-    await pool.query(
-      "UPDATE projects SET latest_project_version = NULL, latest_artifact_id = NULL WHERE project_id = $1",
-      [projectId]
-    );
+    // 尚无任何 remote-sync 推送（分支指针缺失）时才是 processing。
+    await pool.query("DELETE FROM remote_sync_branch_pointers WHERE project_id = $1", [projectId]);
     await expect(restarted.list({ ...request, cursor: first.next_cursor }))
       .rejects.toThrow("PROJECT_MATERIALS_CURSOR_INVALID");
     await expect(restarted.list({ ...request, cursor: null })).resolves.toContain('"page_state":"processing"');
