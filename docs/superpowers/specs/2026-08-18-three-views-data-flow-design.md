@@ -503,7 +503,62 @@ project_knowledge = 0
 2. 把生产归档流程接到 v2 包格式（或让 Python 包也带 `candidates/`）
 3. 之后才轮到原 D2 设想的那条桥
 
-第 1 步是全新特性，不属于"修数据流"。**未实施。**
+第 1 步是全新特性，不属于"修数据流"。
+
+##### 知识来源的选定（2026-08-18，已定）
+
+问题"什么算值得沉淀的知识"不需要交给 LLM——**归档流程已经筛过一轮**。
+`summary-data.json` 里的结构化字段就是筛出来的结论。逐一评估其质量（kld-sdd 实测）：
+
+| 字段 | 实测内容 | 判定 |
+|---|---|---|
+| `reviewFindings` | 带 `severity`/`path`/`line`/`title`/`disposition` 的结构化裁决 | ✅ **采用** |
+| `knownRisks` | 已知风险条目 | ✅ **采用** |
+| `maintenanceNotes` | 约 1/5 是真决策（"不让 cli_token 替代 Archive/Knowledge 仍需的 api_client"），其余是流程流水（"阶段 3 采用 executionMode=inline"、"已完成 6 维度审查：2 RED + 7 YELLOW"） | ❌ 信噪比过低 |
+| `finalStatusReasons` | 实测仅 `stage run=WARN` | ❌ 无知识价值 |
+| `manualActions` | 三个变更均为 0 条 | ❌ 无数据 |
+
+**采用 `reviewFindings` ＋ `knownRisks` 的四个理由**
+
+1. **筛选已经发生过**：评审由独立 reviewer 跑出并裁决，不是原始文本
+2. **带 `path` + `line` 溯源**：知识条目日后可被定位使用，这是可用性的关键
+3. **记教训优于记成果**：`ACCEPTED_RISK` / `DEFERRED` 是明知故犯仍在世的风险，价值最高
+4. **零 LLM**：`type` 由 `disposition` 确定性推导，可复现、无成本、无幻觉
+
+**确定性映射（全部取自真实字段，无发明）**
+
+| 来源 | `type` | `confidence` |
+|---|---|---|
+| `disposition = FIXED` | `pitfall` | RED 0.95 / YELLOW 0.85 |
+| `disposition = ACCEPTED_RISK` 或 `DEFERRED` | `risk` | RED 0.95 / YELLOW 0.85 |
+| `knownRisks[]` | `risk` | 0.85 |
+| `severity = OK` 或 `disposition = NOT_APPLICABLE` | **丢弃** | — |
+
+置信度均高于 extractor 的自动放行阈值 `0.82`（`extractor.ts:12`）——
+质量由 OK/NOT_APPLICABLE 过滤保证，不靠阈值卡。
+
+- `title` ← finding.title
+- `body` ← title ＋ `path:line` ＋ severity ＋ disposition 组合
+- `keywords` ← 从 `path` 派生（文件名、父目录）＋ severity ＋ disposition，均为真实值
+- `source{}` ← 同一份 `summary-data.json` 的 `changeName` / `baseCommit` / `finalCommit` /
+  `finalStatus`，`archive` ← `archive_id`，`summarySha256` ← 该文件哈希
+
+**体量校准**（kld-sdd 三个变更实测）：原始 9 条 → 滤除 OK(4) ＋ NOT_APPLICABLE(1)
+→ 留 4~5 条，约**每次变更 1.5 条**。既不刷屏也不空转。
+
+##### 实施顺序（按此执行）
+
+1. 候选生成器：从 `summary-data.json` 的 `reviewFindings`/`knownRisks` 按上表产出
+   `KnowledgeCandidate[]`，写入归档包 `candidates/knowledge.json`
+2. `knowledgeCandidateSchema` 增补 `entry_type` / `body` / `keywords`（**可选字段**，
+   老归档缺字段时降级；两仓库逐字节镜像 ＋ 更新字节锁）
+3. `KnowledgeResultDraft` ＋ `extractor.ts` 透传新字段
+4. `KnowledgeResult` ＋ `knowledge_pipeline_results` 增列（migration）
+5. 桥：results ＋ `change_summary` 文档 → `upsertKnowledgeEntry` ＋ `projectPendingKnowledge`
+
+**待验证的前置依赖**：change projection 作业是否真的在跑并填充
+`knowledge_pipeline_change_documents`（D1 只修了视图读取端，未验证生产端）。
+第 5 步依赖它；若未跑，需先查 `change-projection-worker`。
 
 ### 待决：归档 ZIP 边界与分支文件边界不一致
 
