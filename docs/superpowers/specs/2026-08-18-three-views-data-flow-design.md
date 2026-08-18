@@ -342,11 +342,33 @@ document_refs: [], document_snapshots: [], candidate_refs: []
 发布核心文件，并根据其中的 Markdown 与摘要重建项目语义索引"，且要求客户端
 不得生成本地索引。即服务端自动入库是既定契约，缺的是实现。
 
-#### 实施顺序建议
+#### D1 — 已完成（2026-08-18）
 
-D1 先做：自包含、与 Stream A 同型（视图改接正确数据源），可直接 TDD。
-D2 后做：需要新增一条 pipeline results → `knowledge_ingest_entries` 的提交路径，
-面较大，且要考虑幂等与 fence 语义。
+列表与详情共用同一段 lateral 聚合，避免两个入口给出不一致的 refs：
+
+- 文档取自 `knowledge_pipeline_change_documents`，按 `change_key` 过滤、按 `document_id` 定序。
+  契约要求 `document_snapshots` 与 `document_refs` 等长同序，故只产出快照数组、
+  refs 由其派生——两者不可能再走偏
+- 候选表按项目而非变更分区，只能经 `knowledge_pipeline_results.source_change_keys`
+  反查 `source_candidate_ids`
+- 上限（文档 20 / 候选 100）在 SQL 与解析两侧各兜一次
+- 形状不合的条目整条丢弃：宁可少给，也不把脏数据送进视图
+
+**补了一条集成测试**：此前该 source 只有假 pool 的单测，SQL 字符串从未被 Postgres
+解析过——语法错误、列名笔误、lateral 作用域问题都只会在生产暴露。新测试
+（`change-records-pg-source.integration.test.ts`）对真实库执行两条查询，
+并验证 refs 确实来自管道。发现并修正了 seed 缺列（`manifest_sha256` 等）后跑通。
+
+门禁：lint + typecheck 通过；`apps/server/test` + `packages/contracts`
+**1268 passed / 9 failed**，9 个全部为预存红，本次零新增。
+
+#### D2 — 待实施
+
+需要新增一条 `knowledge_pipeline_results` → `knowledge_ingest_entries` 的提交路径。
+面较大，且要考虑幂等与 fence 语义（`knowledge_ingest_entries` 有
+`content_sha256` 与 sticky `deprecated` 语义，见 `repositories/postgres.ts:525`
+的 `upsertKnowledgeEntry`）。D1 已让「变更记录」显示真实的文档与候选，
+D2 才会让「项目知识」视图与 `knowledge query` 出结果。
 
 ### 待决：归档 ZIP 边界与分支文件边界不一致
 
