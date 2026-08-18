@@ -362,13 +362,59 @@ document_refs: [], document_snapshots: [], candidate_refs: []
 门禁：lint + typecheck 通过；`apps/server/test` + `packages/contracts`
 **1268 passed / 9 failed**，9 个全部为预存红，本次零新增。
 
-#### D2 — 待实施
+#### D2 — 阻塞：提取契约缺字段，无法忠实映射
 
-需要新增一条 `knowledge_pipeline_results` → `knowledge_ingest_entries` 的提交路径。
-面较大，且要考虑幂等与 fence 语义（`knowledge_ingest_entries` 有
-`content_sha256` 与 sticky `deprecated` 语义，见 `repositories/postgres.ts:525`
-的 `upsertKnowledgeEntry`）。D1 已让「变更记录」显示真实的文档与候选，
-D2 才会让「项目知识」视图与 `knowledge query` 出结果。
+原以为只需接一条 `knowledge_pipeline_results` → `knowledge_ingest_entries` 的桥。
+实际查下来，**要写入的目标形状里有一半字段在管道中根本不存在**。
+
+目标 `knowledgeIngestEntrySchema`（`packages/contracts/src/knowledge.ts:137`）要求：
+`type`（7 值枚举）、`title`、`summary`、`body`、`keywords`、
+`source{archive,summaryData,summarySha256,sourceCommit,baseCommit,changeName,finalStatus}`、
+`scope.sourceFiles`、`lifecycle{...}`。
+
+而管道端能提供的，从 LLM 抽取草稿一路到落库都只有这些
+（`KnowledgeResultDraft`，`knowledge-pipeline/types.ts:175`）：
+
+```
+source_candidate_id, content_hash, display_title, summary,
+reusability_scope, source_refs, confidence
+```
+
+**不是入库时被裁掉的——抽取契约本身就没产出过 `type` / `body` / `keywords`。**
+
+于是任何"现在就接上"的实现都必须凭空捏造：
+
+| 缺失字段 | 只能怎么办 | 代价 |
+|---|---|---|
+| `type` | 从 7 值里挑一个默认值 | 纯捏造，分类失真 |
+| `body` | 拿 `summary` 顶替 | 勉强可辩护 |
+| `keywords` | 空数组 | 检索质量下降 |
+| `source.sourceCommit` / `baseCommit` / `summarySha256` / `finalStatus` | 无任何来源 | **伪造溯源**——知识条目的可信度正是靠溯源 |
+
+##### 为什么"写个残缺 payload"也不成立
+
+`project_knowledge` 视图只读 `knowledge_ingest_entries`，确实只需要
+`id/title/status/lifecycle/content_sha256`，残缺 payload 能让**这个视图**出数据。
+
+但 `knowledge query` 走的是语义库，而投影函数
+`knowledgeEntryDocument`（`semantic/knowledge-projection.ts:31`）会
+`knowledgeIngestEntrySchema.safeParse(payload)`，失败即 `return null` → 条目被跳过。
+所以残缺 payload 只能点亮一半，另一半仍然为空，且失败是静默的。
+
+##### 结论与建议
+
+正确修法是**扩展抽取契约**：让 LLM 抽取草稿产出 `type` / `body` / `keywords`，
+并把归档包已有的 `sourceCommit` / `baseCommit` / `finalStatus` 沿 job 传递下来
+（`knowledge_pipeline_archives` 里有 `package_sha256`、`validation_receipt`，
+`change-context.json` 里应有 commit 信息，需核实）。涉及：
+
+1. 抽取 prompt 与 draft schema（AI 侧行为变更）
+2. `KnowledgeResultDraft` / `KnowledgeResult` 类型
+3. `knowledge_pipeline_results` 表结构（新增列，需 migration）
+4. 提交路径 `commitKnowledgeResults`
+5. 最后才是本节原本设想的那条桥
+
+这已超出"数据流接线"的范畴，属于产品级变更，**未擅自实施**。
 
 ### 待决：归档 ZIP 边界与分支文件边界不一致
 
