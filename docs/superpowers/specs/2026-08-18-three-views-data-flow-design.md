@@ -459,12 +459,51 @@ candidate_id, source_refs, summary, reusability_scope, status`。
 故可让 `knowledgeEntryDocument` 识别管道原生形态，不再强行套旧 schema。
 代价：这批条目在语义检索里没有 `type` / `keywords` 分面，检索质量下降。
 
-##### 取舍点
+##### 更正 3（决定性）：知识候选**没有任何生产方**，路线 A 的前提不成立
 
-`type` 与 `keywords` 直接影响知识检索质量。若知识库要长期可用，A 更正确；
-若只要三个视图先通、检索质量后续再补，B 一次改动即可。
+选定 A 后继续查证，发现"扩展客户端候选生成器"这个前提是错的——**根本没有生成器**：
 
-**这是产品语义取舍，不是接线问题，未擅自选择。**
+- 两仓库全量搜索 `kc_` 候选 id 的产出点：**零命中**（客户端、服务端、AI 任务均无）
+- kld-sdd 历史归档中从未出现 `candidates/knowledge.json`
+- `archive-package-builder` 只**校验** `candidates/knowledge.json`，不生成；
+  它接收的 inventory 由上游给出，而上游没有任何东西填这个槽
+
+于是整条链的真实形态是：
+
+```
+project_knowledge = 0
+  ← knowledge_ingest_entries 空（缺桥，即原 D2）
+  ← 但补上桥也无用：knowledge_pipeline_results 恒空
+  ← extractor.ts 读 archive.knowledge_candidates
+  ← 候选从来没有生产方
+```
+
+`knowledge_extraction_status: "ready"` ＋ `candidate_count: 0` 至此完全自洽：
+提取作业跑完了，找到零个候选，成功结束。
+
+##### 更正 4：两套归档包格式并存，生产用的不是带候选的那套
+
+- **v2 包**（`packages/core/src/archive-package-builder`，TS）：
+  `summary/change-summary.json`、`candidates/knowledge.json`、
+  `attestations/verification.json`、`archive-meta.json`
+- **生产包**（`harness/scripts/harness_archive.py`，Python）：
+  `reports/final/summary-data.json`、`spec/**`、`plans/**`、`archive-meta.md`
+
+生产走 Python 那套，落 legacy 的 `change_archive_packages` 表——与 D1 查到的
+"视图读 legacy 表"完全一致。**`knowledge_pipeline_*` 是一套建好但未接线的平行子系统，
+且其入口（候选生成）尚未实现。**
+
+##### 因此 D2 的真实范围
+
+不是"接一条桥"，也不是"扩展候选契约"，而是：
+
+1. **实现知识候选生成**（新功能）：从变更归档的 design/plan/report 文档中抽出可复用知识，
+   产出带 `type` / `body` / `keywords` / 溯源的候选。这需要一次 LLM 抽取，
+   且要定义什么算"值得沉淀的知识"——**产品定义问题**
+2. 把生产归档流程接到 v2 包格式（或让 Python 包也带 `candidates/`）
+3. 之后才轮到原 D2 设想的那条桥
+
+第 1 步是全新特性，不属于"修数据流"。**未实施。**
 
 ### 待决：归档 ZIP 边界与分支文件边界不一致
 
