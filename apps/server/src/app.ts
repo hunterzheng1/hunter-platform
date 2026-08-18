@@ -1209,8 +1209,12 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     return send(reply, requestId, result);
   });
 
+  // push 流程的第一个调用就是这条（取 baseline 与最新版本），之后才是
+  // projects:resolve（同样声明 "push"）。此前这里没声明 scope，project key 走
+  // default-deny 被 403，push 在 project_id 尚未解析时就整体失败——现场表现是
+  // 平台上"分支文件里没有 plan/spec"，因为它们全靠这条推送上传。
   app.get("/api/v1/projects/:projectId", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository);
+    const { actor, requestId } = await authenticated(request, repository, "push");
     const { projectId } = request.params as { projectId: string };
     const project = await repository.getProject(actor.actorId, projectId);
     reply.header("X-Request-Id", requestId);

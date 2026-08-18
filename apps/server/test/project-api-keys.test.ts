@@ -180,6 +180,36 @@ describe("project-scoped API keys (P2)", () => {
     expect(otherProject.json().error.code).toBe("PROJECT_KEY_MISMATCH");
   });
 
+  it("lets a push-scoped key read the project it is bound to", async () => {
+    // push 流程的第一个调用就是 GET /api/v1/projects/{id}（取 baseline 与版本），
+    // 之后才轮到 projects:resolve。该路由此前没声明 scope，project key 走
+    // default-deny 被 403，push 在 project_id 都没解析出来时就整体失败——现场
+    // 表现是"分支文件里没有 plan/spec"，因为它们全靠这条推送上传。
+    const { apiKey } = await issueKey(["push"]);
+
+    const project = await app.inject({
+      method: "GET",
+      url: `/api/v1/projects/${projectId}`,
+      headers: { authorization: "Bearer " + apiKey, "x-request-id": uuidV7() }
+    });
+
+    expect(project.statusCode).toBe(200);
+    expect(project.json().project_id).toBe(projectId);
+  });
+
+  it("still denies the project read to a key without push scope", async () => {
+    const { apiKey } = await issueKey(["knowledge:read"]);
+
+    const project = await app.inject({
+      method: "GET",
+      url: `/api/v1/projects/${projectId}`,
+      headers: { authorization: "Bearer " + apiKey, "x-request-id": uuidV7() }
+    });
+
+    expect(project.statusCode).toBe(403);
+    expect(project.json().error.code).toBe("PROJECT_KEY_SCOPE");
+  });
+
   it("rejects out-of-scope and unscoped routes", async () => {
     const { apiKey } = await issueKey(["files:read"]);
 
