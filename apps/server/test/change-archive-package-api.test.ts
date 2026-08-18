@@ -488,6 +488,185 @@ describe("change archive package API", () => {
     ]));
   });
 
+  it("accepts the knowledge candidates the archive producer now ships", async () => {
+    // harness/scripts/harness_knowledge_candidates.py 从 summary-data 的
+    // reviewFindings/knownRisks 生成 candidates/knowledge.json，随生产包一起上传。
+    // 老包不带这个条目，所以它必须是可选的，而不是新的必需项。
+    const projectId = await resolveProject();
+    const changeKey = "chg-archive-candidates";
+    const candidates = [
+      {
+        schema_version: 1,
+        candidate_id: "kc_3f66a23f5838a9fcd2f39f17152298e6",
+        source_change_key: changeKey,
+        source_refs: ["packages/contracts/src/content-sync.ts#L1051"],
+        summary: "nonScannablePathPrefixes rejects the whole archive tree",
+        reusability_scope: "packages",
+        content_hash: `sha256:${"a".repeat(64)}`,
+        confidence: 0.95,
+        status: "pending",
+        entry_type: "pitfall",
+        body: "nonScannablePathPrefixes rejects the whole archive tree\npackages/contracts/src/content-sync.ts:1051\nRED\nFIXED",
+        keywords: ["content-sync.ts", "src", "RED", "FIXED"],
+        provenance: {
+          source_kind: "review",
+          source_ref: `archive:${changeKey}#F-001`,
+          producer: "harness-archive",
+          producer_version: "2.3",
+          created_at: "2026-08-18T12:00:00.000Z"
+        }
+      }
+    ];
+    const zip = archiveZip(changeKey, [
+      {
+        path: "reports/final/summary-data.json",
+        role: "summary",
+        content: JSON.stringify(cliSummary(changeKey))
+      },
+      {
+        path: "candidates/knowledge.json",
+        role: "knowledge_candidates",
+        content: JSON.stringify(candidates)
+      },
+      {
+        path: "archive-meta.md",
+        role: "archive_meta",
+        content: "# 归档元数据\n\n带知识候选的核心归档。\n"
+      }
+    ]);
+
+    const response = await app.inject({
+      method: "PUT",
+      url: `/api/v1/projects/${projectId}/changes/${changeKey}/archive-package`,
+      headers: headers(),
+      payload: zip
+    });
+
+    expect(response.statusCode, response.body).toBe(201);
+  });
+
+  it("rejects knowledge candidates that do not match the candidate contract", async () => {
+    // 管道会原样消费这些候选，所以坏数据必须在入口挡掉，而不是半途入库。
+    const projectId = await resolveProject();
+    for (const [name, payload] of [
+      ["not an array", { candidate_id: "kc_x" }],
+      ["unknown entry_type", [{
+        schema_version: 1,
+        candidate_id: "kc_bad_entry_type",
+        source_change_key: "chg-bad",
+        source_refs: ["a.ts"],
+        summary: "s",
+        reusability_scope: "packages",
+        content_hash: `sha256:${"a".repeat(64)}`,
+        confidence: 0.9,
+        status: "pending",
+        entry_type: "lesson",
+        provenance: {
+          source_kind: "review",
+          source_ref: "archive:chg-bad",
+          producer: "harness-archive",
+          producer_version: "2.3",
+          created_at: "2026-08-18T12:00:00.000Z"
+        }
+      }]],
+      ["wrong id namespace", [{
+        schema_version: 1,
+        candidate_id: "pcc_wrong_namespace",
+        source_change_key: "chg-bad",
+        source_refs: ["a.ts"],
+        summary: "s",
+        reusability_scope: "packages",
+        content_hash: `sha256:${"a".repeat(64)}`,
+        confidence: 0.9,
+        status: "pending",
+        provenance: {
+          source_kind: "review",
+          source_ref: "archive:chg-bad",
+          producer: "harness-archive",
+          producer_version: "2.3",
+          created_at: "2026-08-18T12:00:00.000Z"
+        }
+      }]]
+    ] as Array<[string, unknown]>) {
+      const changeKey = `chg-bad-${name.replaceAll(" ", "-")}`;
+      const zip = archiveZip(changeKey, [
+        {
+          path: "reports/final/summary-data.json",
+          role: "summary",
+          content: JSON.stringify(cliSummary(changeKey))
+        },
+        {
+          path: "candidates/knowledge.json",
+          role: "knowledge_candidates",
+          content: JSON.stringify(payload)
+        }
+      ]);
+
+      const response = await app.inject({
+        method: "PUT",
+        url: `/api/v1/projects/${projectId}/changes/${changeKey}/archive-package`,
+        headers: headers(),
+        payload: zip
+      });
+
+      expect(response.statusCode, `${name}: ${response.body}`).toBe(422);
+      expect(response.json()).toMatchObject({ error: { code: "ARCHIVE_PACKAGE_INVALID" } });
+    }
+  });
+
+  it("accepts an empty knowledge candidate array", async () => {
+    // 一次没沉淀出知识的变更同样是合法结果，不能被当成坏包。
+    const projectId = await resolveProject();
+    const changeKey = "chg-archive-empty-candidates";
+    const zip = archiveZip(changeKey, [
+      {
+        path: "reports/final/summary-data.json",
+        role: "summary",
+        content: JSON.stringify(cliSummary(changeKey))
+      },
+      {
+        path: "candidates/knowledge.json",
+        role: "knowledge_candidates",
+        content: "[]"
+      }
+    ]);
+
+    const response = await app.inject({
+      method: "PUT",
+      url: `/api/v1/projects/${projectId}/changes/${changeKey}/archive-package`,
+      headers: headers(),
+      payload: zip
+    });
+
+    expect(response.statusCode, response.body).toBe(201);
+  });
+
+  it("still accepts an archive package that ships no knowledge candidates", async () => {
+    const projectId = await resolveProject();
+    const changeKey = "chg-archive-no-candidates";
+    const zip = archiveZip(changeKey, [
+      {
+        path: "reports/final/summary-data.json",
+        role: "summary",
+        content: JSON.stringify(cliSummary(changeKey))
+      },
+      {
+        path: "archive-meta.md",
+        role: "archive_meta",
+        content: "# 归档元数据\n\n老形态归档。\n"
+      }
+    ]);
+
+    const response = await app.inject({
+      method: "PUT",
+      url: `/api/v1/projects/${projectId}/changes/${changeKey}/archive-package`,
+      headers: headers(),
+      payload: zip
+    });
+
+    expect(response.statusCode, response.body).toBe(201);
+  });
+
   it("rebuilds a ready same-package archive when the semantic index schema is stale", async () => {
     await app.close();
     const legacyStore = new LegacySemanticStore();

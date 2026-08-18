@@ -1455,9 +1455,12 @@ describe("content-sync canonical mirror", () => {
     // 2026-08-18：归档交付物（plans/spec/docs 全部 ＋ reports/final 定稿）放行为
     // branch_file，并导出 mayContainArchiveDeliverables 供工作区遍历决定下钻。
     // reports/review 与 reports/test 是过程产物，边界与归档 ZIP 一致。
+    // 2026-08-18（二）：knowledgeCandidateSchema 增补可选的 entry_type / body /
+    // keywords，供知识候选携带入库投影所需字段；entry_type 与 knowledge.ts 的
+    // knowledgeIngestEntryTypeSchema 逐值对齐，漂移会让桥静默丢条目。
     // 与 Hunter-Harness/packages/contracts/src/content-sync.ts 逐字节镜像。
     expect(contentSyncSha256(source)).toBe(
-      "db91b58398aed580658ba51fdbad3286942c31b431e18248dc47752fb7bceaf0"
+      "4d3095fb0babc0f7e7ec70fd44b0333800964db044a33cdd272f446579c2c98a"
     );
     expect(contentSyncSha256(current)).toBe(
       "a5d700084708255d25a9be7de889024c5c8ce644dd671f300251369fa6fcdb4c"

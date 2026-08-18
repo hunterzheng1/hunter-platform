@@ -3,6 +3,7 @@ import { Buffer } from "node:buffer";
 import {
   canonicalJson,
   fileOperationSchema,
+  knowledgeCandidateSchema,
   type FileOperation
 } from "@hunter-harness/contracts";
 import { scanSensitiveFiles, sha256Bytes } from "@hunter-harness/core";
@@ -28,6 +29,9 @@ const archiveRoleSchema = z.enum([
   "summary",
   "spec",
   "plan",
+  // Produced by harness/scripts/harness_knowledge_candidates.py from the same
+  // summary-data. Optional: archives built before it exists carry no such entry.
+  "knowledge_candidates",
   "archive_meta",
   "change_context"
 ]);
@@ -162,6 +166,11 @@ const ALLOWED_PATHS: ReadonlyArray<{
   { role: "summary", pattern: /^reports\/final\/summary-data\.json$/u, mediaType: "application/json" },
   { role: "spec", pattern: /^spec\/(?:[^/]+\/)*[^/]+\.md$/u, mediaType: "text/markdown" },
   { role: "plan", pattern: /^plans\/(?:[^/]+\/)*[^/]+\.md$/u, mediaType: "text/markdown" },
+  {
+    role: "knowledge_candidates",
+    pattern: /^candidates\/knowledge\.json$/u,
+    mediaType: "application/json"
+  },
   { role: "archive_meta", pattern: /^archive-meta\.md$/u, mediaType: "text/markdown" },
   { role: "change_context", pattern: /^change-context\.json$/u, mediaType: "application/json" }
 ];
@@ -564,6 +573,13 @@ export function validateArchivePackage(
         }
         if (declared.role === "change_context" && !isNonEmptyJsonObject(parsed)) {
           invalid("archive change-context must be a non-empty JSON object", { path });
+        }
+        // Fail closed: the knowledge pipeline consumes these verbatim, so a
+        // malformed array must be rejected here rather than half-ingested later.
+        // An empty array is valid — a change may yield no knowledge at all.
+        if (declared.role === "knowledge_candidates" &&
+            !z.array(knowledgeCandidateSchema).max(1_000).safeParse(parsed).success) {
+          invalid("archive knowledge candidates do not match the candidate contract", { path });
         }
         normalizedJsonFiles[path] = normalizedJsonScanText(parsed, path);
       } catch (error) {
