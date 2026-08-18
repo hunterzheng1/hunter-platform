@@ -68,6 +68,46 @@ describe("PgChangeArchiveSource", () => {
     expect(detail.document_refs).toEqual([]);
   });
 
+  it("projects the documents and candidates the knowledge pipeline actually produced", async () => {
+    // 此前这三个字段是硬编码空数组，视图只读 legacy 的 change_archive_packages，
+    // 从不查询 knowledge_pipeline_change_documents / _results——于是平台上
+    // 「变更记录」的 document_refs 与 candidate_count 与管道产出完全无关，恒为空。
+    const documents = [
+      { document_id: `doc_${"1".repeat(32)}`, content_hash: `sha256:${"b".repeat(64)}` },
+      { document_id: `doc_${"2".repeat(32)}`, content_hash: `sha256:${"c".repeat(64)}` }
+    ];
+    const candidates = ["cand_alpha", "cand_beta"];
+    const queries: string[] = [];
+    const pool = {
+      async query(text: string) {
+        queries.push(text);
+        return result([{ ...archive, documents, candidates }]);
+      }
+    } as unknown as Pool;
+    const source = new PgChangeArchiveSource({
+      pool,
+      cursor_authority: new ChangeRecordsCursorAuthority(secret())
+    });
+
+    const page = JSON.parse(await source.listPage({ ...scope, limit: 10, cursor: null }));
+    expect(page.records[0]).toEqual(expect.objectContaining({
+      change_key: "change-1",
+      document_refs: documents.map((entry) => entry.document_id),
+      document_snapshots: documents,
+      candidate_refs: candidates
+    }));
+    // 契约要求 snapshots 与 refs 等长同序，SQL 的排序必须保证这一点。
+    expect(page.records[0].document_snapshots.map((s: { document_id: string }) => s.document_id))
+      .toEqual(page.records[0].document_refs);
+    expect(queries[0]).toMatch(/knowledge_pipeline_change_documents/u);
+    expect(queries[0]).toMatch(/knowledge_pipeline_results/u);
+
+    const detail = JSON.parse(await source.getDetail({ ...scope, detail_id: "change-1" }));
+    expect(detail.document_refs).toEqual(documents.map((entry) => entry.document_id));
+    expect(detail.document_snapshots).toEqual(documents);
+    expect(detail.candidate_refs).toEqual(candidates);
+  });
+
   it("produces a page accepted by the change-records adapter when archives exist", async () => {
     const pool = {
       async query() { return result([archive]); }

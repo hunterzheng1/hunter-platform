@@ -17,6 +17,11 @@ const MAX_CURSOR_BYTES = 1024;
 const PROJECT = /^prj_[A-Za-z0-9_-]{1,156}$/u;
 const CHANGE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/u;
 const SHA = /^sha256:[a-f0-9]{64}$/u;
+const DOCUMENT = /^doc_[a-f0-9]{32}$/u;
+// 与 module.ts 的 schema 上限一致：document_refs ≤ 20、candidate_refs ≤ 100。
+// SQL 里已经 LIMIT，这里再兜一次，避免上限只写在一处。
+const MAX_DOCUMENT_REFS = 20;
+const MAX_CANDIDATE_REFS = 100;
 
 interface ChangeCursorScope {
   readonly actor_id: string;
@@ -181,6 +186,8 @@ interface ArchiveRow extends Record<string, unknown> {
   readonly attempt_count?: unknown;
   readonly failure_stage?: unknown;
   readonly last_error_code?: unknown;
+  readonly documents?: unknown;
+  readonly candidates?: unknown;
 }
 
 function iso(value: unknown): string | null {
@@ -205,14 +212,81 @@ function archiveRecord(row: ArchiveRow): {
       typeof packageHash !== "string" || !SHA.test(packageHash) || archivedAt === null) return null;
   const knowledge = row.knowledge_status === "ready" ? "ready" as const
     : row.knowledge_status === "failed" ? "failed" as const : "queued" as const;
+  const snapshots = documentSnapshots(row.documents);
   return {
     change_key: changeKey, title: changeKey, archived_at: archivedAt,
     archive_status: "durable", archive_id: archiveId, package_sha256: packageHash,
     knowledge_extraction_status: knowledge,
     projection_status: row.knowledge_status === "failed" ? "failed" : "queued",
-    document_refs: [], document_snapshots: [], candidate_refs: []
+    document_refs: snapshots.map((snapshot) => snapshot.document_id),
+    document_snapshots: snapshots,
+    candidate_refs: candidateRefs(row.candidates)
   };
 }
+
+/**
+ * 管道投影出的变更文档。契约要求 document_snapshots 与 document_refs 等长同序，
+ * 所以这里只产出快照数组，refs 由它派生——两者不可能再走偏。
+ * 形状不合的整条丢弃：宁可少给，也不把脏数据送进视图。
+ */
+function documentSnapshots(value: unknown): Array<{ document_id: string; content_hash: string }> {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const output: Array<{ document_id: string; content_hash: string }> = [];
+  for (const entry of value) {
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const documentId = (entry as { document_id?: unknown }).document_id;
+    const contentHash = (entry as { content_hash?: unknown }).content_hash;
+    if (typeof documentId !== "string" || !DOCUMENT.test(documentId) ||
+        typeof contentHash !== "string" || !SHA.test(contentHash) || seen.has(documentId)) continue;
+    seen.add(documentId);
+    output.push({ document_id: documentId, content_hash: contentHash });
+    if (output.length >= MAX_DOCUMENT_REFS) break;
+  }
+  return output;
+}
+
+function candidateRefs(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== "string" || !text(entry, 160) || seen.has(entry)) continue;
+    seen.add(entry);
+    if (seen.size >= MAX_CANDIDATE_REFS) break;
+  }
+  return [...seen];
+}
+
+// 变更文档与候选来自知识管道，不在 change_archive_packages 里。列表与详情必须
+// 用同一段聚合，否则两个入口会给出不一致的 refs。
+// 文档按 document_id 定序 —— 契约要求 document_snapshots 与 document_refs 同序。
+const DOCUMENTS_LATERAL_SQL = `LEFT JOIN LATERAL (
+  SELECT COALESCE(jsonb_agg(jsonb_build_object(
+           'document_id', document.document_id,
+           'content_hash', document.content_hash
+         ) ORDER BY document.document_id), '[]'::jsonb) AS entries
+    FROM (SELECT document_id, content_hash
+            FROM knowledge_pipeline_change_documents
+           WHERE project_id = pkg.project_id AND change_key = pkg.change_key
+           ORDER BY document_id
+           LIMIT ${MAX_DOCUMENT_REFS}) document
+) documents ON true`;
+
+// 候选表按项目而非变更分区，只能经 knowledge_pipeline_results 的 source_change_keys 反查。
+const CANDIDATES_LATERAL_SQL = `LEFT JOIN LATERAL (
+  SELECT COALESCE(jsonb_agg(candidate.candidate_id ORDER BY candidate.candidate_id), '[]'::jsonb) AS entries
+    FROM (SELECT DISTINCT jsonb_array_elements_text(pipeline.source_candidate_ids) AS candidate_id
+            FROM knowledge_pipeline_results pipeline
+           WHERE pipeline.project_id = pkg.project_id
+             AND pipeline.source_change_keys @> to_jsonb(pkg.change_key)
+           ORDER BY 1
+           LIMIT ${MAX_CANDIDATE_REFS}) candidate
+) candidates ON true`;
+
+const ARCHIVE_COLUMNS_SQL = `pkg.archive_id, pkg.project_id, pkg.change_key, pkg.package_sha256,
+       pkg.knowledge_status, pkg.created_at, pkg.updated_at, pkg.attempt_count,
+       pkg.failure_stage, pkg.last_error_code,
+       documents.entries AS documents, candidates.entries AS candidates`;
 
 interface SourceOptions {
   readonly pool: Pool;
@@ -241,17 +315,17 @@ export class PgChangeArchiveSource implements ChangeRecordsQuerySourcePort, Chan
            FROM change_archive_packages
           WHERE project_id = $1
        )
-       SELECT archive_id, project_id, change_key, package_sha256,
-              knowledge_status, created_at, updated_at, attempt_count,
-              failure_stage, last_error_code,
+       SELECT ${ARCHIVE_COLUMNS_SQL},
               current_fence.total_count AS _total_count,
               current_fence.max_updated_at AS _max_updated_at
-         FROM change_archive_packages
+         FROM change_archive_packages pkg
          CROSS JOIN current_fence
-        WHERE project_id = $1
-          AND ($2::text IS NULL OR created_at < $2::timestamptz OR
-            (created_at = $2::timestamptz AND change_key > $3::text))
-        ORDER BY created_at DESC, change_key ASC
+         ${DOCUMENTS_LATERAL_SQL}
+         ${CANDIDATES_LATERAL_SQL}
+        WHERE pkg.project_id = $1
+          AND ($2::text IS NULL OR pkg.created_at < $2::timestamptz OR
+            (pkg.created_at = $2::timestamptz AND pkg.change_key > $3::text))
+        ORDER BY pkg.created_at DESC, pkg.change_key ASC
         LIMIT $4`,
       [input.project_id, position?.last_key.archived_at ?? null,
         position?.last_key.change_key ?? null, input.limit + 1]
@@ -283,10 +357,11 @@ export class PgChangeArchiveSource implements ChangeRecordsQuerySourcePort, Chan
 
   async getDetail(input: ChangeRecordsDetailSourceRequest): Promise<string | null> {
     const result = await this.#pool.query<ArchiveRow>(
-      `SELECT archive_id, project_id, change_key, package_sha256, knowledge_status,
-              created_at, updated_at, attempt_count, failure_stage, last_error_code
-         FROM change_archive_packages
-        WHERE project_id = $1 AND change_key = $2
+      `SELECT ${ARCHIVE_COLUMNS_SQL}
+         FROM change_archive_packages pkg
+         ${DOCUMENTS_LATERAL_SQL}
+         ${CANDIDATES_LATERAL_SQL}
+        WHERE pkg.project_id = $1 AND pkg.change_key = $2
         LIMIT 1`, [input.project_id, input.detail_id]
     );
     const record = archiveRecord(result.rows[0] ?? {});
@@ -295,8 +370,11 @@ export class PgChangeArchiveSource implements ChangeRecordsQuerySourcePort, Chan
       schema_version: 1, source_kind: "change_record_detail", actor_id: input.actor_id,
       project_id: input.project_id, accessible_project_ids: input.accessible_project_ids,
       content_types: input.content_types, detail_id: input.detail_id, sort: input.sort,
-      request_cursor: null, change_key: record.change_key, document_refs: [],
-      document_snapshots: [], candidate_refs: [], archive_id: record.archive_id,
+      request_cursor: null, change_key: record.change_key,
+      document_refs: record.document_refs,
+      document_snapshots: record.document_snapshots,
+      candidate_refs: record.candidate_refs,
+      archive_id: record.archive_id,
       package_sha256: record.package_sha256
     });
   }
