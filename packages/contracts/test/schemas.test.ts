@@ -1452,8 +1452,11 @@ describe("content-sync canonical mirror", () => {
       new URL("./fixtures/content-sync-v0-legacy.json", import.meta.url)
     );
 
+    // 2026-08-18：归档交付物（plans/spec/reports/docs）放行为 branch_file，
+    // 并导出 mayContainArchiveDeliverables 供工作区遍历决定下钻。
+    // 与 Hunter-Harness/packages/contracts/src/content-sync.ts 逐字节镜像。
     expect(contentSyncSha256(source)).toBe(
-      "b1d1964e11088109d97d9d4187bd2b6921c35cd9d16fa4e225f2bf0fe0e5421b"
+      "45b7ab01d0855dc2d287688055f165cb40cb34d84cab5691f5cda70d42eb11aa"
     );
     expect(contentSyncSha256(current)).toBe(
       "a5d700084708255d25a9be7de889024c5c8ce644dd671f300251369fa6fcdb4c"
