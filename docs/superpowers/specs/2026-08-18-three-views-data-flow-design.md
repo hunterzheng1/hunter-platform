@@ -401,20 +401,70 @@ reusability_scope, source_refs, confidence
 `knowledgeIngestEntrySchema.safeParse(payload)`，失败即 `return null` → 条目被跳过。
 所以残缺 payload 只能点亮一半，另一半仍然为空，且失败是静默的。
 
-##### 结论与建议
+##### 两处自我更正（继续查证后推翻了上一版结论）
 
-正确修法是**扩展抽取契约**：让 LLM 抽取草稿产出 `type` / `body` / `keywords`，
-并把归档包已有的 `sourceCommit` / `baseCommit` / `finalStatus` 沿 job 传递下来
-（`knowledge_pipeline_archives` 里有 `package_sha256`、`validation_receipt`，
-`change-context.json` 里应有 commit 信息，需核实）。涉及：
+**更正 1：溯源字段不需要捏造，全部有真实来源。**
+`reports/final/summary-data.json`（本就在归档 ZIP 内，服务端也已解包成
+`change_summary` 类型文档）含：
 
-1. 抽取 prompt 与 draft schema（AI 侧行为变更）
-2. `KnowledgeResultDraft` / `KnowledgeResult` 类型
-3. `knowledge_pipeline_results` 表结构（新增列，需 migration）
-4. 提交路径 `commitKnowledgeResults`
-5. 最后才是本节原本设想的那条桥
+```
+changeName  = usage-stats-cli-reporting
+baseCommit  = 54a1f26fb33695d2d0e6c06e9d1743bd17115169
+finalStatus = WARN
+finalCommit / archiveCommit / gitFacts / archiveIntegrity ...
+```
 
-这已超出"数据流接线"的范畴，属于产品级变更，**未擅自实施**。
+`summarySha256` 可对该文件直接计算，`archive` 用 `archive_id`。
+所以 `source{archive,summaryData,summarySha256,sourceCommit,baseCommit,changeName,finalStatus}`
+**七个字段全部可如实填充**。上一版"伪造溯源"的判断是错的。
+
+**更正 2：抽取器不是 LLM 调用。**
+`knowledge-pipeline/extractor.ts` 只是读取归档包里**客户端已冻结的**
+`archive.knowledge_candidates`，按置信度阈值 0.82 过滤后原样转成草稿
+（注释明写"不重新打分——候选置信度由归档生产侧的提取器计算并随包冻结"）。
+因此"改抽取 prompt"这条路不存在——要补字段得改**客户端候选生成器**。
+
+##### 真正的缺口：只剩 `type` / `body` / `keywords`
+
+`knowledgeCandidateSchema`（`content-sync.ts:667`）字段为：
+`schema_version, source_change_key, content_hash, confidence, provenance,
+candidate_id, source_refs, summary, reusability_scope, status`。
+
+`reusability_scope` 是自由文本（实测取值 `none` / `server` / `x`），
+**无法映射到 `type` 的 7 值枚举**。`body` 与 `keywords` 同样无来源。
+
+##### 两条路（均满足"运行期无需人工操作"）
+
+**路线 A —— 扩展候选契约（推荐）**
+
+让客户端候选生成器产出 `entry_type` / `body` / `keywords`，沿链路传到入库。
+层次：
+
+1. Harness 客户端候选生成器（归档时写入 `knowledge_candidates`）
+2. `knowledgeCandidateSchema`（**两仓库逐字节镜像 ＋ 字节锁**）
+3. `KnowledgeResultDraft` ＋ `extractor.ts`
+4. `KnowledgeResult` ＋ `knowledge_pipeline_results` 建表（**需 migration**）
+5. 桥：results ＋ change_summary 文档 → `upsertKnowledgeEntry` ＋ `projectPendingKnowledge`
+
+新字段设为**可选**可避免协调发布：老归档缺字段时走降级，新归档走完整路径。
+代价：跨两仓库 5 层 ＋ 一次 migration ＋ 一次 Bundle 发布。
+
+**路线 B —— 放宽消费端**
+
+`knowledgeIngestEntrySchema` 是**旧的客户端知识文件格式**
+（投影里的 `source_path` 仍写 `.harness/knowledge/entries/<status>/<id>.json`），
+而 `harness-knowledge-ingest/SKILL.md` 已明确"客户端不得生成 `.harness/knowledge`……
+本地知识处理脚本已从分发包移除"。即该 schema 描述的是已退役的产物形态。
+
+故可让 `knowledgeEntryDocument` 识别管道原生形态，不再强行套旧 schema。
+代价：这批条目在语义检索里没有 `type` / `keywords` 分面，检索质量下降。
+
+##### 取舍点
+
+`type` 与 `keywords` 直接影响知识检索质量。若知识库要长期可用，A 更正确；
+若只要三个视图先通、检索质量后续再补，B 一次改动即可。
+
+**这是产品语义取舍，不是接线问题，未擅自选择。**
 
 ### 待决：归档 ZIP 边界与分支文件边界不一致
 
