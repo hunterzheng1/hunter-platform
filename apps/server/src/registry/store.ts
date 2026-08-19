@@ -806,10 +806,15 @@ export class RegistryStore {
       // 草稿加载完成后重算各 skill 的 agents：draftVersion 字段需反映已加载草稿（migrateSkillState 迁移时 drafts 尚未加载，传 undefined）
       for (const [slug, state] of this.skills) {
         const defaultAgent = state.detail.defaultAgent ?? defaultAgentOf(state.detail, state.versions);
+        // 与 migrateSkillState 同一规则：legacy snapshot（versions 空 + detail.latest_version 有值）
+        // 保留 migrateSkillDetail 已按 legacy adapters 迁好的 agents，不要用 INSTALLABLE_AGENTS 重算。
+        const isLegacyEmptyVersions = state.versions.length === 0 && state.detail.latest_version !== null;
         state.detail = registrySkillDetailSchema.parse({
           ...state.detail,
           defaultAgent,
-          agents: agentsFor(slug, defaultAgent, state.versions, this.drafts.get(slug))
+          agents: isLegacyEmptyVersions
+            ? state.detail.agents
+            : agentsFor(slug, defaultAgent, state.versions, this.drafts.get(slug))
         });
       }
       for (const [key, raw] of value.workflowFamilies ?? []) {
@@ -1028,9 +1033,16 @@ export class RegistryStore {
       const versions = rawVersions.map((v) => migrateSkillVersion(v, detail.defaultAgent));
       // defaultAgent：优先 detail.defaultAgent，否则从 versions 推断（去 ir 依赖，评审 Y2）
       const defaultAgent = detail.defaultAgent ?? defaultAgentOf(detail, versions);
-      // 重算 agents：per-agent latestVersion 从迁移后 versions 取；旧 v2 同步版本由此拆为 per-agent 独立（COM-003）
-      const recomputedAgents = agentsFor(detail.slug, defaultAgent, versions, undefined);
-      const latestVersion = maxVersionOf(versions);
+      // legacy snapshot（schemaVersion:1）只存 detail.latest_version + 扁平 adapters 数组，
+      // versions 为空。此时不能调 agentsFor 用 INSTALLABLE_AGENTS 重算——会把 legacy
+      // 的 1 个 adapter 膨胀成 4 个 agent、latestVersion 也抹成 null。保留 migrateSkillDetail
+      // 已按 legacy adapters 迁好的 agents；versions 非空时才重算（COM-002/003）。
+      const isLegacyEmptyVersions = versions.length === 0 && detail.latest_version !== null;
+      const recomputedAgents = isLegacyEmptyVersions
+        ? detail.agents
+        : agentsFor(detail.slug, defaultAgent, versions, undefined);
+      // 同理，latest_version 也不能被空 versions 抹掉，回退到 detail 原值。
+      const latestVersion = maxVersionOf(versions) ?? detail.latest_version;
       const detailFinal = registrySkillDetailSchema.parse({
         ...detail,
         defaultAgent,

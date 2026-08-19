@@ -68,7 +68,24 @@ export default defineConfig({
             "apps/**/*.test.ts",
             "apps/**/*.test.tsx",
             "tests/**/*.test.ts"
+          ],
+          exclude: [
+            // PG 集成测试共享同一数据库，并行 worker 之间 TRUNCATE 会清掉
+            // 彼此 fixture。放 integration 项目串行跑。
+            "apps/server/test/**/*.integration.test.ts"
           ]
+        }
+      },
+      {
+        extends: true,
+        test: {
+          name: "integration",
+          testTimeout: 120000,
+          hookTimeout: 120000,
+          include: ["apps/server/test/**/*.integration.test.ts"],
+          // 同一 DB 的 PG 集成测试必须串行；并行 worker 的 TRUNCATE 会
+          // 在另一文件的 beforeAll 和测试体之间穿插，造成难以复现的失败。
+          fileParallelism: false
         }
       }
     ]

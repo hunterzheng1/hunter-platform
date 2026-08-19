@@ -20,6 +20,8 @@ function descriptor(bytes: Uint8Array): RemoteContentUploadHttpRequestDescriptor
   const sha = hash(bytes);
   return {
     schema_version: 1,
+    // e35909d 起 purpose 必填，且决定 media_type 白名单（application/zip ↔ remote_archive）
+    purpose: "remote_archive",
     path: { project_id: "prj_upload_pg", branch_name: "main" },
     auth: { actor_id: "actor_upload_pg" },
     headers: { "Content-Type": "application/zip", "Content-Length": String(bytes.length),
@@ -68,7 +70,7 @@ postgresDescribe("Pg remote content upload integration", () => {
     expect(first.outcome).toBe("new");
     expect(replay.outcome).toBe("replay");
     await expect(active.status({ descriptor: {
-      schema_version: 1, path: request.path, auth: request.auth,
+      schema_version: 1, purpose: "remote_archive", path: request.path, auth: request.auth,
       headers: { "Idempotency-Key": request.headers["Idempotency-Key"] }
     } })).resolves.toMatchObject({ state: "stored" });
   });

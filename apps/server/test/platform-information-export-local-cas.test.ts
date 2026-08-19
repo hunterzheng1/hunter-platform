@@ -8,6 +8,7 @@ import {
   open as openFile,
   readFile,
   readdir,
+  realpath,
   rename,
   rm,
   writeFile,
@@ -79,8 +80,11 @@ const emptyPage: PlatformInformationPage = {
 
 async function tempRoot(): Promise<string> {
   const parent = await mkdtemp(join(tmpdir(), "hunter-export-cas-"));
-  roots.push(parent);
-  return join(parent, "private-cas-root");
+  // Windows CI runner 的 tmpdir 含 8.3 短名/junction，被测 CAS 模块的 realpath
+  // 安全检查会拒绝。先在测试边界 canonical 化。
+  const canonical = await realpath(parent);
+  roots.push(canonical);
+  return join(canonical, "private-cas-root");
 }
 
 async function windowsAcl(path: string): Promise<string> {
@@ -510,7 +514,7 @@ describe("local filesystem Platform Information export CAS Adapter", () => {
   });
 
   it("never mutates an existing business root or tolerates a widened managed subdirectory", async () => {
-    const parent = await mkdtemp(join(tmpdir(), "hunter-export-business-"));
+    const parent = await realpath(await mkdtemp(join(tmpdir(), "hunter-export-business-")));
     roots.push(parent);
     const businessRoot = join(parent, "existing-data");
     await mkdir(businessRoot);

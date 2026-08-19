@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, realpath, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +13,12 @@ import type {
   RemoteContentUploadRecordLookup,
   RemoteContentUploadRecordPort,
 } from "../src/remote-content-upload-pg/ports.js";
+
+// Windows CI runner 的 os.tmpdir() 常含 8.3 短名或 junction，被测 CAS 模块的
+// realpath 安全检查会拒绝。统一在测试边界 canonical 化。
+async function canonicalMkdtemp(prefix: string): Promise<string> {
+  return realpath(await mkdtemp(join(tmpdir(), prefix)));
+}
 import type { RemoteContentUploadHttpRecord, RemoteContentUploadHttpRequestDescriptor } from "@hunter-harness/contracts";
 
 const digest = (bytes: Uint8Array): `sha256:${string}` =>
@@ -144,7 +150,7 @@ describe("remote content upload local CAS", () => {
   });
 
   it("streams an attempt into a private file and publishes an idempotent hash object", async () => {
-    const root = join(await mkdtemp(join(tmpdir(), "hunter-upload-cas-")), "store");
+    const root = join(await canonicalMkdtemp("hunter-upload-cas-"), "store");
     roots.push(root);
     const cas = await createRemoteContentUploadLocalCas({ root });
     services.push(cas);
@@ -164,7 +170,7 @@ describe("remote content upload local CAS", () => {
   });
 
   it("serializes concurrent initialization of the same private CAS root", async () => {
-    const root = join(await mkdtemp(join(tmpdir(), "hunter-upload-cas-concurrent-")), "store");
+    const root = join(await canonicalMkdtemp("hunter-upload-cas-concurrent-"), "store");
     roots.push(root);
     const [first, second] = await Promise.all([
       createRemoteContentUploadLocalCas({ root }),
@@ -181,7 +187,7 @@ describe("remote content upload local CAS", () => {
   });
 
   it("does not reclaim an active attempt owned by another adapter instance", async () => {
-    const root = join(await mkdtemp(join(tmpdir(), "hunter-upload-cas-active-")), "store");
+    const root = join(await canonicalMkdtemp("hunter-upload-cas-active-"), "store");
     roots.push(root);
     const [first, second] = await Promise.all([
       createRemoteContentUploadLocalCas({ root }),
@@ -199,7 +205,7 @@ describe("remote content upload local CAS", () => {
   });
 
   it("cleans a crashed attempt through the safe service facade while preserving an active attempt", async () => {
-    const root = join(await mkdtemp(join(tmpdir(), "hunter-upload-cas-maintenance-")), "store");
+    const root = join(await canonicalMkdtemp("hunter-upload-cas-maintenance-"), "store");
     roots.push(root);
     const crashed = await createRemoteContentUploadLocalCas({ root });
     const staleBytes = Buffer.from("crashed attempt");
@@ -224,7 +230,7 @@ describe("remote content upload local CAS", () => {
   });
 
   it("rejects mismatched size/hash and does not publish a partial object", async () => {
-    const root = join(await mkdtemp(join(tmpdir(), "hunter-upload-cas-")), "store");
+    const root = join(await canonicalMkdtemp("hunter-upload-cas-"), "store");
     roots.push(root);
     const cas = await createRemoteContentUploadLocalCas({ root });
     services.push(cas);
@@ -237,7 +243,7 @@ describe("remote content upload local CAS", () => {
   });
 
   it("binds service replay and conflict to the complete project-scoped identity", async () => {
-    const root = join(await mkdtemp(join(tmpdir(), "hunter-upload-service-")), "store");
+    const root = join(await canonicalMkdtemp("hunter-upload-service-"), "store");
     roots.push(root);
     const cas = await createRemoteContentUploadLocalCas({ root });
     services.push(cas);
@@ -264,7 +270,7 @@ describe("remote content upload local CAS", () => {
   });
 
   it("fails with a stable abort code and does not publish an incomplete attempt", async () => {
-    const root = join(await mkdtemp(join(tmpdir(), "hunter-upload-abort-")), "store");
+    const root = join(await canonicalMkdtemp("hunter-upload-abort-"), "store");
     roots.push(root);
     const cas = await createRemoteContentUploadLocalCas({ root });
     services.push(cas);
@@ -283,7 +289,7 @@ describe("remote content upload local CAS", () => {
   });
 
   it("maps storage/database finalization failure without returning an upload reference", async () => {
-    const root = join(await mkdtemp(join(tmpdir(), "hunter-upload-db-failure-")), "store");
+    const root = join(await canonicalMkdtemp("hunter-upload-db-failure-"), "store");
     roots.push(root);
     const cas = await createRemoteContentUploadLocalCas({ root });
     services.push(cas);
@@ -300,7 +306,7 @@ describe("remote content upload local CAS", () => {
   });
 
   it("recovers a published CAS object after a transient markStored failure", async () => {
-    const root = join(await mkdtemp(join(tmpdir(), "hunter-upload-recovery-")), "store");
+    const root = join(await canonicalMkdtemp("hunter-upload-recovery-"), "store");
     roots.push(root);
     const cas = await createRemoteContentUploadLocalCas({ root });
     services.push(cas);

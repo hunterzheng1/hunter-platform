@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -110,7 +110,7 @@ describe("production Platform Information export lifecycle", () => {
   });
 
   it("holds one database-wide export owner and releases it only after CAS close", async () => {
-    const parent = await mkdtemp(join(tmpdir(), "hunter-export-production-"));
+    const parent = await realpath(await mkdtemp(join(tmpdir(), "hunter-export-production-")));
     roots.push(parent);
     const releaseOwner = vi.fn();
     const releaseRejected = vi.fn();

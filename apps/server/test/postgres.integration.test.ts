@@ -187,7 +187,10 @@ postgresDescribe("PostgreSQL repository integration", () => {
       actorId: "actor_pg",
       localProjectKey,
       displayName: "binding replacement 2",
-      requestedProjectId: null
+      requestedProjectId: null,
+      // 回收站语义：local_project_key 仍绑定在 purged 项目上，必须显式 recreate
+      // 才允许换新 project_id；否则 409 PROJECT_PURGED。
+      recreate: true
     });
     expect(replacement.project.projectId).not.toBe(original.project.projectId);
   });
@@ -212,7 +215,7 @@ postgresDescribe("PostgreSQL repository integration", () => {
           local_project_key: uuidV7(),
           display_name: "postgres archive concurrency",
           requested_project_id: null,
-          client_id: "pg_integration"
+          client_id: "cli_pg_integration"
         }
       });
       expect(resolved.statusCode, resolved.body).toBe(200);
@@ -316,14 +319,27 @@ postgresDescribe("PostgreSQL repository integration", () => {
       adapters: { "claude-code": { enabled: true }, cursor: { enabled: true }, codex: { enabled: true } },
       version: "1.0.0"
     };
-    const files: SourceFile[] = [{ path: "skill.yaml", content: [
-      "name: harness-pg-multi", "kind: tooling", "description: pg multi-agent",
-      'triggers: ["run"]', "inputs: []", 'outputs: ["out"]',
-      "forbidden_actions: [automatic_git_write]", "required_context: [AGENTS.md]",
-      "profiles: { general: { enabled: true } }",
+    // publish 走 findEntryFile 找 SKILL.md 入口（cursor 有 .mdc 兜底）；
+    // 单 skill.yaml 不再被识别为入口文件。
+    const skillMd = [
+      "---",
+      "name: harness-pg-multi",
+      "description: pg multi-agent",
+      "kind: tooling",
+      'triggers: ["run"]',
+      "inputs: []",
+      'outputs: ["out"]',
+      'forbidden_actions: ["automatic_git_write"]',
+      'required_context: ["AGENTS.md"]',
+      'profiles: { general: { enabled: true } }',
       "adapters: { claude-code: { enabled: true }, cursor: { enabled: true }, codex: { enabled: true } }",
-      'version: "1.0.0"'
-    ].join("\n") }];
+      'version: "1.0.0"',
+      "---",
+      "",
+      "# harness-pg-multi",
+      "pg multi-agent body"
+    ].join("\n");
+    const files: SourceFile[] = [{ path: "SKILL.md", content: skillMd }];
     const persistence = new PostgresRegistryPersistence(pool);
     const store = new RegistryStore(new MemoryArtifactStorage(), persistence);
     for (const agent of ["claude-code", "cursor", "codex"] as const) {

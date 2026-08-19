@@ -7,6 +7,7 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  realpath,
   rename,
   rm,
   symlink,
@@ -111,8 +112,12 @@ async function guardianLine(child: ReturnType<typeof spawn>): Promise<string> {
 
 async function parentRoot(): Promise<string> {
   const path = await mkdtemp(join(tmpdir(), "hunter-private-authority-"));
-  roots.push(path);
-  return path;
+  // Windows CI runner 的 os.tmpdir() 常含 8.3 短名或 junction
+  // （例如 C:\Users\RUNNER~1\...），被测模块的 realpath 安全检查会拒绝。
+  // 在测试边界先把路径 canonical 化，让用例聚焦在被测语义而不是路径解析。
+  const canonical = await realpath(path);
+  roots.push(canonical);
+  return canonical;
 }
 
 async function windowsSddl(path: string): Promise<string> {
