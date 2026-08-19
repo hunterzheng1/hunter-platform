@@ -372,7 +372,7 @@ describe("knowledge pipeline v1", () => {
     expect(trapCalls).toBe(0);
   });
 
-  it("dequeues queued knowledge and change projection jobs in enqueue order for the scheduler", async () => {
+  it("withholds queued knowledge until its change projection is ready", async () => {
     const { pipeline, jobRepository } = setup();
     await pipeline.acceptArchive(input("dequeue-first"));
     await pipeline.acceptArchive(input("dequeue-second"));
@@ -380,13 +380,10 @@ describe("knowledge pipeline v1", () => {
     const knowledgeJobs = await jobRepository.listQueuedKnowledgeJobs(10);
     const changeJobs = await jobRepository.listQueuedChangeProjectionJobs(10);
 
-    expect(knowledgeJobs).toHaveLength(2);
+    expect(knowledgeJobs).toHaveLength(0);
     expect(changeJobs).toHaveLength(2);
-    expect(knowledgeJobs.every((job) => job.status === "queued")).toBe(true);
     expect(changeJobs.every((job) => job.status === "queued")).toBe(true);
-    const knowledgeIds = knowledgeJobs.map((job) => job.job_id);
-    expect([...knowledgeIds].sort()).toEqual(knowledgeIds);
-    expect(await jobRepository.listQueuedKnowledgeJobs(1)).toHaveLength(1);
+    expect(await jobRepository.listQueuedKnowledgeJobs(1)).toHaveLength(0);
     await expect(jobRepository.listQueuedKnowledgeJobs(0)).rejects.toMatchObject({
       reason_code: "KNOWLEDGE_DEQUEUE_INVALID"
     });

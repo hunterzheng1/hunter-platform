@@ -253,8 +253,10 @@ async function setup(id: string, options: { packageSchema?: number } = {}) {
 
 describe("ChangeProjectionWorker", () => {
   it("projects only canonical change documents with stable identities", async () => {
-    const { worker, receipt, documents } = await setup("current");
+    const { worker, receipt, documents, taskPort } = await setup("current");
+    expect(await taskPort.listQueuedKnowledgeJobs(10)).toHaveLength(0);
     const result = await worker.run({ job_id: receipt.change_projection_job_id, owner_id: "worker-a" });
+    expect(await taskPort.listQueuedKnowledgeJobs(10)).toHaveLength(1);
     const expected = await fixture("change-projection-worker-v1-current.json");
     expect(result).toMatchObject<Partial<ChangeProjectionWorkerResult>>({ status: "ready", document_count: 4 });
     expect(documents.snapshot(receipt.project_id).map(({ source_path, document_type }) => ({ source_path, document_type }))

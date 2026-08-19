@@ -574,6 +574,18 @@ describe("PostgreSQL knowledge pipeline ports", () => {
     expect(queries[0]).not.toContain("knowledge_extraction_jobs");
   });
 
+  it("dequeues knowledge only after the matching change projection is ready", async () => {
+    const queries: string[] = [];
+    const port = new PgJobRepository(readOnlyPool((text) => {
+      queries.push(text);
+      return result([knowledgeJobRow()]);
+    }));
+    await expect(port.listQueuedKnowledgeJobs(10)).resolves.toHaveLength(1);
+    expect(queries[0]).toContain("FROM knowledge_pipeline_change_jobs change_job");
+    expect(queries[0]).toContain("change_job.status = 'ready'");
+    expect(queries[0]).toContain("change_job.archive_id = knowledge_job.archive_id");
+  });
+
   it("serializes knowledge capacity across concurrent projects", async () => {
     const first = { ...archiveRow(), project_id: "prj_pg_first", archive_id: "arc_pg_first", change_key: "change-pg-first" };
     const second = { ...archiveRow(), project_id: "prj_pg_second", archive_id: "arc_pg_second", change_key: "change-pg-second" };

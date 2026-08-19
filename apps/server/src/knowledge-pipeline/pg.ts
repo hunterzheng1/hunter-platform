@@ -1098,9 +1098,19 @@ export class PgJobRepository implements JobRepository {
     return safeStorage(async () => {
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) fail("KNOWLEDGE_DEQUEUE_INVALID");
       const result = await this.#pool.query<Row>(
-        `SELECT * FROM knowledge_pipeline_knowledge_jobs
-          WHERE status = 'queued'
-          ORDER BY updated_at ASC, job_id ASC
+        `SELECT knowledge_job.*
+           FROM knowledge_pipeline_knowledge_jobs knowledge_job
+          WHERE knowledge_job.status = 'queued'
+            AND EXISTS (
+              SELECT 1
+                FROM knowledge_pipeline_change_jobs change_job
+               WHERE change_job.status = 'ready'
+                 AND change_job.project_id = knowledge_job.project_id
+                 AND change_job.change_key = knowledge_job.change_key
+                 AND change_job.archive_id = knowledge_job.archive_id
+                 AND change_job.package_sha256 = knowledge_job.package_sha256
+            )
+          ORDER BY knowledge_job.updated_at ASC, knowledge_job.job_id ASC
           LIMIT $1`,
         [limit]
       );

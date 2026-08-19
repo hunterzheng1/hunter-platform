@@ -978,7 +978,13 @@ export class MemoryJobRepository implements JobRepository {
       throw new KnowledgePipelineError("KNOWLEDGE_DEQUEUE_INVALID", false);
     }
     return [...this.#knowledgeJobs.values()]
-      .filter((job) => job.status === "queued")
+      .filter((job) => job.status === "queued" &&
+        [...this.#changeProjectionJobs.values()].some((changeJob) =>
+          changeJob.status === "ready" &&
+          changeJob.project_id === job.project_id &&
+          changeJob.change_key === job.change_key &&
+          changeJob.archive_id === job.archive_id &&
+          changeJob.package_sha256 === job.package_sha256))
       .sort((left, right) => left.updated_at === right.updated_at
         ? (left.job_id < right.job_id ? -1 : 1)
         : left.updated_at.localeCompare(right.updated_at))

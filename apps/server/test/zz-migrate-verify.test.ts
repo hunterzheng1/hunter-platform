@@ -4,6 +4,7 @@ import { Pool } from "pg";
 import { describe, expect, it } from "vitest";
 
 import { runMigrations } from "../src/repositories/migrate.js";
+import { PgJobRepository } from "../src/knowledge-pipeline/pg.js";
 
 const databaseUrl = process.env.HUNTER_HARNESS_TEST_DATABASE_URL;
 
@@ -87,6 +88,71 @@ describe.skipIf(databaseUrl === undefined)("migration 033 on real PostgreSQL", (
     } finally {
       await pool.query("DELETE FROM projects WHERE project_id = 'prj_mig_033'").catch(() => undefined);
       await pool.query("DELETE FROM actors WHERE actor_id = 'actor_mig_033'").catch(() => undefined);
+      await pool.end();
+    }
+  }, 120_000);
+
+  it("keeps knowledge queued until the matching change projection is ready", async () => {
+    const pool = new Pool({ connectionString: databaseUrl, max: 4 });
+    const actorId = "actor_mig_033_gate";
+    const projectId = "prj_mig_033_gate";
+    const archiveId = "arc_mig_033_gate";
+    const packageHash = `sha256:${"a".repeat(64)}`;
+    try {
+      const directory = fileURLToPath(new URL("../migrations", import.meta.url));
+      await runMigrations(pool, directory);
+      await pool.query("INSERT INTO actors(actor_id, display_name) VALUES ($1, $1)", [actorId]);
+      await pool.query(
+        "INSERT INTO projects(project_id, owner_actor_id, display_name) VALUES ($1, $2, $1)",
+        [projectId, actorId]
+      );
+      await pool.query(
+        `INSERT INTO knowledge_pipeline_archives(
+           project_id, archive_id, change_key, package_sha256, manifest_sha256, project_version,
+           package_schema_version, archive_schema_version, package_bytes, manifest_bytes,
+           knowledge_candidates, project_content_candidates, validation_receipt, stored_at)
+         VALUES ($1,$2,'change-gate',$3,$4,'pv_gate',1,1,$5,$6,'[]'::jsonb,'[]'::jsonb,
+                 '{}'::jsonb,now())`,
+        [projectId, archiveId, packageHash, `sha256:${"b".repeat(64)}`,
+          Buffer.from("package"), Buffer.from("manifest")]
+      );
+      await pool.query(
+        `INSERT INTO knowledge_pipeline_change_jobs(
+           job_id, project_id, change_key, archive_id, package_sha256, manifest_sha256,
+           project_version, package_schema_version, archive_schema_version, status, attempt,
+           project_generation, generation, input_hash, retryable, created_at, updated_at)
+         VALUES ('job_change_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',$1,'change-gate',$2,$3,$4,
+                 'pv_gate',1,1,'queued',1,1,1,$5,true,now(),now())`,
+        [projectId, archiveId, packageHash, `sha256:${"b".repeat(64)}`,
+          `sha256:${"c".repeat(64)}`]
+      );
+      await pool.query(
+        `INSERT INTO knowledge_pipeline_knowledge_jobs(
+           job_id, idempotency_key, project_id, change_key, archive_id, package_sha256,
+           extractor_version, prompt_version, index_schema_version, status, attempt, generation,
+           input_hash, retryable, knowledge_candidates, created_at, updated_at)
+         VALUES ('job_knowledge_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',$1,$2,'change-gate',$3,$4,
+                 'e','p','i','queued',1,1,$5,true,
+                 '[]'::jsonb,now(),now())`,
+        [`sha256:${"d".repeat(64)}`, projectId, archiveId, packageHash,
+          `sha256:${"e".repeat(64)}`]
+      );
+
+      const repository = new PgJobRepository(pool);
+      await expect(repository.listQueuedKnowledgeJobs(10)).resolves.toHaveLength(0);
+      await pool.query(
+        `UPDATE knowledge_pipeline_change_jobs
+            SET status='ready', output_hash=$2, document_count=1, retryable=false, updated_at=now()
+          WHERE project_id=$1`,
+        [projectId, `sha256:${"f".repeat(64)}`]
+      );
+      await expect(repository.listQueuedKnowledgeJobs(10)).resolves.toMatchObject([
+        { job_id: "job_knowledge_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", status: "queued",
+          archive_id: archiveId }
+      ]);
+    } finally {
+      await pool.query("DELETE FROM projects WHERE project_id = $1", [projectId]).catch(() => undefined);
+      await pool.query("DELETE FROM actors WHERE actor_id = $1", [actorId]).catch(() => undefined);
       await pool.end();
     }
   }, 120_000);

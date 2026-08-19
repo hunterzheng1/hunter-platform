@@ -115,7 +115,10 @@ export interface JobRepository extends ChangeProjectionTaskPort {
   planArchiveTasks(input: PlanArchiveTasksInput): Promise<PlanArchiveTasksResult>;
   enqueueKnowledgeJob(input: EnqueueKnowledgeJobInput): Promise<KnowledgeExtractionJob>;
   getKnowledgeJob(job_id: string): Promise<KnowledgeExtractionJob | null>;
-  /** 调度器 dequeue：按入队时间升序返回 queued 知识提取任务。 */
+  /**
+   * 调度器 dequeue：仅返回对应 change projection 已 ready 的 queued 知识任务，
+   * 避免知识结果先于 change_summary 提交而永久跳过入库桥。
+   */
   listQueuedKnowledgeJobs(limit: number): Promise<KnowledgeExtractionJob[]>;
   /** 调度器 dequeue：按入队时间升序返回 queued 变更投影任务。 */
   listQueuedChangeProjectionJobs(limit: number): Promise<ChangeProjectionJob[]>;
