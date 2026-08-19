@@ -1,16 +1,57 @@
+import { Buffer } from "node:buffer";
+
 import type { KnowledgeCandidate } from "@hunter-harness/contracts";
+import AdmZip from "adm-zip";
 
 import type {
   KnowledgeExtractorInput,
   KnowledgeExtractorPort
 } from "./worker-host/index.js";
 import type { ArchiveStore } from "./ports.js";
+import type { StoredArchive } from "./types.js";
 import type { KnowledgeResultDraft } from "./types.js";
+import { deriveKnowledgeCandidatesFromSummary } from "./summary-candidates.js";
 import { KnowledgePipelineError } from "./errors.js";
 
 /** 与服务端入库裁决同一阈值（semantic/knowledge-judge 的 DEFAULT_MIN_CONFIDENCE）。 */
 const AUTO_PROMOTE_MIN_CONFIDENCE = 0.82;
 const MAX_RESULT_DRAFTS = 64;
+const SUMMARY_PATH = "reports/final/summary-data.json";
+/** Bounded read: a summary is text, and a hostile entry must not exhaust memory. */
+const MAX_SUMMARY_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Candidates for an archive whose stored package carries none.
+ *
+ * Packages published before the CLI generated `candidates/knowledge.json` hold
+ * no candidates, and one immutable package per change key means the client can
+ * never add the file afterwards — those archives would stay permanently absent
+ * from the knowledge base. The summary they *do* carry has the same two
+ * sources the CLI reads, so derive from it.
+ *
+ * Derivation never overrides a package that shipped its own candidates, and it
+ * fails soft: a malformed or missing summary yields nothing rather than
+ * failing the job, because the package itself is already valid and stored.
+ */
+function derivedCandidates(archive: StoredArchive): readonly KnowledgeCandidate[] {
+  let summary: unknown;
+  try {
+    const entry = new AdmZip(Buffer.from(archive.package_bytes)).getEntry(SUMMARY_PATH);
+    if (entry === null || entry.header.size > MAX_SUMMARY_BYTES) return [];
+    summary = JSON.parse(entry.getData().toString("utf8")) as unknown;
+  } catch {
+    return [];
+  }
+  return deriveKnowledgeCandidatesFromSummary({
+    summary,
+    changeKey: archive.change_key,
+    archiveId: archive.archive_id,
+    producerVersion: String(archive.archive_schema_version),
+    // Bound to the archive, never to wall-clock: the same stored package must
+    // derive the same candidates on every run.
+    createdAt: archive.stored_at
+  });
+}
 
 function displayTitle(candidate: KnowledgeCandidate): string {
   const firstSentence = candidate.summary.split(/[\n。.!！?？]/u)
@@ -39,7 +80,10 @@ export function createKnowledgeExtractor(dependencies: {
       if (archive.project_id !== job.project_id || archive.change_key !== job.change_key) {
         throw new KnowledgePipelineError("KNOWLEDGE_EXTRACTION_ARCHIVE_IDENTITY_MISMATCH", false);
       }
-      return archive.knowledge_candidates
+      const candidates = archive.knowledge_candidates.length > 0
+        ? archive.knowledge_candidates
+        : derivedCandidates(archive);
+      return candidates
         .filter((candidate) =>
           candidate.status === "pending" && candidate.confidence >= AUTO_PROMOTE_MIN_CONFIDENCE)
         .slice(0, MAX_RESULT_DRAFTS)

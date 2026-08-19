@@ -76,8 +76,14 @@ import {
   type KnowledgePipeline
 } from "./knowledge-pipeline/index.js";
 
-/** 06A 队列管线的版本标识（服务端侧提取管线 v1；与 CLI 侧提取器版本独立演进）。 */
-const KNOWLEDGE_PIPELINE_EXTRACTOR_VERSION = "server-extractor-v1";
+/** 06A 队列管线的版本标识（服务端侧提取管线；与 CLI 侧提取器版本独立演进）。
+ *
+ * v2：提取器在包不含 candidates/knowledge.json 时改为从归档自带的
+ * summary-data.json 派生候选。提升版本号会改变 enqueueKnowledgeExtraction 的
+ * 幂等键，从而让已入库的归档重新排队提取——这正是 0.2.86 之前上传的那批包
+ * （包里没有候选文件，且同 change key 只保存一个不可变包、客户端无法补传）
+ * 唯一能拿到知识条目的途径。 */
+const KNOWLEDGE_PIPELINE_EXTRACTOR_VERSION = "server-extractor-v2";
 const KNOWLEDGE_PIPELINE_PROMPT_VERSION = "server-prompt-v1";
 const KNOWLEDGE_PIPELINE_INDEX_SCHEMA_VERSION = "server-knowledge-index-v1";
 
