@@ -133,12 +133,17 @@ postgresDescribe("PgPlatformInformationExportRecordPort", () => {
   });
 
   it("durably replays, reclaims, and acknowledges leased Unicode pages across adapter instances", async () => {
+    // ackExpired evaluates lease expiry against the database clock
+    // (clock_timestamp()), so the whole scenario must run on a relative
+    // timeline instead of a fixed date that goes stale after that day.
+    const now = Date.now();
+    const iso = (ms: number) => new Date(ms).toISOString();
     const ids = [`export_${"界".repeat(153)}`, `export_${"😀".repeat(76)}`];
     for (const [index, export_id] of ids.entries()) await new PgPlatformInformationExportRecordPort(pool)
-      .publishReady(record({ export_id, key: `unicode-${index}`, created_at: "2026-08-13T00:00:00Z",
-        expires_at: "2026-08-14T01:00:00Z" }));
-    const input = { now: "2026-08-14T02:00:00Z", limit: 1, worker_id: "worker_1",
-      lease_until: "2026-08-14T03:00:00Z" };
+      .publishReady(record({ export_id, key: `unicode-${index}`, created_at: iso(now - 3 * 3_600_000),
+        expires_at: iso(now - 2 * 3_600_000) }));
+    const input = { now: iso(now - 3_600_000), limit: 1, worker_id: "worker_1",
+      lease_until: iso(now - 30 * 60_000) };
     const [first, overlappingReplay] = await Promise.all([
       new PgPlatformInformationExportRecordPort(pool).claimExpired(input),
       new PgPlatformInformationExportRecordPort(pool).claimExpired(input),
@@ -152,13 +157,13 @@ postgresDescribe("PgPlatformInformationExportRecordPort", () => {
     if (second.status !== "claimed") throw new Error("claim missing");
     expect([...first.refs, ...second.refs].map((ref) => ref.export_id)).toEqual(ids);
     await expect(new PgPlatformInformationExportRecordPort(pool).claimExpired({ ...input,
-      cursor: first.next_cursor, now: "2026-08-14T02:00:01Z" })).rejects
+      cursor: first.next_cursor, now: iso(now - 3_600_000 + 1_000) })).rejects
       .toThrow("PLATFORM_INFORMATION_EXPORT_RECORD_INPUT_INVALID");
     await expect(new PgPlatformInformationExportRecordPort(pool).claimExpired({ ...input,
       cursor: "A".repeat(43) })).rejects.toThrow("PLATFORM_INFORMATION_EXPORT_RECORD_INPUT_INVALID");
     const reclaimed = await new PgPlatformInformationExportRecordPort(pool).claimExpired({
-      now: "2026-08-14T03:00:00Z", limit: 10, worker_id: "worker_2",
-      lease_until: "2026-08-14T04:00:00Z" });
+      now: iso(now), limit: 10, worker_id: "worker_2",
+      lease_until: iso(now + 3_600_000) });
     if (reclaimed.status !== "claimed") throw new Error("reclaim missing");
     await expect(portAck(first.batch_id, "worker_1")).resolves.toEqual({ status: "lease_lost" });
     await expect(portAck(reclaimed.batch_id, "worker_1")).resolves.toEqual({ status: "not_owner" });
