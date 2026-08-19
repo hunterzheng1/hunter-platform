@@ -33,6 +33,16 @@ import {
   createArchivePackageVerifier,
   createChangeProjectionWorker
 } from "./change-projection-worker/index.js";
+import type { KnowledgeCommitPort } from "./knowledge-pipeline/ports.js";
+import {
+  ingestPipelineKnowledge,
+  readChangeSummaryDocument
+} from "./knowledge-bridge/index.js";
+import {
+  knowledgeContentHash,
+  prepareKnowledgeIngestPayload,
+  projectPendingKnowledge
+} from "./semantic/knowledge-projection.js";
 
 async function secret(name: string, required: boolean): Promise<string | undefined> {
   const value = process.env[name];
@@ -106,12 +116,42 @@ const platformInformation = await createProductionPlatformInformationFromEnviron
 // 生产者入队在归档上传路由（app.ts）；调度器只发现与分派，lease/ack 在 worker 内部。
 const knowledgePipelineClock = (): string => new Date().toISOString();
 const knowledgePipelinePorts = createPgKnowledgePipelinePorts(pool);
+// 入库桥：提取结果落库后，把它们投影成知识条目写入 knowledge_ingest_entries，
+// 再排空一次语义投影。此前 knowledge_pipeline_results 没有任何消费方，
+// 所以管道即便产出结果，project_knowledge 与 knowledge query 也永远是空的。
+// 装饰 commit 端口而不是改管道模块：桥失败不回滚已提交的结果，只告警。
+const semanticStore = new PgSemanticStore(pool);
+const knowledgeCommitWithIngest: KnowledgeCommitPort = {
+  async commitKnowledgeResults(input) {
+    const job = await knowledgePipelinePorts.knowledge_commit.commitKnowledgeResults(input);
+    try {
+      const summary = await readChangeSummaryDocument(pool, job.project_id, job.change_key);
+      const outcome = await ingestPipelineKnowledge({
+        repository,
+        results: input.results,
+        summary,
+        contentHash: knowledgeContentHash,
+        preparePayload: prepareKnowledgeIngestPayload
+      });
+      if (outcome.created + outcome.updated > 0) {
+        await projectPendingKnowledge(repository, semanticStore, job.project_id);
+      }
+      if (outcome.skipped > 0) {
+        console.warn("[knowledge-bridge] skipped %d unprojectable result(s) for %s",
+          outcome.skipped, job.change_key);
+      }
+    } catch (error) {
+      console.error("[knowledge-bridge] ingest failed after commit:", error);
+    }
+    return job;
+  }
+};
 const knowledgePipeline = createKnowledgePipeline({
   archive_store: knowledgePipelinePorts.archive_store,
   archive_validation: memoryArchiveValidationEvidence,
   job_repository: knowledgePipelinePorts.job_repository,
   knowledge_index: knowledgePipelinePorts.knowledge_index,
-  knowledge_commit: knowledgePipelinePorts.knowledge_commit,
+  knowledge_commit: knowledgeCommitWithIngest,
   clock: knowledgePipelineClock
 });
 const changeProjectionWorker = createChangeProjectionWorker({

@@ -560,6 +560,164 @@ project_knowledge = 0
 `knowledge_pipeline_change_documents`（D1 只修了视图读取端，未验证生产端）。
 第 5 步依赖它；若未跑，需先查 `change-projection-worker`。
 
+#### D2 — 五步全部实施完成（2026-08-18）
+
+##### 前置依赖的答案：change projection 作业**从未跑过**
+
+不是 worker 有问题，是**入队根本没发生**。`app.ts:2886` 的入队是 best-effort，
+`validateArchivePackage` 抛错就被 `catch` 咽成一条 warn。用生产形态的包
+（照 `harness_archive.py` 的 ZIP 组装逐字段复刻）实测跑真实校验器，三道独立阻塞：
+
+| 阻塞 | 原因 |
+|---|---|
+| `ARCHIVE_CORE_PATH_FORBIDDEN` | `reports/final/summary-data.json` 不在 `coreV2ExactPaths`（白名单里是 `summary/change-summary.json`） |
+| `ARCHIVE_MANIFEST_SCHEMA_INVALID` | Python 写 `schema_version:1` ＋ `profile:"core-v1"` ＋ 每文件带 `role`/`media_type`；v2 `manifestSchema` 是 `.strict()` |
+| `ARCHIVE_CANDIDATE_FILE_MISSING` | 必须同时有 `candidates/knowledge.json` ＋ `candidates/project-content.json` |
+
+且 `createArchivePackageBuilder`（v2 TS builder）**没有任何生产调用方**，只有测试引用。
+所以 `knowledge_pipeline_results` 恒空不只是"候选没有生产方"，而是**整个队列从未收到过任何作业**。
+
+##### 落点改在服务端（与初稿设想相反）
+
+生产包走 `hunter-harness archive upload` → legacy `/archive-package`，而
+`apps/server/src/archive/package-ingest.ts` 里**另一个同名 `validateArchivePackage`**
+正是按 `schema_version:1` ＋ `profile:"core-v1"` 校验的——生产包是一等公民、一直在被正常校验。
+出问题的是知识管道那份平行的 v2 校验器，它为一个没有生产方的格式而写。
+而 v2 manifest 要的 `archive_id`/`project_version` 本质是服务端身份：客户端要填只能凭空造。
+故新增 core-v1 剖面，身份由路由绑定给出。
+
+##### 改动
+
+1. **候选生成器**（Harness）：`harness/scripts/harness_knowledge_candidates.py` 按
+   「知识来源的选定」的映射表从 `reviewFindings`/`knownRisks` 产出候选；
+   `harness_archive.py` 新增 `write_knowledge_candidates`（finalize 步骤 8b，在 after-manifest 之前
+   以便被清单覆盖），并把 `candidates/knowledge.json` 加进核心包 file_specs（role `knowledge_candidates`）。
+   `OPEN`/`UNKNOWN` 与表中未列的一并丢弃——未裁决的发现还不是知识。
+2. **契约增补**：`knowledgeCandidateSchema` 增可选 `entry_type`/`body`/`keywords`；
+   新增 `knowledgeCandidateEntryTypeSchema`（与 `knowledgeIngestEntryTypeSchema` 逐值对齐，
+   有测试锁住两者一致）。两仓库逐字节镜像，字节锁 `db91b583…` → `4d3095fb…`。
+3. **draft 透传**：`KnowledgeResultDraft` ＋ `extractor.ts` ＋ worker-host `readDrafts` 原样透传，
+   不补默认值——"缺失"与"值为某个默认分类"在下游是两回事。
+4. **results 增列**：`KnowledgeResult` ＋ migration `033_knowledge_result_entry_projection.sql`
+   （三列全可空）＋ pg.ts 的 SELECT/INSERT/UPDATE/行映射。
+5. **入库桥**：新增 `apps/server/src/knowledge-bridge/`，
+   `knowledgeEntryFromResult` 把结果 ＋ `change_summary` 文档投影成 `KnowledgeIngestEntry`，
+   七个溯源字段全部取自真实数据；`ingestPipelineKnowledge` 批量 upsert 并计数 skipped。
+   在 `main.ts` 装饰 `knowledge_commit` 端口接线，桥失败不回滚已提交结果。
+6. **格式缺口**（五步之外，用户确认追加）：
+   - `validateCoreV1ArchivePackage`（`knowledge-pipeline/memory-ports.ts`）：结构安全检查与 v2
+     共用抽出的 `scanArchiveEntries`，只有 manifest 形态、路径白名单、身份来源不同；
+     候选文件可选，候选绑定改为"change_key 一致 ＋ 引用不能逃出仓库"
+     （core-v1 候选引用的是仓库源文件而非包内条目，这正是 `path:line` 溯源的意义）
+   - `app.ts` 两条路由按 manifest 自称的 `schema_version` 分派剖面，身份由路由给出；
+     项目无 `latestProjectVersion` 时**跳过入队并告警**，不为凑 NOT NULL 列编造 as-of 版本
+   - change projection worker：core-v1（1/1）不再被 `CHANGE_PROJECTION_LEGACY_READ_ONLY` 拒绝；
+     `reports/final/summary-data.json` 识别为 `change_summary`（第 5 步的桥要靠它取溯源）
+   - `changeSummaryPaths` 常量统一 memory/pg/change-records-query 三处路径判定
+
+##### TDD 证据
+
+每步先红后绿。代表性的红：契约 `Unrecognized keys: "entry_type", "body", "keywords"`；
+服务端归档路由 422；core-v1 校验器 8/8 全红；投影 worker `CHANGE_DOCUMENT_INVALID`
+（暴露出 `safeChangeDocumentPath` 也把 summary 路径钉死了）；桥模块不存在。
+
+跨语言契约锁：`packages/contracts/test/fixtures/knowledge-candidates-v1-archive.json`
+由 Python 生成器真实产出，Python 侧锁字节、TS 侧按 `knowledgeCandidateSchema` 解析，
+任一侧漂移都会断。另锁住 `candidates/knowledge.json` **不得**被当成分支文件上传
+（它是管道输入，不是给人读的文档）。
+
+##### 门禁
+
+- hunter-platform：`tsc -b` ＋ `lint` 全绿；`apps/server/test` ＋ `packages/contracts`
+  **1267 passed / 3 failed**，3 个全部为预存红（干净树上 stash 后复现同样 3 个），本次零新增
+- Hunter-Harness：`tsc -b` ＋ `lint` 全绿；vitest **156 文件 / 2146 测试全过**；
+  Python 归档相关 **194 测试全过**（archive 121 ＋ archive_c 38 ＋ remote 15 ＋ preflight 8 ＋ 新增候选 12）
+
+##### 未验证（需要真实 PG）
+
+migration `033` 与 pg.ts 的三列读写、桥在 `main.ts` 的实际接线，本轮只做了类型与单测层面的验证。
+`HUNTER_HARNESS_TEST_DATABASE_URL` 未配置，PG 集成套件整体跳过。上线前需要起一次 PG 跑
+`apps/server/test` 的集成用例，并确认 `033` 在既有库上幂等。
+
+#### D2 — 五步全部实施完成（2026-08-18）
+
+##### 前置依赖的答案：change projection 作业**从未跑过**
+
+不是 worker 有问题，是**入队根本没发生**。`app.ts:2886` 的入队是 best-effort，
+`validateArchivePackage` 抛错就被 `catch` 咽成一条 warn。用生产形态的包
+（照 `harness_archive.py` 的 ZIP 组装逐字段复刻）实测跑真实校验器，三道独立阻塞：
+
+| 阻塞 | 原因 |
+|---|---|
+| `ARCHIVE_CORE_PATH_FORBIDDEN` | `reports/final/summary-data.json` 不在 `coreV2ExactPaths`（白名单里是 `summary/change-summary.json`） |
+| `ARCHIVE_MANIFEST_SCHEMA_INVALID` | Python 写 `schema_version:1` ＋ `profile:"core-v1"` ＋ 每文件带 `role`/`media_type`；v2 `manifestSchema` 是 `.strict()` |
+| `ARCHIVE_CANDIDATE_FILE_MISSING` | 必须同时有 `candidates/knowledge.json` ＋ `candidates/project-content.json` |
+
+且 `createArchivePackageBuilder`（v2 TS builder）**没有任何生产调用方**，只有测试引用。
+所以 `knowledge_pipeline_results` 恒空不只是"候选没有生产方"，而是**整个队列从未收到过任何作业**。
+
+##### 落点改在服务端（与初稿设想相反）
+
+生产包走 `hunter-harness archive upload` → legacy `/archive-package`，而
+`apps/server/src/archive/package-ingest.ts` 里**另一个同名 `validateArchivePackage`**
+正是按 `schema_version:1` ＋ `profile:"core-v1"` 校验的——生产包是一等公民、一直在被正常校验。
+出问题的是知识管道那份平行的 v2 校验器，它为一个没有生产方的格式而写。
+而 v2 manifest 要的 `archive_id`/`project_version` 本质是服务端身份：客户端要填只能凭空造。
+故新增 core-v1 剖面，身份由路由绑定给出。
+
+##### 改动
+
+1. **候选生成器**（Harness）：`harness/scripts/harness_knowledge_candidates.py` 按
+   「知识来源的选定」的映射表从 `reviewFindings`/`knownRisks` 产出候选；
+   `harness_archive.py` 新增 `write_knowledge_candidates`（finalize 步骤 8b，在 after-manifest 之前
+   以便被清单覆盖），并把 `candidates/knowledge.json` 加进核心包 file_specs（role `knowledge_candidates`）。
+   `OPEN`/`UNKNOWN` 与表中未列的一并丢弃——未裁决的发现还不是知识。
+2. **契约增补**：`knowledgeCandidateSchema` 增可选 `entry_type`/`body`/`keywords`；
+   新增 `knowledgeCandidateEntryTypeSchema`（与 `knowledgeIngestEntryTypeSchema` 逐值对齐，
+   有测试锁住两者一致）。两仓库逐字节镜像，字节锁 `db91b583…` → `4d3095fb…`。
+3. **draft 透传**：`KnowledgeResultDraft` ＋ `extractor.ts` ＋ worker-host `readDrafts` 原样透传，
+   不补默认值——"缺失"与"值为某个默认分类"在下游是两回事。
+4. **results 增列**：`KnowledgeResult` ＋ migration `033_knowledge_result_entry_projection.sql`
+   （三列全可空）＋ pg.ts 的 SELECT/INSERT/UPDATE/行映射。
+5. **入库桥**：新增 `apps/server/src/knowledge-bridge/`，
+   `knowledgeEntryFromResult` 把结果 ＋ `change_summary` 文档投影成 `KnowledgeIngestEntry`，
+   七个溯源字段全部取自真实数据；`ingestPipelineKnowledge` 批量 upsert 并计数 skipped。
+   在 `main.ts` 装饰 `knowledge_commit` 端口接线，桥失败不回滚已提交结果。
+6. **格式缺口**（五步之外，用户确认追加）：
+   - `validateCoreV1ArchivePackage`（`knowledge-pipeline/memory-ports.ts`）：结构安全检查与 v2
+     共用抽出的 `scanArchiveEntries`，只有 manifest 形态、路径白名单、身份来源不同；
+     候选文件可选，候选绑定改为"change_key 一致 ＋ 引用不能逃出仓库"
+     （core-v1 候选引用的是仓库源文件而非包内条目，这正是 `path:line` 溯源的意义）
+   - `app.ts` 两条路由按 manifest 自称的 `schema_version` 分派剖面，身份由路由给出；
+     项目无 `latestProjectVersion` 时**跳过入队并告警**，不为凑 NOT NULL 列编造 as-of 版本
+   - change projection worker：core-v1（1/1）不再被 `CHANGE_PROJECTION_LEGACY_READ_ONLY` 拒绝；
+     `reports/final/summary-data.json` 识别为 `change_summary`（第 5 步的桥要靠它取溯源）
+   - `changeSummaryPaths` 常量统一 memory/pg/change-records-query 三处路径判定
+
+##### TDD 证据
+
+每步先红后绿。代表性的红：契约 `Unrecognized keys: "entry_type", "body", "keywords"`；
+服务端归档路由 422；core-v1 校验器 8/8 全红；投影 worker `CHANGE_DOCUMENT_INVALID`
+（暴露出 `safeChangeDocumentPath` 也把 summary 路径钉死了）；桥模块不存在。
+
+跨语言契约锁：`packages/contracts/test/fixtures/knowledge-candidates-v1-archive.json`
+由 Python 生成器真实产出，Python 侧锁字节、TS 侧按 `knowledgeCandidateSchema` 解析，
+任一侧漂移都会断。另锁住 `candidates/knowledge.json` **不得**被当成分支文件上传
+（它是管道输入，不是给人读的文档）。
+
+##### 门禁
+
+- hunter-platform：`tsc -b` ＋ `lint` 全绿；`apps/server/test` ＋ `packages/contracts`
+  **1267 passed / 3 failed**，3 个全部为预存红（干净树上 stash 后复现同样 3 个），本次零新增
+- Hunter-Harness：`tsc -b` ＋ `lint` 全绿；vitest **156 文件 / 2146 测试全过**；
+  Python 归档相关 **194 测试全过**（archive 121 ＋ archive_c 38 ＋ remote 15 ＋ preflight 8 ＋ 新增候选 12）
+
+##### 未验证（需要真实 PG）
+
+migration `033` 与 pg.ts 的三列读写、桥在 `main.ts` 的实际接线，本轮只做了类型与单测层面的验证。
+`HUNTER_HARNESS_TEST_DATABASE_URL` 未配置，PG 集成套件整体跳过。上线前需要起一次 PG 跑
+`apps/server/test` 的集成用例，并确认 `033` 在既有库上幂等。
+
 ### 待决：归档 ZIP 边界与分支文件边界不一致
 
 `harness-knowledge-ingest/SKILL.md` 规定归档 **ZIP 包**只许含

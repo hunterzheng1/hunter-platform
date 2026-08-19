@@ -1385,6 +1385,68 @@ describe("knowledge pipeline v1", () => {
     })).resolves.toHaveLength(1);
   });
 
+  it("persists entry_type / body / keywords onto the knowledge result", async () => {
+    // 这三个字段是 knowledgeIngestEntrySchema 要求、reusability_scope 无法映射的。
+    // 任何一层把它们丢掉，入库桥就只能凭空造一个 type，或写出 safeParse 不过、
+    // 在语义投影处被静默跳过的残缺 payload。
+    const { pipeline } = setup();
+    const candidate = knowledgeCandidate("entry-projection");
+    const receipt = await pipeline.acceptArchive(input("entry-projection", {
+      knowledge_candidates: [candidate],
+      project_content_candidates: []
+    }));
+    const job = await pipeline.worker.startKnowledgeExtraction(
+      receipt.knowledge_extraction_job_id
+    );
+    await pipeline.worker.completeKnowledgeExtraction({
+      job_id: job.job_id,
+      generation: job.generation,
+      results: [resultDraft(candidate, {
+        entry_type: "pitfall",
+        body: "nonScannablePathPrefixes rejects the whole archive tree",
+        keywords: ["content-sync.ts", "RED", "FIXED"]
+      })]
+    });
+
+    const [stored] = await pipeline.queryKnowledge({
+      project_id: "prj_06a",
+      query: candidate.summary,
+      limit: 10
+    });
+    expect(stored).toBeDefined();
+    expect(stored?.entry_type).toBe("pitfall");
+    expect(stored?.body).toBe("nonScannablePathPrefixes rejects the whole archive tree");
+    expect(stored?.keywords).toEqual(["content-sync.ts", "RED", "FIXED"]);
+  });
+
+  it("keeps the result bare when the archive predates the candidate generator", async () => {
+    const { pipeline } = setup();
+    const candidate = knowledgeCandidate("entry-projection-legacy");
+    const receipt = await pipeline.acceptArchive(input("entry-projection-legacy", {
+      knowledge_candidates: [candidate],
+      project_content_candidates: []
+    }));
+    const job = await pipeline.worker.startKnowledgeExtraction(
+      receipt.knowledge_extraction_job_id
+    );
+    await pipeline.worker.completeKnowledgeExtraction({
+      job_id: job.job_id,
+      generation: job.generation,
+      results: [resultDraft(candidate)]
+    });
+
+    const [stored] = await pipeline.queryKnowledge({
+      project_id: "prj_06a",
+      query: candidate.summary,
+      limit: 10
+    });
+    expect(stored).toBeDefined();
+    // 降级而不是发明：桥自己决定怎么处理一条没有分类的结果。
+    expect(stored?.entry_type).toBeUndefined();
+    expect(stored?.body).toBeUndefined();
+    expect(stored?.keywords).toBeUndefined();
+  });
+
   it("rejects conflicting metadata for one canonical immutable package", async () => {
     const { pipeline, archiveStore, jobRepository } = setup();
     const first = input("canonical-a", {

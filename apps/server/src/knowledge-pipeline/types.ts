@@ -1,6 +1,7 @@
 import type {
   ArchiveIngestReceipt,
   KnowledgeCandidate,
+  KnowledgeCandidateEntryType,
   ProjectContentCandidate
 } from "@hunter-harness/contracts";
 
@@ -56,6 +57,26 @@ export interface ValidatedArchivePackage {
 export interface ValidateArchivePackageInput {
   package_bytes: Uint8Array;
   manifest_bytes: Uint8Array;
+  limits: ArchivePackageValidationLimits;
+  validated_at: string;
+}
+
+/**
+ * Identity for a core-v1 package. The client cannot know server-minted ids at
+ * package-build time, so the route supplies them rather than trusting — or
+ * forcing the client to invent — manifest fields.
+ */
+export interface CoreV1ArchiveIdentity {
+  project_id: string;
+  change_key: string;
+  archive_id: string;
+  project_version: string;
+}
+
+export interface ValidateCoreV1ArchivePackageInput {
+  package_bytes: Uint8Array;
+  manifest_bytes: Uint8Array;
+  identity: CoreV1ArchiveIdentity;
   limits: ArchivePackageValidationLimits;
   validated_at: string;
 }
@@ -180,6 +201,11 @@ export interface KnowledgeResultDraft {
   reusability_scope: string;
   source_refs: string[];
   confidence: number;
+  // 入库投影所需、reusability_scope 无法映射的三个字段。可选：老归档不带它们，
+  // 桥走降级路径而不是凭空造一个 type。
+  entry_type?: KnowledgeCandidateEntryType;
+  body?: string;
+  keywords?: string[];
 }
 
 export interface KnowledgeResult {
@@ -203,6 +229,11 @@ export interface KnowledgeResult {
   generation: number;
   created_at: string;
   updated_at: string;
+  // 入库投影所需、reusability_scope 无法映射的三个字段。可选：老归档不带它们，
+  // 桥走降级路径而不是凭空造一个 type。
+  entry_type?: KnowledgeCandidateEntryType;
+  body?: string;
+  keywords?: string[];
 }
 
 export interface CandidatePage {

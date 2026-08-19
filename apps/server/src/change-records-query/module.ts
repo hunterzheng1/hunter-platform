@@ -266,6 +266,7 @@ export function sourcePathDocumentType(
 ): "design" | "plan" | "test_scenarios" | "change_summary" | null {
   if (!changeKeySchema.safeParse(changeKey).success) return null;
   if (path === "summary/change-summary.json") return "change_summary";
+  if (path === "reports/final/summary-data.json") return "change_summary";
   if (path === `plans/${changeKey}-test-scenarios.md`) return "test_scenarios";
   if (path.endsWith("-test-scenarios.md")) return null;
   if (/^spec\/.+\.md$/u.test(path)) return "design";

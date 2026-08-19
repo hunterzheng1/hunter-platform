@@ -70,12 +70,58 @@ import multipart from "@fastify/multipart";
 import AdmZip from "adm-zip";
 
 import { MemoryAiJobStore, type AiJobStore } from "./ai/ai-job-store.js";
-import { validateArchivePackage, type KnowledgePipeline } from "./knowledge-pipeline/index.js";
+import {
+  validateArchivePackage,
+  validateCoreV1ArchivePackage,
+  type KnowledgePipeline
+} from "./knowledge-pipeline/index.js";
 
 /** 06A 队列管线的版本标识（服务端侧提取管线 v1；与 CLI 侧提取器版本独立演进）。 */
 const KNOWLEDGE_PIPELINE_EXTRACTOR_VERSION = "server-extractor-v1";
 const KNOWLEDGE_PIPELINE_PROMPT_VERSION = "server-prompt-v1";
 const KNOWLEDGE_PIPELINE_INDEX_SCHEMA_VERSION = "server-knowledge-index-v1";
+
+/**
+ * 两种归档包形态并存：生产归档器（harness_archive.py）产出 core-v1，
+ * 其身份由路由绑定给出；v2 包自带服务端 id，沿用原校验器并保留身份交叉核对。
+ * 按 manifest 自称的 schema_version 分派——猜错形态只会 fail closed，不会误判身份。
+ */
+function validateArchivePackageByProfile(input: {
+  packageBytes: Uint8Array;
+  manifestBytes: Uint8Array;
+  identity: { project_id: string; change_key: string; archive_id: string; project_version: string };
+  limits: Parameters<typeof validateArchivePackage>[0]["limits"];
+  validatedAt: string;
+}) {
+  let declaredVersion: unknown;
+  try {
+    declaredVersion = (JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(input.manifestBytes)
+    ) as { schema_version?: unknown }).schema_version;
+  } catch {
+    declaredVersion = undefined;
+  }
+  if (declaredVersion === 1) {
+    return validateCoreV1ArchivePackage({
+      package_bytes: input.packageBytes,
+      manifest_bytes: input.manifestBytes,
+      identity: input.identity,
+      limits: input.limits,
+      validated_at: input.validatedAt
+    });
+  }
+  const validated = validateArchivePackage({
+    package_bytes: input.packageBytes,
+    manifest_bytes: input.manifestBytes,
+    limits: input.limits,
+    validated_at: input.validatedAt
+  });
+  if (validated.project_id !== input.identity.project_id ||
+      validated.change_key !== input.identity.change_key) {
+    return null;
+  }
+  return validated;
+}
 import { CodexAppServerService, type CodexAiService } from "./ai/codex-app-server.js";
 import { createLlmClient } from "./ai/llm-factory.js";
 import { loadAiSecret, writeAiSecret } from "./ai/secret-loader.js";
@@ -2879,13 +2925,32 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
           projectLockHeld: true
         });
         // 06A 知识队列入队（best-effort）：失败只告警，旧 in-process 投影仍是当前主路径。
+        // 这条路由收的是生产归档器（harness_archive.py）产出的 core-v1 包。此前它被
+        // v2 校验器在第一道闸就拒掉，错误又被这里的 catch 咽成一条 warn，于是队列
+        // 从未收到过任何作业——change_documents 与 results 长期为空的真正原因。
         if (options.knowledgePipeline !== undefined) {
           try {
             const manifestEntry = new AdmZip(request.body as Buffer).getEntry("archive-manifest.json");
-            if (manifestEntry !== null) {
-              const validated = validateArchivePackage({
-                package_bytes: new Uint8Array(request.body as Buffer),
-                manifest_bytes: new Uint8Array(manifestEntry.getData()),
+            const projectVersion =
+              (await repository.getProject(actor.actorId, projectId)).latestProjectVersion;
+            if (manifestEntry === null) {
+              // 不是归档包形态，没有可入队的东西。
+            } else if (projectVersion === null) {
+              // 宁可不入队，也不为了凑一个 NOT NULL 列去编造 as-of 版本。
+              request.log.warn(
+                { project_id: projectId, change_key: changeKey },
+                "knowledge enqueue skipped: project has no version to file the archive against");
+            } else {
+              const validated = validateArchivePackageByProfile({
+                packageBytes: new Uint8Array(request.body as Buffer),
+                manifestBytes: new Uint8Array(manifestEntry.getData()),
+                identity: {
+                  project_id: projectId,
+                  change_key: changeKey,
+                  // 服务端在同一个请求里铸出的真实 id，不依赖客户端 manifest 自称。
+                  archive_id: receipt.archive_id,
+                  project_version: projectVersion
+                },
                 limits: {
                   max_package_bytes: config.maxProposalBytes,
                   max_file_count: config.maxUploadFiles + 1,
@@ -2893,16 +2958,21 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
                   max_uncompressed_bytes: config.maxProposalBytes,
                   max_compression_ratio: 100
                 },
-                validated_at: new Date().toISOString()
+                validatedAt: new Date().toISOString()
               });
-              await options.knowledgePipeline.acceptArchive({
-                schema_version: 1,
-                request_id: requestId,
-                validated_package: validated,
-                extractor_version: KNOWLEDGE_PIPELINE_EXTRACTOR_VERSION,
-                prompt_version: KNOWLEDGE_PIPELINE_PROMPT_VERSION,
-                index_schema_version: KNOWLEDGE_PIPELINE_INDEX_SCHEMA_VERSION
-              });
+              if (validated === null) {
+                request.log.warn({ project_id: projectId, change_key: changeKey },
+                  "archive manifest identity differs from route binding; knowledge enqueue skipped");
+              } else {
+                await options.knowledgePipeline.acceptArchive({
+                  schema_version: 1,
+                  request_id: requestId,
+                  validated_package: validated,
+                  extractor_version: KNOWLEDGE_PIPELINE_EXTRACTOR_VERSION,
+                  prompt_version: KNOWLEDGE_PIPELINE_PROMPT_VERSION,
+                  index_schema_version: KNOWLEDGE_PIPELINE_INDEX_SCHEMA_VERSION
+                });
+              }
             }
           } catch (error) {
             request.log.warn({ err: error }, "knowledge queue enqueue failed; in-process projection remains authoritative");
@@ -3064,10 +3134,28 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
       if (options.knowledgePipeline !== undefined) {
         try {
           const manifestEntry = new AdmZip(request.body as Buffer).getEntry("archive-manifest.json");
-          if (manifestEntry !== null) {
-            const validated = validateArchivePackage({
-              package_bytes: new Uint8Array(request.body as Buffer),
-              manifest_bytes: new Uint8Array(manifestEntry.getData()),
+          // 本路由已在 ARCHIVE_VERSION_UNAVAILABLE 处 409，这里的 null 分支实际
+          // 不可达，保留只为让 as-of 版本的来源在两条路由上写法一致。
+          const projectVersion =
+            (await repository.getProject(actor.actorId, projectId)).latestProjectVersion;
+          if (manifestEntry === null) {
+            // 不是归档包形态，没有可入队的东西。
+          } else if (projectVersion === null) {
+            request.log.warn(
+              { project_id: projectId, change_key: changeKey },
+              "knowledge enqueue skipped: project has no version to file the archive against");
+          } else {
+            // 身份由路由绑定给出（core-v1 manifest 不含服务端 id）；manifest 自称的
+            // change_key 与路由不一致时由校验器 fail closed。
+            const validated = validateArchivePackageByProfile({
+              packageBytes: new Uint8Array(request.body as Buffer),
+              manifestBytes: new Uint8Array(manifestEntry.getData()),
+              identity: {
+                project_id: projectId,
+                change_key: changeKey,
+                archive_id: archiveId,
+                project_version: projectVersion
+              },
               limits: {
                 max_package_bytes: config.maxProposalBytes,
                 max_file_count: config.maxUploadFiles + 1,
@@ -3075,9 +3163,14 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
                 max_uncompressed_bytes: config.maxProposalBytes,
                 max_compression_ratio: 100
               },
-              validated_at: new Date().toISOString()
+              validatedAt: new Date().toISOString()
             });
-            if (validated.project_id === projectId && validated.change_key === changeKey) {
+            if (validated === null) {
+              request.log.warn(
+                { project_id: projectId, change_key: changeKey },
+                "archives:ingest manifest identity differs from route binding; knowledge enqueue skipped"
+              );
+            } else {
               await options.knowledgePipeline.acceptArchive({
                 schema_version: 1,
                 request_id: requestId,
@@ -3086,11 +3179,6 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
                 prompt_version: KNOWLEDGE_PIPELINE_PROMPT_VERSION,
                 index_schema_version: KNOWLEDGE_PIPELINE_INDEX_SCHEMA_VERSION
               });
-            } else {
-              request.log.warn(
-                { manifest_project: validated.project_id, manifest_change: validated.change_key },
-                "archives:ingest manifest identity differs from route binding; knowledge enqueue skipped"
-              );
             }
           }
         } catch (error) {

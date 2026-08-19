@@ -44,7 +44,11 @@ const resultDraftSchema = z.object({
   summary: z.string().trim().min(1),
   reusability_scope: z.string().trim().min(1),
   source_refs: z.array(z.string().min(1)),
-  confidence: z.number().min(0).max(1)
+  confidence: z.number().min(0).max(1),
+  // 入库投影所需字段，随候选一路透传；老归档不带时保持 undefined。
+  entry_type: z.enum(["requirement", "decision", "implementation", "risk", "test-evidence", "pitfall", "api-contract"]).optional(),
+  body: z.string().min(1).max(20_000).optional(),
+  keywords: z.array(z.string().min(1).max(80)).max(32).optional()
 }).strict();
 
 function digest(namespace: string, value: string): string {
@@ -624,7 +628,18 @@ export function createKnowledgePipeline(
     const grouped = new Map<string, KnowledgeResultDraft[]>();
     for (const result of parsed.data) {
       const existing = grouped.get(result.content_hash) ?? [];
-      existing.push(result);
+      existing.push({
+        source_candidate_id: result.source_candidate_id,
+        content_hash: result.content_hash,
+        display_title: result.display_title,
+        summary: result.summary,
+        reusability_scope: result.reusability_scope,
+        source_refs: result.source_refs,
+        confidence: result.confidence,
+        ...(result.entry_type === undefined ? {} : { entry_type: result.entry_type }),
+        ...(result.body === undefined ? {} : { body: result.body }),
+        ...(result.keywords === undefined ? {} : { keywords: result.keywords })
+      });
       grouped.set(result.content_hash, existing);
     }
     if (grouped.size > 5) {
@@ -662,6 +677,10 @@ export function createKnowledgePipeline(
         summary: first.summary,
         reusability_scope: first.reusability_scope,
         confidence: Math.max(...drafts.map((draft) => draft.confidence)),
+        // 同一 content_hash 的草稿语义等价，取首条即可；缺失就保持缺失。
+        ...(first.entry_type === undefined ? {} : { entry_type: first.entry_type }),
+        ...(first.body === undefined ? {} : { body: first.body }),
+        ...(first.keywords === undefined ? {} : { keywords: [...first.keywords] }),
         source_archive_ids: [job.archive_id],
         source_change_keys: [job.change_key],
         source_candidate_ids: uniqueStrings(drafts.map((draft) => draft.source_candidate_id)),

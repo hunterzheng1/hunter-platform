@@ -11,12 +11,14 @@ import {
   changeProjectionInputHash,
   changeProjectionOutputHash,
   validateArchivePackage,
+  validateCoreV1ArchivePackage,
   type ArchiveStore,
   type ChangeDocument,
   type ChangeDocumentType,
   type ChangeProjectionCommitPort,
   type ChangeProjectionJob,
   type ChangeProjectionTaskPort,
+  type CoreV1ArchiveIdentity,
   type StoredArchive
 } from "../knowledge-pipeline/index.js";
 
@@ -54,6 +56,11 @@ export interface ArchivePackageVerifierPort {
     manifest_bytes: Uint8Array;
     limits: ArchivePackageVerifierLimits;
     verified_at: string;
+    /**
+     * core-v1 包的身份不在 manifest 里（客户端无从得知服务端 id），由已入库的
+     * 归档记录提供。v2 包不传，身份仍从 manifest 自证。
+     */
+    core_v1_identity?: CoreV1ArchiveIdentity;
   }): Promise<VerifiedProjectionArchive>;
   isTrusted(value: unknown): value is VerifiedProjectionArchive;
 }
@@ -68,13 +75,22 @@ export function createArchivePackageVerifier(): ArchivePackageVerifierPort {
       manifest_bytes: Uint8Array;
       limits: ArchivePackageVerifierLimits;
       verified_at: string;
+      core_v1_identity?: CoreV1ArchiveIdentity;
     }) {
-      const validated = validateArchivePackage({
-        package_bytes: input.package_bytes,
-        manifest_bytes: input.manifest_bytes,
-        limits: input.limits,
-        validated_at: input.verified_at
-      });
+      const validated = input.core_v1_identity === undefined
+        ? validateArchivePackage({
+          package_bytes: input.package_bytes,
+          manifest_bytes: input.manifest_bytes,
+          limits: input.limits,
+          validated_at: input.verified_at
+        })
+        : validateCoreV1ArchivePackage({
+          package_bytes: input.package_bytes,
+          manifest_bytes: input.manifest_bytes,
+          identity: input.core_v1_identity,
+          limits: input.limits,
+          validated_at: input.verified_at
+        });
       const zip = new AdmZip(Buffer.from(input.package_bytes));
       const entries = zip.getEntries().filter((entry) => documentType(entry.entryName) !== null)
         .map((entry) => {
@@ -538,6 +554,9 @@ function sameValidationReceipt(
 
 function documentType(path: string): ChangeDocumentType | null {
   if (path === "summary/change-summary.json") return "change_summary";
+  // core-v1 的同一份事实换了个位置：入库桥要靠这份文档取 changeName /
+  // baseCommit / finalCommit / finalStatus 做溯源。
+  if (path === "reports/final/summary-data.json") return "change_summary";
   if (/^plans\/(?:[^/]+\/)*[^/]+-test-scenarios\.md$/u.test(path)) return "test_scenarios";
   if (/^spec\/.+\.md$/u.test(path)) return "design";
   if (/^plans\/.+\.md$/u.test(path)) return "plan";
@@ -684,7 +703,11 @@ export function createChangeProjectionWorker(dependencies: ChangeProjectionWorke
         now: renewNow,
         lease_expires_at: renewExpires
       })), renewNow, renewExpires);
-      if (archive.package_schema_version !== 2 || archive.archive_schema_version !== 2) {
+      // core-v1（1/1）是生产归档器的当前形态；只有形态不成对的包才是需要
+      // 只读拒绝的 legacy 残留（例如自称 v2 却带 schema 1 的包）。
+      const coreV1 = archive.package_schema_version === 1 && archive.archive_schema_version === 1;
+      if (!coreV1 &&
+          (archive.package_schema_version !== 2 || archive.archive_schema_version !== 2)) {
         fail("CHANGE_PROJECTION_LEGACY_READ_ONLY");
       }
       let rawVerified: unknown;
@@ -693,7 +716,13 @@ export function createChangeProjectionWorker(dependencies: ChangeProjectionWorke
           package_bytes: archive.package_bytes,
           manifest_bytes: archive.manifest_bytes,
           limits: fixedLimits,
-          verified_at: renewNow
+          verified_at: renewNow,
+          ...(coreV1 ? { core_v1_identity: {
+            project_id: archive.project_id,
+            change_key: archive.change_key,
+            archive_id: archive.archive_id,
+            project_version: archive.project_version
+          } } : {})
         });
       } catch {
         fail("CHANGE_PROJECTION_PACKAGE_VERIFICATION_FAILED");

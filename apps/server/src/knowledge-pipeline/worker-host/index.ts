@@ -574,7 +574,7 @@ function readDrafts(value: unknown, maxResultDrafts: number): KnowledgeResultDra
   return snapshotResult.map((raw) => {
     let record: Record<string, unknown>;
     try {
-      record = ownRecord(raw, ["source_candidate_id", "content_hash", "display_title", "summary", "reusability_scope", "source_refs", "confidence"], [], "KNOWLEDGE_RESULT_INVALID");
+      record = ownRecord(raw, ["source_candidate_id", "content_hash", "display_title", "summary", "reusability_scope", "source_refs", "confidence"], ["entry_type", "body", "keywords"], "KNOWLEDGE_RESULT_INVALID");
     } catch { throw new SnapshotFailure("KNOWLEDGE_RESULT_INVALID"); }
     let refs: unknown;
     try { refs = snapshotValue(record.source_refs); } catch { throw new SnapshotFailure("KNOWLEDGE_RESULT_INVALID"); }
@@ -591,9 +591,45 @@ function readDrafts(value: unknown, maxResultDrafts: number): KnowledgeResultDra
       summary: text(record.summary, 65_536, "KNOWLEDGE_RESULT_INVALID"),
       reusability_scope: text(record.reusability_scope, 512, "KNOWLEDGE_RESULT_INVALID"),
       source_refs: refs.map((ref) => text(ref, 512, "KNOWLEDGE_RESULT_INVALID")),
-      confidence: record.confidence
+      confidence: record.confidence,
+      ...readProjectionFields(record)
     };
   });
+}
+
+const entryTypes = new Set(["requirement", "decision", "implementation", "risk", "test-evidence", "pitfall", "api-contract"]);
+
+/**
+ * entry_type / body / keywords 是入库投影所需、reusability_scope 无法映射的字段。
+ * 缺失合法（老归档），但出现就必须成形——坏值宁可整批拒绝也不静默丢弃，
+ * 否则条目会在语义投影处被 safeParse 悄悄跳过。
+ */
+function readProjectionFields(record: Record<string, unknown>) {
+  return {
+    ...(record.entry_type === undefined ? {} : {
+      entry_type: readEntryType(record.entry_type)
+    }),
+    ...(record.body === undefined ? {} : {
+      body: text(record.body, 20_000, "KNOWLEDGE_RESULT_INVALID")
+    }),
+    ...(record.keywords === undefined ? {} : { keywords: readKeywords(record.keywords) })
+  };
+}
+
+function readEntryType(value: unknown): NonNullable<KnowledgeResultDraft["entry_type"]> {
+  const entryType = text(value, 32, "KNOWLEDGE_RESULT_INVALID");
+  if (!entryTypes.has(entryType)) throw new SnapshotFailure("KNOWLEDGE_RESULT_INVALID");
+  return entryType as NonNullable<KnowledgeResultDraft["entry_type"]>;
+}
+
+function readKeywords(value: unknown): string[] {
+  let keywords: unknown;
+  try { keywords = snapshotValue(value); }
+  catch { throw new SnapshotFailure("KNOWLEDGE_RESULT_INVALID"); }
+  if (!Array.isArray(keywords) || keywords.length > 32) {
+    throw new SnapshotFailure("KNOWLEDGE_RESULT_INVALID");
+  }
+  return keywords.map((keyword) => text(keyword, 80, "KNOWLEDGE_RESULT_INVALID"));
 }
 
 function readChangeResult(value: unknown, expectedJobId: string): ChangeProjectionWorkerResult {

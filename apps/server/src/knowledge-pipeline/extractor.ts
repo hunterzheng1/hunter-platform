@@ -50,7 +50,12 @@ export function createKnowledgeExtractor(dependencies: {
           summary: candidate.summary,
           reusability_scope: candidate.reusability_scope,
           source_refs: [...candidate.source_refs],
-          confidence: candidate.confidence
+          confidence: candidate.confidence,
+          // 原样透传，不补默认值：缺失与"值为某个默认分类"是两回事，
+          // 后者会让分类失真且无法在下游区分。
+          ...(candidate.entry_type === undefined ? {} : { entry_type: candidate.entry_type }),
+          ...(candidate.body === undefined ? {} : { body: candidate.body }),
+          ...(candidate.keywords === undefined ? {} : { keywords: [...candidate.keywords] })
         }));
     }
   });

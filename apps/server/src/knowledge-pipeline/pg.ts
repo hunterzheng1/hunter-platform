@@ -12,6 +12,7 @@ import {
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 
 import { KnowledgePipelineError } from "./errors.js";
+import { changeSummaryPaths } from "./memory-ports.js";
 import {
   changeDocumentIdentity,
   changeDocumentVersion,
@@ -565,7 +566,30 @@ function resultFromRow(row: unknown): KnowledgeResult {
     index_schema_version: text(rowValue(row, "index_schema_version"), "KNOWLEDGE_RESULT_CORRUPT"),
     generation: positiveInteger(rowValue(row, "generation"), "KNOWLEDGE_RESULT_CORRUPT"),
     created_at: timestamp(rowValue(row, "created_at"), "KNOWLEDGE_RESULT_CORRUPT"),
-    updated_at: timestamp(rowValue(row, "updated_at"), "KNOWLEDGE_RESULT_CORRUPT")
+    updated_at: timestamp(rowValue(row, "updated_at"), "KNOWLEDGE_RESULT_CORRUPT"),
+    ...entryProjectionFromRow(row)
+  };
+}
+
+/**
+ * 三列都可空：候选生成器上线前的归档不带它们。缺失保持缺失，不补默认值——
+ * "没有分类"和"分类是某个默认值"在下游是两回事。
+ */
+function entryProjectionFromRow(row: unknown) {
+  const entryType = rowValue(row, "entry_type");
+  const body = rowValue(row, "body");
+  const keywords = rowValue(row, "keywords");
+  return {
+    ...(entryType === null || entryType === undefined ? {} : {
+      entry_type: text(entryType, "KNOWLEDGE_RESULT_CORRUPT", 32) as
+        NonNullable<KnowledgeResult["entry_type"]>
+    }),
+    ...(body === null || body === undefined ? {} : {
+      body: text(body, "KNOWLEDGE_RESULT_CORRUPT", MAX_TEXT)
+    }),
+    ...(keywords === null || keywords === undefined ? {} : {
+      keywords: jsonArrayStrings(keywords, "KNOWLEDGE_RESULT_CORRUPT")
+    })
   };
 }
 
@@ -1436,12 +1460,12 @@ export class PgJobRepository implements JobRepository {
 }
 
 function validateKnowledgeResult(value: unknown): KnowledgeResult {
-  const record = safeOwnRecord(value, [
+  const record = safeOwnRecordWithOptional(value, [
     "schema_version", "knowledge_id", "project_id", "content_kind", "status", "content_hash",
     "display_title", "summary", "reusability_scope", "confidence", "source_archive_ids",
     "source_change_keys", "source_candidate_ids", "source_refs", "extractor_version", "prompt_version",
     "index_schema_version", "generation", "created_at", "updated_at"
-  ], "KNOWLEDGE_RESULT_INVALID");
+  ], ["entry_type", "body", "keywords"], "KNOWLEDGE_RESULT_INVALID");
   if (record.schema_version !== 1 || record.content_kind !== "knowledge_entry" || record.status !== "active") fail("KNOWLEDGE_RESULT_INVALID");
   const confidence = record.confidence;
   if (typeof confidence !== "number" || !Number.isFinite(confidence) || confidence < 0 || confidence > 1) fail("KNOWLEDGE_RESULT_INVALID");
@@ -1497,7 +1521,7 @@ export class PgKnowledgeIndex implements KnowledgeIndex {
     const needle = query.query as string;
     return safeStorage(async () => {
       const result = await execute(
-        `SELECT project_id, knowledge_id, content_kind, status, content_hash, display_title, summary,
+        `SELECT project_id, knowledge_id, content_kind, status, content_hash, display_title, summary, entry_type, body, keywords,
                 reusability_scope, confidence, source_archive_ids, source_change_keys,
                 source_candidate_ids, source_refs, extractor_version, prompt_version,
                 index_schema_version, generation, created_at, updated_at
@@ -1569,7 +1593,7 @@ async function storedKnowledgeResults(
   generation: number
 ): Promise<KnowledgeResult[]> {
   const result = await client.query<Row>(
-    `SELECT project_id, knowledge_id, content_kind, status, content_hash, display_title, summary,
+    `SELECT project_id, knowledge_id, content_kind, status, content_hash, display_title, summary, entry_type, body, keywords,
             reusability_scope, confidence, source_archive_ids, source_change_keys,
             source_candidate_ids, source_refs, extractor_version, prompt_version,
             index_schema_version, generation, created_at, updated_at
@@ -1651,7 +1675,7 @@ export class PgKnowledgeCommitPort implements KnowledgeCommitPort {
 
   async #upsertResult(client: PoolClient, incoming: KnowledgeResult): Promise<void> {
     const existingResult = await client.query<Row>(
-      `SELECT project_id, knowledge_id, content_kind, status, content_hash, display_title, summary,
+      `SELECT project_id, knowledge_id, content_kind, status, content_hash, display_title, summary, entry_type, body, keywords,
               reusability_scope, confidence, source_archive_ids, source_change_keys,
               source_candidate_ids, source_refs, extractor_version, prompt_version,
               index_schema_version, generation, created_at, updated_at
@@ -1666,14 +1690,17 @@ export class PgKnowledgeCommitPort implements KnowledgeCommitPort {
            project_id, knowledge_id, content_kind, status, content_hash, display_title, summary,
            reusability_scope, confidence, source_archive_ids, source_change_keys,
            source_candidate_ids, source_refs, extractor_version, prompt_version,
-           index_schema_version, generation, created_at, updated_at
-         ) VALUES ($1,$2,'knowledge_entry','active',$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12,$13,$14,$15,$16,$17)`,
+           index_schema_version, generation, created_at, updated_at,
+           entry_type, body, keywords
+         ) VALUES ($1,$2,'knowledge_entry','active',$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10::jsonb,$11::jsonb,$12,$13,$14,$15,$16,$17,$18,$19,$20::jsonb)`,
         [incoming.project_id, incoming.knowledge_id, incoming.content_hash, incoming.display_title,
           incoming.summary, incoming.reusability_scope, incoming.confidence,
           JSON.stringify(incoming.source_archive_ids), JSON.stringify(incoming.source_change_keys),
           JSON.stringify(incoming.source_candidate_ids), JSON.stringify(incoming.source_refs),
            incoming.extractor_version, incoming.prompt_version, incoming.index_schema_version,
-           incoming.generation, incoming.created_at, incoming.updated_at]
+           incoming.generation, incoming.created_at, incoming.updated_at,
+           incoming.entry_type ?? null, incoming.body ?? null,
+           incoming.keywords === undefined ? null : JSON.stringify(incoming.keywords)]
       );
       return;
     }
@@ -1688,14 +1715,17 @@ export class PgKnowledgeCommitPort implements KnowledgeCommitPort {
               source_archive_ids=$7::jsonb, source_change_keys=$8::jsonb,
               source_candidate_ids=$9::jsonb, source_refs=$10::jsonb,
               extractor_version=$11, prompt_version=$12, index_schema_version=$13,
-              generation=$14, created_at=$15, updated_at=$16
+              generation=$14, created_at=$15, updated_at=$16,
+              entry_type=$17, body=$18, keywords=$19::jsonb
         WHERE project_id=$1 AND content_hash=$2`,
       [incoming.project_id, incoming.content_hash, current.display_title, current.summary,
         current.reusability_scope, current.confidence, JSON.stringify(mergeStrings(existing.source_archive_ids, incoming.source_archive_ids)),
         JSON.stringify(mergeStrings(existing.source_change_keys, incoming.source_change_keys)),
         JSON.stringify(mergeStrings(existing.source_candidate_ids, incoming.source_candidate_ids)),
         JSON.stringify(mergeStrings(existing.source_refs, incoming.source_refs)), current.extractor_version,
-        current.prompt_version, current.index_schema_version, current.generation, createdAt, updatedAt]
+        current.prompt_version, current.index_schema_version, current.generation, createdAt, updatedAt,
+        current.entry_type ?? null, current.body ?? null,
+        current.keywords === undefined ? null : JSON.stringify(current.keywords)]
     );
   }
 }
@@ -1715,7 +1745,7 @@ function validateChangeDocument(value: unknown, job: ChangeProjectionJob): Chang
   if ((documentType === "design" && !/^spec\/(?:[^/]+\/)*[^/]+\.md$/u.test(sourcePath)) ||
       (documentType === "plan" && (!/^plans\/(?:[^/]+\/)*[^/]+\.md$/u.test(sourcePath) || /-test-scenarios\.md$/u.test(sourcePath))) ||
       (documentType === "test_scenarios" && sourcePath !== `plans/${job.change_key}-test-scenarios.md`) ||
-      (documentType === "change_summary" && sourcePath !== "summary/change-summary.json")) fail("CHANGE_DOCUMENT_INVALID");
+      (documentType === "change_summary" && !changeSummaryPaths.has(sourcePath))) fail("CHANGE_DOCUMENT_INVALID");
   const content = text(record.content, "CHANGE_DOCUMENT_INVALID", MAX_TEXT);
   const contentHash = sha(record.content_hash, "CHANGE_DOCUMENT_INVALID");
   if (digest(new TextEncoder().encode(content)) !== contentHash) fail("CHANGE_DOCUMENT_INVALID");

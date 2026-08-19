@@ -14,7 +14,8 @@ import {
   changeProjectionInputHash,
   createKnowledgePipeline,
   memoryArchiveValidationEvidence,
-  validateArchivePackage
+  validateArchivePackage,
+  validateCoreV1ArchivePackage
 } from "../src/knowledge-pipeline/index.js";
 import { KnowledgePipelineError } from "../src/knowledge-pipeline/errors.js";
 import {
@@ -93,6 +94,111 @@ function archiveInput(id: string, options: { packageSchema?: number; corruptAfte
   };
 }
 
+/** A package shaped exactly like harness_archive.py's output. */
+async function setupCoreV1() {
+  const identity = {
+    project_id: "prj_worker",
+    change_key: "change-core-v1",
+    archive_id: "arc_core_v1",
+    project_version: "pv_core_v1"
+  };
+  const files = new Map<string, Buffer>([
+    ["archive-meta.md", Buffer.from("# meta\n")],
+    ["candidates/knowledge.json", Buffer.from("[]")],
+    ["change-context.json", Buffer.from("{}")],
+    ["plans/implementation.md", Buffer.from("# Plan\n")],
+    ["reports/final/summary-data.json", Buffer.from(JSON.stringify({
+      changeName: "change-core-v1",
+      baseCommit: "54a1f26fb33695d2d0e6c06e9d1743bd17115169",
+      finalStatus: "WARN"
+    }))],
+    ["spec/design.md", Buffer.from("# Design\n")]
+  ]);
+  const manifest = {
+    schema_version: 1,
+    profile: "core-v1",
+    change_key: identity.change_key,
+    created_at: "2026-08-18T00:00:00.000Z",
+    source: { commit: "a".repeat(40), tree: "b".repeat(40) },
+    files: [...files].map(([path, content]) => ({
+      path,
+      role: path === "reports/final/summary-data.json" ? "summary"
+        : path === "candidates/knowledge.json" ? "knowledge_candidates"
+        : path === "archive-meta.md" ? "archive_meta"
+        : path === "change-context.json" ? "change_context"
+        : path.startsWith("spec/") ? "spec" : "plan",
+      media_type: path.endsWith(".json") ? "application/json" : "text/markdown",
+      content_sha256: hash(content),
+      size_bytes: content.byteLength
+    }))
+  };
+  const manifestBytes = Buffer.from(JSON.stringify(manifest));
+  const zip = new AdmZip();
+  for (const [path, content] of files) zip.addFile(path, content);
+  zip.addFile("archive-manifest.json", manifestBytes);
+  const validated = validateCoreV1ArchivePackage({
+    package_bytes: zip.toBuffer(),
+    manifest_bytes: manifestBytes,
+    identity,
+    limits: {
+      max_package_bytes: 1024 * 1024,
+      max_file_count: 32,
+      max_file_bytes: 256 * 1024,
+      max_uncompressed_bytes: 1024 * 1024,
+      max_compression_ratio: 100
+    },
+    validated_at: now
+  });
+
+  const archiveStore = new MemoryArchiveStore();
+  const taskPort = new MemoryJobRepository();
+  const stored = {
+    ...validated,
+    package_bytes: validated.package_bytes.slice(),
+    manifest_bytes: validated.manifest_bytes.slice(),
+    stored_at: now
+  };
+  await archiveStore.putIfAbsent(stored);
+  const planned = await taskPort.planArchiveTasks({
+    archive: stored,
+    idempotency_key: hash("worker:core-v1"),
+    extractor_version: "extractor-v1",
+    prompt_version: "prompt-v1",
+    index_schema_version: "index-v1",
+    change_projection_input_hash: changeProjectionInputHash({
+      schema_version: stored.schema_version,
+      project_id: stored.project_id,
+      change_key: stored.change_key,
+      archive_id: stored.archive_id,
+      package_sha256: stored.package_sha256,
+      manifest_sha256: stored.manifest_sha256,
+      project_version: stored.project_version,
+      package_schema_version: stored.package_schema_version,
+      archive_schema_version: stored.archive_schema_version
+    }),
+    input_hash: hash("knowledge:core-v1"),
+    now
+  });
+  const documents = new MemoryChangeDocumentIndex();
+  const worker = createChangeProjectionWorker({
+    task_port: taskPort,
+    archive_store: archiveStore,
+    commit_port: new MemoryChangeProjectionCommitPort(taskPort, documents),
+    archive_verifier: createArchivePackageVerifier(),
+    verification_limits: verificationLimits,
+    clock: () => now,
+    lease_duration_ms: 300_000
+  });
+  return {
+    worker,
+    documents,
+    receipt: {
+      change_projection_job_id: planned.change_projection_job_id,
+      project_id: stored.project_id
+    }
+  };
+}
+
 async function setup(id: string, options: { packageSchema?: number } = {}) {
   const archiveStore = new MemoryArchiveStore();
   const taskPort = new MemoryJobRepository();
@@ -154,6 +260,24 @@ describe("ChangeProjectionWorker", () => {
     expect(documents.snapshot(receipt.project_id).map(({ source_path, document_type }) => ({ source_path, document_type }))
       .sort((left, right) => left.source_path < right.source_path ? -1 : 1))
       .toEqual(expected.documents);
+  });
+
+  it("projects the core-v1 package the production archiver emits", async () => {
+    // 端到端回归：生产归档包此前在 v2 校验器第一道闸就被拒，队列从未收到作业。
+    // 这条测试从"包字节"一路走到"change document 落库"。
+    const { worker, receipt, documents } = await setupCoreV1();
+    const result = await worker.run({ job_id: receipt.change_projection_job_id, owner_id: "worker-a" });
+
+    expect(result).toMatchObject<Partial<ChangeProjectionWorkerResult>>({ status: "ready" });
+    const projected = documents.snapshot(receipt.project_id)
+      .map(({ source_path, document_type }) => ({ source_path, document_type }))
+      .sort((left, right) => (left.source_path < right.source_path ? -1 : 1));
+    expect(projected).toEqual([
+      { source_path: "plans/implementation.md", document_type: "plan" },
+      // 入库桥要靠这份文档取溯源；core-v1 把它放在 reports/final 下。
+      { source_path: "reports/final/summary-data.json", document_type: "change_summary" },
+      { source_path: "spec/design.md", document_type: "design" }
+    ]);
   });
 
   it("replays a ready output without reading or publishing again", async () => {
