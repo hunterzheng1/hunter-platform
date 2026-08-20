@@ -266,8 +266,41 @@ describe("ProjectWorkspace", () => {
 
     fireEvent.click(await screen.findByRole("tab", { name: "分支文件" }));
     expect(await screen.findByText("feature")).toBeInTheDocument();
-    expect(listProjectFiles).not.toHaveBeenCalled();
+    expect(listProjectFiles).toHaveBeenCalledOnce();
     expect(listProjectArtifacts).not.toHaveBeenCalled();
+  });
+
+  it("prefers the archived-branch reader and hides mixed non-archive files even when a branch snapshot exists", async () => {
+    const archiveFile: ProjectFileMetadata = {
+      ...(files[0] as ProjectFileMetadata),
+      path: ".harness/archive/usage-stats-platform-support/plans/usage-stats-platform-support-plan.md"
+    };
+    const nonArchiveFile: ProjectFileMetadata = {
+      ...(files[1] as ProjectFileMetadata),
+      path: ".harness/codebase/map/ARCHITECTURE.md"
+    };
+    render(<ProjectWorkspace api={api({
+      listPlatformInformation: vi.fn(async (): Promise<PlatformInformationPage> => ({
+        schema_version: 1, contract_kind: "page", view: "branch_files", project_id: "prj_one",
+        page_state: "ready", sort: "uploaded_at_desc_snapshot_version_asc",
+        items: [{
+          item_kind: "branch_snapshot", branch_name: "master", snapshot_version: "pv_remote",
+          commit_sha: "e".repeat(40), uploaded_at: "2026-08-20T00:00:00Z",
+          file_count: 12, changed_file_count: 1, sort_key: "master"
+        }],
+        next_cursor: null, failures: []
+      })),
+      listProjectFiles: vi.fn(async () => ({
+        project_id: "prj_one", project_version: "pv_legacy", total: 2,
+        items: [archiveFile, nonArchiveFile]
+      }))
+    })} projectId="prj_one" />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "分支文件" }));
+    expect(await screen.findByRole("button", { name: /^打开分支 .*usage-stats-platform-support/u })).toBeInTheDocument();
+    expect(screen.queryByText("master")).not.toBeInTheDocument();
+    expect(screen.queryByText("ARCHITECTURE.md")).not.toBeInTheDocument();
+    expect(screen.getByText("plan.md")).toBeInTheDocument();
   });
 
   it("does not let stale file content overwrite a newer project selection", async () => {

@@ -252,7 +252,10 @@ function archiveBranchGroups(files: readonly ProjectFileMetadata[]): ArchiveBran
   const groups = new Map<string, ArchiveBranchGroup>();
   for (const file of files) {
     const match = /^\.harness\/archive\/([^/]+)\/(.+)$/u.exec(file.path);
-    if (match === null) return null;
+    // A project may contain both archived delivery documents and ordinary
+    // Git/codebase files.  Only the archive subset belongs in this reader;
+    // unrelated files must not disable the entire archived-branch view.
+    if (match === null) continue;
     const [, name, relativePath] = match;
     if (name === undefined || relativePath === undefined) return null;
     const current = groups.get(name) ?? { name, files: [], updatedAt: file.updated_at };
@@ -260,6 +263,7 @@ function archiveBranchGroups(files: readonly ProjectFileMetadata[]): ArchiveBran
     if (file.updated_at > current.updatedAt) current.updatedAt = file.updated_at;
     groups.set(name, current);
   }
+  if (groups.size === 0) return null;
   return [...groups.values()]
     .map((group) => ({
       ...group,
@@ -564,7 +568,10 @@ async function loadWorkspace(api: HunterApi, projectId: string): Promise<Workspa
   if (useLegacyWorkspaceLists && api.listProjectFiles === undefined) throw new Error("project file API unavailable");
   const [artifacts, snapshot] = await Promise.all([
     useLegacyWorkspaceLists ? api.listProjectArtifacts(projectId) : Promise.resolve([]),
-    useLegacyWorkspaceLists ? api.listProjectFiles?.(projectId) : Promise.resolve(null)
+    // Always inspect current project files when the endpoint exists.  Archived
+    // delivery branches and Remote Sync Git snapshots are different concepts:
+    // the existence of a snapshot must not hide real .harness/archive files.
+    api.listProjectFiles?.(projectId) ?? Promise.resolve(null)
   ]);
   const runTitles = new Map<string, string>();
   if (snapshot !== null && snapshot !== undefined && archiveBranchGroups(snapshot.items) !== null && api.listProjectRuns !== undefined) {
