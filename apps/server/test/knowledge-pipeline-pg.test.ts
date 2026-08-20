@@ -584,6 +584,18 @@ describe("PostgreSQL knowledge pipeline ports", () => {
     expect(queries[0]).toContain("FROM knowledge_pipeline_change_jobs change_job");
     expect(queries[0]).toContain("change_job.status = 'ready'");
     expect(queries[0]).toContain("change_job.archive_id = knowledge_job.archive_id");
+    expect(queries[0]).toContain("active_knowledge.status = 'extracting'");
+  });
+
+  it("does not dequeue another change projection while that project is active", async () => {
+    const queries: string[] = [];
+    const port = new PgJobRepository(readOnlyPool((text) => {
+      queries.push(text);
+      return result([changeJobRow()]);
+    }));
+    await expect(port.listQueuedChangeProjectionJobs(10)).resolves.toHaveLength(1);
+    expect(queries[0]).toContain("active_change.project_id = change_job.project_id");
+    expect(queries[0]).toContain("active_change.status = 'projecting'");
   });
 
   it("serializes knowledge capacity across concurrent projects", async () => {

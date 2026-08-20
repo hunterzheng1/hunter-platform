@@ -979,6 +979,8 @@ export class MemoryJobRepository implements JobRepository {
     }
     return [...this.#knowledgeJobs.values()]
       .filter((job) => job.status === "queued" &&
+        ![...this.#knowledgeJobs.values()].some((active) =>
+          active.project_id === job.project_id && active.status === "extracting") &&
         [...this.#changeProjectionJobs.values()].some((changeJob) =>
           changeJob.status === "ready" &&
           changeJob.project_id === job.project_id &&
@@ -997,7 +999,9 @@ export class MemoryJobRepository implements JobRepository {
       throw new KnowledgePipelineError("CHANGE_PROJECTION_DEQUEUE_INVALID", false);
     }
     return [...this.#changeProjectionJobs.values()]
-      .filter((job) => job.status === "queued")
+      .filter((job) => job.status === "queued" &&
+        ![...this.#changeProjectionJobs.values()].some((active) =>
+          active.project_id === job.project_id && active.status === "projecting"))
       .sort((left, right) => left.updated_at === right.updated_at
         ? (left.job_id < right.job_id ? -1 : 1)
         : left.updated_at.localeCompare(right.updated_at))

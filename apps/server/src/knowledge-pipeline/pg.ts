@@ -1113,6 +1113,12 @@ export class PgJobRepository implements JobRepository {
         `SELECT knowledge_job.*
            FROM knowledge_pipeline_knowledge_jobs knowledge_job
           WHERE knowledge_job.status = 'queued'
+            AND NOT EXISTS (
+              SELECT 1
+                FROM knowledge_pipeline_knowledge_jobs active_knowledge
+               WHERE active_knowledge.project_id = knowledge_job.project_id
+                 AND active_knowledge.status = 'extracting'
+            )
             AND EXISTS (
               SELECT 1
                 FROM knowledge_pipeline_change_jobs change_job
@@ -1134,9 +1140,15 @@ export class PgJobRepository implements JobRepository {
     return safeStorage(async () => {
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) fail("CHANGE_PROJECTION_DEQUEUE_INVALID");
       const result = await this.#pool.query<Row>(
-        `SELECT * FROM knowledge_pipeline_change_jobs
-          WHERE status = 'queued'
-          ORDER BY updated_at ASC, job_id ASC
+        `SELECT change_job.* FROM knowledge_pipeline_change_jobs change_job
+          WHERE change_job.status = 'queued'
+            AND NOT EXISTS (
+              SELECT 1
+                FROM knowledge_pipeline_change_jobs active_change
+               WHERE active_change.project_id = change_job.project_id
+                 AND active_change.status = 'projecting'
+            )
+          ORDER BY change_job.updated_at ASC, change_job.job_id ASC
           LIMIT $1`,
         [limit]
       );
