@@ -549,7 +549,12 @@ function sameValidationReceipt(
   left: StoredArchive["validation_receipt"],
   right: StoredArchive["validation_receipt"]
 ): boolean {
-  return validationReceiptKeys.every((key) => left[key] === right[key]);
+  // `validated_at` records when each independent validation ran, so a worker
+  // re-validating a durable package later must produce a different timestamp.
+  // Compare every security/integrity fact, but not the observation time.
+  return validationReceiptKeys
+    .filter((key) => key !== "validated_at")
+    .every((key) => left[key] === right[key]);
 }
 
 function documentType(path: string): ChangeDocumentType | null {

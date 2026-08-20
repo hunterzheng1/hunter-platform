@@ -95,7 +95,7 @@ function archiveInput(id: string, options: { packageSchema?: number; corruptAfte
 }
 
 /** A package shaped exactly like harness_archive.py's output. */
-async function setupCoreV1() {
+async function setupCoreV1(validatedAt = now) {
   const identity = {
     project_id: "prj_worker",
     change_key: "change-core-v1",
@@ -147,7 +147,7 @@ async function setupCoreV1() {
       max_uncompressed_bytes: 1024 * 1024,
       max_compression_ratio: 100
     },
-    validated_at: now
+    validated_at: validatedAt
   });
 
   const archiveStore = new MemoryArchiveStore();
@@ -280,6 +280,12 @@ describe("ChangeProjectionWorker", () => {
       { source_path: "reports/final/summary-data.json", document_type: "change_summary" },
       { source_path: "spec/design.md", document_type: "design" }
     ]);
+  });
+
+  it("accepts fresh revalidation evidence when the worker runs after archive upload", async () => {
+    const { worker, receipt } = await setupCoreV1("2026-08-18T00:00:00.000Z");
+    await expect(worker.run({ job_id: receipt.change_projection_job_id, owner_id: "worker-a" }))
+      .resolves.toMatchObject({ status: "ready" });
   });
 
   it("replays a ready output without reading or publishing again", async () => {
