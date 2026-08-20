@@ -183,6 +183,18 @@ function text(value: unknown, reasonCode: string, max = 512): string {
   return value;
 }
 
+function documentContent(value: unknown, reasonCode: string): string {
+  if (typeof value !== "string" || value.length < 1 || value.length > MAX_TEXT ||
+      Array.from(value).some((character) => {
+        const point = character.codePointAt(0) ?? 0;
+        // Markdown and JSON legitimately contain tab/newline/CR. Other C0
+        // controls, DEL, and lone surrogate code points remain forbidden.
+        return (point <= 31 && point !== 9 && point !== 10 && point !== 13) ||
+          point === 127 || (point >= 0xd800 && point <= 0xdfff);
+      })) fail(reasonCode);
+  return value;
+}
+
 function timestamp(value: unknown, reasonCode: string): string {
   const result = typeof value === "string" && TIMESTAMP.test(value)
     ? value
@@ -1756,7 +1768,7 @@ function validateChangeDocument(value: unknown, job: ChangeProjectionJob): Chang
       (documentType === "plan" && (!/^plans\/(?:[^/]+\/)*[^/]+\.md$/u.test(sourcePath) || /-test-scenarios\.md$/u.test(sourcePath))) ||
       (documentType === "test_scenarios" && sourcePath !== `plans/${job.change_key}-test-scenarios.md`) ||
       (documentType === "change_summary" && !changeSummaryPaths.has(sourcePath))) fail("CHANGE_DOCUMENT_INVALID");
-  const content = text(record.content, "CHANGE_DOCUMENT_INVALID", MAX_TEXT);
+  const content = documentContent(record.content, "CHANGE_DOCUMENT_INVALID");
   const contentHash = sha(record.content_hash, "CHANGE_DOCUMENT_INVALID");
   if (digest(new TextEncoder().encode(content)) !== contentHash) fail("CHANGE_DOCUMENT_INVALID");
   const result: ChangeDocument = {

@@ -180,7 +180,7 @@ function projectCandidateRow(overrides: Record<string, unknown> = {}) {
 }
 
 function changeDocumentInput(overrides: Record<string, unknown> = {}) {
-  const content = "# Durable design";
+  const content = typeof overrides.content === "string" ? overrides.content : "# Durable design";
   const identity = {
     project_id: "prj_pg_fixture",
     change_key: "change-pg-fixture",
@@ -1023,7 +1023,7 @@ describe("PostgreSQL knowledge pipeline ports", () => {
       document_count: 1,
       retryable: false
     });
-    const document = changeDocumentInput();
+    const document = changeDocumentInput({ content: "# Durable design\n\n- preserves Markdown structure\n" });
     const scripted = transactionPool((text) => {
       if (text.startsWith("SELECT project_id FROM knowledge_pipeline_change_jobs")) return result([{ project_id: row.project_id }]);
       if (text.startsWith("INSERT INTO knowledge_pipeline_project_fences")) return result([]);
