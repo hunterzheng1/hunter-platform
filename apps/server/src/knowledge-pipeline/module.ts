@@ -8,6 +8,7 @@ import { z } from "zod";
 import { KnowledgePipelineError } from "./errors.js";
 import { archiveUploadIdempotencyKey } from "./identity.js";
 import { changeProjectionInputHash } from "./change-projection.js";
+import { knowledgeCandidatesForArchive } from "./extractor.js";
 import type {
   ArchiveStore,
   ArchiveValidationEvidencePort,
@@ -304,7 +305,7 @@ function validateArchiveInput(
 
 function storedArchive(input: AcceptArchiveInput, stored_at: string): StoredArchive {
   const validatedPackage = input.validated_package;
-  return {
+  const archive: StoredArchive = {
     schema_version: 1,
     project_id: validatedPackage.project_id,
     change_key: validatedPackage.change_key,
@@ -322,6 +323,10 @@ function storedArchive(input: AcceptArchiveInput, stored_at: string): StoredArch
     ),
     validation_receipt: structuredClone(validatedPackage.validation_receipt),
     stored_at
+  };
+  return {
+    ...archive,
+    knowledge_candidates: structuredClone([...knowledgeCandidatesForArchive(archive)])
   };
 }
 

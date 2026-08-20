@@ -53,6 +53,15 @@ function derivedCandidates(archive: StoredArchive): readonly KnowledgeCandidate[
   });
 }
 
+/** Freeze the effective candidate set before Archive and Job persistence. */
+export function knowledgeCandidatesForArchive(
+  archive: StoredArchive
+): readonly KnowledgeCandidate[] {
+  return archive.knowledge_candidates.length > 0
+    ? archive.knowledge_candidates
+    : derivedCandidates(archive);
+}
+
 function displayTitle(candidate: KnowledgeCandidate): string {
   const firstSentence = candidate.summary.split(/[\n。.!！?？]/u)
     .map((part) => part.trim())
@@ -80,9 +89,7 @@ export function createKnowledgeExtractor(dependencies: {
       if (archive.project_id !== job.project_id || archive.change_key !== job.change_key) {
         throw new KnowledgePipelineError("KNOWLEDGE_EXTRACTION_ARCHIVE_IDENTITY_MISMATCH", false);
       }
-      const candidates = archive.knowledge_candidates.length > 0
-        ? archive.knowledge_candidates
-        : derivedCandidates(archive);
+      const candidates = knowledgeCandidatesForArchive(archive);
       return candidates
         .filter((candidate) =>
           candidate.status === "pending" && candidate.confidence >= AUTO_PROMOTE_MIN_CONFIDENCE)

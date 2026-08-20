@@ -3,7 +3,10 @@ import { Buffer } from "node:buffer";
 import AdmZip from "adm-zip";
 import { describe, expect, it } from "vitest";
 
-import { createKnowledgeExtractor } from "../src/knowledge-pipeline/extractor.js";
+import {
+  createKnowledgeExtractor,
+  knowledgeCandidatesForArchive
+} from "../src/knowledge-pipeline/extractor.js";
 import { MemoryArchiveStore } from "../src/knowledge-pipeline/memory-ports.js";
 import { deriveKnowledgeCandidatesFromSummary }
   from "../src/knowledge-pipeline/summary-candidates.js";
@@ -128,6 +131,19 @@ describe("knowledge candidates derived from an archived summary", () => {
     expect(drafts).toHaveLength(3);
     expect(drafts.map((draft) => draft.entry_type)).toEqual(["pitfall", "risk", "risk"]);
     expect(drafts[0]?.body).toContain("位置：src/core/a.ts:42");
+  });
+
+  it("freezes summary-derived candidates into the accepted archive snapshot", () => {
+    const archive = storedArchive({ knowledge_candidates: [] });
+    expect(knowledgeCandidatesForArchive(archive as never)).toEqual(
+      deriveKnowledgeCandidatesFromSummary({
+        summary,
+        changeKey: archive.change_key,
+        archiveId: archive.archive_id,
+        producerVersion: String(archive.archive_schema_version),
+        createdAt: archive.stored_at
+      })
+    );
   });
 
   it("never overrides candidates the package shipped itself", async () => {
