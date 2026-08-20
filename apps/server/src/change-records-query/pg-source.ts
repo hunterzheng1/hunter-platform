@@ -190,6 +190,17 @@ interface ArchiveRow extends Record<string, unknown> {
   readonly candidates?: unknown;
 }
 
+interface DocumentDescriptorRow extends Record<string, unknown> {
+  readonly document_id?: unknown;
+  readonly project_id?: unknown;
+  readonly change_key?: unknown;
+  readonly document_type?: unknown;
+  readonly source_path?: unknown;
+  readonly content_hash?: unknown;
+  readonly source_archive_id?: unknown;
+  readonly source_package_sha256?: unknown;
+}
+
 function iso(value: unknown): string | null {
   const parsed = new Date(String(value));
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
@@ -384,13 +395,66 @@ export class PgChangeArchiveSource implements ChangeRecordsQuerySourcePort, Chan
     readonly project_id: string;
     readonly references: readonly { readonly change_key: string; readonly document_ids: readonly string[] }[];
   }): Promise<string> {
-    if (input.references.some((reference) => reference.document_ids.length > 0)) {
+    if (!text(input.actor_id, 160) || !PROJECT.test(input.project_id) || input.references.length > 100 ||
+        input.references.some((reference) => !CHANGE.test(reference.change_key) ||
+          reference.document_ids.length > MAX_DOCUMENT_REFS ||
+          reference.document_ids.some((documentId) => !DOCUMENT.test(documentId)) ||
+          new Set(reference.document_ids).size !== reference.document_ids.length)) {
       throw new Error("CHANGE_DOCUMENT_PROJECTION_UNAVAILABLE");
     }
+    const requested = input.references.flatMap((reference) =>
+      reference.document_ids.map((document_id) => ({ change_key: reference.change_key, document_id })));
+    if (requested.length > 2_000) throw new Error("CHANGE_DOCUMENT_PROJECTION_UNAVAILABLE");
+    const result = requested.length === 0
+      ? { rows: [] as DocumentDescriptorRow[] }
+      : await this.#pool.query<DocumentDescriptorRow>(
+          `WITH requested AS (
+             SELECT change_key, document_id
+               FROM jsonb_to_recordset($2::jsonb) AS item(change_key text, document_id text)
+           )
+           SELECT document.document_id, document.project_id, document.change_key,
+                  document.document_type, document.source_path, document.content_hash,
+                  document.archive_id AS source_archive_id,
+                  document.package_sha256 AS source_package_sha256
+             FROM requested
+             JOIN knowledge_pipeline_change_documents document
+               ON document.project_id = $1
+              AND document.change_key = requested.change_key
+              AND document.document_id = requested.document_id
+            ORDER BY document.change_key, document.document_id`,
+          [input.project_id, JSON.stringify(requested)]
+        );
+    if (result.rows.length !== requested.length) {
+      throw new Error("CHANGE_DOCUMENT_PROJECTION_UNAVAILABLE");
+    }
+    const requestedKeys = new Set(requested.map((entry) => JSON.stringify([entry.change_key, entry.document_id])));
+    const descriptors = result.rows.map((row) => {
+      const key = JSON.stringify([String(row.change_key), String(row.document_id)]);
+      if (row.project_id !== input.project_id || !requestedKeys.delete(key) ||
+          typeof row.document_id !== "string" || !DOCUMENT.test(row.document_id) ||
+          typeof row.change_key !== "string" || !CHANGE.test(row.change_key) ||
+          !["design", "plan", "test_scenarios", "change_summary"].includes(String(row.document_type)) ||
+          !text(row.source_path, 1_024) || typeof row.content_hash !== "string" || !SHA.test(row.content_hash) ||
+          !text(row.source_archive_id, 160) || typeof row.source_package_sha256 !== "string" ||
+          !SHA.test(row.source_package_sha256)) {
+        throw new Error("CHANGE_DOCUMENT_PROJECTION_UNAVAILABLE");
+      }
+      return {
+        document_id: row.document_id,
+        project_id: input.project_id,
+        change_key: row.change_key,
+        document_type: row.document_type,
+        source_path: row.source_path,
+        content_hash: row.content_hash,
+        source_archive_id: row.source_archive_id,
+        source_package_sha256: row.source_package_sha256
+      };
+    });
+    if (requestedKeys.size !== 0) throw new Error("CHANGE_DOCUMENT_PROJECTION_UNAVAILABLE");
     return JSON.stringify({
       schema_version: 1, source_kind: "change_document_reference_resolution",
       actor_id: input.actor_id, project_id: input.project_id,
-      references: input.references, descriptors: []
+      references: input.references, descriptors
     });
   }
 }

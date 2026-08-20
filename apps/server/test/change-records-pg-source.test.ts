@@ -155,4 +155,33 @@ describe("PgChangeArchiveSource", () => {
       references: [{ change_key: "change-1", document_ids: ["doc_" + "a".repeat(32)] }]
     })).rejects.toThrow("CHANGE_DOCUMENT_PROJECTION_UNAVAILABLE");
   });
+
+  it("resolves persisted document descriptors for adapter evidence checks", async () => {
+    const documentId = "doc_" + "a".repeat(32);
+    const pool = { async query(text: string) {
+      expect(text).toMatch(/jsonb_to_recordset/u);
+      return result([{
+        document_id: documentId,
+        project_id: scope.project_id,
+        change_key: "change-1",
+        document_type: "plan",
+        source_path: "plans/change-1-plan.md",
+        content_hash: "sha256:" + "b".repeat(64),
+        source_archive_id: "archive_1",
+        source_package_sha256: "sha256:" + "a".repeat(64)
+      }]);
+    } } as unknown as Pool;
+    const source = new PgChangeArchiveSource({
+      pool, cursor_authority: new ChangeRecordsCursorAuthority(secret())
+    });
+    const resolution = JSON.parse(await source.resolve({
+      actor_id: scope.actor_id,
+      project_id: scope.project_id,
+      references: [{ change_key: "change-1", document_ids: [documentId] }]
+    }));
+    expect(resolution.descriptors).toEqual([expect.objectContaining({
+      document_id: documentId,
+      source_archive_id: "archive_1"
+    })]);
+  });
 });

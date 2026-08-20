@@ -6,9 +6,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import {
   ChangeRecordsCursorAuthority,
+  createChangeRecordsQueryAdapter,
   PgChangeArchiveSource
 } from "../src/change-records-query/index.js";
 import { runMigrations } from "../src/repositories/migrate.js";
+import { changeDocumentIdentity } from "../src/knowledge-pipeline/index.js";
 
 const databaseUrl = process.env.HUNTER_HARNESS_TEST_DATABASE_URL;
 const postgresDescribe = databaseUrl === undefined ? describe.skip : describe;
@@ -25,7 +27,13 @@ postgresDescribe("PgChangeArchiveSource real PostgreSQL integration", () => {
   const archiveId = `arc_${namespace}`;
   const packageHash = `sha256:${"a".repeat(64)}`;
   const manifestHash = `sha256:${"e".repeat(64)}`;
-  const documentIds = [`doc_${"1".repeat(32)}`, `doc_${"2".repeat(32)}`];
+  const documentSpecs = [
+    { document_type: "plan" as const, source_path: `plans/${changeKey}-plan.md` },
+    { document_type: "design" as const, source_path: "spec/design.md" }
+  ];
+  const documentIds = documentSpecs.map((spec) => changeDocumentIdentity({
+    project_id: projectId, change_key: changeKey, ...spec
+  }));
   const documentHashes = [`sha256:${"b".repeat(64)}`, `sha256:${"c".repeat(64)}`];
   const candidateIds = [`cand_${namespace}_a`, `cand_${namespace}_b`];
   const secret = Uint8Array.from({ length: 32 }, (_, index) => (index * 23 + 5) & 0xff);
@@ -71,7 +79,7 @@ postgresDescribe("PgChangeArchiveSource real PostgreSQL integration", () => {
            created_at, updated_at)
          VALUES ($1,$2,'v1',$3,$4,$5,$6,$7,$8,$9,'# body',1, now(), now())`,
         [projectId, documentId, changeKey, archiveId, packageHash, `pv_${namespace}`,
-          index === 0 ? "plan" : "design", `plans/doc-${index}.md`, documentHashes[index]]
+          documentSpecs[index]?.document_type, documentSpecs[index]?.source_path, documentHashes[index]]
       );
     }
     await pool.query(
@@ -131,5 +139,23 @@ postgresDescribe("PgChangeArchiveSource real PostgreSQL integration", () => {
     // 列表与详情必须给出一致的 refs——两处共用同一段聚合 SQL 正是为此。
     expect(detail.document_refs).toEqual(documentIds);
     expect(detail.candidate_refs).toEqual(candidateIds);
+
+    const resolution = JSON.parse(await source.resolve({
+      actor_id: actorId, project_id: projectId,
+      references: [{ change_key: changeKey, document_ids: documentIds }]
+    })) as { descriptors: Array<{ document_id: string }> };
+    expect(resolution.descriptors.map((entry) => entry.document_id).sort()).toEqual([...documentIds].sort());
+
+    const adapter = createChangeRecordsQueryAdapter({
+      source_port: source,
+      reference_port: source,
+      cursor_verifier: new ChangeRecordsCursorAuthority(secret)
+    });
+    const adapted = await adapter.queryPage(JSON.stringify({
+      schema_version: 1, contract_kind: "query", view: "change_records", project_id: projectId,
+      query_scope: { actor_id: actorId, accessible_project_ids: [projectId], content_types: scope.content_types },
+      limit: 10, cursor: null, cursor_verification: "server_port_required", sort: scope.sort
+    }));
+    expect(adapted).toMatchObject({ ok: true, value: { page_state: "ready" } });
   });
 });

@@ -195,9 +195,10 @@ interface SourceRow extends Record<string, unknown> {
 }
 
 function sourceDescriptor(row: SourceRow): {
+  readonly entry_origin: "explicit";
   readonly knowledge_id: string; readonly display_title: string; readonly lifecycle_status: string;
   readonly source_change_key: string; readonly source_refs: string[]; readonly extracted_at: string;
-  readonly relationship_refs: string[]; readonly pending: boolean;
+  readonly relationship_refs: string[];
 } | null {
   if (row.payload !== undefined) {
     const parsed = knowledgeIngestEntrySchema.safeParse(row.payload);
@@ -208,10 +209,10 @@ function sourceDescriptor(row: SourceRow): {
     const relationships = [...entry.lifecycle.supersedes, ...(entry.lifecycle.supersededBy === null ? [] : [entry.lifecycle.supersededBy]), ...entry.lifecycle.conflictsWith]
       .filter((value, index, all) => value !== "" && all.indexOf(value) === index);
     return {
+      entry_origin: "explicit",
       knowledge_id: entry.id, display_title: entry.title, lifecycle_status: entry.status,
       source_change_key: entry.source.changeName || entry.source.sourceCommit, source_refs: refs,
-      extracted_at: entry.lifecycle.createdAt, relationship_refs: relationships,
-      pending: row.projected_at === null
+      extracted_at: entry.lifecycle.createdAt, relationship_refs: relationships
     };
   }
   if (!text(row.knowledge_id ?? row.entry_id, 160) || !text(row.title, 240) || !text(row.entry_status, 64) ||
@@ -221,10 +222,10 @@ function sourceDescriptor(row: SourceRow): {
   const relationships = Array.isArray(row.relationship_refs) && row.relationship_refs.every((value) => typeof value === "string")
     ? [...new Set(row.relationship_refs as string[])] : [];
   return {
+    entry_origin: "explicit",
     knowledge_id: (row.knowledge_id ?? row.entry_id) as string, display_title: row.title as string,
     lifecycle_status: row.entry_status as string, source_change_key: row.source_change_key as string,
-    source_refs: sourceRefs, extracted_at: row.extracted_at as string, relationship_refs: relationships,
-    pending: row.projected_at === null
+    source_refs: sourceRefs, extracted_at: row.extracted_at as string, relationship_refs: relationships
   };
 }
 

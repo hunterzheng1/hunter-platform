@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { Pool } from "pg";
 
+import { createProjectKnowledgeQueryAdapter } from "../src/project-knowledge-query/index.js";
 import {
   PgProjectKnowledgeSource,
   PgProjectKnowledgeRetryAuthority,
@@ -109,6 +110,7 @@ describe("PgProjectKnowledgeSource", () => {
     const page = JSON.parse(await source.listPage({ ...scope, limit: 10, cursor: null }));
     expect(page.page_state).toBe("ready");
     expect(page.entries).toEqual([expect.objectContaining({
+      entry_origin: "explicit",
       knowledge_id: "kn_decision_1",
       source_change_key: "change-1",
       source_refs: ["archive_1", "commit_1"]
@@ -120,6 +122,39 @@ describe("PgProjectKnowledgeSource", () => {
     expect(detail.content).toBe(payload.body);
     expect(detail.media_type).toBe("text/markdown");
     expect(queries).toHaveLength(2);
+  });
+
+  it("produces a page accepted by the query adapter when real entries exist", async () => {
+    const pool = { async query() { return result([row()]); } } as unknown as Pool;
+    const cursorAuthority = new ProjectKnowledgeCursorAuthority(secret());
+    const source = new PgProjectKnowledgeSource({ pool, cursor_authority: cursorAuthority });
+    const adapter = createProjectKnowledgeQueryAdapter({
+      source_port: source,
+      cursor_verifier: cursorAuthority,
+      retry_intent_hash_port: { sha256: () => "sha256:" + "f".repeat(64) },
+      retry_authority_port: { async lookup() { throw new Error("not used"); } }
+    });
+    const page = await adapter.queryPage(JSON.stringify({
+      schema_version: 1,
+      contract_kind: "query",
+      view: "project_knowledge",
+      project_id: scope.project_id,
+      query_scope: {
+        actor_id: scope.actor_id,
+        accessible_project_ids: scope.accessible_project_ids,
+        content_types: scope.content_types
+      },
+      limit: 10,
+      cursor: null,
+      cursor_verification: "server_port_required",
+      sort: scope.sort
+    }));
+    expect(page).toMatchObject({
+      ok: true,
+      value: { page_state: "ready", items: [expect.objectContaining({
+        item_kind: "knowledge_entry", knowledge_id: "kn_decision_1"
+      })] }
+    });
   });
 
   it("fails closed on malformed persisted payloads", async () => {
