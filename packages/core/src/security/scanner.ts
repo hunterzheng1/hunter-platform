@@ -48,11 +48,30 @@ interface RawFinding {
   value: string;
 }
 
+function compareCodepoint(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/**
+ * A connection string only leaks a credential when it carries one. Bare
+ * `postgres://host:5432/db` lines are ordinary documentation and used to be
+ * scored `high` — and `high` refuses inline waivers, so such a design doc was
+ * permanently un-uploadable with no escape hatch. The client-side pre-check
+ * already scores these `low`; scoring them `high` here made the two disagree
+ * while both reported scanner_version 1.1.0.
+ */
+function databaseUrlSeverity(value: string): FindingSeverity {
+  const authority = /:\/\/([^/?#]*)/.exec(value)?.[1] ?? "";
+  const userinfo = authority.includes("@") ? authority.slice(0, authority.lastIndexOf("@")) : "";
+  return userinfo.includes(":") ? "high" : "low";
+}
+
 const RULES: ReadonlyArray<{
   id: string;
   severity: FindingSeverity;
   pattern: RegExp;
   valueGroup?: number;
+  severityFor?: (value: string) => FindingSeverity;
 }> = [
   {
     id: "HH_PRIVATE_KEY",
@@ -78,7 +97,8 @@ const RULES: ReadonlyArray<{
   {
     id: "HH_DATABASE_URL",
     severity: "high",
-    pattern: /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/[^\s"']+/gi
+    pattern: /\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?):\/\/[^\s"']+/gi,
+    severityFor: databaseUrlSeverity
   },
   {
     id: "HH_PASSWORD_VALUE",
@@ -115,7 +135,7 @@ function rawFindings(content: string): RawFinding[] {
       const relative = match[0].indexOf(value);
       findings.push({
         ruleId: rule.id,
-        severity: rule.severity,
+        severity: rule.severityFor?.(match[0]) ?? rule.severity,
         offset: match.index + Math.max(0, relative),
         value
       });
@@ -165,8 +185,10 @@ export function scanSensitiveFiles(
   const findings: SensitiveFinding[] = [];
   const evidence: Array<Readonly<OverrideEvidence>> = [];
   const recordedAt = (options.now ?? new Date()).toISOString();
+  // 按码点排序：localeCompare 随 ICU 区域设置变，客户端与服务端排序不同会让
+  // 逐条比对结果的调用方误判成"发现不一致"。
   for (const [inputPath, content] of Object.entries(files).sort(([a], [b]) =>
-    a.localeCompare(b)
+    compareCodepoint(a, b)
   )) {
     const path = normalizeManagedPath(inputPath);
     const ignores = parseInlineIgnores(content);

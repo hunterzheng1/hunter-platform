@@ -7,6 +7,7 @@ import {
   type FileOperation
 } from "@hunter-harness/contracts";
 import { scanSensitiveFiles, sha256Bytes } from "@hunter-harness/core";
+import type { SensitiveFinding } from "@hunter-harness/core";
 import AdmZip from "adm-zip";
 import { z } from "zod";
 
@@ -452,6 +453,59 @@ function isNonEmptyJsonObject(value: unknown): value is Record<string, unknown> 
     Object.keys(value).length > 0;
 }
 
+export interface SensitiveRejectionFinding {
+  readonly path: string;
+  readonly rule_id: string;
+  readonly severity: string;
+  readonly line: number;
+  readonly column: number;
+  readonly overridable: boolean;
+}
+
+export interface SensitiveRejectionDetails {
+  readonly scanner_version: string;
+  readonly findings: readonly SensitiveRejectionFinding[];
+  readonly next_action: string;
+}
+
+/**
+ * Explain a sensitive-content rejection so the caller can act on it.
+ *
+ * A gate that only says "blocked" forces the caller to guess between two very
+ * different remedies: declare a design decision, or actually redact a leaked
+ * secret. Guessing wrong in either direction is bad — one leaves a real
+ * credential in place, the other rewrites documentation to appease a scanner.
+ * So the response names the line and says which of the two applies.
+ *
+ * `high` findings never get a waiver offer: leaked key material has to go.
+ */
+export function describeSensitiveRejection(
+  findings: readonly SensitiveFinding[],
+  scannerVersion: string
+): SensitiveRejectionDetails {
+  const blocked = findings.filter((finding) => finding.disposition === "blocked");
+  const reported = blocked.map((finding) => ({
+    path: finding.path,
+    rule_id: finding.rule_id,
+    severity: finding.severity,
+    line: finding.line,
+    column: finding.column,
+    overridable: finding.overridable
+  }));
+  const hard = reported.filter((finding) => !finding.overridable);
+  const where = (finding: SensitiveRejectionFinding): string =>
+    `${finding.path}:${finding.line}:${finding.column} ${finding.rule_id}`;
+  const next_action = hard.length > 0
+    ? `以下命中不可豁免：${hard.map(where).join("；")}。` +
+      "必须真正脱敏后重新打包——泄露的密钥材料不接受申报豁免。"
+    : `以下命中可申报豁免：${reported.map(where).join("；")}。` +
+      "若确属设计固有内容，在源文件该行附近加行内标注后用 " +
+      "`harness_archive.py republish` 重建重传，例如 " +
+      `\`hunter-harness-ignore: ${reported[0]?.rule_id ?? "<RULE_ID>"} reason=<简短理由>\`；` +
+      "否则请脱敏。不要为了过扫描删改文档的事实内容。";
+  return { scanner_version: scannerVersion, findings: reported, next_action };
+}
+
 export function validateArchivePackage(
   changeKey: string,
   bytes: Uint8Array,
@@ -614,14 +668,11 @@ export function validateArchivePackage(
     ...normalizedJsonFiles
   });
   if (rawScan.blocked || normalizedScan.blocked) {
-    const blockedFindings = [...rawScan.findings, ...normalizedScan.findings]
-      .filter((finding) => finding.disposition === "blocked");
     invalid("archive contains sensitive content", {
-      findings: blockedFindings.map((finding) => ({
-        path: finding.path,
-        rule_id: finding.rule_id,
-        severity: finding.severity
-      }))
+      ...describeSensitiveRejection(
+        [...rawScan.findings, ...normalizedScan.findings],
+        rawScan.scanner_version
+      )
     });
   }
 

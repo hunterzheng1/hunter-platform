@@ -3,6 +3,52 @@ import { describe, expect, it } from "vitest";
 import { scanSensitiveFiles } from "../src/index.js";
 
 describe("sensitive information scanner", () => {
+
+  it("scores a credential-free connection string low so it stays waivable", () => {
+    // 裸连接串是普通文档内容。判成 high 就等于永久不可上传——high 不接受行内豁免，
+    // 而客户端预检（同名 1.1.0 扫描器）判的是 low/可豁免：调用方按预检加了标注，
+    // 服务端照拒，两边谁也说不通。
+    const bare = scanSensitiveFiles({
+      "plans/design.md": "DB: postgres://dbhost:5432/appdb\n"
+    });
+    const finding = bare.findings.find((item) => item.rule_id === "HH_DATABASE_URL");
+    expect(finding).toMatchObject({ severity: "low", overridable: true });
+  });
+
+  it("still scores a connection string that carries credentials high", () => {
+    const withSecret = scanSensitiveFiles({
+      "plans/design.md": "DB: postgres://appuser:s3cr3t@dbhost:5432/appdb\n"
+    });
+    const finding = withSecret.findings.find((item) => item.rule_id === "HH_DATABASE_URL");
+    expect(finding).toMatchObject({ severity: "high", overridable: false });
+    expect(withSecret.hard_blocked).toBe(true);
+  });
+
+  it("orders findings by codepoint so both sides agree on the same sequence", () => {
+    // localeCompare 的顺序随 ICU 区域设置变；客户端与服务端排序不同会让
+    // 逐条比对结果的调用方误判成"发现不一致"。
+    const result = scanSensitiveFiles({
+      "b.md": "internal http://10.0.0.1\n",
+      "B.md": "internal http://10.0.0.2\n",
+      "a.md": "internal http://10.0.0.3\n"
+    });
+    expect(result.findings.map((item) => item.path)).toEqual(["B.md", "a.md", "b.md"]);
+  });
+
+  it("honours an inline waiver for an overridable finding", () => {
+    // 这条是归档 422 的唯一正规出路，必须有回归保护。
+    const result = scanSensitiveFiles({
+      "plans/design.md":
+        "<!-- hunter-harness-ignore: HH_INTERNAL_ADDRESS reason=designed-endpoint -->\n" +
+        "default endpoint http://10.29.213.80:8080\n"
+    });
+    expect(result.blocked).toBe(false);
+    expect(result.findings[0]).toMatchObject({
+      rule_id: "HH_INTERNAL_ADDRESS",
+      disposition: "overridden"
+    });
+    expect(result.override_evidence).toHaveLength(1);
+  });
   it("blocks private keys and tokens without returning the secret", () => {
     const token = "ghp_1234567890abcdefghijklmnopqrstuvwxyzAB";
     const result = scanSensitiveFiles({
