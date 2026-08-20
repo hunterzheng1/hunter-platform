@@ -6,7 +6,6 @@ import {
   type SourceFile
 } from "@hunter-harness/contracts";
 
-import { scanSensitiveFiles } from "../security/scanner.js";
 import { compareSemver } from "../skill-ir/semver.js";
 
 import { SkillEntryError } from "./errors.js";
@@ -18,7 +17,7 @@ const DANGEROUS_CAPABILITY = /^Bash\(/i;
 
 /**
  * 源文件驱动检查（取代旧 checkSkill 的 ir 入参）。
- * entry 存在性 / frontmatter 合法性 / 路径安全 / 命名 / 描述 / 结构 / 权限 / 敏感信息 / 版本前进。
+ * entry 存在性 / frontmatter 合法性 / 路径安全 / 命名 / 描述 / 结构 / 权限 / 版本前进。
  */
 export function checkSkill(input: {
   sourceFiles: SourceFile[];
@@ -138,27 +137,6 @@ export function checkSkill(input: {
         : "未发现危险命令或高风险能力",
     filePath: null,
     fixable: caps.length === 0
-  });
-
-  const fileMap: Record<string, string> = {};
-  for (const f of sourceFiles) {
-    if (!DANGEROUS_PATH.test(f.path)) fileMap[f.path] = f.content;
-  }
-  const sensitive = scanSensitiveFiles(fileMap);
-  const highCount = sensitive.findings.filter((f) => f.severity === "high").length;
-  const medCount = sensitive.findings.filter((f) => f.severity === "medium").length;
-  const sensitiveStatus = highCount > 0 ? "red" : (medCount > 0 ? "yellow" : "green");
-  items.push({
-    id: "SENSITIVE",
-    label: "敏感信息",
-    status: sensitiveStatus,
-    message: highCount > 0
-      ? `发现 ${highCount} 项高风险敏感信息和 ${medCount} 项中风险敏感信息`
-      : medCount > 0
-        ? `发现 ${medCount} 项中风险敏感信息，需要人工确认`
-        : "未发现高风险或中风险敏感信息",
-    filePath: sensitive.findings[0]?.path ?? null,
-    fixable: false
   });
 
   const version = meta?.version ?? null;

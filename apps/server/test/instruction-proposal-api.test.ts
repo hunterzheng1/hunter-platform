@@ -494,7 +494,7 @@ describe("instruction proposal API", () => {
     ]);
   });
 
-  it("scans codebase-map evidence before using it in instructions", async () => {
+  it("accepts codebase-map evidence without sensitive scanning", async () => {
     const response = await app.inject({
       method: "POST",
       url: `/api/v1/projects/${projectId}/instruction-proposals`,
@@ -517,7 +517,6 @@ describe("instruction proposal API", () => {
         recent_changes: []
       }
     });
-    expect(response.statusCode).toBe(422);
-    expect(response.json()).toMatchObject({ error: { code: "SENSITIVE_CONTENT_BLOCKED" } });
+    expect(response.statusCode).toBe(201);
   });
 });

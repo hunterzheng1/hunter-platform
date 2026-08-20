@@ -107,10 +107,10 @@ describe("RegistryStore per-agent drafts CRUD (UT-001~007)", () => {
       expect(draft.draftVersion).toBe("0.1.0");
     });
 
-    it("blocks on sensitive high-risk content", async () => {
+    it("accepts sensitive high-risk content", async () => {
       const store = newStore();
       const bad = [{ path: "SKILL.md", content: skillMd }, { path: "secret.md", content: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----" }];
-      await expect(store.uploadDraft({ files: bad, actorId: "owner", agent: CC })).rejects.toMatchObject({ code: "SENSITIVE_CONTENT_BLOCKED" });
+      await expect(store.uploadDraft({ files: bad, actorId: "owner", agent: CC })).resolves.toMatchObject({ slug: "harness-x" });
     });
 
     it("blocks on schema-invalid IR", async () => {
@@ -653,10 +653,10 @@ describe("RegistryStore uploadDraft validation", () => {
     expect(() => store.getSkill("harness-x")).toThrowError(expect.objectContaining({ code: "SKILL_NOT_FOUND" }));
   });
 
-  it("blocks on sensitive high-risk content", async () => {
+  it("accepts sensitive high-risk content", async () => {
     const store = newStore();
     const bad = [{ path: "SKILL.md", content: skillMd }, { path: "secret.md", content: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----" }];
-    await expect(store.uploadDraft({ files: bad, actorId: "owner", agent: CC })).rejects.toMatchObject({ code: "SENSITIVE_CONTENT_BLOCKED" });
+    await expect(store.uploadDraft({ files: bad, actorId: "owner", agent: CC })).resolves.toMatchObject({ slug: "harness-x" });
   });
 
   it("blocks on schema-invalid IR", async () => {
@@ -690,40 +690,14 @@ describe("RegistryStore uploadDraft validation", () => {
     expect(draft.draftVersion).toBe("1.0.1");
   });
 
-  it("requires an explicit redacted review for overridable findings and rejects stale evidence", async () => {
+  it("accepts overridable findings without a review round-trip", async () => {
     const store = newStore();
     const reviewedFiles = [...files, { path: "notes.md", content: "password=example-password" }];
-    let reviewDetails: { scanner_version: string; findings: Array<{ fingerprint: string; redacted_preview: string }> } | undefined;
-    try {
-      await store.uploadDraft({ files: reviewedFiles, actorId: "owner", agent: CC });
-    } catch (error) {
-      const value = error as { code?: string; details?: typeof reviewDetails };
-      expect(value.code).toBe("SENSITIVE_CONTENT_REVIEW_REQUIRED");
-      reviewDetails = value.details;
-    }
-    expect(reviewDetails?.findings).toHaveLength(1);
-    expect(reviewDetails?.findings[0]?.redacted_preview).toBe("[REDACTED:HH_PASSWORD_VALUE]");
-
-    await expect(store.uploadDraft({
-      files: reviewedFiles,
-      actorId: "owner",
-      agent: CC,
-      review: {
-        scanner_version: reviewDetails?.scanner_version ?? "",
-        finding_fingerprints: ["sha256:" + "0".repeat(64)],
-        reason: "known example value"
-      }
-    })).rejects.toMatchObject({ code: "SENSITIVE_REVIEW_STALE", status: 409 });
-
     const accepted = await store.uploadDraft({
       files: reviewedFiles,
       actorId: "owner",
       agent: CC,
-      review: {
-        scanner_version: reviewDetails?.scanner_version ?? "",
-        finding_fingerprints: reviewDetails?.findings.map((finding) => finding.fingerprint) ?? [],
-        reason: "known example value"
-      }
+      review: { scanner_version: "legacy", finding_fingerprints: [], reason: "legacy" }
     });
     expect(accepted.revision).toBe(1);
   });
@@ -977,12 +951,12 @@ describe("RegistryStore fix", () => {
     await expect(store.applyDraftFix("harness-x", CC, null)).rejects.toMatchObject({ code: "DRAFT_NOT_FOUND" });
   });
 
-  it("applyDraftFix blocks on sensitive fixed source", async () => {
+  it("accepts sensitive fixed source", async () => {
     const store = newStore();
     const secretFiles: SourceFile[] = [{ path: "SKILL.md", content: skillMd.replace("demo skill body", "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----") }];
     await store.upsertDraft({ slug: "harness-x", agent: CC, sourceFiles: secretFiles, draftVersion: "0.1.0" });
     await store.runChecks({ slug: "harness-x", agent: CC, checkedAt: "2026-06-28T00:00:00Z" });
-    await expect(store.applyDraftFix("harness-x", CC, null)).rejects.toMatchObject({ code: "SENSITIVE_CONTENT_BLOCKED" });
+    await expect(store.applyDraftFix("harness-x", CC, null)).resolves.toMatchObject({ slug: "harness-x" });
   });
 });
 
@@ -1112,9 +1086,9 @@ describe("RegistryStore AI content generation", () => {
     }
   });
 
-  it("applyFixSuggestion sensitive content blocked → 422 SENSITIVE_CONTENT_BLOCKED", async () => {
+  it("applyFixSuggestion accepts sensitive content", async () => {
     const store = await setupDraftWithAiChecks();
-    await expect(store.applyFixSuggestion({ slug: "harness-x", agent: CC, checkId: "x", suggestedContent: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", appliesTo: "description", actorId: "owner" })).rejects.toMatchObject({ code: "SENSITIVE_CONTENT_BLOCKED" });
+    await expect(store.applyFixSuggestion({ slug: "harness-x", agent: CC, checkId: "x", suggestedContent: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", appliesTo: "description", actorId: "owner" })).resolves.toMatchObject({ slug: "harness-x" });
   });
 
   it("applyFixSuggestion persists the applied marker without clearing other AI suggestions", async () => {

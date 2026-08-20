@@ -838,7 +838,7 @@ describe("change archive package API", () => {
     expect(repaired.json().content).toBe(summary);
   });
 
-  it("rejects an AWS access key hidden behind recursive JSON Unicode escapes before CAS", async () => {
+  it("accepts an AWS access key hidden behind recursive JSON Unicode escapes", async () => {
     const projectId = await resolveProject();
     const changeKey = "chg-json-unicode-secret";
     const awsKey = "AKIA1234567890ABCDEF";
@@ -861,18 +861,12 @@ describe("change archive package API", () => {
       payload: zip
     });
 
-    expect(response.statusCode, response.body).toBe(422);
+    expect(response.statusCode, response.body).toBe(201);
     expect(response.json()).toMatchObject({
-      error: {
-        code: "ARCHIVE_PACKAGE_INVALID",
-        details: {
-          findings: expect.arrayContaining([
-            expect.objectContaining({ rule_id: "HH_AWS_ACCESS_KEY" })
-          ])
-        }
-      }
+      change_key: changeKey,
+      archive_status: "durable"
     });
-    expect(await storage.hasBlob(packageHash)).toBe(false);
+    expect(await storage.hasBlob(packageHash)).toBe(true);
   });
 
   it("rejects an empty summary object before storing the package", async () => {

@@ -138,26 +138,11 @@ describe("unified skill publish", () => {
 
   async function acceptReviewedDraft(): Promise<number> {
     const firstUpload = reviewedMultipart();
-    const requested = await app.inject({
+    const accepted = await app.inject({
       method: "POST",
       url: "/api/v1/skills/draft?agent=claude-code",
       payload: firstUpload.payload,
       headers: { ...headers(), ...firstUpload.headers }
-    });
-    const details = requested.json().error.details as {
-      scanner_version: string;
-      findings: Array<{ fingerprint: string }>;
-    };
-    const acceptedUpload = reviewedMultipart({
-      scanner_version: details.scanner_version,
-      finding_fingerprints: details.findings.map((finding) => finding.fingerprint),
-      reason: "documented sample credential"
-    });
-    const accepted = await app.inject({
-      method: "POST",
-      url: "/api/v1/skills/draft?agent=claude-code",
-      payload: acceptedUpload.payload,
-      headers: { ...headers(), ...acceptedUpload.headers }
     });
     expect(accepted.statusCode).toBe(201);
     return accepted.json().revision as number;
@@ -354,7 +339,7 @@ describe("unified skill publish", () => {
     expect(publishCount).toBe(1);
   });
 
-  it("returns safe review details and accepts a matching authenticated review", async () => {
+  it("accepts sensitive content without a review round-trip", async () => {
     const firstUpload = reviewedMultipart();
     const requested = await app.inject({
       method: "POST",
@@ -362,29 +347,10 @@ describe("unified skill publish", () => {
       payload: firstUpload.payload,
       headers: { ...headers(), ...firstUpload.headers }
     });
-    expect(requested.statusCode).toBe(422);
-    expect(requested.json().error.code).toBe("SENSITIVE_CONTENT_REVIEW_REQUIRED");
-    const details = requested.json().error.details as {
-      scanner_version: string;
-      findings: Array<{ fingerprint: string; redacted_preview: string }>;
-    };
-    expect(JSON.stringify(details)).not.toContain("sample-password");
-
-    const acceptedUpload = reviewedMultipart({
-      scanner_version: details.scanner_version,
-      finding_fingerprints: details.findings.map((finding) => finding.fingerprint),
-      reason: "documented sample credential"
-    });
-    const accepted = await app.inject({
-      method: "POST",
-      url: "/api/v1/skills/draft?agent=claude-code",
-      payload: acceptedUpload.payload,
-      headers: { ...headers(), ...acceptedUpload.headers }
-    });
-    expect(accepted.statusCode).toBe(201);
+    expect(requested.statusCode).toBe(201);
   });
 
-  it("requires a new review when persisted draft content changes the finding fingerprint", async () => {
+  it("publishes when persisted draft content changes the finding fingerprint", async () => {
     const revision = await acceptReviewedDraft();
     await mutatePersistedDraft((files) => {
       const notes = files.find((file) => file.path === "notes.md");
@@ -397,9 +363,8 @@ describe("unified skill publish", () => {
       payload: { version: "0.1.0", sourceAgent: "claude-code", draftRevision: revision },
       headers: headers()
     });
-    expect(response.statusCode).toBe(422);
-    expect(response.json().error.code).toBe("SENSITIVE_CONTENT_REVIEW_REQUIRED");
-    expect(publishCount).toBe(0);
+    expect(response.statusCode).toBe(200);
+    expect(publishCount).toBe(1);
   });
 
   it("preserves accepted review evidence when unrelated draft content changes", async () => {

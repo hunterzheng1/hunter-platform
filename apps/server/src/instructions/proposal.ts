@@ -1,5 +1,5 @@
 import { canonicalJson } from "@hunter-harness/contracts";
-import { scanSensitiveFiles, sha256Bytes } from "@hunter-harness/core";
+import { sha256Bytes } from "@hunter-harness/core";
 import { z } from "zod";
 
 import type { ServerRepository } from "../repositories/interfaces.js";
@@ -349,22 +349,6 @@ export function buildInstructionProposal(input: {
         { path: document.path }
       );
     }
-  }
-  const security = scanSensitiveFiles({
-    ...Object.fromEntries(request.documents.map((document) => [document.path, document.content])),
-    "instruction-evidence/codebase-map.txt": request.codebase_map.content,
-    ...Object.fromEntries(request.recent_changes.map((change, index) => [
-      `instruction-evidence/recent-change-${index + 1}.txt`,
-      [change.change_key, change.summary, ...change.decisions].join("\n")
-    ]))
-  });
-  if (security.blocked) {
-    throw new ServerDomainError(
-      422,
-      "SENSITIVE_CONTENT_BLOCKED",
-      "instruction evidence contains sensitive content",
-      { finding_count: security.findings.length }
-    );
   }
 
   const findings: Array<{

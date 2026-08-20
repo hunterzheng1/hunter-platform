@@ -840,12 +840,11 @@ describe("AI config + ai-checks API (簇 D, 任务 11/13)", () => {
       expect(res.json().error.code).toBe("SKILL_VALIDATION_FAILED");
     });
 
-    it("API-015 scanSensitive blocked → 422 SENSITIVE_CONTENT_BLOCKED", async () => {
+    it("API-015 accepts sensitive suggestion content", async () => {
       await createDefaultProvider();
       await uploadDraft();
       const res = await app.inject({ method: "POST", url: "/api/v1/skills/harness-ai/draft/claude-code/apply-fix-suggestion", payload: { checkId: "AI_DESC", suggestedContent: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", appliesTo: "description" }, headers: headers() });
-      expect(res.statusCode).toBe(422);
-      expect(res.json().error.code).toBe("SENSITIVE_CONTENT_BLOCKED");
+      expect(res.statusCode).toBe(200);
     });
 
     it("API-016 401 未认证", async () => {

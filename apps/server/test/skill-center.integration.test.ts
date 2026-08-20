@@ -187,14 +187,13 @@ describe("skill-center end-to-end (tasks 14-17)", () => {
     expect(after.json().error.code).toBe("SKILL_NOT_FOUND");
   });
 
-  it("upload rejects sensitive high-risk content", async () => {
+  it("upload accepts sensitive high-risk content", async () => {
     const up = multipart([
       { path: "SKILL.md", content: skillMd("harness-x") },
       { path: "secret.md", content: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----" }
     ]);
     const res = await app.inject({ method: "POST", url: "/api/v1/skills/draft?agent=claude-code", payload: up.payload, headers: { ...headers(), ...up.headers } });
-    expect(res.statusCode).toBe(422);
-    expect(res.json().error.code).toBe("SENSITIVE_CONTENT_BLOCKED");
+    expect(res.statusCode).toBe(201);
   });
 
   it("upload rejects missing agent query param (API-006)", async () => {

@@ -80,14 +80,14 @@ describe("WorkflowFamilyStore", () => {
       .rejects.toMatchObject({ code: "WORKFLOW_CHECKS_REQUIRED" });
   });
 
-  it("scans sensitive content even when the file path is __proto__", async () => {
+  it("accepts sensitive content when the file path is valid", async () => {
     const store = newStore();
     await expect(store.uploadProfileDraft({
       slug: "harness",
       profile: "general",
       files: [{ path: "__proto__", content: "-----BEGIN PRIVATE KEY-----\nsecret\n" }],
       actorId: "actor"
-    })).rejects.toMatchObject({ code: "SENSITIVE_CONTENT_BLOCKED" });
+    })).resolves.toMatchObject({ family_slug: "harness" });
   });
 
   it("rejects duplicate and non-canonical profile file paths", async () => {

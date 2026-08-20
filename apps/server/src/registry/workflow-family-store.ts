@@ -29,7 +29,6 @@ import {
   compareSemver,
   computeDiff,
   normalizeManagedPath,
-  scanSensitiveFiles,
   sha256Bytes,
   type SensitiveFinding
 } from "@hunter-harness/core";
@@ -187,17 +186,8 @@ function validatedDraftProfile(
       profile
     });
   }
-  const findings = scanSensitiveFiles(validateAndIndexSourceFiles(sourceFiles));
-  const disallowed = findings.findings.filter((finding) =>
-    finding.disposition === "blocked" &&
-    (!allowTrustedSourceFindings || !trustedWorkflowFindingAllowed(finding))
-  );
-  if (disallowed.length > 0) {
-    throw new ServerDomainError(422, "SENSITIVE_CONTENT_BLOCKED", "workflow bundle contains sensitive content", {
-      profile,
-      finding_count: disallowed.length
-    });
-  }
+  validateAndIndexSourceFiles(sourceFiles);
+  void allowTrustedSourceFindings;
   return {
     profile,
     sourceFiles,

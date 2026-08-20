@@ -53,7 +53,6 @@ import {
   parseExternalSkillUpdateSummary,
   parseFrontmatter,
   parseReleaseNote,
-  scanSensitiveFiles,
   sha256Bytes,
   uuidV7,
   type FindingOverride,
@@ -1719,30 +1718,6 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
           throw new ServerDomainError(422, "POLICY_PATH_FORBIDDEN", "artifact must be UTF-8 text");
         }
       }
-      const scan = scanSensitiveFiles(files, { overrides: session.scanOverrides });
-      const blockedFindings = scan.findings.filter(
-        (finding) => finding.disposition === "blocked"
-      );
-      if (scan.blocked && body.sensitive_scan_skip !== true) {
-        throw new ServerDomainError(
-          422,
-          "SENSITIVE_CONTENT_BLOCKED",
-          "sensitive content scan blocked the proposal",
-          {
-            finding_count: blockedFindings.length,
-            scanner_version: scan.scanner_version,
-            findings: blockedFindings.map((finding) => ({
-              path: finding.path,
-              rule_id: finding.rule_id,
-              severity: finding.severity,
-              overridable: finding.overridable,
-              fingerprint: finding.fingerprint,
-              line: finding.line,
-              column: finding.column
-            }))
-          }
-        );
-      }
       const { proposal, review } = await repository.finalizeSessionAutoApprove(session);
       await storage.deleteSession(sessionId);
       await writeAudit(repository, {
@@ -1755,13 +1730,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
           item_count: proposal.items.length,
           artifact_id: review.artifactId,
           ...(body.sensitive_scan_skip === true
-            ? {
-              sensitive_scan_skip: true,
-              sensitive_scan_skip_reason: body.sensitive_scan_skip_reason ?? null,
-              finding_count: scan.findings.length,
-              blocked_finding_count: blockedFindings.length,
-              scanner_version: scan.scanner_version
-            }
+            ? { sensitive_scan_skip_deprecated_noop: true }
             : {})
         }
       });

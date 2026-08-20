@@ -371,7 +371,7 @@ describe("/api/v1 governed server", () => {
     expect(list.json().page).toMatchObject({ limit: 1 });
   });
 
-  it("enforces policy, size limits, and server-side sensitive scanning", async () => {
+  it("enforces policy and size limits without server-side sensitive scanning", async () => {
     const projectId = await resolveProject();
     const forbidden = await app.inject({
       method: "POST",
@@ -455,31 +455,13 @@ describe("/api/v1 governed server", () => {
       }
     });
     await storage.putBlob(hash, Buffer.from(secret));
-    const finalized = await finalizeSession(session.json().session_id, [operation], null);
-    expect(finalized.statusCode).toBe(422);
-    expect(finalized.json().error).toMatchObject({
-      code: "SENSITIVE_CONTENT_BLOCKED",
-      details: {
-        finding_count: expect.any(Number),
-        findings: expect.arrayContaining([
-          expect.objectContaining({ rule_id: "HH_PRIVATE_KEY" })
-        ])
-      }
-    });
-    expect(finalized.body).not.toContain("PRIVATE KEY");
-
-    const skipped = await finalizeSession(
+    const finalized = await finalizeSession(
       session.json().session_id,
       [operation],
       null,
-      { sensitive_scan_skip: true, sensitive_scan_skip_reason: "test fixture" }
+      { sensitive_scan_skip: true, sensitive_scan_skip_reason: "legacy fixture" }
     );
-    expect(skipped.statusCode).toBe(201);
-    expect(skipped.json()).toMatchObject({ status: "approved" });
-    const audits = await repository.listAuditEvents({ actorId: "actor_owner", limit: 20 });
-    expect(audits.some((item) =>
-      item.action === "proposal.finalized" &&
-      (item.details as { sensitive_scan_skip?: boolean }).sensitive_scan_skip === true
-    )).toBe(true);
+    expect(finalized.statusCode).toBe(201);
+    expect(finalized.json()).toMatchObject({ status: "approved" });
   });
 });

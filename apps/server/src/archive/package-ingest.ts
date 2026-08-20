@@ -6,7 +6,7 @@ import {
   knowledgeCandidateSchema,
   type FileOperation
 } from "@hunter-harness/contracts";
-import { scanSensitiveFiles, sha256Bytes } from "@hunter-harness/core";
+import { sha256Bytes } from "@hunter-harness/core";
 import type { SensitiveFinding } from "@hunter-harness/core";
 import AdmZip from "adm-zip";
 import { z } from "zod";
@@ -657,23 +657,6 @@ export function validateArchivePackage(
   }
   if (!manifest.files.some((file) => file.role === "summary")) {
     invalid("archive must contain the final structured summary");
-  }
-
-  const rawScan = scanSensitiveFiles({
-    "archive-manifest.json": manifestText,
-    ...Object.fromEntries(validatedFiles.map((file) => [file.path, file.text]))
-  });
-  const normalizedScan = scanSensitiveFiles({
-    "archive-manifest.json": normalizedJsonScanText(manifestJson, "archive-manifest.json"),
-    ...normalizedJsonFiles
-  });
-  if (rawScan.blocked || normalizedScan.blocked) {
-    invalid("archive contains sensitive content", {
-      ...describeSensitiveRejection(
-        [...rawScan.findings, ...normalizedScan.findings],
-        rawScan.scanner_version
-      )
-    });
   }
 
   return {

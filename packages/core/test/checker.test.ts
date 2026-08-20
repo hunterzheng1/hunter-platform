@@ -36,9 +36,9 @@ describe("checkSkill (source-file driven)", () => {
     expect(r.items.find((i) => i.id === "ENTRY_SKILL_MD")?.status).toBe("red");
   });
 
-  it("UT-011 sensitive content → SENSITIVE red", () => {
+  it("UT-011 sensitive content is not a publication check", () => {
     const r = checkSkill(baseInput([skillFile(fm("harness-x") + "\n" + PRIVATE_KEY)]));
-    expect(r.items.find((i) => i.id === "SENSITIVE")?.status).toBe("red");
+    expect(r.items.find((i) => i.id === "SENSITIVE")).toBeUndefined();
   });
 
   it("UT-012 no forbidden_actions → PERMISSIONS not red (suggestion)", () => {

@@ -82,7 +82,6 @@ import {
   externalSkillSummarySourceHash,
   findEntryFile,
   parseFrontmatter,
-  scanSensitiveFiles,
   sha256Bytes,
   SkillEntryError
 } from "@hunter-harness/core";
@@ -1210,47 +1209,8 @@ export class RegistryStore {
       }
       throw error;
     }
-    const fileMap: Record<string, string> = {};
-    for (const f of input.files) fileMap[f.path] = f.content;
-    const findings = scanSensitiveFiles(fileMap);
-    const safeFindings = findings.findings.map(({ disposition, ...finding }) => {
-      void disposition;
-      return finding;
-    });
-    if (findings.hard_blocked) {
-      throw new ServerDomainError(422, "SENSITIVE_CONTENT_BLOCKED", "skill contains sensitive content", {
-        scanner_version: findings.scanner_version,
-        finding_count: findings.findings.length,
-        findings: safeFindings
-      });
-    }
-    if (findings.review_required) {
-      if (input.review === undefined) {
-        throw new ServerDomainError(422, "SENSITIVE_CONTENT_REVIEW_REQUIRED", "skill contains content that requires explicit review", {
-          scanner_version: findings.scanner_version,
-          finding_count: findings.findings.length,
-          findings: safeFindings
-        });
-      }
-      const expected = findings.findings.map((finding) => finding.fingerprint).sort();
-      const provided = [...input.review.finding_fingerprints].sort();
-      if (input.review.scanner_version !== findings.scanner_version || canonicalJson(expected) !== canonicalJson(provided)) {
-        throw new ServerDomainError(409, "SENSITIVE_REVIEW_STALE", "sensitive review no longer matches the uploaded files", {
-          scanner_version: findings.scanner_version,
-          findings: safeFindings
-        });
-      }
-      const acceptedAt = new Date().toISOString();
-      this.sensitiveReviews.set(`${slug}\0${input.agent}`, expected.map((fingerprint) => ({
-        scanner_version: findings.scanner_version,
-        finding_fingerprints: [fingerprint],
-        reason: input.review?.reason ?? "",
-        actor: input.actorId,
-        accepted_at: acceptedAt
-      })));
-    } else {
-      this.sensitiveReviews.delete(`${slug}\0${input.agent}`);
-    }
+    void input.review;
+    this.sensitiveReviews.delete(`${slug}\0${input.agent}`);
     // A Skill owns one semver across all target agents. The source agent only
     // selects the uploaded variant; the candidate always advances global latest.
     const skillState = this.skills.get(slug);
@@ -1343,10 +1303,6 @@ export class RegistryStore {
       } else {
         Reflect.deleteProperty(fileMap, d.path);
       }
-    }
-    const findings = scanSensitiveFiles(fileMap);
-    if (findings.blocked) {
-      throw new ServerDomainError(422, "SENSITIVE_CONTENT_BLOCKED", "fixed source contains sensitive content", { finding_count: findings.findings.length });
     }
     const updatedSourceFiles: SourceFile[] = Object.entries(fileMap).map(([path, content]) => ({ path, content }));
     const now = new Date().toISOString();
@@ -1467,10 +1423,6 @@ export class RegistryStore {
         throw error;
       }
     }
-    const findings = scanSensitiveFiles(fileMap);
-    if (findings.blocked) {
-      throw new ServerDomainError(422, "SENSITIVE_CONTENT_BLOCKED", "applied suggestion contains sensitive content", { finding_count: findings.findings.length });
-    }
     const updatedSourceFiles: SourceFile[] = Object.entries(fileMap).map(([path, content]) => ({ path, content }));
     const now = new Date().toISOString();
     const retainedAiChecks = draft.aiChecks === null ? null : {
@@ -1530,16 +1482,6 @@ export class RegistryStore {
     }
     const fileMap: Record<string, string> = {};
     for (const f of draft.sourceFiles) fileMap[f.path] = f.content;
-    const findings = scanSensitiveFiles(fileMap);
-    if (findings.hard_blocked || (findings.review_required && !this.reviewMatches(
-      input.slug,
-      input.agent,
-      findings.findings.map((finding) => finding.fingerprint)
-    ))) {
-      throw new ServerDomainError(422, "SENSITIVE_CONTENT_BLOCKED", "skill contains sensitive content", {
-        finding_count: findings.findings.length
-      });
-    }
     const built = buildArtifactFor(draft.sourceFiles, input.slug, input.version, input.agent);
     if (built === null) {
       // agent 未 installable 时拒绝发布（避免静默发布 0 制品 version）
@@ -1693,22 +1635,6 @@ export class RegistryStore {
       sourceFiles = [{ path: "SKILL.md", content: legacyEntry.content }, ...sourceFiles];
     }
     const fileMap = Object.fromEntries(sourceFiles.map((file) => [file.path, file.content]));
-    const sensitive = scanSensitiveFiles(fileMap);
-    if (sensitive.hard_blocked) {
-      throw new ServerDomainError(422, "SENSITIVE_CONTENT_BLOCKED", "skill contains sensitive content", {
-        finding_count: sensitive.findings.length
-      });
-    }
-    if (sensitive.review_required && !this.reviewMatches(
-      input.slug,
-      sourceAgent,
-      sensitive.findings.map((finding) => finding.fingerprint)
-    )) {
-      throw new ServerDomainError(422, "SENSITIVE_CONTENT_REVIEW_REQUIRED", "skill review is missing or stale", {
-        finding_count: sensitive.findings.length,
-        scanner_version: sensitive.scanner_version
-      });
-    }
     const meta = parseFrontmatter(findEntryFile(sourceFiles, sourceAgent).content);
     const createdAt = new Date().toISOString();
     const builtArtifacts: Array<{ version: RegistrySkillVersion; bytes: Uint8Array; hash: string }> = [];
