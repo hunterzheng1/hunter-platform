@@ -29,7 +29,6 @@ import {
 import { ServerDomainError, type TransactionRepository } from "../repositories/interfaces.js";
 import {
   summarizeWorkflowFamilyDraft,
-  trustedWorkflowFindingAllowed,
   validateAndIndexSourceFiles,
   type WorkflowFamilyStore
 } from "./workflow-family-store.js";

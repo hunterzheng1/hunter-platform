@@ -1634,7 +1634,6 @@ export class RegistryStore {
       const legacyEntry = findEntryFile(sourceFiles, sourceAgent);
       sourceFiles = [{ path: "SKILL.md", content: legacyEntry.content }, ...sourceFiles];
     }
-    const fileMap = Object.fromEntries(sourceFiles.map((file) => [file.path, file.content]));
     const meta = parseFrontmatter(findEntryFile(sourceFiles, sourceAgent).content);
     const createdAt = new Date().toISOString();
     const builtArtifacts: Array<{ version: RegistrySkillVersion; bytes: Uint8Array; hash: string }> = [];
