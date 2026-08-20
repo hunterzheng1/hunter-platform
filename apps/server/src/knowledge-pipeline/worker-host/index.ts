@@ -251,8 +251,8 @@ function snapshot(value: unknown, state: SnapshotState, depth = 0): unknown {
   if (value === null || typeof value === "boolean") return value;
   if (typeof value === "string") {
     if (value.length > maxSnapshotString || Array.from(value).some((character) => {
-      const code = character.charCodeAt(0);
-      return code < 32 || code === 127;
+      const code = character.codePointAt(0) ?? 0;
+      return (code < 32 && code !== 9 && code !== 10 && code !== 13) || code === 127;
     })) {
       throw new SnapshotFailure("WORKER_HOST_SNAPSHOT_INVALID");
     }
@@ -318,6 +318,15 @@ function text(value: unknown, max: number, reason_code: string): string {
       value.trim() !== value || Array.from(value).some((character) => {
         const code = character.charCodeAt(0);
         return code < 32 || code === 127;
+      })) throw new SnapshotFailure(reason_code);
+  return value;
+}
+
+function contentText(value: unknown, max: number, reason_code: string): string {
+  if (typeof value !== "string" || value.length < 1 || value.length > max ||
+      Array.from(value).some((character) => {
+        const code = character.codePointAt(0) ?? 0;
+        return (code < 32 && code !== 9 && code !== 10 && code !== 13) || code === 127;
       })) throw new SnapshotFailure(reason_code);
   return value;
 }
@@ -588,7 +597,7 @@ function readDrafts(value: unknown, maxResultDrafts: number): KnowledgeResultDra
       source_candidate_id: text(record.source_candidate_id, 160, "KNOWLEDGE_RESULT_INVALID"),
       content_hash: hash(record.content_hash, "KNOWLEDGE_RESULT_INVALID"),
       display_title: text(record.display_title, 240, "KNOWLEDGE_RESULT_INVALID"),
-      summary: text(record.summary, 65_536, "KNOWLEDGE_RESULT_INVALID"),
+      summary: contentText(record.summary, 65_536, "KNOWLEDGE_RESULT_INVALID"),
       reusability_scope: text(record.reusability_scope, 512, "KNOWLEDGE_RESULT_INVALID"),
       source_refs: refs.map((ref) => text(ref, 512, "KNOWLEDGE_RESULT_INVALID")),
       confidence: record.confidence,
@@ -610,7 +619,7 @@ function readProjectionFields(record: Record<string, unknown>) {
       entry_type: readEntryType(record.entry_type)
     }),
     ...(record.body === undefined ? {} : {
-      body: text(record.body, 20_000, "KNOWLEDGE_RESULT_INVALID")
+      body: contentText(record.body, 20_000, "KNOWLEDGE_RESULT_INVALID")
     }),
     ...(record.keywords === undefined ? {} : { keywords: readKeywords(record.keywords) })
   };

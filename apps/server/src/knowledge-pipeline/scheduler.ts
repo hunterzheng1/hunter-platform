@@ -39,7 +39,12 @@ export function startKnowledgePipelineScheduler(dependencies: {
     const jobs = kind === "change_projection"
       ? await dependencies.job_repository.listQueuedChangeProjectionJobs(batchSize)
       : await dependencies.job_repository.listQueuedKnowledgeJobs(batchSize);
-    return jobs.map((job) => ({ job_id: job.job_id }));
+    const projects = new Set<string>();
+    return jobs.flatMap((job) => {
+      if (projects.has(job.project_id)) return [];
+      projects.add(job.project_id);
+      return [{ job_id: job.job_id }];
+    });
   }
 
   async function tick(): Promise<void> {

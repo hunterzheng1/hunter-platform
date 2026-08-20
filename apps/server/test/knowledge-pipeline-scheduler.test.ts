@@ -92,6 +92,37 @@ describe("knowledge pipeline scheduler", () => {
       host, job_repository: new MemoryJobRepository(), owner_id: "owner", interval_ms: 10
     })).toThrow("KNOWLEDGE_SCHEDULER_CONFIGURATION_INVALID");
   });
+
+  it("dispatches at most one queued job per project and kind in each tick", async () => {
+    const dispatch = vi.fn(async (input: unknown) => {
+      void input;
+      return { schema_version: 1 as const, results: [] };
+    });
+    const repository = {
+      async listQueuedChangeProjectionJobs() {
+        return [
+          { project_id: "prj_same", job_id: "job_change_first" },
+          { project_id: "prj_same", job_id: "job_change_second" },
+          { project_id: "prj_other", job_id: "job_change_other" }
+        ];
+      },
+      async listQueuedKnowledgeJobs() { return []; }
+    };
+    const scheduler = startKnowledgePipelineScheduler({
+      host: { async run() { throw new Error("unused"); }, dispatch },
+      job_repository: repository as never,
+      owner_id: "owner_project_serial",
+      interval_ms: 100,
+      batch_size: 8
+    });
+    await new Promise((resolve) => setTimeout(resolve, 125));
+    await scheduler.close();
+    const firstBatch = dispatch.mock.calls[0]?.[0] as { jobs: Array<{ job_id: string }> };
+    expect(firstBatch.jobs.map((job) => job.job_id)).toEqual([
+      "job_change_first",
+      "job_change_other"
+    ]);
+  });
 });
 
 describe("knowledge extractor", () => {

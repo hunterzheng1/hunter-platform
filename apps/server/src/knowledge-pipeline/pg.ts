@@ -1499,7 +1499,7 @@ function validateKnowledgeResult(value: unknown): KnowledgeResult {
     status: "active",
     content_hash: sha(record.content_hash, "KNOWLEDGE_RESULT_INVALID"),
     display_title: text(record.display_title, "KNOWLEDGE_RESULT_INVALID", 240),
-    summary: text(record.summary, "KNOWLEDGE_RESULT_INVALID", MAX_TEXT),
+    summary: documentContent(record.summary, "KNOWLEDGE_RESULT_INVALID"),
     reusability_scope: text(record.reusability_scope, "KNOWLEDGE_RESULT_INVALID", MAX_TEXT),
     confidence,
     source_archive_ids: canonicalArray(jsonArrayStrings(record.source_archive_ids, "KNOWLEDGE_RESULT_INVALID")),

@@ -88,7 +88,8 @@ describe("knowledge pipeline worker host", () => {
       calls.push(`extract:${input.job.generation}`);
       return [{ source_candidate_id: "kc_1", content_hash: hash("content"), display_title: "Reusable conclusion",
         summary: "A bounded reusable summary", reusability_scope: "server indexing",
-        source_refs: ["summary/change-summary.json#1"], confidence: 0.9 }];
+        source_refs: ["summary/change-summary.json#1"], confidence: 0.9,
+        entry_type: "risk", body: "Risk statement\n阶段：submit\n严重度：YELLOW", keywords: ["submit", "YELLOW"] }];
     } };
     const host = createKnowledgePipelineWorkerHost({
       change_projection_worker: changeWorker(async ({ job_id }) => readyChange(job_id)),
