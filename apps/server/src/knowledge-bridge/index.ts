@@ -1,4 +1,4 @@
-import type { KnowledgeIngestEntry } from "@hunter-harness/contracts";
+import { knowledgeIngestEntrySchema, type KnowledgeIngestEntry } from "@hunter-harness/contracts";
 
 import type { KnowledgeResult } from "../knowledge-pipeline/types.js";
 
@@ -186,10 +186,15 @@ export async function ingestPipelineKnowledge(
       continue;
     }
     const prepared = input.preparePayload(entry);
+    const preparedEntry = knowledgeIngestEntrySchema.safeParse(prepared.payload);
+    if (!preparedEntry.success) {
+      outcome.skipped += 1;
+      continue;
+    }
     const written = await input.repository.upsertKnowledgeEntry({
       projectId: entry.projectId,
       entryId: entry.id,
-      contentSha256: input.contentHash(entry),
+      contentSha256: input.contentHash(preparedEntry.data),
       payload: prepared.payload,
       status: prepared.status
     });

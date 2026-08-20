@@ -183,4 +183,24 @@ describe("ingestPipelineKnowledge", () => {
     expect(outcome).toEqual({ created: 0, updated: 0, duplicate: 0, skipped: 1 });
     expect(store.written).toEqual([]);
   });
+
+  it("hashes the prepared payload that is actually persisted", async () => {
+    const store = repository();
+    let hashedStatus: string | undefined;
+    const outcome = await ingestPipelineKnowledge({
+      repository: store,
+      results: [result()],
+      summary: SUMMARY_DOCUMENT,
+      contentHash: (entry) => {
+        hashedStatus = entry.status;
+        return `sha256:${"e".repeat(64)}`;
+      },
+      preparePayload: (entry) => ({
+        payload: { ...entry, status: "deprecated" },
+        status: "deprecated"
+      })
+    });
+    expect(outcome).toEqual({ created: 1, updated: 0, duplicate: 0, skipped: 0 });
+    expect(hashedStatus).toBe("deprecated");
+  });
 });

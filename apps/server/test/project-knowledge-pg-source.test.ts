@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
+import { canonicalJson } from "@hunter-harness/contracts";
 import { describe, expect, it } from "vitest";
 import type { Pool } from "pg";
 
 import { createProjectKnowledgeQueryAdapter } from "../src/project-knowledge-query/index.js";
+import { adjudicateKnowledgeEntry } from "../src/semantic/knowledge-judge.js";
 import {
   PgProjectKnowledgeSource,
   PgProjectKnowledgeRetryAuthority,
@@ -60,7 +62,7 @@ function row(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     project_id: "prj_knowledge",
     entry_id: "kn_decision_1",
-    content_sha256: `sha256:${createHash("sha256").update(payload.body, "utf8").digest("hex")}`,
+    content_sha256: `sha256:${createHash("sha256").update(canonicalJson(payload), "utf8").digest("hex")}`,
     payload,
     status: "active",
     created_at: "2026-08-14T01:02:03.000Z",
@@ -120,8 +122,46 @@ describe("PgProjectKnowledgeSource", () => {
 
     const detail = JSON.parse(await source.getDetail({ ...scope, detail_id: "kn_decision_1" }));
     expect(detail.content).toBe(payload.body);
+    expect(detail.content_hash).toBe(
+      `sha256:${createHash("sha256").update(payload.body, "utf8").digest("hex")}`
+    );
     expect(detail.media_type).toBe("text/markdown");
     expect(queries).toHaveLength(2);
+  });
+
+  it("fails closed when the persisted canonical entry hash does not match the payload", async () => {
+    const pool = { async query() {
+      return result([row({ content_sha256: "sha256:" + "f".repeat(64) })]);
+    } } as unknown as Pool;
+    const source = new PgProjectKnowledgeSource({
+      pool, cursor_authority: new ProjectKnowledgeCursorAuthority(secret())
+    });
+    await expect(source.getDetail({ ...scope, detail_id: "kn_decision_1" })).resolves.toBeNull();
+  });
+
+  it("accepts a legacy Bridge hash only when the originating result reconstructs it exactly", async () => {
+    const resultUpdatedAt = "2026-08-14T01:02:03.000Z";
+    const original = {
+      ...payload,
+      confidence: {
+        score: 0.95, level: "high", signals: ["archive-review-finding"],
+        lastCalculatedAt: resultUpdatedAt
+      }
+    };
+    const prepared = adjudicateKnowledgeEntry(original, new Date("2026-08-14T01:03:00.000Z")).payload;
+    const pool = { async query() {
+      return result([row({
+        payload: prepared,
+        content_sha256: `sha256:${createHash("sha256").update(canonicalJson(original), "utf8").digest("hex")}`,
+        result_confidence: 0.95,
+        result_updated_at: resultUpdatedAt
+      })]);
+    } } as unknown as Pool;
+    const source = new PgProjectKnowledgeSource({
+      pool, cursor_authority: new ProjectKnowledgeCursorAuthority(secret())
+    });
+    await expect(source.getDetail({ ...scope, detail_id: "kn_decision_1" }))
+      .resolves.not.toBeNull();
   });
 
   it("produces a page accepted by the query adapter when real entries exist", async () => {

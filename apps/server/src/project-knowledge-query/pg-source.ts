@@ -192,6 +192,8 @@ interface SourceRow extends Record<string, unknown> {
   readonly projected_at?: unknown;
   readonly _total_count?: unknown;
   readonly _max_updated_at?: unknown;
+  readonly result_confidence?: unknown;
+  readonly result_updated_at?: unknown;
 }
 
 function sourceDescriptor(row: SourceRow): {
@@ -204,7 +206,7 @@ function sourceDescriptor(row: SourceRow): {
     const parsed = knowledgeIngestEntrySchema.safeParse(row.payload);
     if (!parsed.success) return null;
     const entry = parsed.data;
-    if (row.content_sha256 !== undefined && row.content_sha256 !== contentHash(entry.body)) return null;
+    if (!persistedEntryHashMatches(row, entry)) return null;
     const refs = [entry.source.archive, entry.source.sourceCommit].filter((value, index, all) => value !== "" && all.indexOf(value) === index);
     const relationships = [...entry.lifecycle.supersedes, ...(entry.lifecycle.supersededBy === null ? [] : [entry.lifecycle.supersededBy]), ...entry.lifecycle.conflictsWith]
       .filter((value, index, all) => value !== "" && all.indexOf(value) === index);
@@ -231,6 +233,35 @@ function sourceDescriptor(row: SourceRow): {
 
 function contentHash(content: string): string {
   return `sha256:${createHash("sha256").update(content, "utf8").digest("hex")}`;
+}
+
+function entryContentHash(entry: unknown): string {
+  return `sha256:${createHash("sha256").update(canonicalJson(entry), "utf8").digest("hex")}`;
+}
+
+function legacyBridgeEntryHash(entry: Record<string, unknown>, row: SourceRow): string | null {
+  if (typeof row.result_confidence !== "number" || !Number.isFinite(row.result_confidence) ||
+      row.result_confidence < 0 || row.result_confidence > 1) return null;
+  const parsedTime = row.result_updated_at instanceof Date
+    ? row.result_updated_at
+    : typeof row.result_updated_at === "string" ? new Date(row.result_updated_at) : null;
+  if (parsedTime === null || Number.isNaN(parsedTime.getTime())) return null;
+  const score = row.result_confidence;
+  return entryContentHash({
+    ...entry,
+    confidence: {
+      score,
+      level: score >= 0.9 ? "high" : score >= 0.75 ? "medium" : "low",
+      signals: ["archive-review-finding"],
+      lastCalculatedAt: parsedTime.toISOString()
+    }
+  });
+}
+
+function persistedEntryHashMatches(row: SourceRow, entry: Record<string, unknown>): boolean {
+  if (row.content_sha256 === undefined) return true;
+  return row.content_sha256 === entryContentHash(entry) ||
+    row.content_sha256 === legacyBridgeEntryHash(entry, row);
 }
 
 export class PgProjectKnowledgeSource implements ProjectKnowledgeQuerySourcePort, KnowledgeRetryAuthorityPort {
@@ -324,9 +355,12 @@ export class PgProjectKnowledgeSource implements ProjectKnowledgeQuerySourcePort
 
   async getDetail(input: ProjectKnowledgeDetailSourceRequest): Promise<string | null> {
     const result = await this.#pool.query<SourceRow>(
-      `SELECT project_id, entry_id, content_sha256, payload
-         FROM knowledge_ingest_entries
-        WHERE project_id = $1 AND entry_id = $2
+      `SELECT ingest.project_id, ingest.entry_id, ingest.content_sha256, ingest.payload,
+              result.confidence AS result_confidence, result.updated_at AS result_updated_at
+         FROM knowledge_ingest_entries ingest
+         LEFT JOIN knowledge_pipeline_results result
+           ON result.project_id = ingest.project_id AND result.knowledge_id = ingest.entry_id
+        WHERE ingest.project_id = $1 AND ingest.entry_id = $2
         LIMIT 1`, [input.project_id, input.detail_id]
     );
     const row = result.rows[0];
@@ -334,7 +368,7 @@ export class PgProjectKnowledgeSource implements ProjectKnowledgeQuerySourcePort
     const parsed = knowledgeIngestEntrySchema.safeParse(row.payload);
     if (!parsed.success) return null;
     const entry = parsed.data;
-    if (row.content_sha256 !== undefined && row.content_sha256 !== contentHash(entry.body)) return null;
+    if (!persistedEntryHashMatches(row, entry)) return null;
     const sourceRefs = [entry.source.archive, entry.source.sourceCommit].filter((value, index, all) => value !== "" && all.indexOf(value) === index);
     return JSON.stringify({
       schema_version: 1, source_kind: "project_knowledge_detail", actor_id: input.actor_id,
