@@ -330,9 +330,12 @@ describe("archives:ingest knowledge enqueue (06B-3 补齐)", () => {
 
     expect(response.statusCode).toBe(201);
     expect(acceptArchive).toHaveBeenCalledTimes(1);
-    const [call] = acceptArchive.mock.calls as [[{
+    const [call] = acceptArchive.mock.calls as unknown as [[{
+      request_id: string;
       validated_package: { project_id: string; change_key: string; archive_id: string };
     }]];
+    expect(call[0].request_id).toMatch(/^archive_request:[a-f0-9]{64}$/u);
+    expect(call[0].request_id).not.toBe(requestId);
     expect(call[0].validated_package).toMatchObject({
       project_id: projectId,
       change_key: changeKey,

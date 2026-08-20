@@ -88,6 +88,22 @@ const KNOWLEDGE_PIPELINE_PROMPT_VERSION = "server-prompt-v1";
 const KNOWLEDGE_PIPELINE_INDEX_SCHEMA_VERSION = "server-knowledge-index-v1";
 
 /**
+ * Knowledge Pipeline receipts use their own correlation-id namespace.  HTTP
+ * request ids are intentionally excluded: they change on transport retries and
+ * are neither archive identity nor job idempotency.  Both archive HTTP adapters
+ * derive the same bounded internal id from immutable server-validated facts.
+ */
+function knowledgeArchiveRequestId(input: {
+  project_id: string;
+  change_key: string;
+  archive_id: string;
+  package_sha256: string;
+}): string {
+  const hash = sha256Bytes(Buffer.from(canonicalJson(input), "utf8"));
+  return `archive_request:${hash.slice("sha256:".length)}`;
+}
+
+/**
  * 两种归档包形态并存：生产归档器（harness_archive.py）产出 core-v1，
  * 其身份由路由绑定给出；v2 包自带服务端 id，沿用原校验器并保留身份交叉核对。
  * 按 manifest 自称的 schema_version 分派——猜错形态只会 fail closed，不会误判身份。
@@ -2972,7 +2988,12 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
               } else {
                 await options.knowledgePipeline.acceptArchive({
                   schema_version: 1,
-                  request_id: requestId,
+                  request_id: knowledgeArchiveRequestId({
+                    project_id: validated.project_id,
+                    change_key: validated.change_key,
+                    archive_id: validated.archive_id,
+                    package_sha256: validated.package_sha256
+                  }),
                   validated_package: validated,
                   extractor_version: KNOWLEDGE_PIPELINE_EXTRACTOR_VERSION,
                   prompt_version: KNOWLEDGE_PIPELINE_PROMPT_VERSION,
@@ -3179,7 +3200,12 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
             } else {
               await options.knowledgePipeline.acceptArchive({
                 schema_version: 1,
-                request_id: requestId,
+                request_id: knowledgeArchiveRequestId({
+                  project_id: validated.project_id,
+                  change_key: validated.change_key,
+                  archive_id: validated.archive_id,
+                  package_sha256: validated.package_sha256
+                }),
                 validated_package: validated,
                 extractor_version: KNOWLEDGE_PIPELINE_EXTRACTOR_VERSION,
                 prompt_version: KNOWLEDGE_PIPELINE_PROMPT_VERSION,

@@ -1,7 +1,7 @@
 import { canonicalJson, fileOperationSchema } from "@hunter-harness/contracts";
 import { sha256Bytes, uuidV7 } from "@hunter-harness/core";
 import AdmZip from "adm-zip";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createServer } from "../src/app.js";
 import { MemoryRepository } from "../src/repositories/memory.js";
@@ -486,6 +486,38 @@ describe("change archive package API", () => {
         })
       })
     ]));
+  });
+
+  it("adapts the HTTP request id to the internal archive request id before knowledge enqueue", async () => {
+    const projectId = await resolveProject();
+    const changeKey = "chg-knowledge-request-id";
+    const zip = archiveZip(changeKey, [{
+      path: "reports/final/summary-data.json",
+      role: "summary",
+      content: JSON.stringify(cliSummary(changeKey, "2.3", {
+        baseCommit: "0000000000000000"
+      }))
+    }]);
+    const acceptArchive = vi.fn(async () => ({}));
+    await app.close();
+    app = await createServer({
+      repository,
+      storage,
+      semanticStore,
+      knowledgePipeline: { acceptArchive } as never
+    });
+
+    const response = await app.inject({
+      method: "PUT",
+      url: `/api/v1/projects/${projectId}/changes/${changeKey}/archive-package`,
+      headers: headers(),
+      payload: zip
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(acceptArchive).toHaveBeenCalledTimes(1);
+    const [call] = acceptArchive.mock.calls as unknown as [[{ request_id: string }]];
+    expect(call[0].request_id).toMatch(/^archive_request:[a-f0-9]{64}$/u);
   });
 
   it("accepts the knowledge candidates the archive producer now ships", async () => {
