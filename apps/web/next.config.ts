@@ -14,12 +14,18 @@ const config: NextConfig = {
 
   async rewrites() {
     const internalApi = process.env.HUNTER_HARNESS_INTERNAL_API_URL;
-    return internalApi === undefined || internalApi === ""
-      ? []
-      : [{
+    if (internalApi === undefined || internalApi === "") return [];
+    const destination = internalApi.replace(/\/$/, "");
+    return [
+      {
         source: "/api/v1/:path*",
-        destination: internalApi.replace(/\/$/, "") + "/api/v1/:path*"
-      }];
+        destination: destination + "/api/v1/:path*"
+      },
+      {
+        source: "/mcp",
+        destination: destination + "/mcp"
+      }
+    ];
   }
 };
 
