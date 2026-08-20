@@ -187,6 +187,27 @@ describe("knowledge candidates derived from an archived summary", () => {
     expect(brokenZip).toEqual([]);
   });
 
+  it("honours the commit contract by selecting at most five derived results", async () => {
+    const risks = Array.from({ length: 6 }, (_, index) => ({
+      phase: `phase-${index + 1}`,
+      severity: "WARN",
+      message: `风险-${index + 1}`
+    }));
+    const drafts = await extractFrom(storedArchive({
+      package_bytes: packageBytes({
+        "reports/final/summary-data.json": {
+          schemaVersion: "2.3",
+          changeName: "usage-stats-platform-support",
+          reviewFindings: [],
+          knownRisks: risks
+        }
+      })
+    }));
+    expect(drafts.map((draft) => draft.summary)).toEqual([
+      "风险-1", "风险-2", "风险-3", "风险-4", "风险-5"
+    ]);
+  });
+
   it("derives the same candidates on every run of the same package", async () => {
     const archive = storedArchive({ knowledge_candidates: [] });
     const first = await extractFrom(archive);

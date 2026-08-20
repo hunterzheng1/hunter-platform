@@ -15,7 +15,7 @@ import { KnowledgePipelineError } from "./errors.js";
 
 /** 与服务端入库裁决同一阈值（semantic/knowledge-judge 的 DEFAULT_MIN_CONFIDENCE）。 */
 const AUTO_PROMOTE_MIN_CONFIDENCE = 0.82;
-const MAX_RESULT_DRAFTS = 64;
+const MAX_RESULT_DRAFTS = 5;
 const SUMMARY_PATH = "reports/final/summary-data.json";
 /** Bounded read: a summary is text, and a hostile entry must not exhaust memory. */
 const MAX_SUMMARY_BYTES = 8 * 1024 * 1024;
