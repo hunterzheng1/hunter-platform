@@ -176,6 +176,30 @@ const ALLOWED_PATHS: ReadonlyArray<{
   { role: "change_context", pattern: /^change-context\.json$/u, mediaType: "application/json" }
 ];
 
+function archiveSummaryIssues(
+  parsed: unknown,
+  unionError: z.ZodError
+): Array<{path: string; code: string; message: string}> {
+  // A union error only says "no variant matched"; the actionable cause lives in
+  // the variant whose schemaVersion literal the payload claimed. Report that
+  // variant's issues so the CLI can point at the exact field.
+  const claimed = typeof parsed === "object" && parsed !== null &&
+    "schemaVersion" in parsed
+    ? (parsed as Record<string, unknown>).schemaVersion
+    : undefined;
+  const variant = claimed === "2.2" ? archiveSummary22Schema
+    : claimed === "2.3" ? archiveSummary23Schema
+    : undefined;
+  const error = variant === undefined
+    ? unionError
+    : (variant.safeParse(parsed).error ?? unionError);
+  return error.issues.slice(0, 20).map((issue) => ({
+    path: issue.path.map(String).join("."),
+    code: issue.code,
+    message: issue.message
+  }));
+}
+
 function invalid(message: string, details: Record<string, unknown> = {}): never {
   throw new ServerDomainError(422, "ARCHIVE_PACKAGE_INVALID", message, details);
 }
@@ -622,8 +646,14 @@ export function validateArchivePackage(
         if (declared.role === "summary" && !isNonEmptyJsonObject(parsed)) {
           invalid("archive summary must be a non-empty JSON object", { path });
         }
-        if (declared.role === "summary" && !archiveSummarySchema.safeParse(parsed).success) {
-          invalid("archive summary does not match CLI schema 2.2 or 2.3", { path });
+        if (declared.role === "summary") {
+          const summaryResult = archiveSummarySchema.safeParse(parsed);
+          if (!summaryResult.success) {
+            invalid("archive summary does not match CLI schema 2.2 or 2.3", {
+              path,
+              issues: archiveSummaryIssues(parsed, summaryResult.error)
+            });
+          }
         }
         if (declared.role === "change_context" && !isNonEmptyJsonObject(parsed)) {
           invalid("archive change-context must be a non-empty JSON object", { path });

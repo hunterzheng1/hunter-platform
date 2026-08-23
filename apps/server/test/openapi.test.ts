@@ -335,6 +335,7 @@ describe("OpenAPI v1 contract", () => {
       "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/snapshots/{snapshot_id}/content",
       "/api/v1/projects/{project_id}/changes/{change_key}/archive-package",
       "/api/v1/projects/{project_id}/changes/{change_key}/archive-package/download",
+      "/api/v1/projects/{project_id}/changes/{change_key}/archive-package/validate",
       "/api/v1/projects/{project_id}/information/branch-files:confirm-restore",
       "/api/v1/projects/{project_id}/information/branch-files:preview-restore",
       "/api/v1/projects/{project_id}/information/branch_files/{detail_id}/files",

@@ -916,6 +916,99 @@ describe("change archive package API", () => {
     expect(await storage.hasBlob(packageHash)).toBe(false);
   });
 
+  it("pinpoints the offending stageStatus keys when a 2.3 summary misses run/test", async () => {
+    // 2026-10 事故：生成器输出 {plan, execute, review, submit, archive}，服务端
+    // 只说 "does not match CLI schema 2.2 or 2.3"，迫使客户端用真实 PUT 探针二分。
+    // 现在 422 details 必须带字段级 issues，一次定位。
+    const projectId = await resolveProject();
+    const changeKey = "chg-stage-status-execute-only";
+    const summary = cliSummary(changeKey, "2.3", {
+      stageStatus: {
+        plan: "OK",
+        execute: "OK",
+        review: "ADVISORY",
+        submit: "OK",
+        archive: "OK"
+      }
+    });
+    const zip = archiveZip(changeKey, [{
+      path: "reports/final/summary-data.json",
+      role: "summary",
+      content: JSON.stringify(summary)
+    }]);
+    const packageHash = sha256Bytes(zip);
+
+    const response = await app.inject({
+      method: "PUT",
+      url: `/api/v1/projects/${projectId}/changes/${changeKey}/archive-package`,
+      headers: headers(),
+      payload: zip
+    });
+
+    expect(response.statusCode, response.body).toBe(422);
+    const body = response.json();
+    expect(body).toMatchObject({ error: { code: "ARCHIVE_PACKAGE_INVALID" } });
+    const issues = body.error.details.issues as Array<{ path: string; code: string }>;
+    expect(issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "stageStatus.run" }),
+      expect.objectContaining({ path: "stageStatus.test" })
+    ]));
+    expect(await storage.hasBlob(packageHash)).toBe(false);
+  });
+
+  it("validates a package read-only without persisting anything", async () => {
+    const projectId = await resolveProject();
+    const changeKey = "chg-validate-only";
+    const zip = archiveZip(changeKey, [{
+      path: "reports/final/summary-data.json",
+      role: "summary",
+      content: JSON.stringify(cliSummary(changeKey))
+    }]);
+    const packageHash = sha256Bytes(zip);
+
+    const badSummary = cliSummary(changeKey, "2.3", {
+      stageStatus: { plan: "OK", execute: "OK", review: "OK", submit: "OK", archive: "OK" }
+    });
+    const badZip = archiveZip(changeKey, [{
+      path: "reports/final/summary-data.json",
+      role: "summary",
+      content: JSON.stringify(badSummary)
+    }]);
+    const rejected = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectId}/changes/${changeKey}/archive-package/validate`,
+      headers: headers(),
+      payload: badZip
+    });
+    expect(rejected.statusCode, rejected.body).toBe(422);
+    const issues = rejected.json().error.details.issues as Array<{ path: string }>;
+    expect(issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "stageStatus.run" })
+    ]));
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectId}/changes/${changeKey}/archive-package/validate`,
+      headers: headers(),
+      payload: zip
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({
+      ok: true,
+      change_key: changeKey,
+      package_sha256: packageHash
+    });
+    // 只读：validate 既不能落 CAS，也不能消耗正式上传位——同一包随后 PUT 仍须 201。
+    expect(await storage.hasBlob(packageHash)).toBe(false);
+    const upload = await app.inject({
+      method: "PUT",
+      url: `/api/v1/projects/${projectId}/changes/${changeKey}/archive-package`,
+      headers: headers(),
+      payload: zip
+    });
+    expect(upload.statusCode, upload.body).toBe(201);
+  });
+
   it("accepts the compact summary structure emitted by CLI schema 2.2", async () => {
     const projectId = await resolveProject();
     const changeKey = "chg-real-cli-2-2";

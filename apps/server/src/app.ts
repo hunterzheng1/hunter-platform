@@ -166,6 +166,7 @@ import {
 import {
   archivePackageReceipt,
   ingestArchivePackage,
+  validateArchivePackage as validateIngestArchivePackage,
   loadSemanticSnapshotFiles,
   rebuildStableSemanticSnapshot
 } from "./archive/package-ingest.js";
@@ -2995,6 +2996,48 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
         key: projectId
       });
       return send(reply, requestId, result);
+    }
+  );
+
+  // 只读预检：跑与 PUT 完全相同的包校验（含 summary CLI schema 2.2/2.3），
+  // 但不落盘、不入队、不写审计。配合 422 details 里的字段级 issues，CLI 可以
+  // 在正式上传前以最低成本定位并修掉 schema 违规，而不必用 probe-* change key
+  // 污染正式收据。
+  app.post(
+    "/api/v1/projects/:projectId/changes/:changeKey/archive-package/validate",
+    async (request, reply) => {
+      const { actor, requestId } = await authenticated(request, repository, "push");
+      const { projectId, changeKey } = request.params as { projectId: string; changeKey: string };
+      requireArchiveChangeKey(changeKey);
+      const contentType = request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase();
+      if (contentType !== "application/zip" || !Buffer.isBuffer(request.body)) {
+        throw new ServerDomainError(
+          415,
+          "ARCHIVE_MEDIA_TYPE_UNSUPPORTED",
+          "archive upload must use application/zip"
+        );
+      }
+      // 不存在的项目与 PUT 一样先 404，避免 validate 变成项目枚举探针。
+      await repository.getProject(actor.actorId, projectId);
+      const validated = validateIngestArchivePackage(changeKey, request.body as Buffer, {
+        maxFileBytes: config.maxFileBytes,
+        maxUploadFiles: config.maxUploadFiles,
+        maxPackageBytes: config.maxProposalBytes,
+        maxUncompressedBytes: config.maxProposalBytes
+      });
+      return send(reply, requestId, {
+        statusCode: 200,
+        body: {
+          schema_version: 1,
+          ok: true,
+          project_id: projectId,
+          change_key: changeKey,
+          package_sha256: validated.packageSha256,
+          manifest_sha256: validated.manifestSha256,
+          file_count: validated.files.length,
+          request_id: requestId
+        }
+      });
     }
   );
 

@@ -1396,6 +1396,28 @@ paths:
               schema:
                 $ref: "#/components/schemas/ArchivePackageReceipt"
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/projects/{project_id}/changes/{change_key}/archive-package/validate:
+    post:
+      operationId: validateChangeArchivePackage
+      summary: Run the full archive package validation read-only (no storage, no receipt)
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/ChangeKey"
+        - $ref: "#/components/parameters/RequestId"
+      requestBody:
+        required: true
+        content:
+          application/zip:
+            schema: { type: string, format: binary }
+      responses:
+        "200":
+          description: Package passes the same checks the PUT applies; nothing was stored
+        "415": { description: Request body is not an application/zip buffer }
+        "422":
+          {
+            description: Validation failed; error details carry field-level issues,
+          }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/projects/{project_id}/changes/{change_key}/archive-package/download:
     get:
       operationId: downloadChangeArchivePackage
