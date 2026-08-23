@@ -1366,12 +1366,15 @@ const COPY = {
     } as Record<string, string>,
     phaseNames: {
       plan: "计划",
+      // 2026-08 run+test 合并为 execute；旧名保留用于历史事件。
+      execute: "执行",
       run: "编码",
       test: "测试",
       review: "评审",
       package: "打包",
       apidoc: "接口文档",
       submit: "提交",
+      merge: "合并",
       archive: "归档"
     } as Record<string, string>
   },
@@ -1558,12 +1561,14 @@ const COPY = {
     } as Record<string, string>,
     phaseNames: {
       plan: "Plan",
+      execute: "Execute",
       run: "Code",
       test: "Test",
       review: "Review",
       package: "Package",
       apidoc: "API docs",
       submit: "Submit",
+      merge: "Merge",
       archive: "Archive"
     } as Record<string, string>
   }

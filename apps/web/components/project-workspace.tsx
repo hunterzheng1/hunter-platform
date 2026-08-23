@@ -171,9 +171,14 @@ const JSON_LABELS_ZH: Readonly<Record<string, string>> = {
   finalStatus: "最终状态", finalStatusReasons: "状态说明", releaseEligible: "可发布", riskTier: "风险等级",
   verification: "验证结果", changedFiles: "变更文件", knownRisks: "已知风险", reviewSummary: "评审摘要",
   reviewFindings: "评审发现", stageStatus: "阶段状态", timeline: "时间线", durations: "耗时",
+  decisions: "设计决策",
   efficiency: "效率", releaseDecision: "发布决策", manualActions: "手工操作", maintenanceNotes: "维护说明",
   artifacts: "交付物", ownership: "归属信息", plannedPhases: "计划阶段", lifecycle: "生命周期",
-  build: "构建", tests: "测试", passed: "通过", failed: "失败", owner: "负责人"
+  build: "构建", tests: "测试", passed: "通过", failed: "失败", owner: "负责人",
+  // 工作流阶段名（stageStatus/timeline 等对象的键）；2026-08 起 run+test 合并为
+  // execute，旧名仍见于历史归档。
+  plan: "计划", execute: "执行", run: "编码", test: "测试", review: "评审",
+  package: "打包", apidoc: "接口文档", submit: "提交", merge: "合并", archive: "归档"
 };
 
 function humanizeJsonKey(key: string, lang: "zh" | "en"): string {
