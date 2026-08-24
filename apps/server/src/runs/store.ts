@@ -191,7 +191,10 @@ export function deriveRunStatus(
   if (eventType === "phase_started") return "running";
   if (eventType === "validation_failed") return "failed";
   if (eventType === "phase_ended") {
-    return current === "failed" || current === "partial" ? current : "succeeded";
+    if (current === "failed" || current === "partial") return current;
+    // Stage 12 emits phase_ended after every phase. Only archive completion is a
+    // run terminal; plan/execute/review/... completion leaves the workflow running.
+    return payload.phase === "archive" ? "succeeded" : "running";
   }
   if (eventType === "phase.start") return "running";
   if (eventType === "workflow.end" || eventType === "run.end") {

@@ -112,8 +112,8 @@ postgresDescribe("PgRunStore Stage 12 integration", () => {
         idempotency_key: `sha256:${"d".repeat(64)}` }
     }] });
     await expect(store.getRun(projectId, identity.runId)).resolves.toMatchObject({
-      runStatus: "succeeded", startedAt: "2026-08-13T12:00:01.000Z",
-      lastEventAt: "2026-08-13T12:00:02.000Z", endedAt: "2026-08-13T12:00:02.000Z",
+      runStatus: "running", startedAt: "2026-08-13T12:00:01.000Z",
+      lastEventAt: "2026-08-13T12:00:02.000Z", endedAt: null,
       currentPhase: "plan"
     });
     const next = await store.ingestBatch({ projectId, runId: identity.runId, events: [{

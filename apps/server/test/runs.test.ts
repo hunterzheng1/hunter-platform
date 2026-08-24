@@ -306,7 +306,9 @@ describe("run monitoring (P4)", () => {
       headers: { authorization: "Bearer api-token" },
       payload: { ...base, events: [event("plan_event:start_terminal", 1, "phase_started"),
         event("plan_event:end_terminal", 2, "phase_ended")] } });
-    expect(success.json().run).toMatchObject({ run_status: "succeeded", current_phase: "plan" });
+    expect(success.json().run).toMatchObject({
+      run_status: "running", current_phase: "plan", ended_at: null
+    });
 
     const retryFailed = await app.inject({ method: "POST",
       url: `/api/v1/projects/${projectId}/runs/events:batch`,

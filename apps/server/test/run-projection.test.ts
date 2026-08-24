@@ -156,6 +156,12 @@ describe("run monitoring projection", () => {
   });
 
   it("does not turn a retryable archive attempt into a terminal run failure", () => {
+    expect(deriveRunStatus("running", "phase_ended", {
+      phase: "plan"
+    })).toBe("running");
+    expect(deriveRunStatus("running", "phase_ended", {
+      phase: "archive"
+    })).toBe("succeeded");
     expect(deriveRunStatus("running", "phase.end", {
       phase: "archive",
       status: "FAIL"

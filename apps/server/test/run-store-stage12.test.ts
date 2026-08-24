@@ -149,8 +149,8 @@ describe("RunStore Stage 12 identity", () => {
         idempotency_key: `sha256:${"d".repeat(64)}` }
     }] });
     await expect(store.getRun(identity.projectId, identity.runId)).resolves.toMatchObject({
-      runStatus: "succeeded", startedAt: "2026-08-13T04:00:01Z",
-      lastEventAt: "2026-08-13T04:00:02Z", endedAt: "2026-08-13T04:00:02Z",
+      runStatus: "running", startedAt: "2026-08-13T04:00:01Z",
+      lastEventAt: "2026-08-13T04:00:02Z", endedAt: null,
       currentPhase: "plan"
     });
   });
