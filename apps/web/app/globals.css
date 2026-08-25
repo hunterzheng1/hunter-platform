@@ -8495,7 +8495,8 @@ aside.external-skill-detail-rail {
 .archive-file-content > header { flex: 0 0 auto; padding: 11px 14px; border-bottom: 1px solid var(--line); }
 .archive-file-content .project-file-name { margin: 0 0 3px; color: var(--text-heading); font-size: 14px; font-weight: 700; }
 .archive-file-content .project-file-path { margin-bottom: 7px; color: var(--muted); font-size: 9px; }
-.archive-file-content .project-file-content { flex: 1; max-height: none; min-height: 0; margin: 0; border: 0; border-radius: 0; }
+.archive-file-content .project-file-badges { margin-bottom: 0; }
+.harness-plan-note { margin: 8px 0 0; padding: 8px 11px; border-radius: var(--radius-sm); background: var(--accent-glow); color: var(--accent); font-size: 12px; line-height: 1.5; }
 .archive-content-loading { min-height: 180px; margin: 0; padding: 28px; color: var(--muted); }
 .archive-markdown { flex: 1; max-height: none; min-height: 0; padding: 24px clamp(18px, 4vw, 52px) 40px; overflow: auto; color: var(--text); font-size: 14px; line-height: 1.75; }
 .archive-markdown > :first-child { margin-top: 0; }
@@ -8604,6 +8605,7 @@ aside.external-skill-detail-rail {
 .project-file-badges span { padding: 3px 8px; border-radius: var(--radius-full); background: var(--line); color: var(--muted); font-size: .7rem; }
 .project-file-badges .editable { color: var(--success); background: var(--success-bg); }
 .project-file-badges .readonly { color: var(--warn); background: var(--warn-bg); }
+.project-file-badges .harness-generated { color: var(--accent); background: var(--accent-glow); }
 .project-file-actions { display: flex; gap: 7px; }
 .project-file-actions button { min-height: 44px; padding: 8px 11px; border: 1px solid var(--line); background: var(--bg-raised); color: var(--text); }
 .project-file-actions button:first-child { border-color: var(--accent); color: var(--accent); }

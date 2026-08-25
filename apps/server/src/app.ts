@@ -2920,15 +2920,22 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
         // 这条路由收的是生产归档器（harness_archive.py）产出的 core-v1 包。此前它被
         // v2 校验器在第一道闸就拒掉，错误又被这里的 catch 咽成一条 warn，于是队列
         // 从未收到过任何作业——change_documents 与 results 长期为空的真正原因。
+        // 现在把入队结果显式带回收据：客户端能看到知识提取是否真的进了队列，而不是
+        // 只看到旧的 in-process 语义投影状态。
+        let knowledgeEnqueue: { status: "enqueued" | "skipped" | "failed"; reason_code?: string } = {
+          status: "skipped",
+          reason_code: "KNOWLEDGE_PIPELINE_DISABLED"
+        };
         if (options.knowledgePipeline !== undefined) {
           try {
             const manifestEntry = new AdmZip(request.body as Buffer).getEntry("archive-manifest.json");
             const projectVersion =
               (await repository.getProject(actor.actorId, projectId)).latestProjectVersion;
             if (manifestEntry === null) {
-              // 不是归档包形态，没有可入队的东西。
+              knowledgeEnqueue = { status: "skipped", reason_code: "ARCHIVE_MANIFEST_MISSING" };
             } else if (projectVersion === null) {
               // 宁可不入队，也不为了凑一个 NOT NULL 列去编造 as-of 版本。
+              knowledgeEnqueue = { status: "skipped", reason_code: "PROJECT_VERSION_MISSING" };
               request.log.warn(
                 { project_id: projectId, change_key: changeKey },
                 "knowledge enqueue skipped: project has no version to file the archive against");
@@ -2953,6 +2960,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
                 validatedAt: new Date().toISOString()
               });
               if (validated === null) {
+                knowledgeEnqueue = { status: "skipped", reason_code: "ARCHIVE_IDENTITY_MISMATCH" };
                 request.log.warn({ project_id: projectId, change_key: changeKey },
                   "archive manifest identity differs from route binding; knowledge enqueue skipped");
               } else {
@@ -2969,9 +2977,16 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
                   prompt_version: KNOWLEDGE_PIPELINE_PROMPT_VERSION,
                   index_schema_version: KNOWLEDGE_PIPELINE_INDEX_SCHEMA_VERSION
                 });
+                knowledgeEnqueue = { status: "enqueued" };
               }
             }
           } catch (error) {
+            knowledgeEnqueue = {
+              status: "failed",
+              reason_code: error instanceof Error && /^[A-Z][A-Z0-9_]{0,127}$/u.test(error.message)
+                ? error.message
+                : "KNOWLEDGE_ENQUEUE_FAILED"
+            };
             request.log.warn({ err: error }, "knowledge queue enqueue failed; in-process projection remains authoritative");
           }
         }
@@ -2985,10 +3000,11 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
             change_key: changeKey,
             package_sha256: receipt.package_sha256,
             stored_files: receipt.stored_files,
-            knowledge_status: receipt.knowledge_status
+            knowledge_status: receipt.knowledge_status,
+            knowledge_enqueue: knowledgeEnqueue
           }
         });
-        return { statusCode: 201, body: { ...receipt } };
+        return { statusCode: 201, body: { ...receipt, knowledge_enqueue: knowledgeEnqueue } };
       }, undefined, {
         actorId: "internal:archive-package",
         method: "ARCHIVE",

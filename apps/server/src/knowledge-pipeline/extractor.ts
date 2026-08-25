@@ -10,7 +10,7 @@ import type {
 import type { ArchiveStore } from "./ports.js";
 import type { StoredArchive } from "./types.js";
 import type { KnowledgeResultDraft } from "./types.js";
-import { deriveKnowledgeCandidatesFromSummary } from "./summary-candidates.js";
+import { deriveKnowledgeCandidatesFromSummary, derivePlanKnowledgeFromArchive } from "./summary-candidates.js";
 import { KnowledgePipelineError } from "./errors.js";
 
 /** 与服务端入库裁决同一阈值（semantic/knowledge-judge 的 DEFAULT_MIN_CONFIDENCE）。 */
@@ -42,15 +42,32 @@ function derivedCandidates(archive: StoredArchive): readonly KnowledgeCandidate[
   } catch {
     return [];
   }
-  return deriveKnowledgeCandidatesFromSummary({
+  const summaryCandidates = deriveKnowledgeCandidatesFromSummary({
     summary,
     changeKey: archive.change_key,
     archiveId: archive.archive_id,
     producerVersion: String(archive.archive_schema_version),
-    // Bound to the archive, never to wall-clock: the same stored package must
-    // derive the same candidates on every run.
     createdAt: archive.stored_at
   });
+  // Merge plan-derived candidates (soft-fail: empty plans still produce a valid output).
+  const planCandidates = derivePlanKnowledgeFromArchive(
+    archive.package_bytes,
+    {
+      changeKey: archive.change_key,
+      archiveId: archive.archive_id,
+      producerVersion: String(archive.archive_schema_version),
+      createdAt: archive.stored_at
+    }
+  );
+  const existingIds = new Set(summaryCandidates.map((c) => c.candidate_id));
+  const merged = [...summaryCandidates];
+  for (const candidate of planCandidates) {
+    if (!existingIds.has(candidate.candidate_id)) {
+      existingIds.add(candidate.candidate_id);
+      merged.push(candidate);
+    }
+  }
+  return merged;
 }
 
 /** Freeze the effective candidate set before Archive and Job persistence. */

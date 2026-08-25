@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import { Buffer } from "node:buffer";
 
 import type { KnowledgeCandidate } from "@hunter-harness/contracts";
+import AdmZip from "adm-zip";
 
 /**
  * Derive knowledge candidates from an archived `reports/final/summary-data.json`.
@@ -236,5 +238,285 @@ export function deriveKnowledgeCandidatesFromSummary(
     }
   }
 
+  return candidates;
+}
+
+// --- plan/design-derived knowledge candidates ---------------------------------
+// mirrors harness/scripts/harness_knowledge_candidates.py build_plan_candidates.
+
+const PLAN_CONFIDENCE = 0.85;
+const PLAN_SOURCE_KIND = "plan" as const;
+
+function unescapeMarkdown(value: string): string {
+  return value
+    .replace(/&lt;/gu, "<")
+    .replace(/&gt;/gu, ">")
+    .replace(/&amp;/gu, "&")
+    .replace(/<br>/gu, "\n")
+    .replace(/\\`/gu, "`")
+    .replace(/\\#/gu, "#")
+    .replace(/\\\*/gu, "*")
+    .replace(/\\\[/gu, "[")
+    .replace(/\\\]/gu, "]")
+    .replace(/\\\\/gu, "\\");
+}
+
+function markdownSections(text: string): Map<string, string[]> {
+  const sections = new Map<string, string[]>();
+  let current: string | undefined;
+  for (const line of text.split("\n")) {
+    if (line.startsWith("## ") && !line.startsWith("### ")) {
+      current = line.slice(3).trim();
+      sections.set(current, []);
+    } else if (current !== undefined) {
+      sections.get(current)?.push(line);
+    }
+  }
+  return sections;
+}
+
+function planSourceRefs(changeKey: string, packagePath: string): string[] {
+  return [packagePath];
+}
+
+function makePlanCandidate(input: {
+  changeKey: string;
+  archiveId: string;
+  producerVersion: string;
+  createdAt: string;
+  kind: string;
+  entryType: KnowledgeCandidate["entry_type"];
+  summary: string;
+  body: string;
+  keywords: string[];
+  sourceRefs: string[];
+  reusabilityScope?: string;
+}): KnowledgeCandidate {
+  const canonical = JSON.stringify({
+    body: input.body,
+    entry_type: input.entryType,
+    keywords: input.keywords,
+    summary: input.summary
+  });
+  const contentHash = `sha256:${createHash("sha256").update(canonical, "utf8").digest("hex")}`;
+  const identity = `${input.changeKey}\0${input.kind}\0${input.summary}`;
+  const candidateId = `kc_${createHash("sha256").update(identity, "utf8").digest("hex").slice(0, 32)}`;
+  return {
+    schema_version: SCHEMA_VERSION,
+    candidate_id: candidateId,
+    source_change_key: input.changeKey,
+    source_refs: input.sourceRefs,
+    summary: input.summary,
+    reusability_scope: input.reusabilityScope ?? "project",
+    content_hash: contentHash,
+    confidence: PLAN_CONFIDENCE,
+    status: "pending",
+    entry_type: input.entryType,
+    body: input.body,
+    keywords: [...new Set(input.keywords)].filter(Boolean),
+    provenance: {
+      source_kind: PLAN_SOURCE_KIND,
+      source_ref: `archive:${input.archiveId}`,
+      producer: PRODUCER,
+      producer_version: input.producerVersion,
+      created_at: input.createdAt
+    }
+  } as KnowledgeCandidate;
+}
+
+function requirementsFromDesign(
+  designText: string,
+  input: { changeKey: string; archiveId: string; producerVersion: string; createdAt: string }
+): KnowledgeCandidate[] {
+  const sections = markdownSections(designText);
+  const lines = sections.get("Requirements") ?? [];
+  const out: KnowledgeCandidate[] = [];
+  for (const line of lines) {
+    const stripped = line.trim();
+    if (!stripped.startsWith("- ")) continue;
+    const prefix = stripped.slice(2);
+    const closeBracket = prefix.indexOf("]");
+    if (closeBracket <= 0 || !prefix.startsWith("requirement:")) continue;
+    const kind = prefix.slice(1, closeBracket).trim();
+    if (kind !== "behavior" && kind !== "invariant" && kind !== "failure_behavior") continue;
+    const colon = prefix.indexOf(": ", closeBracket + 1);
+    if (colon === -1) continue;
+    const text = unescapeMarkdown(prefix.slice(colon + 2).trim());
+    if (!text) continue;
+    out.push(makePlanCandidate({
+      ...input,
+      kind: "requirement",
+      entryType: "requirement",
+      summary: text,
+      body: `需求类型：${kind}\n${text}`,
+      keywords: [kind, "requirement"],
+      sourceRefs: planSourceRefs(input.changeKey, `plans/${input.changeKey}-design.md`)
+    }));
+  }
+  return out;
+}
+
+function risksFromDesign(
+  designText: string,
+  input: { changeKey: string; archiveId: string; producerVersion: string; createdAt: string }
+): KnowledgeCandidate[] {
+  const sections = markdownSections(designText);
+  const lines = sections.get("Risks") ?? [];
+  const out: KnowledgeCandidate[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const stripped = lines[index]?.trim() ?? "";
+    if (!stripped.startsWith("- ")) continue;
+    const risk = unescapeMarkdown(stripped.slice(2).trim());
+    if (!risk || risk === "None.") continue;
+    let mitigation = "";
+    const next = lines[index + 1]?.trim() ?? "";
+    if (next.startsWith("- Mitigation:")) {
+      mitigation = unescapeMarkdown(next.slice("- Mitigation:".length).trim());
+      index += 1;
+    }
+    out.push(makePlanCandidate({
+      ...input,
+      kind: "risk",
+      entryType: "risk",
+      summary: risk,
+      body: mitigation ? `${risk}\n缓解：${mitigation}` : risk,
+      keywords: ["risk"],
+      sourceRefs: planSourceRefs(input.changeKey, `plans/${input.changeKey}-design.md`)
+    }));
+  }
+  return out;
+}
+
+function invariantsFromDesign(
+  designText: string,
+  input: { changeKey: string; archiveId: string; producerVersion: string; createdAt: string }
+): KnowledgeCandidate[] {
+  const sections = markdownSections(designText);
+  const out: KnowledgeCandidate[] = [];
+  for (const line of sections.get("Invariants") ?? []) {
+    const stripped = line.trim();
+    if (!stripped.startsWith("- ")) continue;
+    const text = unescapeMarkdown(stripped.slice(2).trim());
+    if (!text || text === "None.") continue;
+    out.push(makePlanCandidate({
+      ...input,
+      kind: "invariant",
+      entryType: "requirement",
+      summary: text,
+      body: `需求类型：invariant\n${text}`,
+      keywords: ["invariant", "requirement"],
+      sourceRefs: planSourceRefs(input.changeKey, `plans/${input.changeKey}-design.md`)
+    }));
+  }
+  return out;
+}
+
+function tasksFromPlan(
+  planText: string,
+  input: { changeKey: string; archiveId: string; producerVersion: string; createdAt: string }
+): KnowledgeCandidate[] {
+  const sections = markdownSections(planText);
+  const lines = sections.get("Tasks") ?? [];
+  const out: KnowledgeCandidate[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    const stripped = lines[index]?.trim() ?? "";
+    if (!stripped.startsWith("### ")) { index += 1; continue; }
+    const taskId = stripped.slice(4).trim();
+    index += 1;
+    const parts: string[] = [];
+    while (index < lines.length) {
+      const current = lines[index]?.trim() ?? "";
+      if (current.startsWith("### ") || current.startsWith("- ")) break;
+      if (current) parts.push(current);
+      index += 1;
+    }
+    const objective = parts.join(" ").trim();
+    if (!objective) continue;
+    out.push(makePlanCandidate({
+      ...input,
+      kind: "task",
+      entryType: "implementation",
+      summary: objective,
+      body: `任务：${taskId}\n${objective}`,
+      keywords: [taskId, "implementation"],
+      sourceRefs: planSourceRefs(input.changeKey, `plans/${input.changeKey}-plan.md`)
+    }));
+  }
+  return out;
+}
+
+function scenariosFromTestScenarios(
+  scenariosText: string,
+  input: { changeKey: string; archiveId: string; producerVersion: string; createdAt: string }
+): KnowledgeCandidate[] {
+  const out: KnowledgeCandidate[] = [];
+  for (const line of scenariosText.split("\n")) {
+    const stripped = line.trim();
+    if (!stripped.startsWith("## ") || stripped.startsWith("### ")) continue;
+    const heading = stripped.slice(3).trim();
+    if (heading === "Coverage" || !heading.includes(":")) continue;
+    const [scenarioId, title] = [heading.slice(0, heading.indexOf(":")), heading.slice(heading.indexOf(":") + 1)];
+    if (!title?.trim()) continue;
+    out.push(makePlanCandidate({
+      ...input,
+      kind: "scenario",
+      entryType: "test-evidence",
+      summary: title.trim(),
+      body: `场景：${scenarioId?.trim() ?? ""}\n${title.trim()}`,
+      keywords: [scenarioId?.trim() ?? "", "test-evidence"],
+      sourceRefs: planSourceRefs(input.changeKey, `plans/${input.changeKey}-test-scenarios.md`)
+    }));
+  }
+  return out;
+}
+
+/**
+ * Derive knowledge candidates from the archive's plans/*.md artifacts.
+ *
+ * Complements deriveKnowledgeCandidatesFromSummary. Archives that carry no
+ * review findings still have design/plan/test-scenarios worth remembering.
+ * Returns [] for missing or unparseable files (soft-fail).
+ */
+export function derivePlanKnowledgeFromArchive(packageBytes: Uint8Array, input: {
+  changeKey: string;
+  archiveId: string;
+  producerVersion: string;
+  createdAt: string;
+}): KnowledgeCandidate[] {
+  const candidates: KnowledgeCandidate[] = [];
+  const seen = new Set<string>();
+  const collect = (items: KnowledgeCandidate[]): void => {
+    for (const candidate of items) {
+      if (seen.has(candidate.candidate_id)) continue;
+      seen.add(candidate.candidate_id);
+      candidates.push(candidate);
+    }
+  };
+  try {
+    const zip = new AdmZip(Buffer.from(packageBytes));
+    const designPath = `plans/${input.changeKey}-design.md`;
+    const designEntry = zip.getEntry(designPath);
+    if (designEntry) {
+      const designText = new TextDecoder("utf-8", { fatal: true }).decode(designEntry.getData());
+      collect(requirementsFromDesign(designText, input));
+      collect(risksFromDesign(designText, input));
+      collect(invariantsFromDesign(designText, input));
+    }
+    const planPath = `plans/${input.changeKey}-plan.md`;
+    const planEntry = zip.getEntry(planPath);
+    if (planEntry) {
+      const planText = new TextDecoder("utf-8", { fatal: true }).decode(planEntry.getData());
+      collect(tasksFromPlan(planText, input));
+    }
+    const scenariosPath = `plans/${input.changeKey}-test-scenarios.md`;
+    const scenariosEntry = zip.getEntry(scenariosPath);
+    if (scenariosEntry) {
+      const scenariosText = new TextDecoder("utf-8", { fatal: true }).decode(scenariosEntry.getData());
+      collect(scenariosFromTestScenarios(scenariosText, input));
+    }
+  } catch {
+    // Soft-fail: plans are optional knowledge sources.
+  }
   return candidates;
 }
