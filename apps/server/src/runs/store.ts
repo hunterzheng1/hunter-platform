@@ -225,7 +225,7 @@ export function deriveCanonicalRunAggregate(events: readonly RunEventRecord[]): 
   RunRecord,
   "startedAt" | "lastEventAt" | "currentPhase" | "runStatus" | "endedAt" | "serverCursor"
 > {
-  const phases = ["plan", "run", "test", "review", "package", "apidoc", "submit", "merge", "archive"];
+  const phases = ["plan", "execute", "run", "test", "review", "package", "apidoc", "submit", "merge", "archive"];
   const ordered = [...events].sort((left, right) => {
     if (left.planEvent !== null && right.planEvent !== null) {
       return phases.indexOf(left.planEvent.phase) - phases.indexOf(right.planEvent.phase) ||

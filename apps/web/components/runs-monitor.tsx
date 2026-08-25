@@ -71,10 +71,10 @@ function durationMs(run: RunSummary, now: number): number | null {
 
 /**
  * harness CLI 的阶段模板（Hunter-Harness harness/scripts/harness_phase.py 的 PHASE_ORDER）。
- * 通用工作流只有 6 个阶段；package / apidoc 是 workflow-policy.json 里的条件阶段（如 java overlay），
- * 仅当事件流或 current_phase 中实际出现时才插入到规范位置。
+ * v2 的 execute 替换了 v1 的 run+test；两套名都保留在模板中，事件流中实际出现的
+ * 阶段名决定显示哪个。
  */
-const HARNESS_PHASE_ORDER = ["plan", "run", "test", "review", "package", "apidoc", "submit", "archive"] as const;
+const HARNESS_PHASE_ORDER = ["plan", "execute", "run", "test", "review", "package", "apidoc", "submit", "archive"] as const;
 const CONDITIONAL_PHASES = new Set(["package", "apidoc"]);
 
 type PhaseState = "done" | "active" | "preparing" | "failed" | "warning" | "stale" | "pending";
