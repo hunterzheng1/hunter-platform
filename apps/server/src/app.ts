@@ -3004,7 +3004,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
             knowledge_enqueue: knowledgeEnqueue
           }
         });
-        return { statusCode: 201, body: { ...receipt, knowledge_enqueue: knowledgeEnqueue } };
+        return { statusCode: 201, body: { ...receipt } };
       }, undefined, {
         actorId: "internal:archive-package",
         method: "ARCHIVE",
