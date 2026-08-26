@@ -36,31 +36,44 @@ describe("skill package contracts", () => {
     }).success).toBe(false);
   });
 
-  it("requires all four variants in an npm manifest v3", () => {
+  it("requires the four legacy variants in an npm manifest v3 and accepts an optional pi variant", () => {
     const baseVariant = {
       status: "ready" as const,
       adapterVersion: "1",
       buildHash: null,
       components: ["skill"]
     };
-    const parsed = skillPackageManifestV3Schema.parse({
-      schema_version: 3,
+    const legacyOnly = {
+      schema_version: 3 as const,
       slug: "demo",
       version: "1.0.0",
       files: [{ path: "skill/SKILL.md", sha256: "sha256:" + "a".repeat(64), size: 10 }],
-      components: [{ role: "skill", source: "." }],
+      components: [{ role: "skill" as const, source: "." }],
       variants: {
         "claude-code": baseVariant,
         codex: baseVariant,
         cursor: baseVariant,
         codebuddy: baseVariant
       }
-    });
-    expect(Object.keys(parsed.variants)).toEqual([
+    };
+    const parsedLegacy = skillPackageManifestV3Schema.parse(legacyOnly);
+    expect(Object.keys(parsedLegacy.variants)).toEqual([
       "claude-code",
       "codex",
       "cursor",
       "codebuddy"
     ]);
+
+    const parsedWithPi = skillPackageManifestV3Schema.parse({
+      ...legacyOnly,
+      variants: { ...legacyOnly.variants, pi: baseVariant }
+    });
+    expect(Object.keys(parsedWithPi.variants)).toContain("pi");
+
+    const missingLegacy = skillPackageManifestV3Schema.safeParse({
+      ...legacyOnly,
+      variants: { codex: baseVariant, cursor: baseVariant, codebuddy: baseVariant, pi: baseVariant }
+    });
+    expect(missingLegacy.success).toBe(false);
   });
 });

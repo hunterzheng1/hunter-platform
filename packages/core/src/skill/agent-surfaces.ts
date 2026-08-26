@@ -46,6 +46,18 @@ const SURFACES: Readonly<Record<SkillTargetAgent, AgentSurface>> = Object.freeze
     subagentFormat: "markdown",
     subagentExtension: ".md",
     nativeSkillAliases: Object.freeze([])
+  }),
+  pi: Object.freeze({
+    agent: "pi",
+    // pi 全局技能目录是 ~/.pi/agent/skills（另原生发现 ~/.agents/skills），
+    // 项目级技能目录是 .pi/skills（另原生发现 .agents/skills）。
+    skillRoots: Object.freeze({ project: ".pi/skills", user: ".pi/agent/skills" }),
+    // pi-subagents 全局代理目录是 ~/.pi/agent/agents（或 ~/.agents），
+    // 项目级代理目录是 .pi/agents。
+    subagentRoots: Object.freeze({ project: ".pi/agents", user: ".pi/agent/agents" }),
+    subagentFormat: "markdown",
+    subagentExtension: ".md",
+    nativeSkillAliases: Object.freeze([".agents/skills"])
   })
 });
 
@@ -106,5 +118,6 @@ export const SKILL_TARGET_AGENTS = Object.freeze([
   "claude-code",
   "codex",
   "cursor",
-  "codebuddy"
+  "codebuddy",
+  "pi"
 ] as const satisfies readonly SkillTargetAgent[]);

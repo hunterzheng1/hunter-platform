@@ -397,7 +397,7 @@ const MOCK_MANIFEST_FILES: Record<string, ArtifactManifestModel["files"]> = {
 
 const DELAY_MS = 60; // 保留一点异步感，但不再拖慢切换体验（原 400ms 叠加多请求导致明显卡顿）
 
-const ALL_AGENTS: RegistryAgent[] = ["claude-code", "codex", "cursor", "generic", "mcp"];
+const ALL_AGENTS: RegistryAgent[] = ["claude-code", "codex", "cursor", "codebuddy", "pi", "generic", "mcp"];
 
 // sap-field-mapper demo 元数据（原 canonical IR 字段，现作为纯展示常量；源文件见 sapFieldMapper.source.files）。
 const SAP_FIELD_MAPPER_DESCRIPTION = "Extract SAP/S4 table and field references from Markdown and build entity-class mapping tables.";

@@ -159,7 +159,7 @@ export function validateAndIndexSourceFiles(sourceFiles: SourceFile[]): Record<s
 }
 
 export function trustedWorkflowFindingAllowed(finding: SensitiveFinding): boolean {
-  const agentRoot = "(?:(?:general|java)/)?(?:claude-code|codebuddy|codex|cursor)";
+  const agentRoot = "(?:(?:general|java)/)?(?:claude-code|codebuddy|codex|cursor|pi)";
   if (finding.rule_id === "HH_WINDOWS_ABSOLUTE_PATH") {
     return new RegExp(
       `^${agentRoot}/(?:contracts/fixtures/managed-execution\\.json|harness-test/(?:checklist|reference)\\.md|protocols/powershell-protocol\\.md)$`

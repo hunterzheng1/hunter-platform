@@ -12,7 +12,7 @@ export const instructionProposalRequestSchema = z.object({
   schema_version: z.literal(1),
   language: z.literal("zh-CN").default("zh-CN"),
   project_profile: z.string().min(1).max(100),
-  adapters: z.array(z.enum(["codex", "claude-code", "cursor", "codebuddy"])).max(4),
+  adapters: z.array(z.enum(["codex", "claude-code", "cursor", "codebuddy", "pi"])).max(5),
   documents: z.array(z.object({
     path: z.enum([
       "AGENTS.md",

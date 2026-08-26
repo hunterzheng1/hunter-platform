@@ -664,7 +664,7 @@ export function SkillDetail({ api: apiValue, skillId }: { api?: HunterApi; skill
   useEffect(() => {
     const stored = globalThis.localStorage?.getItem("hunter-harness-install-agent")
       ?? globalThis.localStorage?.getItem("hunter-harness-default-agent");
-    if (stored === "claude-code" || stored === "cursor" || stored === "codex" || stored === "codebuddy") setInstallAgent(stored as DemoAgent);
+    if (stored === "claude-code" || stored === "cursor" || stored === "codex" || stored === "codebuddy" || stored === "pi") setInstallAgent(stored as DemoAgent);
     void refresh();
     void refreshDraft();
   }, [api, skillId]);

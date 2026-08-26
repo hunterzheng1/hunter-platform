@@ -32,7 +32,7 @@ const AI_JOB_POLL_INTERVAL_MS = 1_000;
 const AI_JOB_POLL_TIMEOUT_MS = 150_000;
 
 function isSkillTargetAgent(agent: RegistryAgent): agent is SkillTargetAgent {
-  return agent === "claude-code" || agent === "codex" || agent === "cursor" || agent === "codebuddy";
+  return agent === "claude-code" || agent === "codex" || agent === "cursor" || agent === "codebuddy" || agent === "pi";
 }
 
 function checkStatusCopy(status: "green" | "yellow" | "red", t: ReturnType<typeof useI18n>["t"]["skillDetail"]): { title: string; description: string } {

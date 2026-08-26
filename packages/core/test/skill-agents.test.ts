@@ -11,12 +11,13 @@ describe("native skill agent destinations", () => {
       .toBe(".codebuddy/skills/demo/");
   });
 
-  it("exposes only the four native agents as new install targets", () => {
+  it("exposes only the five native agents as new install targets", () => {
     expect(INSTALLABLE_AGENTS).toEqual([
       "claude-code",
       "codex",
       "cursor",
-      "codebuddy"
+      "codebuddy",
+      "pi"
     ]);
   });
 });

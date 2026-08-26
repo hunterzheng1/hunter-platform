@@ -329,7 +329,8 @@ const detailAgents: Array<{ value: DemoAgent; label: string }> = [
   { value: "claude-code", label: "Claude Code" },
   { value: "codex", label: "Codex" },
   { value: "cursor", label: "Cursor" },
-  { value: "codebuddy", label: "CodeBuddy" }
+  { value: "codebuddy", label: "CodeBuddy" },
+  { value: "pi", label: "pi" }
 ];
 
 function agentLabel(agent: DemoAgent): string {

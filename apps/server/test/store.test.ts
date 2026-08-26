@@ -804,7 +804,7 @@ describe("RegistryStore legacy snapshot compatibility + listSkills", () => {
     await store.initialize();
     const skill = store.getSkill("harness-x");
     expect(skill).not.toHaveProperty("category");
-    expect(skill.agents).toHaveLength(4); // 新模型：所有 installable agent（fallback default）
+    expect(skill.agents).toHaveLength(5); // 新模型：所有 installable agent（fallback default，含 pi）
     expect(skill.agents.some((a) => a.agent === CC && a.isDefault)).toBe(true);
     expect(skill.defaultAgent).toBe(CC);
     expect(skill.agents[0]?.latestVersion).toBe("1.0.0");
