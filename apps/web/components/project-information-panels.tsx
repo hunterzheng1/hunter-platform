@@ -287,7 +287,7 @@ function MaterialFileList({ items, lang, select, expandForSearch }: { items: rea
   const c = COPY[lang];
   const groups = new Map<MaterialItem["category"], MaterialItem[]>();
   for (const item of items) {
-    if (item.item_kind !== "project_material") continue;
+    if (item.item_kind !== "project_material" || /\.json$/iu.test(item.path)) continue;
     const group = groups.get(item.category) ?? [];
     group.push(item);
     groups.set(item.category, group);

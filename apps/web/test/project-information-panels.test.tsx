@@ -51,7 +51,7 @@ describe("project information panels", () => {
   it("paginates materials and loads body only after selecting a reference", async () => {
     const list = vi.fn(async (_project: string, _view: PlatformInformationPage["view"], query?: { cursor?: string | null }) => page("project_materials", [{
       item_kind: "project_material", material_id: query?.cursor ? "mat_rule" : "mat_map",
-      category: query?.cursor ? "rule" : "architecture_map", path: query?.cursor ? "AGENTS.md" : ".harness/codebase/map.json",
+      category: query?.cursor ? "rule" : "architecture_map", path: query?.cursor ? "AGENTS.md" : ".harness/codebase/map.md",
       blob_ref: { blob_hash: `sha256:${"a".repeat(64)}`, snapshot_version: "pv_2" }, source_branch_name: "develop",
       source_commit_sha: "b".repeat(40), sort_key: query?.cursor ? "rule" : "map"
     }], query?.cursor ? null : "cursor_page_two_1"));
@@ -60,9 +60,9 @@ describe("project information panels", () => {
     } } as const));
     render(<ProjectMaterialsInformationPanel api={api({ listPlatformInformation: list, getPlatformInformationDetail: detail })} projectId="prj_one" lang="en" />);
 
-    expect(await screen.findByText("map.json")).toBeInTheDocument();
+    expect(await screen.findByText("map.md")).toBeInTheDocument();
     expect(detail).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Open map.json" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open map.md" }));
     expect(await screen.findByRole("heading", { name: "Architecture map" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Load more" }));
     expect(await screen.findByText("AGENTS.md")).toBeInTheDocument();
@@ -72,7 +72,8 @@ describe("project information panels", () => {
   it("lists material filenames without directory segments and previews Markdown as a readable document", async () => {
     const materials = [
       { item_kind: "project_material" as const, material_id: "readme", category: "rule" as const, path: "docs/guide/README.md", blob_ref: { blob_hash: `sha256:${"a".repeat(64)}`, snapshot_version: "pv_1" }, source_branch_name: "main", source_commit_sha: "b".repeat(40), sort_key: "readme" },
-      { item_kind: "project_material" as const, material_id: "note", category: "instruction" as const, path: "docs/notes.md", blob_ref: { blob_hash: `sha256:${"a".repeat(64)}`, snapshot_version: "pv_1" }, source_branch_name: "main", source_commit_sha: "b".repeat(40), sort_key: "note" }
+      { item_kind: "project_material" as const, material_id: "note", category: "instruction" as const, path: "docs/notes.md", blob_ref: { blob_hash: `sha256:${"a".repeat(64)}`, snapshot_version: "pv_1" }, source_branch_name: "main", source_commit_sha: "b".repeat(40), sort_key: "note" },
+      { item_kind: "project_material" as const, material_id: "map", category: "architecture_map" as const, path: ".harness/codebase/map.json", blob_ref: { blob_hash: `sha256:${"a".repeat(64)}`, snapshot_version: "pv_1" }, source_branch_name: "main", source_commit_sha: "b".repeat(40), sort_key: "map" }
     ];
     render(<ProjectMaterialsInformationPanel api={api({
       listPlatformInformation: vi.fn(async () => page("project_materials", materials)),
@@ -81,7 +82,8 @@ describe("project information panels", () => {
 
     expect(await screen.findByRole("button", { name: "打开 README.md" })).not.toHaveAttribute("title");
     expect(screen.getByRole("button", { name: "打开 notes.md" })).toBeInTheDocument();
-    expect(screen.getByText("规则").closest("details")).not.toHaveAttribute("open");
+    expect(screen.queryByRole("button", { name: "打开 map.json" })).not.toBeInTheDocument();
+    expect(screen.queryByText("架构事实")).not.toBeInTheDocument();
     expect(screen.getByText("指令").closest("details")).not.toHaveAttribute("open");
     expect(screen.queryByText("docs")).not.toBeInTheDocument();
     expect(screen.queryByText("guide")).not.toBeInTheDocument();
