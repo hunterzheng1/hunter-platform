@@ -6,6 +6,8 @@ import type {
   PlatformInformationPage,
 } from "@hunter-harness/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import { ApiClientError, type HunterApi } from "../lib/api";
 import { WorkspaceFilterBar, WorkspaceState } from "./project-workspace-shell";
@@ -25,7 +27,7 @@ const COPY = {
     files: "个文件", changed: "项变化", source: "来源", relations: "个关系", archive: "归档引用", documents: "变更文档", candidates: "治理候选",
     detailLoading: "正在按需加载详情", choose: "选择一项查看详情。", document: "文档", unavailableFiles: "当前 HTTP Interface 尚未暴露快照文件 locator；不会回退到旧的全量项目文件接口。",
     unavailableDiff: "当前 HTTP Interface 尚未接通可信版本差异 locator。", unavailableDownload: "归档身份已就绪，但认证下载 client 尚未接通。",
-    documentLoading: "正在按需加载变更文档", documentFailure: "变更文档暂时无法加载，请重试。", documentUnsupported: "当前 API client 不支持加载变更文档详情。"
+    documentLoading: "正在按需加载变更文档", documentFailure: "变更文档暂时无法加载，请重试。", documentUnsupported: "当前 API client 不支持加载变更文档详情。", remoteImageBlocked: "为保护隐私，已阻止加载远程图片"
   },
   en: {
     loading: "Loading", empty: "Nothing here yet", emptyHint: "This view currently has no results.", processing: "Data is still processing",
@@ -37,7 +39,7 @@ const COPY = {
     files: "files", changed: "changed", source: "Source", relations: "relations", archive: "Archive reference", documents: "Change documents", candidates: "Governance candidates",
     detailLoading: "Loading detail on demand", choose: "Select an item to view its detail.", document: "document", unavailableFiles: "The HTTP interface does not expose a trusted snapshot-file locator yet; the legacy unbounded project-file API is not used.",
     unavailableDiff: "The HTTP interface does not expose a trusted version-diff locator yet.", unavailableDownload: "Archive identity is available, but the authenticated download client is not wired yet.",
-    documentLoading: "Loading change document on demand", documentFailure: "The change document could not be loaded. Try again.", documentUnsupported: "Change document detail is not supported by this API client."
+    documentLoading: "Loading change document on demand", documentFailure: "The change document could not be loaded. Try again.", documentUnsupported: "Change document detail is not supported by this API client.", remoteImageBlocked: "Remote image blocked for privacy"
   }
 } as const;
 
@@ -93,8 +95,10 @@ function machineLabel(value: string, lang: Lang): string {
 
 interface PanelProps { api: HunterApi; projectId: string; lang: Lang }
 
-function InformationPanel({ api, projectId, lang, view, title, renderItem, emptyTechnical, onDetail, onDetailStart, onDetailReset, onDetailError }: PanelProps & {
-  view: View; title: string; renderItem(item: Item, select: (id: string) => void): React.ReactNode; emptyTechnical?: { label: string; value: string };
+function InformationPanel({ api, projectId, lang, view, title, renderItem, renderList, emptyTechnical, onDetail, onDetailStart, onDetailReset, onDetailError }: PanelProps & {
+  view: View; title: string; renderItem(item: Item, select: (id: string) => void): React.ReactNode;
+  renderList?: (items: readonly Item[], select: (id: string) => void) => React.ReactNode;
+  emptyTechnical?: { label: string; value: string };
   onDetail?: (detail: PlatformInformationDetailResponse) => void;
   onDetailStart?: () => void;
   onDetailReset?: () => void;
@@ -230,7 +234,7 @@ function InformationPanel({ api, projectId, lang, view, title, renderItem, empty
   const content = <div className="information-panel-grid">
     <section className="information-list" aria-label={title}>
       <WorkspaceFilterBar label={c.filter} placeholder={c.filterPlaceholder} query={query} onQueryChange={setQuery} />
-      <div className="information-list-items">{filtered.map((item) => <div key={itemIdentity(item)}>{renderItem(item, (id) => void select(id))}</div>)}</div>
+      <div className="information-list-items">{renderList === undefined ? filtered.map((item) => <div key={itemIdentity(item)}>{renderItem(item, (id) => void select(id))}</div>) : renderList(filtered, (id) => void select(id))}</div>
       {bounded ? <p className="information-list-bounded" role="status">{c.bounded}</p> : null}
       {cursor !== null && paginationError === null ? <button className="information-load-more" type="button" disabled={loadingMore} onClick={() => void load(cursor, true)}>{c.loadMore}</button> : null}
     </section>
@@ -245,6 +249,21 @@ function InformationPanel({ api, projectId, lang, view, title, renderItem, empty
   return paginationError === null ? content : <div className="information-pagination-failure"><WorkspaceState technicalDetailsLabel={c.technical} state={{ kind: "error", title: c.error, description: c.paginationFailure, technicalDetails: technical(paginationError) }} />{cursor === null ? null : <button type="button" onClick={() => void load(cursor, true)}>{c.retryMore}</button>}{content}</div>;
 }
 
+function MarkdownPreview({ content, lang }: { content: string; lang: Lang }) {
+  const c = COPY[lang];
+  return <article className="information-markdown"><ReactMarkdown
+    remarkPlugins={[remarkGfm]}
+    components={{
+      img: ({ alt }) => <span className="information-markdown-image-blocked" role="note">{c.remoteImageBlocked}{alt === undefined || alt === "" ? null : `：${alt}`}</span>,
+      a: ({ href, children }) => href?.startsWith("http://") === true || href?.startsWith("https://") === true
+        ? <a href={href} target="_blank" rel="noreferrer noopener">{children}</a>
+        : href?.startsWith("#") === true
+          ? <a href={href}>{children}</a>
+          : <span className="information-markdown-relative-link" title={href}>{children}</span>
+    }}
+  >{content}</ReactMarkdown></article>;
+}
+
 function DetailView({ detail, lang }: { detail: PlatformInformationDetailResponse; lang: Lang }) {
   const c = COPY[lang];
   if (detail.detail.detail_kind === "change_record") return <div className="information-detail-stack">
@@ -255,7 +274,45 @@ function DetailView({ detail, lang }: { detail: PlatformInformationDetailRespons
   </div>;
   if (detail.detail.detail_kind === "version_diff") return <div className="information-detail-stack"><h3>{detail.detail.from_version} → {detail.detail.to_version}</h3>{[...new Set(detail.detail.changed_paths)].map((path) => <code key={path}>{path}</code>)}</div>;
   if (detail.detail.detail_kind === "branch_monitor") return <div className="information-detail-stack">{[...new Set(detail.detail.event_refs)].map((id) => <code key={id}>{id}</code>)}</div>;
-  return <div className="information-detail-stack"><div className="information-detail-meta"><code>{detail.detail.media_type}</code><code>{detail.detail.content_hash}</code></div><pre>{detail.detail.content}</pre></div>;
+  return <div className="information-detail-stack"><div className="information-detail-meta"><code>{detail.detail.media_type}</code><code>{detail.detail.content_hash}</code></div>{detail.detail.media_type === "text/markdown" ? <MarkdownPreview content={detail.detail.content} lang={lang} /> : <pre>{detail.detail.content}</pre>}</div>;
+}
+
+type MaterialItem = Extract<Item, { item_kind: "project_material" }>;
+type MaterialTree = { directories: Map<string, MaterialTree>; files: MaterialItem[] };
+
+function materialFileName(path: string): string {
+  return path.split("/").filter(Boolean).at(-1) ?? path;
+}
+
+function makeMaterialTree(items: readonly Item[]): MaterialTree {
+  const root: MaterialTree = { directories: new Map(), files: [] };
+  for (const item of items) {
+    if (item.item_kind !== "project_material") continue;
+    const parts = item.path.split("/").filter(Boolean);
+    const directories = parts.slice(0, -1);
+    let node = root;
+    for (const directory of directories) {
+      const existing = node.directories.get(directory);
+      if (existing !== undefined) node = existing;
+      else {
+        const next: MaterialTree = { directories: new Map(), files: [] };
+        node.directories.set(directory, next);
+        node = next;
+      }
+    }
+    node.files.push(item);
+  }
+  return root;
+}
+
+function MaterialTreeView({ tree, lang, select, nested = false }: { tree: MaterialTree; lang: Lang; select: (id: string) => void; nested?: boolean }) {
+  const c = COPY[lang];
+  const entries = [...tree.directories.entries()].sort(([left], [right]) => left.localeCompare(right));
+  const files = [...tree.files].sort((left, right) => left.path.localeCompare(right.path));
+  return <ul className={nested ? "information-material-tree nested" : "information-material-tree"}>
+    {entries.map(([name, child]) => <li key={name}><details className="information-material-directory"><summary>{name}</summary><MaterialTreeView tree={child} lang={lang} select={select} nested /></details></li>)}
+    {files.map((file) => <li key={file.material_id}><button type="button" className="information-material-file" aria-label={`${c.open} ${materialFileName(file.path)}`} title={file.path} onClick={() => select(file.material_id)}><span>{materialFileName(file.path)}</span><small>{machineLabel(file.category, lang)}</small></button></li>)}
+  </ul>;
 }
 
 function itemButton(id: string, label: string, action: string, children: React.ReactNode, select: (id: string) => void) {
@@ -264,10 +321,10 @@ function itemButton(id: string, label: string, action: string, children: React.R
 
 export function ProjectMaterialsInformationPanel(props: PanelProps) {
   const c = COPY[props.lang];
-  return <InformationPanel {...props} view="project_materials" title={c.materials} renderItem={(raw, select) => {
-    if (raw.item_kind !== "project_material") return null;
-    return itemButton(raw.material_id, raw.path, c.open, <><span className="information-kicker">{machineLabel(raw.category, props.lang)}</span><strong>{raw.path}</strong><span>{c.source}: {raw.source_branch_name} · {raw.source_commit_sha.slice(0, 8)}</span></>, select);
-  }} />;
+  return <InformationPanel {...props} view="project_materials" title={c.materials}
+    renderItem={() => null}
+    renderList={(items, select) => <MaterialTreeView tree={makeMaterialTree(items)} lang={props.lang} select={select} />}
+  />;
 }
 
 export function ProjectKnowledgeInformationPanel(props: PanelProps) {

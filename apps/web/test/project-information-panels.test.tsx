@@ -60,13 +60,32 @@ describe("project information panels", () => {
     } } as const));
     render(<ProjectMaterialsInformationPanel api={api({ listPlatformInformation: list, getPlatformInformationDetail: detail })} projectId="prj_one" lang="en" />);
 
-    expect(await screen.findByText(".harness/codebase/map.json")).toBeInTheDocument();
+    expect(await screen.findByText("map.json")).toBeInTheDocument();
     expect(detail).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: /Open .harness\/codebase\/map.json/ }));
-    expect(await screen.findByText("# Architecture map")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open map.json" }));
+    expect(await screen.findByRole("heading", { name: "Architecture map" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Load more" }));
     expect(await screen.findByText("AGENTS.md")).toBeInTheDocument();
     expect(list).toHaveBeenLastCalledWith("prj_one", "project_materials", { limit: 50, cursor: "cursor_page_two_1" });
+  });
+
+  it("renders material files as a collapsible filename tree and previews Markdown as a readable document", async () => {
+    const materials = [
+      { item_kind: "project_material" as const, material_id: "readme", category: "rule" as const, path: "docs/guide/README.md", blob_ref: { blob_hash: `sha256:${"a".repeat(64)}`, snapshot_version: "pv_1" }, source_branch_name: "main", source_commit_sha: "b".repeat(40), sort_key: "readme" },
+      { item_kind: "project_material" as const, material_id: "note", category: "instruction" as const, path: "docs/notes.md", blob_ref: { blob_hash: `sha256:${"a".repeat(64)}`, snapshot_version: "pv_1" }, source_branch_name: "main", source_commit_sha: "b".repeat(40), sort_key: "note" }
+    ];
+    render(<ProjectMaterialsInformationPanel api={api({
+      listPlatformInformation: vi.fn(async () => page("project_materials", materials)),
+      getPlatformInformationDetail: vi.fn(async () => ({ schema_version: 1, contract_kind: "detail_response", view: "project_materials", project_id: "prj_one", detail_id: "readme", detail: { detail_kind: "project_material", content: "# Guide\n\n- First step\n- Second step", content_hash: `sha256:${"a".repeat(64)}`, media_type: "text/markdown" } } as const))
+    })} projectId="prj_one" lang="zh" />);
+
+    expect(await screen.findByText("docs")).toBeInTheDocument();
+    expect(screen.getByText("guide")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "打开 README.md" })).toHaveAttribute("title", "docs/guide/README.md");
+    expect(screen.queryByText("docs/guide/README.md")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "打开 README.md" }));
+    expect(await screen.findByRole("heading", { name: "Guide" })).toBeInTheDocument();
+    expect(screen.getByText("First step")).toBeInTheDocument();
   });
 
   it("does not let stale detail overwrite a newer project and localizes the open action", async () => {
@@ -125,7 +144,7 @@ describe("project information panels", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /Open 真实变更/ }));
     fireEvent.click(await screen.findByRole("button", { name: "Open document doc_design" }));
-    expect(await screen.findByText("# Design")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Design" })).toBeInTheDocument();
     expect(screen.getByText("archive_1")).toBeInTheDocument();
     expect(screen.getByText("ARCHIVE_AUTHENTICATED_DOWNLOAD_CLIENT_UNAVAILABLE")).toBeInTheDocument();
   });
@@ -151,7 +170,7 @@ describe("project information panels", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByText("Loading change document on demand")).toBeInTheDocument();
     release({ schema_version: 1, contract_kind: "detail_response", view: "change_records", project_id: "prj_one", detail_id: "doc_design", detail: { detail_kind: "change_document", content: "# Recovered", content_hash: `sha256:${"d".repeat(64)}`, media_type: "text/markdown" } });
-    expect(await screen.findByText("# Recovered")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Recovered" })).toBeInTheDocument();
     expect(detail).toHaveBeenCalledTimes(3);
   });
 

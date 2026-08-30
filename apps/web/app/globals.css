@@ -8340,6 +8340,31 @@ aside.external-skill-detail-rail {
 .information-detail-stack { display: grid; gap: 12px; min-width: 0; }
 .information-detail-stack h3 { margin: 0; color: var(--text-heading); }
 .information-detail-stack pre { max-height: 620px; margin: 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.information-material-tree { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.information-material-tree.nested { margin: 3px 0 3px 14px; padding-left: 10px; border-left: 1px solid var(--line-dim); }
+.information-material-directory > summary { display: flex; min-height: 36px; align-items: center; padding: 0 8px; color: var(--text-heading); cursor: pointer; font-size: .86rem; font-weight: 700; }
+.information-material-directory > summary:hover { background: var(--panel-hover); }
+.information-material-file { display: flex; width: 100%; min-height: 40px; align-items: center; justify-content: space-between; gap: 8px; padding: 8px; border: 0; border-radius: var(--radius-sm); color: var(--text); background: transparent; box-shadow: none; text-align: left; }
+.information-material-file:hover { background: var(--panel-hover); transform: none; }
+.information-material-file > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.information-material-file > small { flex: 0 0 auto; color: var(--muted); font-size: .68rem; }
+.information-markdown { min-width: 0; color: var(--text); font-size: .92rem; line-height: 1.75; }
+.information-markdown > :first-child { margin-top: 0; }
+.information-markdown h1, .information-markdown h2, .information-markdown h3, .information-markdown h4 { margin: 1.7em 0 .65em; color: var(--text-heading); line-height: 1.3; }
+.information-markdown h1 { padding-bottom: .45em; border-bottom: 1px solid var(--line); font-size: 1.7rem; }
+.information-markdown h2 { padding-bottom: .35em; border-bottom: 1px solid var(--line-dim); font-size: 1.35rem; }
+.information-markdown p, .information-markdown ul, .information-markdown ol, .information-markdown blockquote { margin: .8em 0; }
+.information-markdown li + li { margin-top: .28em; }
+.information-markdown blockquote { padding: 2px 16px; border-left: 3px solid var(--accent); color: var(--muted); background: var(--accent-glow); }
+.information-markdown code { padding: 2px 5px; border-radius: 4px; background: var(--panel); color: var(--code-text); font: .9em/1.5 var(--font-mono); }
+.information-markdown pre { padding: 16px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); white-space: pre; }
+.information-markdown pre code { padding: 0; background: transparent; }
+.information-markdown table { display: block; width: 100%; overflow: auto; border-collapse: collapse; }
+.information-markdown th, .information-markdown td { padding: 8px 11px; border: 1px solid var(--line); text-align: left; }
+.information-markdown th { background: var(--panel); color: var(--text-heading); }
+.information-markdown a { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.information-markdown-image-blocked { display: inline-flex; margin: 6px 0; padding: 7px 10px; border: 1px dashed var(--line); border-radius: var(--radius-sm); color: var(--muted); background: var(--panel); font-size: .78rem; }
+.information-markdown-relative-link { color: var(--muted); text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
 .information-detail-meta { display: flex; flex-wrap: wrap; gap: 8px; }
 .information-terminal-state { display: grid; gap: 12px; }
 .information-terminal-state > button { justify-self: start; }
