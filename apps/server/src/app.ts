@@ -2707,9 +2707,15 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     await repository.getProject(actor.actorId, projectId);
     const pending = await repository.listUnprojectedKnowledge(projectId, 500);
     reply.header("X-Request-Id", requestId);
+    // P0-1 查询面自查：ingest 回执与真实查询面之间的缺口需要可诊断——
+    // fence 代数、job 状态计数、结果条目数一并给出（有 pipeline 时）。
+    const pipeline = options.knowledgePipeline === undefined
+      ? undefined
+      : await options.knowledgePipeline.pipelineStatus(projectId);
     return {
       pending_count: pending.length,
       pending_capped: pending.length >= 500,
+      ...(pipeline === undefined ? {} : { pipeline }),
       request_id: requestId
     };
   });

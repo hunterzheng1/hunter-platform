@@ -39,6 +39,7 @@ import type {
   ChangeDocument,
   ChangeProjectionJob,
   KnowledgeExtractionJob,
+  KnowledgePipelineStats,
   KnowledgeResult,
   StoredArchive,
   ValidateArchivePackageInput,
@@ -971,6 +972,32 @@ export class MemoryJobRepository implements JobRepository {
   async getKnowledgeJob(job_id: string): Promise<KnowledgeExtractionJob | null> {
     const job = this.#knowledgeJobs.get(job_id);
     return job === undefined ? null : cloneJob(job);
+  }
+
+  async knowledgePipelineStats(project_id: string): Promise<KnowledgePipelineStats> {
+    if (typeof project_id !== "string" || project_id.trim() === "") {
+      throw new KnowledgePipelineError("KNOWLEDGE_STATS_INVALID", false);
+    }
+    const jobs = [...this.#knowledgeJobs.values()].filter(
+      (job) => job.project_id === project_id
+    );
+    const counts: Record<"queued" | "extracting" | "ready" | "failed", number> = {
+      queued: 0, extracting: 0, ready: 0, failed: 0
+    };
+    let latest: string | null = null;
+    for (const job of jobs) {
+      if (job.status in counts) counts[job.status as keyof typeof counts] += 1;
+      if (latest === null || job.updated_at > latest) latest = job.updated_at;
+    }
+    return Object.freeze({
+      project_id,
+      generation: this.#latestGeneration.get(project_id) ?? 0,
+      results_count: jobs
+        .filter((job) => job.status === "ready")
+        .reduce((sum, job) => sum + (job.result_count ?? 0), 0),
+      jobs: counts,
+      latest_job_updated_at: latest
+    });
   }
 
   async listQueuedKnowledgeJobs(limit: number): Promise<KnowledgeExtractionJob[]> {

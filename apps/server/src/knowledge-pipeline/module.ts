@@ -25,6 +25,7 @@ import type {
   FailKnowledgeExtractionInput,
   JobReceipt,
   KnowledgeExtractionJob,
+  KnowledgePipelineStats,
   KnowledgeResult,
   KnowledgeResultDraft,
   KnowledgePipeline,
@@ -576,6 +577,13 @@ export function createKnowledgePipeline(
     ));
   }
 
+  async function pipelineStatus(project_id: string): Promise<KnowledgePipelineStats> {
+    if (typeof project_id !== "string" || project_id.trim() === "") {
+      throw new KnowledgePipelineError("KNOWLEDGE_STATS_INVALID", false);
+    }
+    return dependencies.job_repository.knowledgePipelineStats(project_id);
+  }
+
   async function queryKnowledge(input: QueryKnowledgeInput): Promise<KnowledgeResult[]> {
     validateLimit(input.limit);
     if (input.project_id === "" || input.query.trim() === "") {
@@ -728,6 +736,7 @@ export function createKnowledgePipeline(
     enqueueKnowledgeExtraction,
     retryKnowledgeExtraction,
     queryKnowledge,
+    pipelineStatus,
     listRuleCandidates,
     worker: {
       startKnowledgeExtraction,

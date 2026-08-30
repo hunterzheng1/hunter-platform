@@ -1055,12 +1055,26 @@ export async function ingestArchivePackage(input: {
           "ready archive does not match the latest project semantic generation"
         );
       }
+      // 诚实收据（2026-08-30 实测 P0-1）：知识条目由异步 extraction job 产出，
+      // semantic 快照重建完成 ≠ 知识可查询。有候选时置 indexing，由知识 job
+      // 的 commit/fail 桥（main.ts knowledgeCommitWithIngest）翻转为 ready/failed；
+      // 无候选的归档没有后续动作，直接 ready。
+      const knowledgeFile = archive.files.find((file) => file.path === "candidates/knowledge.json");
+      let hasKnowledgeCandidates = false;
+      if (knowledgeFile?.text !== undefined) {
+        try {
+          const parsedCandidates: unknown = JSON.parse(knowledgeFile.text);
+          hasKnowledgeCandidates = Array.isArray(parsedCandidates) && parsedCandidates.length > 0;
+        } catch {
+          hasKnowledgeCandidates = false;
+        }
+      }
       const updated = await input.repository.updateChangeArchivePackage({
         actorId: input.actorId,
         projectId: input.projectId,
         changeKey: input.changeKey,
         artifactId: archiveArtifactId,
-        knowledgeStatus: "ready",
+        knowledgeStatus: hasKnowledgeCandidates ? "indexing" : "ready",
         failureStage: null,
         lastErrorCode: null
       });

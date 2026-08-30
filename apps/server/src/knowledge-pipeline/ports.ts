@@ -4,6 +4,7 @@ import type {
   ChangeDocument,
   ChangeProjectionJob,
   KnowledgeExtractionJob,
+  KnowledgePipelineStats,
   KnowledgeResult,
   StoredArchive,
   ValidatedArchivePackage
@@ -134,6 +135,8 @@ export interface JobRepository extends ChangeProjectionTaskPort {
   listProjectContentCandidates(
     query: ProjectContentCandidateQuery
   ): Promise<ProjectContentCandidateQueryResult>;
+  /** 查询面自查（P0-1）：fence 代数、job 状态计数、结果条目数、最近活动时间。 */
+  knowledgePipelineStats(project_id: string): Promise<KnowledgePipelineStats>;
 }
 
 export interface KnowledgeIndexQuery {

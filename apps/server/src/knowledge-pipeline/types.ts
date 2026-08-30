@@ -281,6 +281,16 @@ export interface KnowledgePipelineWorker {
   failKnowledgeExtraction(input: FailKnowledgeExtractionInput): Promise<JobReceipt>;
 }
 
+/** 查询面自查（2026-08-30 P0-1）：ingest 回执说 ready 但查询全空时，
+ *  调用方需要能区分「job 没跑」「job 失败」「结果为空」三种状态。 */
+export interface KnowledgePipelineStats {
+  readonly project_id: string;
+  readonly generation: number;
+  readonly results_count: number;
+  readonly jobs: Readonly<Record<"queued" | "extracting" | "ready" | "failed", number>>;
+  readonly latest_job_updated_at: string | null;
+}
+
 export interface KnowledgePipeline {
   acceptArchive(input: AcceptArchiveInput): Promise<ArchiveIngestReceipt>;
   retryArchiveTaskPlanning(
@@ -291,6 +301,7 @@ export interface KnowledgePipeline {
   ): Promise<JobReceipt>;
   retryKnowledgeExtraction(job_id: string): Promise<JobReceipt>;
   queryKnowledge(input: QueryKnowledgeInput): Promise<KnowledgeResult[]>;
+  pipelineStatus(project_id: string): Promise<KnowledgePipelineStats>;
   listRuleCandidates(input: ListRuleCandidatesInput): Promise<CandidatePage>;
   worker: KnowledgePipelineWorker;
 }

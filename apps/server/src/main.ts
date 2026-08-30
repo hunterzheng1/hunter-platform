@@ -121,9 +121,45 @@ const knowledgePipelinePorts = createPgKnowledgePipelinePorts(pool);
 // 所以管道即便产出结果，project_knowledge 与 knowledge query 也永远是空的。
 // 装饰 commit 端口而不是改管道模块：桥失败不回滚已提交的结果，只告警。
 const semanticStore = new PgSemanticStore(pool);
+
+// 收据诚实化（2026-08-30 P0-1）：归档上传 finalize 只能把 knowledgeStatus 置为
+// indexing（知识条目由异步 extraction job 产出），job commit/fail 时在这里翻转
+// 归档记录的 knowledgeStatus，调用方不再拿到「知识已就绪」的空头收据。
+async function flipArchiveKnowledgeStatus(
+  projectId: string,
+  changeKey: string,
+  status: "ready" | "failed",
+  lastErrorCode: string | null
+): Promise<void> {
+  try {
+    const owner = await pool.query<{ owner_actor_id: string }>(
+      "SELECT owner_actor_id FROM projects WHERE project_id = $1",
+      [projectId]
+    );
+    const ownerId = owner.rows[0]?.owner_actor_id;
+    if (ownerId === undefined) return;
+    const record = await repository.getChangeArchivePackage(ownerId, projectId, changeKey);
+    if (record.knowledgeStatus === "ready" && status === "ready") return;
+    await repository.updateChangeArchivePackage({
+      actorId: ownerId,
+      projectId,
+      changeKey,
+      artifactId: record.artifactId,
+      knowledgeStatus: status,
+      failureStage: status === "failed" ? record.failureStage : null,
+      lastErrorCode
+    });
+  } catch (error) {
+    console.error("[knowledge-bridge] archive knowledgeStatus flip failed:", error);
+  }
+}
+
 const knowledgeCommitWithIngest: KnowledgeCommitPort = {
   async commitKnowledgeResults(input) {
     const job = await knowledgePipelinePorts.knowledge_commit.commitKnowledgeResults(input);
+    // commit 成功即查询面（knowledge_pipeline_results）就绪——先翻转收据，
+    // 桥接投影失败不影响查询可用性
+    await flipArchiveKnowledgeStatus(job.project_id, job.change_key, "ready", null);
     try {
       const summary = await readChangeSummaryDocument(pool, job.project_id, job.change_key);
       const outcome = await ingestPipelineKnowledge({
@@ -169,9 +205,22 @@ const changeProjectionWorker = createChangeProjectionWorker({
   clock: knowledgePipelineClock,
   lease_duration_ms: 60_000
 });
+// fail 桥：知识 job 终态失败时同步翻转归档收据，不让 indexing 永远挂起
+const knowledgeWorkerWithStatusBridge = {
+  ...knowledgePipeline.worker,
+  async failKnowledgeExtraction(input: { job_id: string; generation: number; reason_code: string; retryable: boolean }) {
+    const job = await knowledgePipeline.worker.failKnowledgeExtraction(input);
+    if (job.status === "failed") {
+      await flipArchiveKnowledgeStatus(
+        job.project_id, job.change_key, "failed", input.reason_code
+      );
+    }
+    return job;
+  }
+};
 const knowledgeWorkerHost = createKnowledgePipelineWorkerHost({
   change_projection_worker: changeProjectionWorker,
-  knowledge_pipeline_worker: knowledgePipeline.worker,
+  knowledge_pipeline_worker: knowledgeWorkerWithStatusBridge,
   knowledge_extractor: createKnowledgeExtractor({ archive_store: knowledgePipelinePorts.archive_store })
 });
 if (bootstrapToken !== undefined && bootstrapToken !== "") {

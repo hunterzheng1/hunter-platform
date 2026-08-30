@@ -43,6 +43,7 @@ import type {
   ChangeDocument,
   ChangeProjectionJob,
   KnowledgeExtractionJob,
+  KnowledgePipelineStats,
   KnowledgeResult,
   StoredArchive
 } from "./types.js";
@@ -1154,6 +1155,54 @@ export class PgJobRepository implements JobRepository {
       );
       return result.rows.map(changeJobFromRow);
     });
+  }
+
+  async knowledgePipelineStats(project_id: string): Promise<KnowledgePipelineStats> {
+    return safeStorage(async () => {
+      if (typeof project_id !== "string" || project_id.trim() === "") {
+        fail("KNOWLEDGE_STATS_INVALID");
+      }
+      const fence = await this.#pool.query<Row>(
+        "SELECT knowledge_generation FROM knowledge_pipeline_project_fences WHERE project_id=$1",
+        [project_id]
+      );
+      const jobCounts = await this.#pool.query<Row>(
+        `SELECT status, COUNT(*)::text AS count, MAX(updated_at) AS latest
+           FROM knowledge_pipeline_knowledge_jobs WHERE project_id=$1 GROUP BY status`,
+        [project_id]
+      );
+      const resultCount = await this.#pool.query<Row>(
+        `SELECT COUNT(*)::text AS count FROM knowledge_pipeline_results
+          WHERE project_id=$1 AND content_kind='knowledge_entry' AND status='active'`,
+        [project_id]
+      );
+      const jobs: Record<"queued" | "extracting" | "ready" | "failed", number> = {
+        queued: 0, extracting: 0, ready: 0, failed: 0
+      };
+      let latest: string | null = null;
+      for (const row of jobCounts.rows) {
+        const status = String(rowValue(row, "status"));
+        if (status in jobs) {
+          jobs[status as keyof typeof jobs] = Number(rowValue(row, "count"));
+        }
+        const updated = row["latest"];
+        const iso = updated instanceof Date ? updated.toISOString() :
+          typeof updated === "string" ? new Date(updated).toISOString() : null;
+        if (iso !== null && (latest === null || iso > latest)) latest = iso;
+      }
+      return Object.freeze({
+        project_id,
+        generation: fence.rows[0] === undefined
+          ? 0
+          : nonNegativeInteger(
+              rowValue(fence.rows[0], "knowledge_generation"),
+              "KNOWLEDGE_PIPELINE_FENCE_CORRUPT"
+            ),
+        results_count: Number(rowValue(resultCount.rows[0], "count")),
+        jobs,
+        latest_job_updated_at: latest
+      });
+    }, true);
   }
 
   async getChangeProjectionJob(job_id: string): Promise<ChangeProjectionJob | null> {
