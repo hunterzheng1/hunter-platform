@@ -97,7 +97,7 @@ interface PanelProps { api: HunterApi; projectId: string; lang: Lang }
 
 function InformationPanel({ api, projectId, lang, view, title, renderItem, renderList, emptyTechnical, onDetail, onDetailStart, onDetailReset, onDetailError }: PanelProps & {
   view: View; title: string; renderItem(item: Item, select: (id: string) => void): React.ReactNode;
-  renderList?: (items: readonly Item[], select: (id: string) => void, hasActiveFilter: boolean) => React.ReactNode;
+  renderList?: (items: readonly Item[], select: (id: string) => void) => React.ReactNode;
   emptyTechnical?: { label: string; value: string };
   onDetail?: (detail: PlatformInformationDetailResponse) => void;
   onDetailStart?: () => void;
@@ -234,7 +234,7 @@ function InformationPanel({ api, projectId, lang, view, title, renderItem, rende
   const content = <div className="information-panel-grid">
     <section className="information-list" aria-label={title}>
       <WorkspaceFilterBar label={c.filter} placeholder={c.filterPlaceholder} query={query} onQueryChange={setQuery} />
-      <div className="information-list-items">{renderList === undefined ? filtered.map((item) => <div key={itemIdentity(item)}>{renderItem(item, (id) => void select(id))}</div>) : renderList(filtered, (id) => void select(id), query.trim() !== "")}</div>
+      <div className="information-list-items">{renderList === undefined ? filtered.map((item) => <div key={itemIdentity(item)}>{renderItem(item, (id) => void select(id))}</div>) : renderList(filtered, (id) => void select(id))}</div>
       {bounded ? <p className="information-list-bounded" role="status">{c.bounded}</p> : null}
       {cursor !== null && paginationError === null ? <button className="information-load-more" type="button" disabled={loadingMore} onClick={() => void load(cursor, true)}>{c.loadMore}</button> : null}
     </section>
@@ -278,40 +278,17 @@ function DetailView({ detail, lang }: { detail: PlatformInformationDetailRespons
 }
 
 type MaterialItem = Extract<Item, { item_kind: "project_material" }>;
-type MaterialTree = { directories: Map<string, MaterialTree>; files: MaterialItem[] };
 
 function materialFileName(path: string): string {
   return path.split("/").filter(Boolean).at(-1) ?? path;
 }
 
-function makeMaterialTree(items: readonly Item[]): MaterialTree {
-  const root: MaterialTree = { directories: new Map(), files: [] };
-  for (const item of items) {
-    if (item.item_kind !== "project_material") continue;
-    const parts = item.path.split("/").filter(Boolean);
-    const directories = parts.slice(0, -1);
-    let node = root;
-    for (const directory of directories) {
-      const existing = node.directories.get(directory);
-      if (existing !== undefined) node = existing;
-      else {
-        const next: MaterialTree = { directories: new Map(), files: [] };
-        node.directories.set(directory, next);
-        node = next;
-      }
-    }
-    node.files.push(item);
-  }
-  return root;
-}
-
-function MaterialTreeView({ tree, lang, select, nested = false, expandForSearch = false }: { tree: MaterialTree; lang: Lang; select: (id: string) => void; nested?: boolean; expandForSearch?: boolean }) {
+function MaterialFileList({ items, lang, select }: { items: readonly Item[]; lang: Lang; select: (id: string) => void }) {
   const c = COPY[lang];
-  const entries = [...tree.directories.entries()].sort(([left], [right]) => left.localeCompare(right));
-  const files = [...tree.files].sort((left, right) => left.path.localeCompare(right.path));
-  return <ul className={nested ? "information-material-tree nested" : "information-material-tree"}>
-    {entries.map(([name, child]) => <li key={name}><details className="information-material-directory" open={expandForSearch}><summary>{name}</summary><MaterialTreeView tree={child} lang={lang} select={select} nested expandForSearch={expandForSearch} /></details></li>)}
-    {files.map((file) => <li key={file.material_id}><button type="button" className="information-material-file" aria-label={`${c.open} ${materialFileName(file.path)}`} title={file.path} onClick={() => select(file.material_id)}><span>{materialFileName(file.path)}</span><small>{machineLabel(file.category, lang)}</small></button></li>)}
+  const files = items.filter((item): item is MaterialItem => item.item_kind === "project_material")
+    .sort((left, right) => left.path.localeCompare(right.path));
+  return <ul className="information-material-files">
+    {files.map((file) => <li key={file.material_id}><button type="button" className="information-material-file" aria-label={`${c.open} ${materialFileName(file.path)}`} onClick={() => select(file.material_id)}><span>{materialFileName(file.path)}</span><small>{machineLabel(file.category, lang)}</small></button></li>)}
   </ul>;
 }
 
@@ -323,7 +300,7 @@ export function ProjectMaterialsInformationPanel(props: PanelProps) {
   const c = COPY[props.lang];
   return <InformationPanel {...props} view="project_materials" title={c.materials}
     renderItem={() => null}
-    renderList={(items, select, hasActiveFilter) => <MaterialTreeView tree={makeMaterialTree(items)} lang={props.lang} select={select} expandForSearch={hasActiveFilter} />}
+    renderList={(items, select) => <MaterialFileList items={items} lang={props.lang} select={select} />}
   />;
 }
 

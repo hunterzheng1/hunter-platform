@@ -69,7 +69,7 @@ describe("project information panels", () => {
     expect(list).toHaveBeenLastCalledWith("prj_one", "project_materials", { limit: 50, cursor: "cursor_page_two_1" });
   });
 
-  it("renders material files as a collapsible filename tree and previews Markdown as a readable document", async () => {
+  it("lists material filenames without directory segments and previews Markdown as a readable document", async () => {
     const materials = [
       { item_kind: "project_material" as const, material_id: "readme", category: "rule" as const, path: "docs/guide/README.md", blob_ref: { blob_hash: `sha256:${"a".repeat(64)}`, snapshot_version: "pv_1" }, source_branch_name: "main", source_commit_sha: "b".repeat(40), sort_key: "readme" },
       { item_kind: "project_material" as const, material_id: "note", category: "instruction" as const, path: "docs/notes.md", blob_ref: { blob_hash: `sha256:${"a".repeat(64)}`, snapshot_version: "pv_1" }, source_branch_name: "main", source_commit_sha: "b".repeat(40), sort_key: "note" }
@@ -79,13 +79,13 @@ describe("project information panels", () => {
       getPlatformInformationDetail: vi.fn(async () => ({ schema_version: 1, contract_kind: "detail_response", view: "project_materials", project_id: "prj_one", detail_id: "readme", detail: { detail_kind: "project_material", content: "# Guide\n\n- First step\n- Second step", content_hash: `sha256:${"a".repeat(64)}`, media_type: "text/markdown" } } as const))
     })} projectId="prj_one" lang="zh" />);
 
-    expect(await screen.findByText("docs")).toBeInTheDocument();
-    expect(screen.getByText("guide")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "打开 README.md" })).toHaveAttribute("title", "docs/guide/README.md");
+    expect(await screen.findByRole("button", { name: "打开 README.md" })).not.toHaveAttribute("title");
+    expect(screen.getByRole("button", { name: "打开 notes.md" })).toBeInTheDocument();
+    expect(screen.queryByText("docs")).not.toBeInTheDocument();
+    expect(screen.queryByText("guide")).not.toBeInTheDocument();
     expect(screen.queryByText("docs/guide/README.md")).not.toBeInTheDocument();
     fireEvent.change(screen.getByRole("searchbox", { name: "筛选当前结果" }), { target: { value: "README" } });
-    expect(screen.getByText("docs").closest("details")).toHaveAttribute("open");
-    expect(screen.getByText("guide").closest("details")).toHaveAttribute("open");
+    expect(screen.getByRole("button", { name: "打开 README.md" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "打开 README.md" }));
     expect(await screen.findByRole("heading", { name: "Guide" })).toBeInTheDocument();
     expect(screen.getByText("First step")).toBeInTheDocument();
