@@ -8323,8 +8323,8 @@ aside.external-skill-detail-rail {
   outline-offset: 3px;
 }
 
-.information-panel-grid { display: grid; grid-template-columns: minmax(280px, 380px) minmax(0, 1fr); min-height: 560px; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); }
-.information-list { min-width: 0; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 92%, var(--bg) 8%); }
+.information-panel-grid { display: grid; grid-template-columns: minmax(280px, 380px) minmax(0, 1fr); height: clamp(360px, calc(100dvh - 250px), 720px); min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); }
+.information-list { min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 92%, var(--bg) 8%); }
 .information-list-items { display: grid; gap: 8px; padding: 0 14px 14px; }
 .information-list-bounded { margin: 0 14px 14px; color: var(--muted); font-size: .76rem; line-height: 1.5; }
 .information-list-card { display: grid; width: 100%; min-height: 44px; gap: 6px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-md); color: var(--text); background: var(--panel); box-shadow: none; text-align: left; overflow-wrap: anywhere; }
@@ -8335,7 +8335,7 @@ aside.external-skill-detail-rail {
 .information-kicker { color: var(--accent) !important; font-size: .67rem !important; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
 .information-load-more, .information-pagination-failure > button, .information-terminal-state > button, .information-document-nav button { min-height: 44px; }
 .information-load-more { width: calc(100% - 28px); margin: 0 14px 14px; }
-.information-detail { min-width: 0; padding: 20px; background: var(--code-surface); }
+.information-detail { min-width: 0; min-height: 0; padding: 20px; overflow-y: auto; overscroll-behavior: contain; background: var(--code-surface); }
 .information-detail-placeholder { display: grid; min-height: 300px; place-items: center; margin: 0; color: var(--muted); text-align: center; }
 .information-detail-stack { display: grid; gap: 12px; min-width: 0; }
 .information-detail-stack h3 { margin: 0; color: var(--text-heading); }
@@ -8374,9 +8374,9 @@ aside.external-skill-detail-rail {
 .information-document-nav { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); }
 
 @media (max-width: 760px) {
-  .information-panel-grid { grid-template-columns: 1fr; }
-  .information-list { border-right: 0; border-bottom: 1px solid var(--line); }
-  .information-detail { min-height: 280px; }
+  .information-panel-grid { grid-template-columns: 1fr; height: auto; }
+  .information-list { overflow: visible; border-right: 0; border-bottom: 1px solid var(--line); }
+  .information-detail { min-height: 280px; overflow: visible; }
 }
 
 .workspace-filter-bar { display: grid; gap: 9px; padding: 14px 14px 12px; }

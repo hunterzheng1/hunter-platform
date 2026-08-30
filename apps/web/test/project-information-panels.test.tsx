@@ -202,6 +202,12 @@ describe("project information panels", () => {
     expect(css).toMatch(/\.information-pagination-failure\s*>\s*button[^{}]*\{[^{}]*min-height:\s*44px;/u);
   });
 
+  it("keeps the information workspace bounded while the right detail pane scrolls independently", () => {
+    const css = readFileSync(resolve(process.cwd(), "apps/web/app/globals.css"), "utf8");
+    expect(css).toMatch(/\.information-panel-grid[^{}]*\{[^{}]*height:\s*clamp\(360px,\s*calc\(100dvh\s*-\s*250px\),\s*720px\);/u);
+    expect(css).toMatch(/\.information-detail\s*\{[^{}]*overflow-y:\s*auto;[^{}]*overscroll-behavior:\s*contain;/u);
+  });
+
   it("uses canonical branch and version pages without falling back to legacy full-file APIs", async () => {
     const listProjectFiles = vi.fn();
     const list = vi.fn(async (_project: string, view: PlatformInformationPage["view"]) => view === "branch_files"
