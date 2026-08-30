@@ -8340,6 +8340,11 @@ aside.external-skill-detail-rail {
 .information-detail-stack { display: grid; gap: 12px; min-width: 0; }
 .information-detail-stack h3 { margin: 0; color: var(--text-heading); }
 .information-detail-stack pre { max-height: 620px; margin: 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.information-material-groups { display: grid; gap: 7px; }
+.information-material-category { border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); }
+.information-material-category > summary { display: flex; min-height: 42px; align-items: center; justify-content: space-between; gap: 10px; padding: 0 10px; color: var(--text-heading); cursor: pointer; font-size: .82rem; font-weight: 700; }
+.information-material-category > summary:hover { background: var(--panel-hover); }
+.information-material-category > summary small { color: var(--muted); font-weight: 500; }
 .information-material-files { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
 .information-material-file { display: flex; width: 100%; min-height: 40px; align-items: center; justify-content: space-between; gap: 8px; padding: 8px; border: 0; border-radius: var(--radius-sm); color: var(--text); background: transparent; box-shadow: none; text-align: left; }
 .information-material-file:hover { background: var(--panel-hover); transform: none; }

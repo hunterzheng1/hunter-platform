@@ -97,7 +97,7 @@ interface PanelProps { api: HunterApi; projectId: string; lang: Lang }
 
 function InformationPanel({ api, projectId, lang, view, title, renderItem, renderList, emptyTechnical, onDetail, onDetailStart, onDetailReset, onDetailError }: PanelProps & {
   view: View; title: string; renderItem(item: Item, select: (id: string) => void): React.ReactNode;
-  renderList?: (items: readonly Item[], select: (id: string) => void) => React.ReactNode;
+  renderList?: (items: readonly Item[], select: (id: string) => void, hasActiveFilter: boolean) => React.ReactNode;
   emptyTechnical?: { label: string; value: string };
   onDetail?: (detail: PlatformInformationDetailResponse) => void;
   onDetailStart?: () => void;
@@ -234,7 +234,7 @@ function InformationPanel({ api, projectId, lang, view, title, renderItem, rende
   const content = <div className="information-panel-grid">
     <section className="information-list" aria-label={title}>
       <WorkspaceFilterBar label={c.filter} placeholder={c.filterPlaceholder} query={query} onQueryChange={setQuery} />
-      <div className="information-list-items">{renderList === undefined ? filtered.map((item) => <div key={itemIdentity(item)}>{renderItem(item, (id) => void select(id))}</div>) : renderList(filtered, (id) => void select(id))}</div>
+      <div className="information-list-items">{renderList === undefined ? filtered.map((item) => <div key={itemIdentity(item)}>{renderItem(item, (id) => void select(id))}</div>) : renderList(filtered, (id) => void select(id), query.trim() !== "")}</div>
       {bounded ? <p className="information-list-bounded" role="status">{c.bounded}</p> : null}
       {cursor !== null && paginationError === null ? <button className="information-load-more" type="button" disabled={loadingMore} onClick={() => void load(cursor, true)}>{c.loadMore}</button> : null}
     </section>
@@ -283,13 +283,21 @@ function materialFileName(path: string): string {
   return path.split("/").filter(Boolean).at(-1) ?? path;
 }
 
-function MaterialFileList({ items, lang, select }: { items: readonly Item[]; lang: Lang; select: (id: string) => void }) {
+function MaterialFileList({ items, lang, select, expandForSearch }: { items: readonly Item[]; lang: Lang; select: (id: string) => void; expandForSearch: boolean }) {
   const c = COPY[lang];
-  const files = items.filter((item): item is MaterialItem => item.item_kind === "project_material")
-    .sort((left, right) => left.path.localeCompare(right.path));
-  return <ul className="information-material-files">
-    {files.map((file) => <li key={file.material_id}><button type="button" className="information-material-file" aria-label={`${c.open} ${materialFileName(file.path)}`} onClick={() => select(file.material_id)}><span>{materialFileName(file.path)}</span><small>{machineLabel(file.category, lang)}</small></button></li>)}
-  </ul>;
+  const groups = new Map<MaterialItem["category"], MaterialItem[]>();
+  for (const item of items) {
+    if (item.item_kind !== "project_material") continue;
+    const group = groups.get(item.category) ?? [];
+    group.push(item);
+    groups.set(item.category, group);
+  }
+  return <div className="information-material-groups">
+    {[...groups.entries()].sort(([left], [right]) => machineLabel(left, lang).localeCompare(machineLabel(right, lang))).map(([category, files]) => <details key={category} className="information-material-category" open={expandForSearch}>
+      <summary><span>{machineLabel(category, lang)}</span><small>{files.length}</small></summary>
+      <ul className="information-material-files">{files.sort((left, right) => left.path.localeCompare(right.path)).map((file) => <li key={file.material_id}><button type="button" className="information-material-file" aria-label={`${c.open} ${materialFileName(file.path)}`} onClick={() => select(file.material_id)}><span>{materialFileName(file.path)}</span></button></li>)}</ul>
+    </details>)}
+  </div>;
 }
 
 function itemButton(id: string, label: string, action: string, children: React.ReactNode, select: (id: string) => void) {
@@ -300,7 +308,7 @@ export function ProjectMaterialsInformationPanel(props: PanelProps) {
   const c = COPY[props.lang];
   return <InformationPanel {...props} view="project_materials" title={c.materials}
     renderItem={() => null}
-    renderList={(items, select) => <MaterialFileList items={items} lang={props.lang} select={select} />}
+    renderList={(items, select, hasActiveFilter) => <MaterialFileList items={items} lang={props.lang} select={select} expandForSearch={hasActiveFilter} />}
   />;
 }
 

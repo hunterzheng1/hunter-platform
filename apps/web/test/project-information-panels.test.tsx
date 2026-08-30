@@ -81,10 +81,13 @@ describe("project information panels", () => {
 
     expect(await screen.findByRole("button", { name: "打开 README.md" })).not.toHaveAttribute("title");
     expect(screen.getByRole("button", { name: "打开 notes.md" })).toBeInTheDocument();
+    expect(screen.getByText("规则").closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByText("指令").closest("details")).not.toHaveAttribute("open");
     expect(screen.queryByText("docs")).not.toBeInTheDocument();
     expect(screen.queryByText("guide")).not.toBeInTheDocument();
     expect(screen.queryByText("docs/guide/README.md")).not.toBeInTheDocument();
     fireEvent.change(screen.getByRole("searchbox", { name: "筛选当前结果" }), { target: { value: "README" } });
+    expect(screen.getByText("规则").closest("details")).toHaveAttribute("open");
     expect(screen.getByRole("button", { name: "打开 README.md" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "打开 README.md" }));
     expect(await screen.findByRole("heading", { name: "Guide" })).toBeInTheDocument();
