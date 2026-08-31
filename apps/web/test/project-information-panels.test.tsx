@@ -216,7 +216,8 @@ describe("project information panels", () => {
     const css = readFileSync(resolve(process.cwd(), "apps/web/app/globals.css"), "utf8");
     expect(css).toMatch(/\.information-panel-grid[^{}]*\{[^{}]*height:\s*clamp\(360px,\s*calc\(100dvh\s*-\s*250px\),\s*720px\);/u);
     expect(css).toMatch(/\.information-panel-grid\s*\{[^}]*grid-template-columns:\s*minmax\(230px,\s*310px\)/u);
-    expect(css).toMatch(/\.information-markdown\s+pre\s+code[^{}]*\{[^{}]*white-space:\s*pre;/u);
+    expect(css).toMatch(/\.information-markdown\s+code,\s*\.archive-markdown\s+code[^{}]*\{[^{}]*display:\s*inline;/u);
+    expect(css).toMatch(/\.information-markdown\s+pre\s+code[^{}]*\{[^{}]*display:\s*block;[^{}]*white-space:\s*pre;/u);
     expect(css).not.toMatch(/\.information-markdown\s+code,\s*\.archive-markdown\s+code[^{}]*white-space:\s*nowrap/u);
     expect(css).toMatch(/\.information-detail\s*\{[^{}]*overflow-y:\s*auto;[^{}]*overscroll-behavior:\s*contain;/u);
   });

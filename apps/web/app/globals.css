@@ -8359,8 +8359,8 @@ aside.external-skill-detail-rail {
 .information-markdown li + li { margin-top: .28em; }
 .information-markdown blockquote { padding: 2px 16px; border-left: 3px solid var(--accent); color: var(--muted); background: var(--accent-glow); }
 .information-markdown, .archive-markdown { overflow-x: auto; }
-.information-markdown code, .archive-markdown code { overflow-wrap: normal; word-break: normal; }
-.information-markdown pre code, .archive-markdown pre code { white-space: pre; }
+.information-markdown code, .archive-markdown code { display: inline; margin: 0; overflow-wrap: normal; word-break: normal; }
+.information-markdown pre code, .archive-markdown pre code { display: block; white-space: pre; }
 .information-markdown code { padding: 2px 5px; border-radius: 4px; background: var(--panel); color: var(--code-text); font: .9em/1.5 var(--font-mono); }
 .information-markdown pre { padding: 16px; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); white-space: pre; }
 .information-markdown pre code { padding: 0; background: transparent; }
