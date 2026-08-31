@@ -153,7 +153,7 @@ describe("ProjectWorkspace", () => {
           : path.endsWith("change-context.json")
             ? JSON.stringify({ schemaVersion: 1, displayTitle: "知识库配置上传绑定", ownership: { owner: "team-platform" } })
             : path.endsWith(".md")
-              ? "# 设计方案\n\n- 支持配置上传\n- 保留审计记录\n\n![远程示意图](https://example.invalid/tracker.png)\n\n[相关文档](./related.md)"
+              ? "---\nschema_version: 2\nartifact_type: design\ncontent_hash: sha256:e890\ngenerated: true\n---\n# 设计方案\n\n- 支持配置上传\n- 保留审计记录\n\n![远程示意图](https://example.invalid/tracker.png)\n\n[相关文档](./related.md)\n\n## Requirements\n\n- machine-only trace\n\n## Unreadable generated tail\n\nshould not render"
               : "{}"
       }))
     })} projectId="prj_one" />);
@@ -175,6 +175,9 @@ describe("ProjectWorkspace", () => {
     expect(screen.queryByRole("img", { name: "远程示意图" })).not.toBeInTheDocument();
     expect(screen.getByText(/^远程图片未自动加载/u)).toBeInTheDocument();
     expect(screen.getByText("相关文档").closest("a")).toBeNull();
+    expect(screen.queryByText("schema_version: 2")).not.toBeInTheDocument();
+    expect(screen.queryByText("machine-only trace")).not.toBeInTheDocument();
+    expect(screen.queryByText("should not render")).not.toBeInTheDocument();
 
     expect(screen.queryByText(".harness")).not.toBeInTheDocument();
     expect(screen.queryByText("archive")).not.toBeInTheDocument();

@@ -265,30 +265,11 @@ function MarkdownPreview({ content, lang }: { content: string; lang: Lang }) {
 }
 
 function branchDesignMarkdown(content: string): string {
-  const withoutLeadingMetadata = content.replace(
-    /^\s*(?:(?:schema_version|artifact_type|content_hash|generated):[^\r\n]*(?:\r?\n|$))+/iu,
-    ""
-  );
-  const output: string[] = [];
-  let hiddenRequirementsLevel: number | null = null;
-  for (const line of withoutLeadingMetadata.split(/\r?\n/u)) {
-    const heading = /^(#{1,6})\s+(.+?)\s*#*\s*$/u.exec(line);
-    const headingLevel = heading?.[1]?.length;
-    const headingText = heading?.[2] ?? "";
-    if (hiddenRequirementsLevel === null && headingLevel !== undefined && /^(?:requirements|需求)$/iu.test(headingText)) {
-      hiddenRequirementsLevel = headingLevel;
-      continue;
-    }
-    if (hiddenRequirementsLevel !== null) {
-      if (headingLevel !== undefined && headingLevel <= hiddenRequirementsLevel) {
-        hiddenRequirementsLevel = null;
-      } else {
-        continue;
-      }
-    }
-    output.push(line);
-  }
-  return output.join("\n").trim();
+  const withoutLeadingMetadata = content
+    .replace(/^\uFEFF?[ \t]*---[ \t]*\r?\n(?:(?:schema_version|artifact_type|content_hash|generated):[^\r\n]*\r?\n)+[ \t]*---[ \t]*(?:\r?\n)?/iu, "")
+    .replace(/^\uFEFF?\s*(?:(?:schema_version|artifact_type|content_hash|generated):[^\r\n]*(?:\r?\n|$))+/iu, "");
+  const requirementsStart = /^(?:#{1,6})\s+(?:requirements|需求)(?:[ \t#]|$)[^\r\n]*(?:\r?\n|$)/imu.exec(withoutLeadingMetadata);
+  return (requirementsStart === null ? withoutLeadingMetadata : withoutLeadingMetadata.slice(0, requirementsStart.index)).trim();
 }
 
 function branchDesignDetail(detail: PlatformInformationDetailResponse): PlatformInformationDetailResponse {

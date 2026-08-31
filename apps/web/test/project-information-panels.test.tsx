@@ -217,17 +217,18 @@ describe("project information panels", () => {
       { detail_id: "bff_other", path: "src/index.ts", size: 1, content_hash: `sha256:${"a".repeat(64)}` },
       { detail_id: "bff_design", path: "docs/design.md", size: 100, content_hash: `sha256:${"b".repeat(64)}` }
     ], next_cursor: null }));
-    const detail = vi.fn(async (): Promise<PlatformInformationDetailResponse> => ({ schema_version: 1, contract_kind: "detail_response", view: "branch_files", project_id: "prj_one", detail_id: "bff_design", detail: { detail_kind: "branch_file", content: "schema_version: 2 artifact_type: design content_hash: sha256:e890 generated: true\n# Design\n\nIntro\n\n## Requirements\n\n- machine clause\n\n## Decisions\n\nHuman decision", content_hash: `sha256:${"e".repeat(64)}`, media_type: "text/markdown" } }));
+    const detail = vi.fn(async (): Promise<PlatformInformationDetailResponse> => ({ schema_version: 1, contract_kind: "detail_response", view: "branch_files", project_id: "prj_one", detail_id: "bff_design", detail: { detail_kind: "branch_file", content: "---\nschema_version: 2\nartifact_type: design\ncontent_hash: sha256:e890\ngenerated: true\n---\n# Design\n\nIntro\n\n## Requirements\n\n- machine clause\n\n## Post-requirements\n\nMust stay hidden", content_hash: `sha256:${"e".repeat(64)}`, media_type: "text/markdown" } }));
     const sharedApi = api({ listPlatformInformation: list, listProjectFiles, listPlatformInformationBranchFiles: listBranchFiles, getPlatformInformationDetail: detail });
     const { rerender } = render(<BranchFilesInformationPanel api={sharedApi} projectId="prj_one" lang="en" />);
     fireEvent.click(await screen.findByRole("button", { name: "Open pv_2" }));
     expect(await screen.findByRole("heading", { name: "Design" })).toBeInTheDocument();
     expect(screen.getByText("Intro")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Decisions" })).toBeInTheDocument();
-    expect(screen.getByText("Human decision")).toBeInTheDocument();
-    expect(screen.queryByText("schema_version: 2 artifact_type: design content_hash: sha256:e890 generated: true")).not.toBeInTheDocument();
+    expect(screen.queryByText("schema_version: 2")).not.toBeInTheDocument();
+    expect(screen.queryByText("artifact_type: design")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Requirements" })).not.toBeInTheDocument();
     expect(screen.queryByText("machine clause")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Post-requirements" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Must stay hidden")).not.toBeInTheDocument();
     expect(screen.queryByText("src/index.ts")).not.toBeInTheDocument();
     expect(listProjectFiles).not.toHaveBeenCalled();
 
