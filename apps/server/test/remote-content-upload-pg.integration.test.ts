@@ -44,6 +44,9 @@ postgresDescribe("Pg remote content upload integration", () => {
 
   beforeAll(async () => {
     await runMigrations(pool, fileURLToPath(new URL("../migrations", import.meta.url)));
+    await pool.query("DELETE FROM remote_content_uploads WHERE project_id=$1", ["prj_upload_pg"]);
+    await pool.query("DELETE FROM remote_content_upload_cas_objects WHERE project_id=$1", ["prj_upload_pg"]);
+    await pool.query("DELETE FROM remote_content_upload_gc_batches WHERE project_id=$1", ["prj_upload_pg"]);
     await pool.query("INSERT INTO actors(actor_id,display_name) VALUES ($1,$1) ON CONFLICT DO NOTHING", ["actor_upload_pg"]);
     await pool.query(`INSERT INTO projects(project_id,owner_actor_id,display_name) VALUES ($1,$2,$1)
       ON CONFLICT (project_id) DO NOTHING`, ["prj_upload_pg", "actor_upload_pg"]);
@@ -56,21 +59,10 @@ postgresDescribe("Pg remote content upload integration", () => {
   afterAll(async () => {
     await service?.close();
     await pool.query("DELETE FROM remote_content_uploads WHERE project_id=$1", ["prj_upload_pg"]).catch(() => undefined);
+    await pool.query("DELETE FROM remote_content_upload_cas_objects WHERE project_id=$1", ["prj_upload_pg"]).catch(() => undefined);
+    await pool.query("DELETE FROM remote_content_upload_gc_batches WHERE project_id=$1", ["prj_upload_pg"]).catch(() => undefined);
     await pool.end();
     if (root !== undefined) await rm(join(root, ".."), { recursive: true, force: true }).catch(() => undefined);
-  });
-
-  it("runs garbage maintenance with timestamp parameters shared by JSON receipts and push leases", async () => {
-    const active = service;
-    if (active === undefined) throw new Error("service not initialized");
-    const now = new Date().toISOString();
-    await expect(active.claimGarbage({
-      project_id: "prj_upload_pg",
-      now,
-      limit: 1,
-      worker_id: "worker_upload_pg",
-      lease_until: new Date(Date.now() + 60_000).toISOString(),
-    })).resolves.toMatchObject({ refs: [] });
   });
 
   it("persists one project-scoped record and replays it", async () => {
@@ -86,5 +78,23 @@ postgresDescribe("Pg remote content upload integration", () => {
       schema_version: 1, purpose: "remote_archive", path: request.path, auth: request.auth,
       headers: { "Idempotency-Key": request.headers["Idempotency-Key"] }
     } })).resolves.toMatchObject({ state: "stored" });
+  });
+
+  it("claims, acknowledges, and finalizes expired uploads without mixing receipt text and push timestamps", async () => {
+    const active = service;
+    if (active === undefined) throw new Error("service not initialized");
+    const now = new Date().toISOString();
+    await pool.query("UPDATE remote_content_uploads SET expires_at=$2 WHERE project_id=$1", [
+      "prj_upload_pg", new Date(Date.now() - 1_000).toISOString(),
+    ]);
+    const claimed = await active.claimGarbage({
+      project_id: "prj_upload_pg", now, limit: 1, worker_id: "worker_upload_pg",
+      lease_until: new Date(Date.now() + 60_000).toISOString(),
+    });
+    expect(claimed.refs).toHaveLength(1);
+    await expect(active.acknowledgeGarbage({
+      project_id: "prj_upload_pg", batch_id: claimed.batch_id, worker_id: "worker_upload_pg", now,
+    })).resolves.toMatchObject({ status: "acked" });
+    await expect(pool.query("SELECT 1 FROM remote_content_upload_gc_batches WHERE project_id=$1", ["prj_upload_pg"])).resolves.toMatchObject({ rowCount: 0 });
   });
 });
