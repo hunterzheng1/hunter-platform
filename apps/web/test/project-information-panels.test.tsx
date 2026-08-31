@@ -77,7 +77,7 @@ describe("project information panels", () => {
     ];
     render(<ProjectMaterialsInformationPanel api={api({
       listPlatformInformation: vi.fn(async () => page("project_materials", materials)),
-      getPlatformInformationDetail: vi.fn(async () => ({ schema_version: 1, contract_kind: "detail_response", view: "project_materials", project_id: "prj_one", detail_id: "readme", detail: { detail_kind: "project_material", content: "# Guide\n\n- First step\n- Second step", content_hash: `sha256:${"a".repeat(64)}`, media_type: "text/markdown" } } as const))
+      getPlatformInformationDetail: vi.fn(async () => ({ schema_version: 1, contract_kind: "detail_response", view: "project_materials", project_id: "prj_one", detail_id: "readme", detail: { detail_kind: "project_material", content: "---\nharness:\n  origin: generated\n  generator: harness-codebase-map\nfile_kind: generated_reviewable\npush_policy: full-diff-proposal\nupdate_policy: skip-if-local-dirty\ntitle: Codebase Conventions\ndocument_type: conventions\nprofile: unknown\nmapped_at: 2026-08-11 19:25\nlast_mapped_commit: 5900dd032dd72089b362edf67e3084c4cd6319f9\npath_scope: full\nstatus: active\n---\n# Guide\n\n- First step\n- Second step", content_hash: `sha256:${"a".repeat(64)}`, media_type: "text/markdown" } } as const))
     })} projectId="prj_one" lang="zh" />);
 
     expect(await screen.findByRole("button", { name: "打开 README.md" })).not.toHaveAttribute("title");
@@ -94,6 +94,10 @@ describe("project information panels", () => {
     fireEvent.click(screen.getByRole("button", { name: "打开 README.md" }));
     expect(await screen.findByRole("heading", { name: "Guide" })).toBeInTheDocument();
     expect(screen.getByText("First step")).toBeInTheDocument();
+    expect(screen.queryByText("origin: generated")).not.toBeInTheDocument();
+    expect(screen.queryByText("generator: harness-codebase-map")).not.toBeInTheDocument();
+    expect(screen.queryByText("file_kind: generated_reviewable")).not.toBeInTheDocument();
+    expect(screen.queryByText("Codebase Conventions")).not.toBeInTheDocument();
   });
 
   it("does not let stale detail overwrite a newer project and localizes the open action", async () => {

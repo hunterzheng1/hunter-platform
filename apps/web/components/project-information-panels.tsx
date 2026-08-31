@@ -264,6 +264,17 @@ function MarkdownPreview({ content, lang }: { content: string; lang: Lang }) {
   >{content}</ReactMarkdown></article>;
 }
 
+function projectMaterialMarkdown(content: string): string {
+  const frontmatter = /^\uFEFF?[ \t]*---[ \t]*\r?\n([\s\S]{0,8192}?)\r?\n---[ \t]*(?:\r?\n|$)/u.exec(content);
+  if (frontmatter === null || !/^(?:harness|origin|generated|generator|file_kind|push_policy|update_policy|title|document_type|profile|mapped_at|last_mapped_commit|path_scope|status):/imu.test(frontmatter[1] ?? "")) return content;
+  return content.slice(frontmatter[0].length);
+}
+
+function projectMaterialDetail(detail: PlatformInformationDetailResponse): PlatformInformationDetailResponse {
+  if (detail.detail.detail_kind !== "project_material" || detail.detail.media_type !== "text/markdown") return detail;
+  return { ...detail, detail: { ...detail.detail, content: projectMaterialMarkdown(detail.detail.content) } };
+}
+
 function branchDesignMarkdown(content: string): string {
   const withoutLeadingMetadata = content
     .replace(/^\uFEFF?[ \t]*---[ \t]*\r?\n(?:(?:schema_version|artifact_type|content_hash|generated):[^\r\n]*\r?\n)+[ \t]*---[ \t]*(?:\r?\n)?/iu, "")
@@ -322,7 +333,7 @@ function itemButton(id: string, label: string, action: string, children: React.R
 
 export function ProjectMaterialsInformationPanel(props: PanelProps) {
   const c = COPY[props.lang];
-  return <InformationPanel {...props} view="project_materials" title={c.materials}
+  return <InformationPanel {...props} view="project_materials" title={c.materials} transformDetail={projectMaterialDetail}
     renderItem={() => null}
     renderList={(items, select, hasActiveFilter) => <MaterialFileList items={items} lang={props.lang} select={select} expandForSearch={hasActiveFilter} />}
   />;
