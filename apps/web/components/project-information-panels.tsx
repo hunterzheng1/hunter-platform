@@ -264,10 +264,27 @@ function MarkdownPreview({ content, lang }: { content: string; lang: Lang }) {
   >{content}</ReactMarkdown></article>;
 }
 
+function repairMarkdownTableRows(content: string): string {
+  const lines = content.split(/\r?\n/u);
+  const tableCells = (line: string): string[] => line.trim().replace(/^\||\|$/gu, "").split("|").map((cell) => cell.trim());
+  for (let index = 0; index < lines.length - 2; index += 1) {
+    if (!/^\|/u.test(lines[index] ?? "") || !/^\|?\s*:?-{3,}/u.test(lines[index + 1] ?? "")) continue;
+    const expectedCells = tableCells(lines[index] ?? "").length;
+    for (let row = index + 2; row < lines.length && /^\|/u.test(lines[row] ?? ""); row += 1) {
+      const cells = tableCells(lines[row] ?? "");
+      const split = expectedCells === 2 && cells.length === 3 ? /^(.+?)[；;]\s*(.+)$/u.exec(cells[1] ?? "") : null;
+      if (split === null) continue;
+      lines.splice(row, 1, `| ${cells[0]} | ${split[1]} |`, `| ${split[2]} | ${cells[2]} |`);
+      row += 1;
+    }
+  }
+  return lines.join("\n");
+}
+
 function projectMaterialMarkdown(content: string): string {
   const frontmatter = /^\uFEFF?[ \t]*---[ \t]*\r?\n([\s\S]{0,8192}?)\r?\n---[ \t]*(?:\r?\n|$)/u.exec(content);
-  if (frontmatter === null || !/^(?:harness|origin|generated|generator|file_kind|push_policy|update_policy|title|document_type|profile|mapped_at|last_mapped_commit|path_scope|status):/imu.test(frontmatter[1] ?? "")) return content;
-  return content.slice(frontmatter[0].length);
+  const withoutFrontmatter = frontmatter === null || !/^(?:harness|origin|generated|generator|file_kind|push_policy|update_policy|title|document_type|profile|mapped_at|last_mapped_commit|path_scope|status):/imu.test(frontmatter[1] ?? "") ? content : content.slice(frontmatter[0].length);
+  return repairMarkdownTableRows(withoutFrontmatter);
 }
 
 function projectMaterialDetail(detail: PlatformInformationDetailResponse): PlatformInformationDetailResponse {

@@ -4,7 +4,7 @@ import "@testing-library/jest-dom/vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { PlatformInformationDetailResponse, PlatformInformationPage } from "@hunter-harness/contracts";
@@ -77,7 +77,7 @@ describe("project information panels", () => {
     ];
     render(<ProjectMaterialsInformationPanel api={api({
       listPlatformInformation: vi.fn(async () => page("project_materials", materials)),
-      getPlatformInformationDetail: vi.fn(async () => ({ schema_version: 1, contract_kind: "detail_response", view: "project_materials", project_id: "prj_one", detail_id: "readme", detail: { detail_kind: "project_material", content: "---\nharness:\n  origin: generated\n  generator: harness-codebase-map\nfile_kind: generated_reviewable\npush_policy: full-diff-proposal\nupdate_policy: skip-if-local-dirty\ntitle: Codebase Conventions\ndocument_type: conventions\nprofile: unknown\nmapped_at: 2026-08-11 19:25\nlast_mapped_commit: 5900dd032dd72089b362edf67e3084c4cd6319f9\npath_scope: full\nstatus: active\n---\n# Guide\n\n- First step\n- Second step", content_hash: `sha256:${"a".repeat(64)}`, media_type: "text/markdown" } } as const))
+      getPlatformInformationDetail: vi.fn(async () => ({ schema_version: 1, contract_kind: "detail_response", view: "project_materials", project_id: "prj_one", detail_id: "readme", detail: { detail_kind: "project_material", content: "---\nharness:\n  origin: generated\n  generator: harness-codebase-map\nfile_kind: generated_reviewable\npush_policy: full-diff-proposal\nupdate_policy: skip-if-local-dirty\ntitle: Codebase Conventions\ndocument_type: conventions\nprofile: unknown\nmapped_at: 2026-08-11 19:25\nlast_mapped_commit: 5900dd032dd72089b362edf67e3084c4cd6319f9\npath_scope: full\nstatus: active\n---\n# Guide\n\n- First step\n- Second step\n\n| 内容 | 位置 |\n|---|---|\n| 设计文档 | `docs/designs/`；计划与跟踪 | `docs/plans/` |", content_hash: `sha256:${"a".repeat(64)}`, media_type: "text/markdown" } } as const))
     })} projectId="prj_one" lang="zh" />);
 
     expect(await screen.findByRole("button", { name: "打开 README.md" })).not.toHaveAttribute("title");
@@ -98,6 +98,12 @@ describe("project information panels", () => {
     expect(screen.queryByText("generator: harness-codebase-map")).not.toBeInTheDocument();
     expect(screen.queryByText("file_kind: generated_reviewable")).not.toBeInTheDocument();
     expect(screen.queryByText("Codebase Conventions")).not.toBeInTheDocument();
+    const rows = screen.getAllByRole("row");
+    expect(rows).toHaveLength(3);
+    expect(within(rows[1]!).getByText("设计文档")).toBeInTheDocument();
+    expect(within(rows[1]!).getByText("docs/designs/")).toBeInTheDocument();
+    expect(within(rows[2]!).getByText("计划与跟踪")).toBeInTheDocument();
+    expect(within(rows[2]!).getByText("docs/plans/")).toBeInTheDocument();
   });
 
   it("does not let stale detail overwrite a newer project and localizes the open action", async () => {
