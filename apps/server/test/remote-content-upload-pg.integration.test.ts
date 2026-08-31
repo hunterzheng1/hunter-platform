@@ -60,6 +60,19 @@ postgresDescribe("Pg remote content upload integration", () => {
     if (root !== undefined) await rm(join(root, ".."), { recursive: true, force: true }).catch(() => undefined);
   });
 
+  it("runs garbage maintenance with timestamp parameters shared by JSON receipts and push leases", async () => {
+    const active = service;
+    if (active === undefined) throw new Error("service not initialized");
+    const now = new Date().toISOString();
+    await expect(active.claimGarbage({
+      project_id: "prj_upload_pg",
+      now,
+      limit: 1,
+      worker_id: "worker_upload_pg",
+      lease_until: new Date(Date.now() + 60_000).toISOString(),
+    })).resolves.toMatchObject({ refs: [] });
+  });
+
   it("persists one project-scoped record and replays it", async () => {
     const bytes = Buffer.from("pg-backed upload");
     const request = descriptor(bytes);

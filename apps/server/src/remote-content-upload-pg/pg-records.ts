@@ -506,7 +506,7 @@ export class PgRemoteContentUploadRecordPort implements RemoteContentUploadRecor
             WHERE p.project_id=c.project_id
               AND p.files_json @> jsonb_build_array(jsonb_build_object('upload_ref',
                 jsonb_build_object('sha256',c.content_sha256,'size_bytes',c.size_bytes)))
-              AND (p.state IN ('committing','committed') OR (p.state='prepared' AND p.expires_at>$4)))
+              AND (p.state IN ('committing','committed') OR (p.state='prepared' AND p.expires_at>$2)))
         ORDER BY c.content_sha256 LIMIT $3`,
       [input.project_id, input.now, input.limit, input.now]);
       await client.query(`INSERT INTO remote_content_upload_gc_batches
@@ -540,7 +540,7 @@ export class PgRemoteContentUploadRecordPort implements RemoteContentUploadRecor
             WHERE p.project_id=$1
               AND p.files_json @> jsonb_build_array(jsonb_build_object('upload_ref',
                 jsonb_build_object('sha256',$2,'size_bytes',$4::bigint)))
-              AND (p.state IN ('committing','committed') OR (p.state='prepared' AND p.expires_at>$5))
+              AND (p.state IN ('committing','committed') OR (p.state='prepared' AND p.expires_at>$3))
           LIMIT 1`,
         [input.project_id, ref.sha256, input.now, String(current.rows[0].size_bytes), input.now]);
         if ((live.rowCount ?? 0) !== 0) continue;
@@ -604,7 +604,7 @@ export class PgRemoteContentUploadRecordPort implements RemoteContentUploadRecor
             WHERE p.project_id=$1
               AND p.files_json @> jsonb_build_array(jsonb_build_object('upload_ref',
                 jsonb_build_object('sha256',$2,'size_bytes',$4::bigint)))
-              AND (p.state IN ('committing','committed') OR (p.state='prepared' AND p.expires_at>$5))
+              AND (p.state IN ('committing','committed') OR (p.state='prepared' AND p.expires_at>$3))
           LIMIT 1`,
         [input.project_id, item.content_sha256, input.now, String(object.size_bytes), input.now]);
         if (live.rowCount === 0) {
