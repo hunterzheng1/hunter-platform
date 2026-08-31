@@ -520,6 +520,55 @@ describe("change archive package API", () => {
     expect(call[0].request_id).toMatch(/^archive_request:[a-f0-9]{64}$/u);
   });
 
+  it("marks the archive failed and returns an actionable receipt when knowledge enqueue fails", async () => {
+    const projectId = await resolveProject();
+    const changeKey = "chg-knowledge-enqueue-failed";
+    const zip = archiveZip(changeKey, [{
+      path: "reports/final/summary-data.json",
+      role: "summary",
+      content: JSON.stringify(cliSummary(changeKey, "2.3", { baseCommit: "0000000000000000" }))
+    }]);
+    await app.close();
+    app = await createServer({
+      repository,
+      storage,
+      semanticStore,
+      knowledgePipeline: {
+        async acceptArchive() { throw new Error("ARCHIVE_CANDIDATE_SOURCE_UNBOUND"); }
+      } as never
+    });
+
+    const response = await app.inject({
+      method: "PUT",
+      url: `/api/v1/projects/${projectId}/changes/${changeKey}/archive-package`,
+      headers: headers(),
+      payload: zip
+    });
+
+    expect(response.statusCode, response.body).toBe(201);
+    expect(response.json()).toMatchObject({
+      archive_status: "durable",
+      knowledge_status: "failed",
+      failure_stage: "knowledge_enqueue",
+      last_error_code: "ARCHIVE_CANDIDATE_SOURCE_UNBOUND",
+      knowledge_enqueue: {
+        status: "failed",
+        reason_code: "ARCHIVE_CANDIDATE_SOURCE_UNBOUND"
+      }
+    });
+    const status = await app.inject({
+      method: "GET",
+      url: `/api/v1/projects/${projectId}/changes/${changeKey}/archive-package`,
+      headers: headers("application/json")
+    });
+    expect(status.statusCode).toBe(200);
+    expect(status.json()).toMatchObject({
+      knowledge_status: "failed",
+      failure_stage: "knowledge_enqueue",
+      last_error_code: "ARCHIVE_CANDIDATE_SOURCE_UNBOUND"
+    });
+  });
+
   it("accepts the knowledge candidates the archive producer now ships", async () => {
     // harness/scripts/harness_knowledge_candidates.py 从 summary-data 的
     // reviewFindings/knownRisks 生成 candidates/knowledge.json，随生产包一起上传。

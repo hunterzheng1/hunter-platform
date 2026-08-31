@@ -2904,7 +2904,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
         );
       }
       const result = await mutation(request, repository, actor, requestId, async () => {
-        const receipt = await ingestArchivePackage({
+        let receipt = await ingestArchivePackage({
           actorId: actor.actorId,
           projectId,
           changeKey,
@@ -2987,13 +2987,30 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
               }
             }
           } catch (error) {
+            const reasonCode = error instanceof Error && /^[A-Z][A-Z0-9_]{0,127}$/u.test(error.message)
+              ? error.message
+              : "KNOWLEDGE_ENQUEUE_FAILED";
             knowledgeEnqueue = {
               status: "failed",
-              reason_code: error instanceof Error && /^[A-Z][A-Z0-9_]{0,127}$/u.test(error.message)
-                ? error.message
-                : "KNOWLEDGE_ENQUEUE_FAILED"
+              reason_code: reasonCode
             };
-            request.log.warn({ err: error }, "knowledge queue enqueue failed; in-process projection remains authoritative");
+            // The ZIP and legacy semantic projection are durable, but the requested
+            // knowledge extraction was not admitted. Do not leave a permanently
+            // misleading `indexing` receipt for clients or the query projection.
+            const archiveRecord = await repository.getChangeArchivePackage(
+              actor.actorId, projectId, changeKey
+            );
+            receipt = archivePackageReceipt(await repository.updateChangeArchivePackage({
+              actorId: actor.actorId,
+              projectId,
+              changeKey,
+              artifactId: archiveRecord.artifactId,
+              knowledgeStatus: "failed",
+              failureStage: "knowledge_enqueue",
+              lastErrorCode: reasonCode
+            }));
+            request.log.warn({ err: error, reason_code: reasonCode },
+              "knowledge queue enqueue failed; archive receipt marked failed");
           }
         }
         await writeAudit(repository, {
@@ -3010,7 +3027,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
             knowledge_enqueue: knowledgeEnqueue
           }
         });
-        return { statusCode: 201, body: { ...receipt } };
+        return { statusCode: 201, body: { ...receipt, knowledge_enqueue: knowledgeEnqueue } };
       }, undefined, {
         actorId: "internal:archive-package",
         method: "ARCHIVE",

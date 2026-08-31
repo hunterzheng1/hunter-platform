@@ -90,7 +90,7 @@ export interface ChangeArchivePackageRecord {
   archiveStatus: "durable";
   knowledgeStatus: "indexing" | "ready" | "failed";
   attemptCount: number;
-  failureStage: "raw_storage" | "core_storage" | "finalize" | "semantic" | null;
+  failureStage: "raw_storage" | "core_storage" | "finalize" | "semantic" | "knowledge_enqueue" | null;
   lastErrorCode: string | null;
   storedFiles: number;
   createdAt: string;

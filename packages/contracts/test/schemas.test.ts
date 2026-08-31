@@ -1460,7 +1460,7 @@ describe("content-sync canonical mirror", () => {
     // knowledgeIngestEntryTypeSchema 逐值对齐，漂移会让桥静默丢条目。
     // 与 Hunter-Harness/packages/contracts/src/content-sync.ts 逐字节镜像。
     expect(contentSyncSha256(source)).toBe(
-      "4d3095fb0babc0f7e7ec70fd44b0333800964db044a33cdd272f446579c2c98a"
+      "16b697ac128dcbd29d63d91b3e4951dc5e6965727bcc070089086e76b83bf518"
     );
     expect(contentSyncSha256(current)).toBe(
       "a5d700084708255d25a9be7de889024c5c8ce644dd671f300251369fa6fcdb4c"

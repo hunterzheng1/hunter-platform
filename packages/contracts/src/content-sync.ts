@@ -1402,6 +1402,14 @@ export const legacyArchivePackageReceiptSchema = z.object({
   artifact_id: z.string().nullable(),
   archive_status: frozenStringLiteralSchema("durable"),
   knowledge_status: frozenStringEnumSchema(["indexing", "ready", "failed"]),
+  failure_stage: frozenStringEnumSchema([
+    "raw_storage", "core_storage", "finalize", "semantic", "knowledge_enqueue"
+  ]).nullable().optional(),
+  last_error_code: z.string().min(1).max(128).nullable().optional(),
+  knowledge_enqueue: z.object({
+    status: frozenStringEnumSchema(["enqueued", "skipped", "failed"]),
+    reason_code: z.string().min(1).max(128).optional()
+  }).strict().optional(),
   stored_files: z.number().nonnegative().refine(Number.isInteger),
   uploaded_at: rfc3339DateTimeSchema,
   request_id: z.string().regex(

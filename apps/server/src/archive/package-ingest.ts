@@ -140,6 +140,8 @@ export interface ArchivePackageReceipt {
   artifact_id: string | null;
   archive_status: "durable";
   knowledge_status: "indexing" | "ready" | "failed";
+  failure_stage: "raw_storage" | "core_storage" | "finalize" | "semantic" | "knowledge_enqueue" | null;
+  last_error_code: string | null;
   stored_files: number;
   uploaded_at: string;
 }
@@ -708,6 +710,8 @@ function receipt(record: ChangeArchivePackageRecord): ArchivePackageReceipt {
     artifact_id: record.artifactId,
     archive_status: record.archiveStatus,
     knowledge_status: record.knowledgeStatus,
+    failure_stage: record.failureStage,
+    last_error_code: record.lastErrorCode,
     stored_files: record.storedFiles,
     uploaded_at: record.createdAt
   };
