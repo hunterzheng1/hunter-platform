@@ -414,7 +414,7 @@ export function BranchFilesInformationPanel(props: PanelProps) {
     });
     try {
       const files = await props.api.listPlatformInformationBranchFiles(props.projectId, snapshotDetailId, { limit: 100 });
-      const design = files.items.find((file) => file.path.split("/").filter(Boolean).at(-1)?.toLowerCase() === "design.md");
+      const design = files.items.find((file) => /(?:^|-)design\.md$/iu.test(file.path.split("/").filter(Boolean).at(-1) ?? ""));
       if (design?.detail_id === undefined) {
         setErrors((previous) => ({ ...previous, [snapshotDetailId]: "BRANCH_DESIGN_FILE_NOT_FOUND" }));
         return;

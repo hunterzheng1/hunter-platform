@@ -146,6 +146,30 @@ function archiveFileDisplayName(branchName: string, fileName: string): string {
   return shortened === "" ? fileName : shortened;
 }
 
+function archiveDesignMarkdown(content: string): string {
+  const withoutLeadingMetadata = content.replace(
+    /^\s*(?:(?:schema_version|artifact_type|content_hash|generated):[^\r\n]*(?:\r?\n|$))+/iu,
+    ""
+  );
+  const output: string[] = [];
+  let hiddenRequirementsLevel: number | null = null;
+  for (const line of withoutLeadingMetadata.split(/\r?\n/u)) {
+    const heading = /^(#{1,6})\s+(.+?)\s*#*\s*$/u.exec(line);
+    const headingLevel = heading?.[1]?.length;
+    const headingText = heading?.[2] ?? "";
+    if (hiddenRequirementsLevel === null && headingLevel !== undefined && /^(?:requirements|需求)$/iu.test(headingText)) {
+      hiddenRequirementsLevel = headingLevel;
+      continue;
+    }
+    if (hiddenRequirementsLevel !== null) {
+      if (headingLevel !== undefined && headingLevel <= hiddenRequirementsLevel) hiddenRequirementsLevel = null;
+      else continue;
+    }
+    output.push(line);
+  }
+  return output.join("\n").trim();
+}
+
 function isHarnessGeneratedPlan(relativePath: string, content: string | undefined): boolean {
   if (content === undefined || !/^plans\//u.test(relativePath)) return false;
   const endFm = content.indexOf("---\n", 4);
@@ -326,6 +350,7 @@ const COPY = {
     openBranch: (name: string) => `打开分支 ${name}`,
     openFile: (name: string) => `打开文件 ${name}`,
     chooseArchiveFile: "选择一个文件查看内容。计划与设计规格已优先排列。",
+    noDesignFile: "该分支没有 design.md。",
     markdownPreview: "Markdown 阅读视图",
     archiveReadOnly: "历史文件 · 只读",
     remoteImageBlocked: "远程图片未自动加载",
@@ -401,6 +426,7 @@ const COPY = {
     openBranch: (name: string) => `Open branch ${name}`,
     openFile: (name: string) => `Open file ${name}`,
     chooseArchiveFile: "Choose a file to read. Plans and specifications are shown first.",
+    noDesignFile: "This branch does not contain design.md.",
     markdownPreview: "Markdown reading view",
     archiveReadOnly: "Historical file · read only",
     remoteImageBlocked: "Remote image not loaded automatically",
@@ -685,8 +711,8 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
   const activeArchiveBranch = archiveBranches?.find((branch) => branch.name === selectedArchiveBranch)
     ?? archiveBranches?.[0]
     ?? null;
-  const activeArchiveFile = activeArchiveBranch?.files.find((entry) => entry.file.path === selectedPath) ?? null;
-  const activeArchiveGroups = activeArchiveBranch === null ? [] : archiveFileGroups(activeArchiveBranch.files);
+  const activeArchiveDesignFile = activeArchiveBranch?.files.find((entry) => /(?:^|-)design\.md$/iu.test(archiveFileParts(entry.relativePath).name)) ?? null;
+  const activeArchiveFile = activeArchiveDesignFile !== null && selectedPath === activeArchiveDesignFile.file.path ? activeArchiveDesignFile : null;
   const latestArtifact = data?.artifacts.find((artifact) => artifact.artifact_id === data.project.latest_artifact_id)
     ?? data?.artifacts[0]
     ?? null;
@@ -755,6 +781,17 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
       if (request === contentRequest.current) setLoadingContent(false);
     }
   }
+
+  useEffect(() => {
+    if (activeArchiveBranch === null) return;
+    if (activeArchiveDesignFile === null) {
+      setSelectedPath(null);
+      return;
+    }
+    if (selectedPath !== activeArchiveDesignFile.file.path) void choose(activeArchiveDesignFile.file);
+    // This intentionally reacts only to a branch/data change, not to the unstable choose closure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeArchiveBranch?.name, activeArchiveDesignFile?.file.path]);
 
   function beginAdd(): void {
     if (busy) return;
@@ -922,39 +959,10 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
       </aside>
       <main className="runs-detail archive-branch-detail">
         <div className="runs-detail-head"><div><h2>{branchDisplayName(activeArchiveBranch.name, lang, data.runTitles.get(activeArchiveBranch.name))}</h2><p className="runs-mono">{activeArchiveBranch.name}</p></div><div className="archive-branch-meta"><span>{copy.branchFileCount(activeArchiveBranch.files.length)}</span><time dateTime={activeArchiveBranch.updatedAt}>{copy.branchUpdated}：{new Date(activeArchiveBranch.updatedAt).toLocaleDateString(lang === "zh" ? "zh-CN" : "en-US")}</time></div></div>
-        <div className="archive-branch-browser">
-          <nav className="archive-branch-files" aria-label={copy.branchFilesTitle}>
-            {activeArchiveGroups.map((group) => <details
-              className={`archive-file-group category-${group.category}`}
-              key={group.category}
-              open={openArchiveCategories.has(group.category)}
-              onToggle={(event) => {
-                const shouldOpen = event.currentTarget.open;
-                setOpenArchiveCategories((current) => {
-                  if (current.has(group.category) === shouldOpen) return current;
-                  const next = new Set(current);
-                  if (shouldOpen) next.add(group.category); else next.delete(group.category);
-                  return next;
-                });
-              }}
-            >
-              <summary><span><h3>{copy.categoryLabels[group.category]}</h3><small>{copy.categoryHints[group.category]}</small></span><strong>{group.files.length}</strong></summary>
-              <ul>{group.files.map(({ file, relativePath }) => {
-                const parts = archiveFileParts(relativePath);
-                return <li key={file.path}><button
-                  type="button"
-                  className={selectedPath === file.path ? "selected" : ""}
-                  aria-label={copy.openFile(relativePath)}
-                  aria-pressed={selectedPath === file.path}
-                  title={relativePath}
-                  onClick={() => void choose(file)}
-                ><span className="archive-file-identity"><strong>{archiveFileDisplayName(activeArchiveBranch.name, parts.name)}</strong>{parts.directory === "" ? null : <small>{parts.directory}</small>}</span><small>{file.size_bytes} {copy.bytes}</small></button></li>;
-              })}</ul>
-            </details>)}
-          </nav>
+        <div className="archive-branch-browser archive-branch-design-browser">
           <div className="archive-content-pane">
-            {activeArchiveFile === null ? <div className="project-file-placeholder archive-file-placeholder"><Icon name="file" size={24} /><h3>{copy.chooseArchiveFile}</h3></div> : <section className="archive-file-content">
-              <header><div><p className="project-file-name">{archiveFileParts(activeArchiveFile.relativePath).name}</p><p className="project-file-path">{archiveFileParts(activeArchiveFile.relativePath).directory}</p><div className="project-file-badges"><span className="readonly">{copy.archiveReadOnly}</span>{isHarnessGeneratedPlan(activeArchiveFile.relativePath, selectedContent) ? <span className="harness-generated">{copy.harnessGenerated}</span> : null}<span>{activeArchiveFile.file.size_bytes} {copy.bytes}</span>{/\.mdx?$/iu.test(activeArchiveFile.relativePath) ? <span>{copy.markdownPreview}</span> : null}</div></div>{isHarnessGeneratedPlan(activeArchiveFile.relativePath, selectedContent) ? <p className="harness-plan-note">{copy.harnessPlanNote}</p> : null}</header>
+            {activeArchiveDesignFile === null ? <div className="project-file-placeholder archive-file-placeholder"><Icon name="file" size={24} /><h3>{copy.noDesignFile}</h3></div> : activeArchiveFile === null ? <div className="project-file-placeholder archive-file-placeholder"><Icon name="file" size={24} /><h3>{copy.loadingContent}</h3></div> : <section className="archive-file-content">
+              <header><div><p className="project-file-name">design.md</p><div className="project-file-badges"><span className="readonly">{copy.archiveReadOnly}</span><span>{activeArchiveFile.file.size_bytes} {copy.bytes}</span><span>{copy.markdownPreview}</span></div></div></header>
               {loadingContent && selectedContent === undefined ? <p className="archive-content-loading">{copy.loadingContent}</p> : /\.mdx?$/iu.test(activeArchiveFile.relativePath) ? <article className="archive-markdown"><ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
@@ -965,7 +973,7 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
                       ? <a href={href}>{children}</a>
                       : <span className="archive-markdown-relative-link" title={href}>{children}</span>
                 }}
-              >{selectedContent ?? ""}</ReactMarkdown></article> : selectedJsonTooLarge ? <div className="json-too-large"><strong>{lang === "zh" ? "JSON 文件过大" : "JSON file is too large"}</strong><p>{lang === "zh" ? "为避免浏览器卡顿，超过 2 MB 的 JSON 不在页面中展开。" : "JSON files over 2 MB are not expanded in the browser."}</p></div> : /\.json$/iu.test(activeArchiveFile.relativePath) && selectedJson.ok ? <JsonDocument value={selectedJson.value} lang={lang} report={/(^|\/)reports\/final\/summary-data\.json$/iu.test(activeArchiveFile.relativePath)} /> : <pre className="project-file-content">{selectedContent ?? ""}</pre>}
+              >{archiveDesignMarkdown(selectedContent ?? "")}</ReactMarkdown></article> : selectedJsonTooLarge ? <div className="json-too-large"><strong>{lang === "zh" ? "JSON 文件过大" : "JSON file is too large"}</strong><p>{lang === "zh" ? "为避免浏览器卡顿，超过 2 MB 的 JSON 不在页面中展开。" : "JSON files over 2 MB are not expanded in the browser."}</p></div> : /\.json$/iu.test(activeArchiveFile.relativePath) && selectedJson.ok ? <JsonDocument value={selectedJson.value} lang={lang} report={/(^|\/)reports\/final\/summary-data\.json$/iu.test(activeArchiveFile.relativePath)} /> : <pre className="project-file-content">{selectedContent ?? ""}</pre>}
             </section>}
           </div>
         </div>

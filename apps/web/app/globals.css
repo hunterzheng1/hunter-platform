@@ -8494,6 +8494,7 @@ aside.external-skill-detail-rail {
 .archive-branch-meta { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .archive-branch-meta span, .archive-branch-meta time { padding: 4px 8px; border: 1px solid var(--line-dim); border-radius: var(--radius-full); color: var(--muted); background: var(--bg-raised); font-size: 9px; }
 .archive-branch-browser { display: grid; min-height: 500px; grid-template-columns: minmax(180px, 24%) minmax(0, 1fr); overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--bg-raised); }
+.archive-branch-design-browser { grid-template-columns: minmax(0, 1fr); }
 .archive-branch-files { display: flex; min-width: 0; max-height: 560px; flex-direction: column; gap: 7px; padding: 9px; overflow-y: auto; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 90%, var(--bg) 10%); }
 .archive-file-group { flex: 0 0 auto; overflow: hidden; border: 1px solid var(--line-dim); border-radius: var(--radius-sm); background: var(--bg-raised); }
 .archive-file-group.category-plan,

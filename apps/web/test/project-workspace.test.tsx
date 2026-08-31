@@ -165,55 +165,22 @@ describe("ProjectWorkspace", () => {
     expect(screen.queryByText(/requiredindicatorsraw配置/u)).not.toBeInTheDocument();
     expect(screen.queryByText("已归档")).not.toBeInTheDocument();
 
-    expect(screen.getByText("实施计划")).toBeInTheDocument();
-    expect(screen.getByText("设计规格")).toBeInTheDocument();
-    const planHeading = screen.getByText("实施计划");
-    const specHeading = screen.getByText("设计规格");
-    const reportHeading = screen.getByText("交付报告");
-    expect(planHeading.compareDocumentPosition(specHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(planHeading.closest("details")).toHaveAttribute("open");
-    expect(specHeading.closest("details")).toHaveAttribute("open");
-    expect(reportHeading.closest("details")).not.toHaveAttribute("open");
-    expect(screen.getByText("plan.md")).toBeInTheDocument();
-    expect(screen.getByText("plans")).toBeInTheDocument();
-    expect(screen.queryByText("kb-config-upload-binding-plan.md")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: /打开文件.*design\.md/ }));
     expect(await screen.findByRole("heading", { name: "设计方案" })).toBeInTheDocument();
     expect(screen.getByText("支持配置上传").closest("li")).not.toBeNull();
+    expect(screen.queryByText("plan.md")).not.toBeInTheDocument();
+    expect(screen.queryByText("summary-data.json")).not.toBeInTheDocument();
+    expect(screen.queryByText("change-context.json")).not.toBeInTheDocument();
+    expect(screen.queryByText("spec/kb-config-upload-binding-design.md")).not.toBeInTheDocument();
     expect(screen.queryByText("# 设计方案")).not.toBeInTheDocument();
     expect(screen.queryByRole("img", { name: "远程示意图" })).not.toBeInTheDocument();
     expect(screen.getByText(/^远程图片未自动加载/u)).toBeInTheDocument();
     expect(screen.getByText("相关文档").closest("a")).toBeNull();
-    expect(screen.getByRole("button", { name: "打开文件 spec/kb-config-upload-binding-design.md" })).toHaveAttribute("aria-pressed", "true");
-
-    fireEvent.click(reportHeading.closest("summary") as HTMLElement);
-    const reportFileButton = screen.getByRole("button", { name: "打开文件 reports/final/summary-data.json" });
-    fireEvent.click(reportFileButton);
-    await waitFor(() => expect(reportFileButton).toHaveAttribute("aria-pressed", "true"));
-    expect(await screen.findByRole("heading", { name: "交付报告概览" })).toBeInTheDocument();
-    expect(screen.getByText("最终状态")).toBeInTheDocument();
-    expect(screen.getByText("支持配置上传绑定")).toBeInTheDocument();
-    expect(screen.queryByText("apps/server/src/config.ts")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByText("变更文件").closest("summary") as HTMLElement);
-    expect(await screen.findByText("apps/server/src/config.ts")).toBeInTheDocument();
-    expect(screen.queryByText("files/change-129.ts")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /继续显示（剩余 30 项）/ }));
-    expect(await screen.findByText("files/change-129.ts")).toBeInTheDocument();
-
-    const otherHeading = screen.getByText("其他文件");
-    fireEvent.click(otherHeading.closest("summary") as HTMLElement);
-    fireEvent.click(screen.getByRole("button", { name: "打开文件 change-context.json" }));
-    expect(await screen.findByRole("heading", { name: "JSON 阅读视图" })).toBeInTheDocument();
-    expect(screen.getByText("显示标题")).toBeInTheDocument();
-    expect(screen.getAllByText("知识库配置上传绑定").some((node) => node.classList.contains("json-string"))).toBe(true);
 
     expect(screen.queryByText(".harness")).not.toBeInTheDocument();
     expect(screen.queryByText("archive")).not.toBeInTheDocument();
 
     const css = readFileSync(resolve(process.cwd(), "apps/web/app/globals.css"), "utf8");
-    expect(css).toMatch(/\.archive-branch-browser\s*\{[^}]*grid-template-columns:\s*minmax\(180px,\s*24%\)/u);
-    expect(css).toMatch(/\.archive-file-group\s*\{/u);
+    expect(css).toMatch(/\.archive-branch-design-browser\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/u);
     expect(css).toMatch(/\.archive-markdown\s*\{/u);
     expect(css).toMatch(/@media \(max-width: 760px\)[\s\S]*\.archive-branches-shell/u);
   });
@@ -235,9 +202,7 @@ describe("ProjectWorkspace", () => {
     })} projectId="prj_one" />);
 
     fireEvent.click(await screen.findByRole("tab", { name: "分支文件" }));
-    fireEvent.click(screen.getByText("其他文件").closest("summary") as HTMLElement);
-    fireEvent.click(screen.getByRole("button", { name: "打开文件 change-context.json" }));
-    expect(await screen.findByText("JSON 文件过大")).toBeInTheDocument();
+    expect(await screen.findByText("该分支没有 design.md。")).toBeInTheDocument();
     expect(getProjectFileContent).not.toHaveBeenCalled();
   });
 
@@ -273,7 +238,7 @@ describe("ProjectWorkspace", () => {
   it("prefers the archived-branch reader and hides mixed non-archive files even when a branch snapshot exists", async () => {
     const archiveFile: ProjectFileMetadata = {
       ...(files[0] as ProjectFileMetadata),
-      path: ".harness/archive/usage-stats-platform-support/plans/usage-stats-platform-support-plan.md"
+      path: ".harness/archive/usage-stats-platform-support/spec/usage-stats-platform-support-design.md"
     };
     const nonArchiveFile: ProjectFileMetadata = {
       ...(files[1] as ProjectFileMetadata),
@@ -300,7 +265,7 @@ describe("ProjectWorkspace", () => {
     expect(await screen.findByRole("button", { name: /^打开分支 .*usage-stats-platform-support/u })).toBeInTheDocument();
     expect(screen.queryByText("master")).not.toBeInTheDocument();
     expect(screen.queryByText("ARCHITECTURE.md")).not.toBeInTheDocument();
-    expect(screen.getByText("plan.md")).toBeInTheDocument();
+    expect(await screen.findByText("design.md")).toBeInTheDocument();
   });
 
   it("does not let stale file content overwrite a newer project selection", async () => {
