@@ -8323,7 +8323,7 @@ aside.external-skill-detail-rail {
   outline-offset: 3px;
 }
 
-.information-panel-grid { display: grid; grid-template-columns: minmax(280px, 380px) minmax(0, 1fr); height: clamp(360px, calc(100dvh - 250px), 720px); min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); }
+.information-panel-grid { display: grid; grid-template-columns: minmax(230px, 310px) minmax(0, 1fr); height: clamp(360px, calc(100dvh - 250px), 720px); min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--panel); }
 .information-list { min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 92%, var(--bg) 8%); }
 .information-list-items { display: grid; gap: 8px; padding: 0 14px 14px; }
 .information-list-bounded { margin: 0 14px 14px; color: var(--muted); font-size: .76rem; line-height: 1.5; }
