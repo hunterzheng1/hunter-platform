@@ -1,7 +1,6 @@
 "use client";
 
 import type {
-  PlatformInformationBranchFilesPage,
   PlatformInformationDetailResponse,
   PlatformInformationPage,
 } from "@hunter-harness/contracts";
@@ -95,7 +94,7 @@ function machineLabel(value: string, lang: Lang): string {
 
 interface PanelProps { api: HunterApi; projectId: string; lang: Lang }
 
-function InformationPanel({ api, projectId, lang, view, title, renderItem, renderList, emptyTechnical, onDetail, onDetailStart, onDetailReset, onDetailError }: PanelProps & {
+function InformationPanel({ api, projectId, lang, view, title, renderItem, renderList, emptyTechnical, onDetail, onDetailStart, onDetailReset, onDetailError, transformDetail }: PanelProps & {
   view: View; title: string; renderItem(item: Item, select: (id: string) => void): React.ReactNode;
   renderList?: (items: readonly Item[], select: (id: string) => void, hasActiveFilter: boolean) => React.ReactNode;
   emptyTechnical?: { label: string; value: string };
@@ -103,6 +102,7 @@ function InformationPanel({ api, projectId, lang, view, title, renderItem, rende
   onDetailStart?: () => void;
   onDetailReset?: () => void;
   onDetailError?: () => void;
+  transformDetail?: (detail: PlatformInformationDetailResponse) => PlatformInformationDetailResponse;
 }) {
   const c = COPY[lang];
   const [items, setItems] = useState<Item[]>([]);
@@ -240,7 +240,7 @@ function InformationPanel({ api, projectId, lang, view, title, renderItem, rende
     </section>
     <aside className="information-detail" aria-live="polite">
       {detailLoading ? <WorkspaceState technicalDetailsLabel={c.technical} state={{ kind: "loading", label: c.detailLoading }} /> : null}
-      {!detailLoading && detail !== null ? <DetailView detail={detail} lang={lang} /> : null}
+      {!detailLoading && detail !== null ? <DetailView detail={transformDetail === undefined ? detail : transformDetail(detail)} lang={lang} /> : null}
       {!detailLoading && detailError !== null ? <WorkspaceState technicalDetailsLabel={c.technical} state={{ kind: "error", title: c.error, description: c.errorHint, technicalDetails: technical(detailError) }} /> : null}
       {!detailLoading && selectedId === null ? <p className="information-detail-placeholder">{c.choose}</p> : null}
     </aside>
@@ -262,6 +262,41 @@ function MarkdownPreview({ content, lang }: { content: string; lang: Lang }) {
           : <span className="information-markdown-relative-link" title={href}>{children}</span>
     }}
   >{content}</ReactMarkdown></article>;
+}
+
+function branchDesignMarkdown(content: string): string {
+  const withoutLeadingMetadata = content.replace(
+    /^\s*(?:(?:schema_version|artifact_type|content_hash|generated):[^\r\n]*(?:\r?\n|$))+/iu,
+    ""
+  );
+  const output: string[] = [];
+  let hiddenRequirementsLevel: number | null = null;
+  for (const line of withoutLeadingMetadata.split(/\r?\n/u)) {
+    const heading = /^(#{1,6})\s+(.+?)\s*#*\s*$/u.exec(line);
+    const headingLevel = heading?.[1]?.length;
+    const headingText = heading?.[2] ?? "";
+    if (hiddenRequirementsLevel === null && headingLevel !== undefined && /^(?:requirements|需求)$/iu.test(headingText)) {
+      hiddenRequirementsLevel = headingLevel;
+      continue;
+    }
+    if (hiddenRequirementsLevel !== null) {
+      if (headingLevel !== undefined && headingLevel <= hiddenRequirementsLevel) {
+        hiddenRequirementsLevel = null;
+      } else {
+        continue;
+      }
+    }
+    output.push(line);
+  }
+  return output.join("\n").trim();
+}
+
+function branchDesignDetail(detail: PlatformInformationDetailResponse): PlatformInformationDetailResponse {
+  if (detail.detail.detail_kind !== "branch_file" || detail.detail.media_type !== "text/markdown") return detail;
+  return {
+    ...detail,
+    detail: { ...detail.detail, content: branchDesignMarkdown(detail.detail.content) }
+  };
 }
 
 function DetailView({ detail, lang }: { detail: PlatformInformationDetailResponse; lang: Lang }) {
@@ -365,67 +400,49 @@ export function ChangeRecordsInformationPanel(props: PanelProps) {
 
 export function BranchFilesInformationPanel(props: PanelProps) {
   const c = COPY[props.lang];
-  const { api, projectId } = props;
-  const [expanded, setExpanded] = useState<Record<string, {
-    loading: boolean;
-    files?: PlatformInformationBranchFilesPage["items"];
-    error?: string;
-  }>>({});
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
-  async function toggleFiles(detailId: string): Promise<void> {
-    if (expanded[detailId]?.files !== undefined) {
-      setExpanded((previous) => Object.fromEntries(
-        Object.entries(previous).filter(([key]) => key !== detailId)
-      ));
+  async function openDesign(snapshotDetailId: string, select: (id: string) => void): Promise<void> {
+    if (props.api.listPlatformInformationBranchFiles === undefined) {
+      setErrors((previous) => ({ ...previous, [snapshotDetailId]: "BRANCH_DESIGN_LOCATOR_ROUTE_UNAVAILABLE" }));
       return;
     }
-    if (api.listPlatformInformationBranchFiles === undefined) {
-      setExpanded((previous) => ({ ...previous, [detailId]: { loading: false, error: "list_files unavailable" } }));
-      return;
-    }
-    setExpanded((previous) => ({ ...previous, [detailId]: { loading: true } }));
+    setErrors((previous) => {
+      const next = { ...previous };
+      delete next[snapshotDetailId];
+      return next;
+    });
     try {
-      const page = await api.listPlatformInformationBranchFiles(projectId, detailId, { limit: 100 });
-      setExpanded((previous) => ({ ...previous, [detailId]: { loading: false, files: page.items } }));
+      const files = await props.api.listPlatformInformationBranchFiles(props.projectId, snapshotDetailId, { limit: 100 });
+      const design = files.items.find((file) => file.path.split("/").filter(Boolean).at(-1)?.toLowerCase() === "design.md");
+      if (design?.detail_id === undefined) {
+        setErrors((previous) => ({ ...previous, [snapshotDetailId]: "BRANCH_DESIGN_FILE_NOT_FOUND" }));
+        return;
+      }
+      select(design.detail_id);
     } catch (reason) {
-      setExpanded((previous) => ({
+      setErrors((previous) => ({
         ...previous,
-        [detailId]: { loading: false, error: reason instanceof Error ? reason.message : "load failed" }
+        [snapshotDetailId]: reason instanceof Error ? reason.message : "BRANCH_DESIGN_LOAD_FAILED"
       }));
     }
   }
 
-  return <InformationPanel {...props} view="branch_files" title={c.branchFiles} emptyTechnical={{ label: "Code", value: "BRANCH_FILE_LOCATOR_ROUTE_UNAVAILABLE" }} renderItem={(raw, select) => {
+  return <InformationPanel {...props} view="branch_files" title={c.branchFiles} transformDetail={branchDesignDetail} renderItem={(raw, select) => {
     if (raw.item_kind !== "branch_snapshot") return null;
     if (raw.detail_id === undefined) {
-      return <article className="information-list-card static"><span className="information-kicker">{raw.snapshot_version}</span><strong>{raw.branch_name}</strong><code>{raw.commit_sha.slice(0, 8)}</code><span>{raw.file_count} {c.files} · {raw.changed_file_count} {c.changed}</span><time>{formatTime(raw.uploaded_at, props.lang)}</time><p>{c.unavailableFiles}</p><code>BRANCH_FILE_LOCATOR_ROUTE_UNAVAILABLE</code></article>;
+      return <article className="information-list-card static"><span className="information-kicker">{raw.snapshot_version}</span><strong>{raw.branch_name}</strong><code>{raw.commit_sha.slice(0, 8)}</code><span>{raw.file_count} {c.files} · {raw.changed_file_count} {c.changed}</span><time>{formatTime(raw.uploaded_at, props.lang)}</time><code>BRANCH_DESIGN_LOCATOR_ROUTE_UNAVAILABLE</code></article>;
     }
-    const detailId = raw.detail_id;
-    const state = expanded[detailId];
+    const snapshotDetailId = raw.detail_id;
     return <div className="information-snapshot">
-      {itemButton(detailId, raw.snapshot_version, c.open, <>
+      {itemButton(snapshotDetailId, raw.snapshot_version, c.open, <>
         <span className="information-kicker">{raw.snapshot_version}</span>
         <strong>{raw.branch_name}</strong>
         <code>{raw.commit_sha.slice(0, 8)}</code>
-        <span>{raw.file_count} {c.files} · {raw.changed_file_count} {c.changed}</span>
+        <span>{raw.changed_file_count} {c.changed}</span>
         <time>{formatTime(raw.uploaded_at, props.lang)}</time>
-      </>, () => void toggleFiles(detailId))}
-      {state?.loading === true ? <p className="information-files-note">{c.detailLoading}</p> : null}
-      {state?.error !== undefined ? <p className="information-files-note">{state.error}</p> : null}
-      {state?.files !== undefined ? (
-        state.files.length === 0
-          ? <p className="information-files-note">{c.empty}</p>
-          : <ul className="information-files">
-              {state.files.map((file) => (
-                <li key={file.detail_id}>
-                  <button type="button" title={file.path} onClick={() => select(file.detail_id)}>
-                    <code>{file.path}</code>
-                    <small>{file.size} B</small>
-                  </button>
-                </li>
-              ))}
-            </ul>
-      ) : null}
+      </>, () => void openDesign(snapshotDetailId, select))}
+      {errors[snapshotDetailId] !== undefined ? <p className="information-files-note">{errors[snapshotDetailId]}</p> : null}
     </div>;
   }} />;
 }

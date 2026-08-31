@@ -208,15 +208,27 @@ describe("project information panels", () => {
     expect(css).toMatch(/\.information-detail\s*\{[^{}]*overflow-y:\s*auto;[^{}]*overscroll-behavior:\s*contain;/u);
   });
 
-  it("uses canonical branch and version pages without falling back to legacy full-file APIs", async () => {
+  it("shows only a cleaned design.md from a branch snapshot and does not fall back to legacy full-file APIs", async () => {
     const listProjectFiles = vi.fn();
     const list = vi.fn(async (_project: string, view: PlatformInformationPage["view"]) => view === "branch_files"
-      ? page(view, [{ item_kind: "branch_snapshot", branch_name: "feature", snapshot_version: "pv_2", commit_sha: "e".repeat(40), uploaded_at: "2026-08-13T00:00:00Z", file_count: 8, changed_file_count: 2, sort_key: "feature" }])
+      ? page(view, [{ item_kind: "branch_snapshot", branch_name: "feature", snapshot_version: "pv_2", commit_sha: "e".repeat(40), uploaded_at: "2026-08-13T00:00:00Z", file_count: 8, changed_file_count: 2, detail_id: "bf_1", sort_key: "feature" }])
       : page(view, [{ item_kind: "version_record", branch_name: "feature", snapshot_version: "pv_2", commit_sha: "e".repeat(40), uploaded_at: "2026-08-13T00:00:00Z", file_count: 8, changed_file_count: 2, diff_ref: "diff_2", sort_key: "version" }]));
-    const sharedApi = api({ listPlatformInformation: list, listProjectFiles });
+    const listBranchFiles = vi.fn(async () => ({ schema_version: 1 as const, contract_kind: "branch_files_page" as const, project_id: "prj_one", detail_id: "bf_1", items: [
+      { detail_id: "bff_other", path: "src/index.ts", size: 1, content_hash: `sha256:${"a".repeat(64)}` },
+      { detail_id: "bff_design", path: "docs/design.md", size: 100, content_hash: `sha256:${"b".repeat(64)}` }
+    ], next_cursor: null }));
+    const detail = vi.fn(async (): Promise<PlatformInformationDetailResponse> => ({ schema_version: 1, contract_kind: "detail_response", view: "branch_files", project_id: "prj_one", detail_id: "bff_design", detail: { detail_kind: "branch_file", content: "schema_version: 2 artifact_type: design content_hash: sha256:e890 generated: true\n# Design\n\nIntro\n\n## Requirements\n\n- machine clause\n\n## Decisions\n\nHuman decision", content_hash: `sha256:${"e".repeat(64)}`, media_type: "text/markdown" } }));
+    const sharedApi = api({ listPlatformInformation: list, listProjectFiles, listPlatformInformationBranchFiles: listBranchFiles, getPlatformInformationDetail: detail });
     const { rerender } = render(<BranchFilesInformationPanel api={sharedApi} projectId="prj_one" lang="en" />);
-    expect(await screen.findByText("feature")).toBeInTheDocument();
-    expect(screen.getByText("BRANCH_FILE_LOCATOR_ROUTE_UNAVAILABLE")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Open pv_2" }));
+    expect(await screen.findByRole("heading", { name: "Design" })).toBeInTheDocument();
+    expect(screen.getByText("Intro")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Decisions" })).toBeInTheDocument();
+    expect(screen.getByText("Human decision")).toBeInTheDocument();
+    expect(screen.queryByText("schema_version: 2 artifact_type: design content_hash: sha256:e890 generated: true")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Requirements" })).not.toBeInTheDocument();
+    expect(screen.queryByText("machine clause")).not.toBeInTheDocument();
+    expect(screen.queryByText("src/index.ts")).not.toBeInTheDocument();
     expect(listProjectFiles).not.toHaveBeenCalled();
 
     rerender(<VersionRecordsInformationPanel api={sharedApi} projectId="prj_one" lang="en" />);
