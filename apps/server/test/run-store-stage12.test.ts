@@ -8,7 +8,7 @@ import { createBranchMonitorCursorPort } from "../src/runs/branch-monitor-cursor
 import { MemoryRunStore } from "../src/runs/memory-store.js";
 import { createStage12MonitorVerifierAdapter } from "../src/runs/stage12-monitor-verifier.js";
 import { createProductionBranchMonitorTrust } from "../src/runs/production-branch-monitor-trust.js";
-import type { RunStore } from "../src/runs/store.js";
+import { aggregateRunPhases, type RunStore } from "../src/runs/store.js";
 
 const canonicalIdentity = {
   runId: "run_stage12",
@@ -153,6 +153,10 @@ describe("RunStore Stage 12 identity", () => {
       lastEventAt: "2026-08-13T04:00:02Z", endedAt: null,
       currentPhase: "plan"
     });
+    const events = await store.listEvents(identity.runId);
+    expect(aggregateRunPhases(events)).toMatchObject([{
+      id: "plan", ended_at: "2026-08-13T04:00:02Z", duration_ms: 1_000, active_attempt: null
+    }]);
   });
 
   it("allows producer sequence one in a new Stage 12 phase/attempt group", async () => {

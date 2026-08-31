@@ -345,9 +345,14 @@ export function aggregateRunPhases(events: readonly RunEventRecord[]): RunPhaseS
   const attemptsByPhase = new Map<string, MutableAttempt[]>();
   const preparationsByPhase = new Map<string, MutablePreparation[]>();
   const reconciledPhases = new Set<string>();
-  const sorted = [...events].sort((left, right) =>
-    left.serverCursor - right.serverCursor || left.eventId.localeCompare(right.eventId)
-  );
+  const sorted = [...events].sort((left, right) => {
+    if (left.planEvent !== null && right.planEvent !== null) {
+      return WORKFLOW_PHASE_ORDER.indexOf(left.planEvent.phase) - WORKFLOW_PHASE_ORDER.indexOf(right.planEvent.phase) ||
+        left.planEvent.attempt - right.planEvent.attempt || left.planEvent.producer_seq - right.planEvent.producer_seq ||
+        left.eventId.localeCompare(right.eventId);
+    }
+    return left.serverCursor - right.serverCursor || left.eventId.localeCompare(right.eventId);
+  });
   let legacyArchivePreparationStart: RunEventRecord | null = null;
   let legacyArchivePreparationEnd: RunEventRecord | null = null;
   for (const event of sorted) {
@@ -463,7 +468,11 @@ export function aggregateRunPhases(events: readonly RunEventRecord[]): RunPhaseS
       preparation.endCursor = event.serverCursor;
       continue;
     }
-    if (event.eventType === "phase.start") {
+    if (event.eventType === "phase.start" || event.eventType === "phase_started") {
+      const existingAttempt = declaredAttempt === null
+        ? undefined
+        : attempts.findLast((item) => item.attempt === declaredAttempt && item.ended_at === null);
+      if (existingAttempt !== undefined) continue;
       const matchingPreparation = preparations.findLast((item) =>
         item.ended_at === null &&
         (declaredAttempt === null || item.attempt === declaredAttempt)
@@ -518,7 +527,7 @@ export function aggregateRunPhases(events: readonly RunEventRecord[]): RunPhaseS
     }
     attempt.trigger ??= payloadText(event.payload, "trigger");
     attempt.from_phase ??= payloadText(event.payload, "from_phase");
-    if (event.eventType === "phase.end" || event.eventType === "phase.auto_sealed") {
+    if (event.eventType === "phase.end" || event.eventType === "phase_ended" || event.eventType === "phase.auto_sealed") {
       attempt.ended_at = event.occurredAt;
       attempt.status = payloadText(event.payload, "status") ??
         (event.eventType === "phase.auto_sealed" ? "AUTO_SEALED" : null);
