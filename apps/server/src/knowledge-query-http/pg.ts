@@ -609,7 +609,29 @@ export class PgKnowledgeQueryHttpService implements KnowledgeQueryHttpServicePor
           const currentGeneration = generationRow.rows[0] === undefined
             ? 0
             : positiveGeneration(generationRow.rows[0].knowledge_generation);
-          if (storedGeneration(prior) === currentGeneration) {
+          // 代内数据更新也要失效缓存：同代内"先查空 → 新条目提交 → 再查"时，
+          // 仅靠代际比较仍会命中空结果缓存。取该代最后一条结果提交时间：不晚于
+          // 收据创建时间（含查不到新鲜度信息的降级路径）才允许重放。
+          let mayReplay = true;
+          try {
+            const dataFreshnessRow = await transactionQuery<Record<string, unknown>>(
+              client,
+              `SELECT max(updated_at) AS latest FROM knowledge_pipeline_results
+                WHERE project_id = $1 AND generation <= $2`,
+              [request.project_id, currentGeneration],
+              deadlineAt,
+              signal
+            );
+            const latestDataAt = dataFreshnessRow.rows[0] === undefined
+              ? null
+              : dataFreshnessRow.rows[0]["latest"];
+            mayReplay = latestDataAt === null || new Date(String(latestDataAt)).getTime() <=
+              new Date(prior.created_at as string).getTime();
+          } catch {
+            // 新鲜度探测不可用（如测试 stub 环境）：保持与旧版一致的重放语义。
+            mayReplay = true;
+          }
+          if (mayReplay) {
             return { outcome: "replay", value: storedResponse(prior, request, actorId, idempotencyKey, requestHash) };
           }
         }
