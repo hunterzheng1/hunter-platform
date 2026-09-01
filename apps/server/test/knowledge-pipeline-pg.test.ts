@@ -865,7 +865,7 @@ describe("PostgreSQL knowledge pipeline ports", () => {
     expect(scripted.queries).not.toContain("COMMIT");
   });
 
-  it("rejects more than five knowledge results before opening a transaction", async () => {
+  it("rejects more than twenty knowledge results before opening a transaction", async () => {
     let connects = 0;
     const port = new PgKnowledgeCommitPort({
       connect: async () => {
@@ -873,7 +873,7 @@ describe("PostgreSQL knowledge pipeline ports", () => {
         throw new Error("database should not be reached");
       }
     } as unknown as Pool);
-    const results = Array.from({ length: 6 }, (_, index) => knowledgeResultInput({
+    const results = Array.from({ length: 21 }, (_, index) => knowledgeResultInput({
       knowledge_id: `kn_pg_fixture_${index}`,
       content_hash: hash(`knowledge-content-${index}`)
     }));

@@ -1814,9 +1814,9 @@ describe("knowledge pipeline v1", () => {
     expect(replay.knowledge_extraction_status.status).toBe("ready");
   });
 
-  it("accepts one to five quality results and rejects a sixth", async () => {
+  it("accepts one to twenty quality results and rejects a twenty-first", async () => {
     const { pipeline } = setup();
-    const candidates = Array.from({ length: 6 }, (_, index) =>
+    const candidates = Array.from({ length: 21 }, (_, index) =>
       ({
         ...knowledgeCandidate(`quality-${index}`, hash(String(index))),
         source_change_key: "change-quality"

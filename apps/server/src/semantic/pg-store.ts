@@ -319,7 +319,11 @@ export class PgSemanticStore implements SemanticStore {
     if (options.kinds !== undefined && options.kinds.length === 0) return [];
     const parameters: unknown[] = [needle];
     const filters = [
-      "d.search_vector @@ plainto_tsquery('simple', $1)",
+      // 中文子串语义：原文 token 匹配 ∪ CJK bigram 匹配（见迁移 035）。
+      // plainto_tsquery 对 bigram 串做 AND 组合："问候 候语" = 问候 & 候语，
+      // 文档同时含两个 bigram 即命中——对 2~3 字中文查询近似子串检索。
+      "(d.search_vector @@ plainto_tsquery('simple', $1) OR " +
+        "d.search_vector @@ plainto_tsquery('simple', cjk_bigrams($1)))",
       "COALESCE(d.metadata->>'status', '') <> 'deprecated'"
     ];
     if (typeof projectScope === "string") {

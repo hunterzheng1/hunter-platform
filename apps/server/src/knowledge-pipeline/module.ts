@@ -655,7 +655,7 @@ export function createKnowledgePipeline(
       });
       grouped.set(result.content_hash, existing);
     }
-    if (grouped.size > 5) {
+    if (grouped.size > 20) {
       throw new KnowledgePipelineError("KNOWLEDGE_RESULT_LIMIT_EXCEEDED", false);
     }
 

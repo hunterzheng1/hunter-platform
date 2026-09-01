@@ -462,6 +462,13 @@ function responseForFailure(
   return response;
 }
 
+function storedGeneration(receipt: ReceiptRow): number {
+  const raw = receipt.index_generation;
+  const match = typeof raw === "string" ? /^(?:knowledge_generation:)?(\d+)$/.exec(raw) : null;
+  if (match !== null) return Number(match[1]);
+  return 0;
+}
+
 function storedResponse(
   row: ReceiptRow,
   request: KnowledgeQueryHttpRequest,
@@ -586,7 +593,25 @@ export class PgKnowledgeQueryHttpService implements KnowledgeQueryHttpServicePor
               error: { code: "KNOWLEDGE_QUERY_IDEMPOTENCY_CONFLICT", retryable: false }
             };
           }
-          return { outcome: "replay", value: storedResponse(prior, request, actorId, idempotencyKey, requestHash) };
+          // 幂等重放只在索引代际未变时成立：同文本查询在归档/重建后必须拿到新
+          // 结果。CLI 幂等键按 query 文本恒定（knowledge-query:<hash>），若服务端
+          // 无条件重放，新知识入库后同文本永远返回旧 generation 的空结果——
+          // 2026-09 自测「问候语」复现：gen1 查 0 条，v3 归档入库后仍查 0。
+          // 这里读取当前代际；与存储的代际不一致时放弃重放、重新执行（幂等键
+          // 仍保留，请求一致时不冲突）。
+          const generationRow = await transactionQuery<Record<string, unknown>>(
+            client,
+            "SELECT knowledge_generation FROM knowledge_pipeline_project_fences WHERE project_id=$1 FOR SHARE",
+            [request.project_id],
+            deadlineAt,
+            signal
+          );
+          const currentGeneration = generationRow.rows[0] === undefined
+            ? 0
+            : positiveGeneration(generationRow.rows[0].knowledge_generation);
+          if (storedGeneration(prior) === currentGeneration) {
+            return { outcome: "replay", value: storedResponse(prior, request, actorId, idempotencyKey, requestHash) };
+          }
         }
         const generationRow = await transactionQuery<Record<string, unknown>>(
           client,
@@ -642,7 +667,16 @@ export class PgKnowledgeQueryHttpService implements KnowledgeQueryHttpServicePor
           `INSERT INTO knowledge_query_http_receipts(
              actor_id, project_id, idempotency_key, request_hash, query_hash, query_id,
              receipt_id, result_set_hash, index_generation, response_json, created_at
-           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11)`,
+           ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11)
+           ON CONFLICT (actor_id, project_id, idempotency_key) DO UPDATE SET
+             request_hash = EXCLUDED.request_hash,
+             query_hash = EXCLUDED.query_hash,
+             query_id = EXCLUDED.query_id,
+             receipt_id = EXCLUDED.receipt_id,
+             result_set_hash = EXCLUDED.result_set_hash,
+             index_generation = EXCLUDED.index_generation,
+             response_json = EXCLUDED.response_json,
+             created_at = EXCLUDED.created_at`,
           [actorId, request.project_id, idempotencyKey, requestHash, request.query_hash,
             response.query_id, response.receipt.receipt_id, response.receipt.result_set_hash,
             response.receipt.index_generation ?? null, canonicalJson(response), executedAt],

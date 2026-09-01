@@ -1613,6 +1613,8 @@ export class PgKnowledgeIndex implements KnowledgeIndex {
             AND (position(lower($2) in lower(display_title)) > 0 OR
                  position(lower($2) in lower(summary)) > 0 OR
                  position(lower($2) in lower(reusability_scope)) > 0 OR
+                 position(lower($2) in lower(body)) > 0 OR
+                 position(lower($2) in lower(coalesce(keywords::text, ''))) > 0 OR
                  EXISTS (SELECT 1 FROM jsonb_array_elements_text(source_refs) ref
                           WHERE position(lower($2) in lower(ref)) > 0))
           ORDER BY updated_at DESC, knowledge_id ASC LIMIT $3`,
@@ -1632,7 +1634,10 @@ function validateCommitInput(raw: CommitKnowledgeResultsInput): {
 } {
   const record = safeOwnRecord(raw, ["job_id", "generation", "output_hash", "results", "now"], "KNOWLEDGE_COMMIT_INVALID");
   const results = safeOwnArray(record.results, "KNOWLEDGE_COMMIT_INVALID").map(validateKnowledgeResult);
-  if (results.length > 5) fail("KNOWLEDGE_RESULT_LIMIT_EXCEEDED");
+  // 单 job 知识结果上限：旧值 5 会让 6+ 候选的真实变更静默丢条目（2026-09 自测
+// greeting-module 6 候选丢 1）。20 对单 change 归档仍是有界上限，且 KnowledgeIndexQuery
+// 查询侧另有 max_results ≤ 100 的预算约束。
+if (results.length > 20) fail("KNOWLEDGE_RESULT_LIMIT_EXCEEDED");
   const seen = new Set<string>();
   for (const result of results) {
     if (seen.has(result.content_hash)) fail("KNOWLEDGE_RESULT_INVALID");
@@ -1655,7 +1660,10 @@ function validateKnowledgeResultsForJob(
   results: readonly KnowledgeResult[],
   job: KnowledgeExtractionJob
 ): void {
-  if (results.length > 5) fail("KNOWLEDGE_RESULT_LIMIT_EXCEEDED");
+  // 单 job 知识结果上限：旧值 5 会让 6+ 候选的真实变更静默丢条目（2026-09 自测
+// greeting-module 6 候选丢 1）。20 对单 change 归档仍是有界上限，且 KnowledgeIndexQuery
+// 查询侧另有 max_results ≤ 100 的预算约束。
+if (results.length > 20) fail("KNOWLEDGE_RESULT_LIMIT_EXCEEDED");
   const allowedCandidateIds = new Set(job.knowledge_candidates.map((candidate) => candidate.candidate_id));
   for (const result of results) {
     if (result.project_id !== job.project_id || result.generation !== job.generation ||
