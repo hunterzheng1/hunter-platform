@@ -625,9 +625,10 @@ export class PgKnowledgeQueryHttpService implements KnowledgeQueryHttpServicePor
             const latestDataAt = dataFreshnessRow.rows[0] === undefined
               ? null
               : dataFreshnessRow.rows[0]["latest"];
-            mayReplay = latestDataAt === null || new Date(String(latestDataAt)).getTime() <=
+            mayReplay = latestDataAt === null || new Date(latestDataAt as Date).getTime() <=
               new Date(prior.created_at as string).getTime();
-          } catch {
+          } catch (freshnessError) {
+            console.error(`[cache-debug] freshness probe failed: ${freshnessError instanceof Error ? freshnessError.message : String(freshnessError)}`);
             // 新鲜度探测不可用（如测试 stub 环境）：保持与旧版一致的重放语义。
             mayReplay = true;
           }
