@@ -19,8 +19,9 @@ describe("PgSemanticStore search scoping", () => {
     expect(query.mock.calls[0]?.[0]).toContain("d.kind = ANY($3::text[])");
     expect(query.mock.calls[0]?.[0]).toContain("g.schema_version = $4");
     expect(query.mock.calls[0]?.[0]).toContain(
-      "g.schema_version IS NULL AND d.artifact_id = 'ingest'"
+      "to_tsvector('simple', cjk_bigrams(coalesce(d.title, '') || ' ' || coalesce(d.body, '')))"
     );
+    expect(query.mock.calls[0]?.[0]).toContain("@@ plainto_tsquery('simple', cjk_bigrams($1))");
     expect(query.mock.calls[0]?.[1]).toEqual([
       "needle",
       ["prj_a", "prj_b"],

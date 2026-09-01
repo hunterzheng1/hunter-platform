@@ -323,7 +323,8 @@ export class PgSemanticStore implements SemanticStore {
       // plainto_tsquery 对 bigram 串做 AND 组合："问候 候语" = 问候 & 候语，
       // 文档同时含两个 bigram 即命中——对 2~3 字中文查询近似子串检索。
       "(d.search_vector @@ plainto_tsquery('simple', $1) OR " +
-        "d.search_vector @@ plainto_tsquery('simple', cjk_bigrams($1)))",
+        "to_tsvector('simple', cjk_bigrams(coalesce(d.title, '') || ' ' || coalesce(d.body, ''))) " +
+        "@@ plainto_tsquery('simple', cjk_bigrams($1)))",
       "COALESCE(d.metadata->>'status', '') <> 'deprecated'"
     ];
     if (typeof projectScope === "string") {
