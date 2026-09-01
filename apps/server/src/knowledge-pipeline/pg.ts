@@ -358,6 +358,17 @@ function snapshotArchive(value: unknown, reasonCode = "ARCHIVE_INPUT_INVALID"): 
   };
 }
 
+/** 验证收据的幂等比较视图：剔除 validated_at。服务端每次上传都重新验证并生成
+ * 新时间戳——它不是包身份的一部分；保留在比较里会让同包幂等重传永远
+ * ARCHIVE_IDENTITY_CONFLICT（2026-09 真实环境自测复现：重传同一 ZIP，
+ * CLI 收到 knowledge_status=failed 并被提示"可重试"，但每次重试都同样失败）。 */
+function identityReceipt(receipt: unknown): unknown {
+  if (receipt === null || typeof receipt !== "object" || Array.isArray(receipt)) return receipt;
+  const clone: Record<string, unknown> = { ...(receipt as Record<string, unknown>) };
+  delete clone["validated_at"];
+  return clone;
+}
+
 function archiveIdentityEqual(left: StoredArchive, right: StoredArchive): boolean {
   return left.schema_version === right.schema_version && left.project_id === right.project_id &&
     left.change_key === right.change_key && left.archive_id === right.archive_id &&
@@ -371,7 +382,8 @@ function archiveIdentityEqual(left: StoredArchive, right: StoredArchive): boolea
     left.manifest_bytes.every((byte, index) => byte === right.manifest_bytes[index]) &&
     canonicalJson(left.knowledge_candidates) === canonicalJson(right.knowledge_candidates) &&
     canonicalJson(left.project_content_candidates) === canonicalJson(right.project_content_candidates) &&
-    canonicalJson(left.validation_receipt) === canonicalJson(right.validation_receipt);
+    canonicalJson(identityReceipt(left.validation_receipt)) ===
+      canonicalJson(identityReceipt(right.validation_receipt));
 }
 
 function archiveCanonicalEqual(left: StoredArchive, right: StoredArchive): boolean {

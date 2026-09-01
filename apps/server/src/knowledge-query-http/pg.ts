@@ -642,7 +642,12 @@ export class PgKnowledgeQueryHttpService implements KnowledgeQueryHttpServicePor
           if (snapshots.some((item) => item.project_id !== request.project_id || item.generation > generation)) unavailable();
           let remaining = request.budget.max_total_summary_bytes;
           const projected: KnowledgeQueryHttpResult[] = [];
-          for (const item of snapshots.filter((value) => value.generation === generation)) {
+          // 知识条目跨代累积：generation 是索引版本号而非过滤条件。若只取
+          // `=== 当前代`，每次新 change 归档后代际递增，旧 change 的所有知识
+          // 都会从查询结果消失（2026-09 自测：shout 归档后 gen 4→5，greeting
+          // 的「问候语」条目随之查不到）。任何未超过当前代际的 active 条目
+          // 都应可查。
+          for (const item of snapshots.filter((value) => value.generation <= generation)) {
             const mapped = resultFor(item, remaining);
             if (mapped === null) continue;
             const bytes = new TextEncoder().encode(mapped.summary).byteLength;
