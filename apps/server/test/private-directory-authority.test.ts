@@ -18,7 +18,12 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// guardian 按 (path, role) 冷启动 powershell.exe；满负载下单次冷启动 13-20s，
+// 一个用例常串行拉起多个 guardian。30s 默认预算在负载漂移下不够，放宽到 120s
+// 只影响本文件（全局 30s 保持不变，避免掩盖其他套件的真实挂起）。
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 import {
   closePrivateDirectoryAuthority,
@@ -98,7 +103,9 @@ async function guardianLine(child: ReturnType<typeof spawn>): Promise<string> {
   if (child.stdout === null) throw new Error("guardian stdout is unavailable");
   const lines = createInterface({ input: child.stdout });
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("guardian did not become ready")), 15_000);
+    // 满负载下 powershell 冷启动实测 13-20s+；15s 预算会先于 vitest 超时误报
+    // "guardian did not become ready"。与文件级 120s 预算同数量级放宽。
+    const timeout = setTimeout(() => reject(new Error("guardian did not become ready")), 60_000);
     lines.once("line", (line) => { clearTimeout(timeout); resolve(line); });
     child.once("error", (error) => { clearTimeout(timeout); reject(error); });
     child.once("exit", (code) => {

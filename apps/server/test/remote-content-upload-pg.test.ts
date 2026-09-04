@@ -4,7 +4,12 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { describe, expect, it, afterEach } from "vitest";
+import { describe, expect, it, afterEach, vi } from "vitest";
+
+// local-cas 内部按路径冷启动 powershell guardian；满负载下单次冷启动 13-20s。
+// 放宽本文件预算，全局 30s 保持不变（见 private-directory-authority.test.ts
+// 同款注释）。
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 import { createRemoteContentUploadLocalCas } from "../src/remote-content-upload-pg/local-cas.js";
 import { createPgRemoteContentUploadHttpService } from "../src/remote-content-upload-pg/service.js";

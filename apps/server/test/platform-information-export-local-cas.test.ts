@@ -17,7 +17,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// local-cas 端口内部按路径冷启动 powershell guardian；满负载下单次冷启动
+// 13-20s，且用例各自新建根目录 → guardian 无法跨用例复用。放宽本文件预算，
+// 全局 30s 保持不变（见 private-directory-authority.test.ts 同款注释）。
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
+
 import {
   PLATFORM_INFORMATION_EXPORT_LIMITS,
   canonicalJson,

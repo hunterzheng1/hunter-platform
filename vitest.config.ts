@@ -50,7 +50,7 @@ export default defineConfig({
     env: {
       NEXT_PUBLIC_HUNTER_HARNESS_DEMO: ""
     },
-    globalSetup: ["./tests/setup/global-temp.ts"],
+    globalSetup: ["./tests/setup/global-temp.ts", "./tests/setup/powershell-warmup.ts"],
     maxWorkers: 2,
     coverage: {
       reporter: ["text", "json", "html"]
