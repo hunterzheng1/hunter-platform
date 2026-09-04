@@ -9,8 +9,6 @@ export const PROJECT_WORKSPACE_SECTIONS = [
   "branchFiles",
   "materials",
   "knowledge",
-  "changes",
-  "versions",
   "apiKeys"
 ] as const;
 

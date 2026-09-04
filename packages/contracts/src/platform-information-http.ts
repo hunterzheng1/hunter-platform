@@ -225,8 +225,6 @@ const listAuth = Object.freeze({
     branch_files: "files:read" as const,
     project_materials: "files:read" as const,
     project_knowledge: "knowledge:read" as const,
-    change_records: "files:read" as const,
-    version_records: "files:read" as const,
   }) satisfies Readonly<
     Record<
       z.infer<typeof platformInformationViewSchema>,

@@ -10,10 +10,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PlatformInformationDetailResponse, PlatformInformationPage } from "@hunter-harness/contracts";
 import {
   BranchFilesInformationPanel,
-  ChangeRecordsInformationPanel,
   ProjectKnowledgeInformationPanel,
-  ProjectMaterialsInformationPanel,
-  VersionRecordsInformationPanel
+  ProjectMaterialsInformationPanel
 } from "../components/project-information-panels";
 import type { HunterApi } from "../lib/api";
 
@@ -22,7 +20,6 @@ afterEach(cleanup);
 function page(view: PlatformInformationPage["view"], items: PlatformInformationPage["items"], nextCursor: string | null = null): PlatformInformationPage {
   const sort = view === "project_materials" ? "category_asc_path_asc_version_desc"
     : view === "project_knowledge" ? "extracted_at_desc_knowledge_id_asc"
-      : view === "change_records" ? "archived_at_desc_change_key_asc"
         : "uploaded_at_desc_snapshot_version_asc";
   return { schema_version: 1, contract_kind: "page", view, project_id: "prj_one", page_state: items.length === 0 ? "empty" : "ready", sort, items, next_cursor: nextCursor, failures: [] };
 }
@@ -153,62 +150,6 @@ describe("project information panels", () => {
     expect(retry).not.toHaveBeenCalled();
   });
 
-  it("loads change metadata and documents separately and exposes only the canonical archive reference", async () => {
-    const detail = vi.fn(async (_project: string, _view: PlatformInformationPage["view"], id: string): Promise<PlatformInformationDetailResponse> => id === "change-one"
-      ? { schema_version: 1, contract_kind: "detail_response", view: "change_records", project_id: "prj_one", detail_id: id, detail: { detail_kind: "change_record", document_refs: ["doc_design"], candidate_refs: ["candidate_1"], archive_download_ref: { archive_id: "archive_1", package_hash: `sha256:${"c".repeat(64)}` } } }
-      : { schema_version: 1, contract_kind: "detail_response", view: "change_records", project_id: "prj_one", detail_id: id, detail: { detail_kind: "change_document", content: "# Design", content_hash: `sha256:${"d".repeat(64)}`, media_type: "text/markdown" } });
-    render(<ChangeRecordsInformationPanel api={api({
-      listPlatformInformation: vi.fn(async () => page("change_records", [{ item_kind: "change_record", change_key: "change-one", title: "真实变更", archived_at: "2026-08-13T00:00:00Z", archive_status: "stored", knowledge_extraction_status: "ready", document_refs: ["doc_design"], candidate_count: 1, archive_download_ref: { archive_id: "archive_1", package_hash: `sha256:${"c".repeat(64)}` }, sort_key: "change-one" }])),
-      getPlatformInformationDetail: detail
-    })} projectId="prj_one" lang="en" />);
-
-    fireEvent.click(await screen.findByRole("button", { name: /Open 真实变更/ }));
-    fireEvent.click(await screen.findByRole("button", { name: "Open document doc_design" }));
-    expect(await screen.findByRole("heading", { name: "Design" })).toBeInTheDocument();
-    expect(screen.getByText("archive_1")).toBeInTheDocument();
-    expect(screen.getByText("ARCHIVE_AUTHENTICATED_DOWNLOAD_CLIENT_UNAVAILABLE")).toBeInTheDocument();
-  });
-
-  it("shows change-document loading and technical failure state, then retries the same document safely", async () => {
-    let documentAttempts = 0;
-    let release!: (value: PlatformInformationDetailResponse) => void;
-    const pending = new Promise<PlatformInformationDetailResponse>((resolve) => { release = resolve; });
-    const detail = vi.fn(async (_project: string, _view: PlatformInformationPage["view"], id: string): Promise<PlatformInformationDetailResponse> => {
-      if (id === "change-one") return { schema_version: 1, contract_kind: "detail_response", view: "change_records", project_id: "prj_one", detail_id: id, detail: { detail_kind: "change_record", document_refs: ["doc_design"], candidate_refs: [], archive_download_ref: null } };
-      documentAttempts += 1;
-      if (documentAttempts === 1) throw new Error("CHANGE_DOCUMENT_FETCH_FAILED");
-      return pending;
-    });
-    render(<ChangeRecordsInformationPanel api={api({
-      listPlatformInformation: vi.fn(async () => page("change_records", [{ item_kind: "change_record", change_key: "change-one", title: "Change one", archived_at: "2026-08-13T00:00:00Z", archive_status: "stored", knowledge_extraction_status: "ready", document_refs: ["doc_design"], candidate_count: 0, archive_download_ref: null, sort_key: "change-one" }])),
-      getPlatformInformationDetail: detail
-    })} projectId="prj_one" lang="en" />);
-
-    fireEvent.click(await screen.findByRole("button", { name: "Open Change one" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Open document doc_design" }));
-    expect(await screen.findByText("CHANGE_DOCUMENT_FETCH_FAILED")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(await screen.findByText("Loading change document on demand")).toBeInTheDocument();
-    release({ schema_version: 1, contract_kind: "detail_response", view: "change_records", project_id: "prj_one", detail_id: "doc_design", detail: { detail_kind: "change_document", content: "# Recovered", content_hash: `sha256:${"d".repeat(64)}`, media_type: "text/markdown" } });
-    expect(await screen.findByRole("heading", { name: "Recovered" })).toBeInTheDocument();
-    expect(detail).toHaveBeenCalledTimes(3);
-  });
-
-  it("reports unsupported change-document loading when the detail API disappears", async () => {
-    const shared = api({});
-    shared.listPlatformInformation = vi.fn(async () => page("change_records", [{ item_kind: "change_record", change_key: "change-one", title: "Change one", archived_at: "2026-08-13T00:00:00Z", archive_status: "stored", knowledge_extraction_status: "ready", document_refs: ["doc_design"], candidate_count: 0, archive_download_ref: null, sort_key: "change-one" }]));
-    shared.getPlatformInformationDetail = vi.fn(async (): Promise<PlatformInformationDetailResponse> => {
-      delete shared.getPlatformInformationDetail;
-      return { schema_version: 1, contract_kind: "detail_response", view: "change_records", project_id: "prj_one", detail_id: "change-one", detail: { detail_kind: "change_record", document_refs: ["doc_design"], candidate_refs: [], archive_download_ref: null } };
-    });
-    render(<ChangeRecordsInformationPanel api={shared} projectId="prj_one" lang="en" />);
-    fireEvent.click(await screen.findByRole("button", { name: "Open Change one" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Open document doc_design" }));
-    expect(await screen.findByText("CHANGE_DOCUMENT_DETAIL_UNSUPPORTED")).toBeInTheDocument();
-    expect(screen.getByText("Change document detail is not supported by this API client.")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
-  });
-
   it("keeps the pagination retry action at least 44px high", () => {
     const css = readFileSync(resolve(process.cwd(), "apps/web/app/globals.css"), "utf8");
     expect(css).toMatch(/\.information-pagination-failure\s*>\s*button[^{}]*\{[^{}]*min-height:\s*44px;/u);
@@ -226,16 +167,14 @@ describe("project information panels", () => {
 
   it("shows only a cleaned design.md from a branch snapshot and does not fall back to legacy full-file APIs", async () => {
     const listProjectFiles = vi.fn();
-    const list = vi.fn(async (_project: string, view: PlatformInformationPage["view"]) => view === "branch_files"
-      ? page(view, [{ item_kind: "branch_snapshot", branch_name: "feature", snapshot_version: "pv_2", commit_sha: "e".repeat(40), uploaded_at: "2026-08-13T00:00:00Z", file_count: 8, changed_file_count: 2, detail_id: "bf_1", sort_key: "feature" }])
-      : page(view, [{ item_kind: "version_record", branch_name: "feature", snapshot_version: "pv_2", commit_sha: "e".repeat(40), uploaded_at: "2026-08-13T00:00:00Z", file_count: 8, changed_file_count: 2, diff_ref: "diff_2", sort_key: "version" }]));
+    const list = vi.fn(async (_project: string, view: PlatformInformationPage["view"]) => page(view, [{ item_kind: "branch_snapshot", branch_name: "feature", snapshot_version: "pv_2", commit_sha: "e".repeat(40), uploaded_at: "2026-08-13T00:00:00Z", file_count: 8, changed_file_count: 2, detail_id: "bf_1", sort_key: "feature" }]));
     const listBranchFiles = vi.fn(async () => ({ schema_version: 1 as const, contract_kind: "branch_files_page" as const, project_id: "prj_one", detail_id: "bf_1", items: [
       { detail_id: "bff_other", path: "src/index.ts", size: 1, content_hash: `sha256:${"a".repeat(64)}` },
       { detail_id: "bff_design", path: "docs/design.md", size: 100, content_hash: `sha256:${"b".repeat(64)}` }
     ], next_cursor: null }));
     const detail = vi.fn(async (): Promise<PlatformInformationDetailResponse> => ({ schema_version: 1, contract_kind: "detail_response", view: "branch_files", project_id: "prj_one", detail_id: "bff_design", detail: { detail_kind: "branch_file", content: "---\nschema_version: 2\nartifact_type: design\ncontent_hash: sha256:e890\ngenerated: true\n---\n# Design\n\nIntro\n\n## Requirements\n\n- machine clause\n\n## Post-requirements\n\nMust stay hidden", content_hash: `sha256:${"e".repeat(64)}`, media_type: "text/markdown" } }));
     const sharedApi = api({ listPlatformInformation: list, listProjectFiles, listPlatformInformationBranchFiles: listBranchFiles, getPlatformInformationDetail: detail });
-    const { rerender } = render(<BranchFilesInformationPanel api={sharedApi} projectId="prj_one" lang="en" />);
+    render(<BranchFilesInformationPanel api={sharedApi} projectId="prj_one" lang="en" />);
     fireEvent.click(await screen.findByRole("button", { name: "Open pv_2" }));
     expect(await screen.findByRole("heading", { name: "Design" })).toBeInTheDocument();
     expect(screen.getByText("Intro")).toBeInTheDocument();
@@ -247,10 +186,6 @@ describe("project information panels", () => {
     expect(screen.queryByText("Must stay hidden")).not.toBeInTheDocument();
     expect(screen.queryByText("src/index.ts")).not.toBeInTheDocument();
     expect(listProjectFiles).not.toHaveBeenCalled();
-
-    rerender(<VersionRecordsInformationPanel api={sharedApi} projectId="prj_one" lang="en" />);
-    expect(await screen.findByText("diff_2")).toBeInTheDocument();
-    await waitFor(() => expect(list).toHaveBeenCalledWith("prj_one", "version_records", { limit: 50, cursor: null }));
   });
 
   it("gates concurrent load-more and stops on a non-progress cursor while deduplicating identities", async () => {
@@ -348,39 +283,6 @@ describe("project information panels", () => {
     rerender(<ProjectKnowledgeInformationPanel api={shared} projectId="prj_new" lang="en" />);
     expect(await screen.findByText("prj_new")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Load more" })).toBeEnabled();
-  });
-
-  it("requests a change detail only once per click and clears navigation across projects", async () => {
-    const detail = vi.fn(async (project: string): Promise<PlatformInformationDetailResponse> => ({ schema_version: 1, contract_kind: "detail_response", view: "change_records", project_id: project, detail_id: "change-one", detail: { detail_kind: "change_record", document_refs: ["doc_one"], candidate_refs: [], archive_download_ref: null } }));
-    const shared = api({ listPlatformInformation: vi.fn(async (project: string) => ({ ...page("change_records", [{ item_kind: "change_record", change_key: "change-one", title: project, archived_at: "2026-08-13T00:00:00Z", archive_status: "stored", knowledge_extraction_status: "ready", document_refs: ["doc_one"], candidate_count: 0, archive_download_ref: null, sort_key: project }]), project_id: project })), getPlatformInformationDetail: detail });
-    const { rerender } = render(<ChangeRecordsInformationPanel api={shared} projectId="prj_one" lang="en" />);
-    fireEvent.click(await screen.findByRole("button", { name: "Open prj_one" }));
-    expect(await screen.findByRole("button", { name: "Open document doc_one" })).toBeInTheDocument();
-    expect(detail).toHaveBeenCalledTimes(1);
-    rerender(<ChangeRecordsInformationPanel api={shared} projectId="prj_two" lang="en" />);
-    await screen.findByRole("button", { name: "Open prj_two" });
-    expect(screen.queryByRole("button", { name: "Open document doc_one" })).not.toBeInTheDocument();
-  });
-
-  it("clears the previous change navigation as soon as another change starts and keeps it clear on failure", async () => {
-    let rejectSecond!: (reason: unknown) => void;
-    const second = new Promise<PlatformInformationDetailResponse>((_resolve, reject) => { rejectSecond = reject; });
-    const detail = vi.fn(async (_project: string, _view: PlatformInformationPage["view"], id: string): Promise<PlatformInformationDetailResponse> => id === "one"
-      ? { schema_version: 1, contract_kind: "detail_response", view: "change_records", project_id: "prj_one", detail_id: id, detail: { detail_kind: "change_record", document_refs: ["doc_old"], candidate_refs: [], archive_download_ref: null } }
-      : second);
-    render(<ChangeRecordsInformationPanel api={api({
-      listPlatformInformation: vi.fn(async () => page("change_records", [
-        { item_kind: "change_record", change_key: "one", title: "One", archived_at: "2026-08-13T00:00:00Z", archive_status: "stored", knowledge_extraction_status: "ready", document_refs: ["doc_old"], candidate_count: 0, archive_download_ref: null, sort_key: "one" },
-        { item_kind: "change_record", change_key: "two", title: "Two", archived_at: "2026-08-12T00:00:00Z", archive_status: "failed", knowledge_extraction_status: "failed", document_refs: [], candidate_count: 0, archive_download_ref: null, sort_key: "two" }
-      ])), getPlatformInformationDetail: detail
-    })} projectId="prj_one" lang="en" />);
-    fireEvent.click(await screen.findByRole("button", { name: "Open One" }));
-    expect(await screen.findByRole("button", { name: "Open document doc_old" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Open Two" }));
-    expect(screen.queryByRole("button", { name: "Open document doc_old" })).not.toBeInTheDocument();
-    rejectSecond(new Error("raw backend secret"));
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Open document doc_old" })).not.toBeInTheDocument());
-    expect(screen.queryByText("raw backend secret")).not.toBeInTheDocument();
   });
 
   it("keeps loaded items and cursor after load-more failure, then retries that same cursor", async () => {

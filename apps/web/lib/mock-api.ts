@@ -810,8 +810,6 @@ export class MockApiClient implements HunterApi {
       branch_files: "uploaded_at_desc_snapshot_version_asc",
       project_materials: "category_asc_path_asc_version_desc",
       project_knowledge: "extracted_at_desc_knowledge_id_asc",
-      change_records: "archived_at_desc_change_key_asc",
-      version_records: "uploaded_at_desc_snapshot_version_asc",
     };
     return delay({
       schema_version: 1,

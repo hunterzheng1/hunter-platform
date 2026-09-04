@@ -16,7 +16,6 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 
 import type { BranchVersionQueryAdapter } from "../branch-version-query/index.js";
-import type { ChangeRecordsQueryAdapter } from "../change-records-query/index.js";
 import type { ProjectKnowledgeQueryAdapter } from "../project-knowledge-query/index.js";
 import type { ProjectMaterialsQueryAdapter } from "../project-materials/query-adapter.js";
 import type {
@@ -36,7 +35,6 @@ export interface PlatformInformationAdapters {
   readonly branchVersion?: BranchVersionQueryAdapter;
   readonly projectMaterials?: ProjectMaterialsQueryAdapter;
   readonly projectKnowledge?: ProjectKnowledgeQueryAdapter;
-  readonly changeRecords?: ChangeRecordsQueryAdapter;
   readonly export_module?: PlatformInformationExportModule;
   readonly export_records?: PlatformInformationExportRecordPort;
   readonly export_download?: PlatformInformationExportDownloadPort;
@@ -85,18 +83,6 @@ const policies = Object.freeze({
     scope: "knowledge:read" as const,
     content_types: Object.freeze(["knowledge_entry"] as const),
     sort: "extracted_at_desc_knowledge_id_asc" as const
-  }),
-  change_records: Object.freeze({
-    scope: "files:read" as const,
-    content_types: Object.freeze([
-      "change_document", "archive_package", "project_content_candidate"
-    ] as const),
-    sort: "archived_at_desc_change_key_asc" as const
-  }),
-  version_records: Object.freeze({
-    scope: "files:read" as const,
-    content_types: Object.freeze(["branch_file"] as const),
-    sort: "uploaded_at_desc_snapshot_version_asc" as const
   })
 });
 
@@ -258,9 +244,7 @@ async function queryPage(
     ? requireAdapter(adapters.projectMaterials, "project materials").query(serialized)
     : view === "project_knowledge"
       ? requireAdapter(adapters.projectKnowledge, "project knowledge").queryPage(serialized)
-      : view === "change_records"
-        ? requireAdapter(adapters.changeRecords, "change records").queryPage(serialized)
-        : requireAdapter(adapters.branchVersion, "branch version").query(serialized),
+      : requireAdapter(adapters.branchVersion, "branch version").query(serialized),
   "PLATFORM_INFORMATION_UNAVAILABLE", "platform information source is unavailable");
 }
 
@@ -344,8 +328,7 @@ export function registerPlatformInformationRoutes(
       cursor: string | null;
       cursor_verification: "server_port_required";
       sort: "last_event_at_desc_run_id_asc" | "uploaded_at_desc_snapshot_version_asc" |
-        "category_asc_path_asc_version_desc" | "extracted_at_desc_knowledge_id_asc" |
-        "archived_at_desc_change_key_asc";
+        "category_asc_path_asc_version_desc" | "extracted_at_desc_knowledge_id_asc";
     };
     const pages: Array<{
       request_cursor: string | null;
@@ -585,9 +568,7 @@ export function registerPlatformInformationRoutes(
       ? await requireAdapter(adapters.projectMaterials, "project materials").detail(serialized)
       : view === "project_knowledge"
         ? await requireAdapter(adapters.projectKnowledge, "project knowledge").queryDetail(serialized)
-        : view === "version_records" || view === "branch_files"
-          ? await requireAdapter(adapters.branchVersion, "branch version").queryDetail(serialized)
-          : await requireAdapter(adapters.changeRecords, "change records").queryDetail(serialized);
+        : await requireAdapter(adapters.branchVersion, "branch version").queryDetail(serialized);
     if (!result.ok) routeFailure(result.reason_code, "detail");
     if ("mode" in result && result.mode === "legacy_read_only") {
       routeFailure("PLATFORM_INFORMATION_LEGACY_READ_ONLY", "detail");

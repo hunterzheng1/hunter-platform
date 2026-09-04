@@ -17,15 +17,12 @@ import { classifyManagedFile, isProposalEditable } from "../lib/file-policy";
 import { ProjectApiKeysPanel } from "./project-api-keys";
 import {
   BranchFilesInformationPanel,
-  ChangeRecordsInformationPanel,
   ProjectKnowledgeInformationPanel,
-  ProjectMaterialsInformationPanel,
-  VersionRecordsInformationPanel
+  ProjectMaterialsInformationPanel
 } from "./project-information-panels";
 import { useI18n } from "../lib/i18n";
 import { runPreservingWindowScroll } from "../lib/preserve-scroll";
 import { ProjectSemanticPanels } from "./project-semantic-panels";
-import { ProjectVersionsPanel } from "./project-versions-panel";
 import {
   ProjectWorkspaceShell,
   WorkspaceFilterBar,
@@ -253,14 +250,12 @@ const COPY = {
   zh: {
     back: "返回项目列表",
     eyebrow: "项目工作台",
-    tabs: { branchFiles: "分支文件", materials: "项目资料", knowledge: "项目知识", changes: "变更记录", versions: "版本记录", apiKeys: "API 密钥" },
+    tabs: { branchFiles: "分支文件", materials: "项目资料", knowledge: "项目知识", apiKeys: "API 密钥" },
     loading: "正在加载项目工作台",
     pendingMaterialsTitle: "项目资料查询正在接入",
     pendingMaterialsDescription: "规则、架构事实、架构约束、指令和配置将在查询 Adapter 接通后显示。",
     legacyMaterialsTitle: "暂无可信项目资料投影",
     legacyMaterialsDescription: "当前文件来自普通 artifact 或历史归档，没有 branch snapshot；真实项目文件可在“分支文件”中查看，资料投影将在后续 Remote Sync 生成快照后显示。",
-    pendingChangesTitle: "变更记录查询正在接入",
-    pendingChangesDescription: "设计、计划、测试场景、变更总结和归档状态将在查询 Adapter 接通后显示。",
     pendingSectionTitle: "此工作台查询正在接入",
     pendingSectionDescription: "查询 Adapter 接通前不会展示模拟的生产数据。",
     technicalDetails: "技术详情",
@@ -329,14 +324,12 @@ const COPY = {
   en: {
     back: "Back to projects",
     eyebrow: "Project workbench",
-    tabs: { branchFiles: "Branch files", materials: "Project materials", knowledge: "Project knowledge", changes: "Changes", versions: "Version history", apiKeys: "API keys" },
+    tabs: { branchFiles: "Branch files", materials: "Project materials", knowledge: "Project knowledge", apiKeys: "API keys" },
     loading: "Loading project workspace",
     pendingMaterialsTitle: "Project materials query is being connected",
     pendingMaterialsDescription: "Rules, architecture facts and constraints, instructions, and configuration will appear after the query adapter is connected.",
     legacyMaterialsTitle: "No trusted project-material projection yet",
     legacyMaterialsDescription: "Current files came from regular artifacts or historical archives and have no branch snapshot. View the real files under Branch files; material projections appear after a later Remote Sync creates a snapshot.",
-    pendingChangesTitle: "Changes query is being connected",
-    pendingChangesDescription: "Designs, plans, test scenarios, change summaries, and archive status will appear after the query adapter is connected.",
     pendingSectionTitle: "This workspace query is being connected",
     pendingSectionDescription: "No simulated production data is shown before the query adapter is connected.",
     technicalDetails: "Technical details",
@@ -954,12 +947,6 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
             : <ProjectKnowledgeInformationPanel api={api} projectId={projectId} lang={lang} />,
           keepMounted: true
         } } : {}),
-        changes: { content: api.listPlatformInformation === undefined
-          ? <WorkspaceState technicalDetailsLabel={copy.technicalDetails} state={{ kind: "processing", title: copy.pendingChangesTitle, description: copy.pendingChangesDescription }} />
-          : <ChangeRecordsInformationPanel api={api} projectId={projectId} lang={lang} /> },
-        versions: { content: usesLegacyWorkspaceLists
-          ? <ProjectVersionsPanel api={api} artifacts={data.artifacts} lang={lang} />
-          : <VersionRecordsInformationPanel api={api} projectId={projectId} lang={lang} /> },
         apiKeys: { content: <ProjectApiKeysPanel projectId={projectId} />, keepMounted: true }
       }}
     />

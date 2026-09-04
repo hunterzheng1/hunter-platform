@@ -11,9 +11,7 @@
         "branch_monitor": "platform:read",
         "branch_files": "files:read",
         "project_materials": "files:read",
-        "project_knowledge": "knowledge:read",
-        "change_records": "files:read",
-        "version_records": "files:read"
+        "project_knowledge": "knowledge:read"
       }
     },
     "request_schema": "PlatformInformationListHttpQuery",
@@ -92,9 +90,7 @@
         "branch_monitor": "platform:read",
         "branch_files": "files:read",
         "project_materials": "files:read",
-        "project_knowledge": "knowledge:read",
-        "change_records": "files:read",
-        "version_records": "files:read"
+        "project_knowledge": "knowledge:read"
       }
     },
     "request_schema": "PlatformInformationExportCreateHttpRequest",
@@ -145,9 +141,7 @@
         "branch_monitor": "platform:read",
         "branch_files": "files:read",
         "project_materials": "files:read",
-        "project_knowledge": "knowledge:read",
-        "change_records": "files:read",
-        "version_records": "files:read"
+        "project_knowledge": "knowledge:read"
       }
     },
     "request_schema": null,
@@ -196,9 +190,7 @@
         "branch_monitor": "platform:read",
         "branch_files": "files:read",
         "project_materials": "files:read",
-        "project_knowledge": "knowledge:read",
-        "change_records": "files:read",
-        "version_records": "files:read"
+        "project_knowledge": "knowledge:read"
       }
     },
     "request_schema": null,
@@ -361,9 +353,7 @@
         "branch_monitor": "platform:read",
         "branch_files": "files:read",
         "project_materials": "files:read",
-        "project_knowledge": "knowledge:read",
-        "change_records": "files:read",
-        "version_records": "files:read"
+        "project_knowledge": "knowledge:read"
       }
     },
     "request_schema": "PlatformInformationListHttpQuery",

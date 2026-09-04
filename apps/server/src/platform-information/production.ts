@@ -20,11 +20,6 @@ import {
   createProjectMaterialsQueryAdapter
 } from "../project-materials/index.js";
 import {
-  ChangeRecordsCursorAuthority,
-  createChangeRecordsQueryAdapter,
-  PgChangeArchiveSource
-} from "../change-records-query/index.js";
-import {
   createProjectKnowledgeQueryAdapter,
   PgProjectKnowledgeRetryAuthority,
   PgProjectKnowledgeSource,
@@ -45,8 +40,6 @@ export interface ProductionPlatformInformationOptions {
   readonly projectMaterialsCursorSecret?: string;
   /** The independent signing secret for project-knowledge cursors. */
   readonly projectKnowledgeCursorSecret?: string;
-  /** The independent signing secret for archive-backed change cursors. */
-  readonly changeRecordsCursorSecret?: string;
 }
 
 export interface ProductionPlatformInformationEnvironmentOptions {
@@ -176,30 +169,10 @@ export function createProductionPlatformInformation(
     });
   }
 
-  let changeRecords: PlatformInformationAdapters["changeRecords"];
-  if (options.changeRecordsCursorSecret !== undefined) {
-    if (options.pool === undefined) {
-      throw new Error("CHANGE_RECORDS_PRODUCTION_DEPENDENCY_MISSING");
-    }
-    const cursorAuthority = new ChangeRecordsCursorAuthority(
-      Buffer.from(options.changeRecordsCursorSecret, "utf8")
-    );
-    const source = new PgChangeArchiveSource({
-      pool: options.pool,
-      cursor_authority: cursorAuthority
-    });
-    changeRecords = createChangeRecordsQueryAdapter({
-      source_port: source,
-      reference_port: source,
-      cursor_verifier: cursorAuthority
-    });
-  }
-
   return Object.freeze({
     ...(branchVersion === undefined ? {} : { branchVersion }),
     ...(projectMaterials === undefined ? {} : { projectMaterials }),
-    ...(projectKnowledge === undefined ? {} : { projectKnowledge }),
-    ...(changeRecords === undefined ? {} : { changeRecords })
+    ...(projectKnowledge === undefined ? {} : { projectKnowledge })
   });
 }
 
@@ -255,7 +228,7 @@ export async function createProductionPlatformInformationFromEnvironment(
     async (path: string): Promise<string> => await readFile(path, "utf8")
   );
 
-  const [projectMaterialsCursorSecret, projectKnowledgeCursorSecret, changeRecordsCursorSecret] =
+  const [projectMaterialsCursorSecret, projectKnowledgeCursorSecret] =
     await Promise.all([
       resolveCursorSecret({
         environment,
@@ -268,20 +241,13 @@ export async function createProductionPlatformInformationFromEnvironment(
         envName: "HUNTER_PROJECT_KNOWLEDGE_CURSOR_SECRET",
         readSecretFile,
         poolAvailable: options.pool !== undefined
-      }),
-      resolveCursorSecret({
-        environment,
-        envName: "HUNTER_CHANGE_RECORDS_CURSOR_SECRET",
-        readSecretFile,
-        poolAvailable: options.pool !== undefined
       })
     ]);
 
   const base = createProductionPlatformInformation({
     ...(options.pool === undefined ? {} : { pool: options.pool }),
     ...(projectMaterialsCursorSecret === undefined ? {} : { projectMaterialsCursorSecret }),
-    ...(projectKnowledgeCursorSecret === undefined ? {} : { projectKnowledgeCursorSecret }),
-    ...(changeRecordsCursorSecret === undefined ? {} : { changeRecordsCursorSecret })
+    ...(projectKnowledgeCursorSecret === undefined ? {} : { projectKnowledgeCursorSecret })
   });
   if (options.platformInformationExportRoot === undefined) return base;
   if (options.pool === undefined) throw new Error("PLATFORM_INFORMATION_EXPORT_PRODUCTION_DEPENDENCY_MISSING");

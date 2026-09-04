@@ -21,24 +21,22 @@ const COPY = {
     processingHint: "平台完成投影后会自动显示真实结果。", forbidden: "无权查看", forbiddenHint: "当前身份没有此项目视图的访问权限。",
     partial: "部分结果暂不可用", partialHint: "已加载的结果仍可查看。", failed: "知识提取失败", failedHint: "平台保留了失败状态，需使用可信任务身份重试。",
     error: "加载失败", errorHint: "平台暂时无法返回此视图，请稍后重试。", paginationFailure: "后续结果加载失败，已加载内容不受影响。", retry: "重试", retryMore: "重试加载更多", retryExtraction: "重试提取", loadMore: "加载更多", filter: "筛选当前结果", filterPlaceholder: "搜索名称、路径或版本",
-    technical: "技术详情", open: "打开", branchFiles: "分支快照", materials: "项目资料", knowledge: "项目知识", changes: "变更记录", versions: "版本记录",
+    technical: "技术详情", open: "打开", branchFiles: "分支快照", materials: "项目资料", knowledge: "项目知识",
     bounded: "普通列表最多显示 500 项；其余结果未加载。",
-    files: "个文件", changed: "项变化", source: "来源", relations: "个关系", archive: "归档引用", documents: "变更文档", candidates: "治理候选",
-    detailLoading: "正在按需加载详情", choose: "选择一项查看详情。", document: "文档", unavailableFiles: "当前 HTTP Interface 尚未暴露快照文件 locator；不会回退到旧的全量项目文件接口。",
-    unavailableDiff: "当前 HTTP Interface 尚未接通可信版本差异 locator。", unavailableDownload: "归档身份已就绪，但认证下载 client 尚未接通。",
-    documentLoading: "正在按需加载变更文档", documentFailure: "变更文档暂时无法加载，请重试。", documentUnsupported: "当前 API client 不支持加载变更文档详情。", remoteImageBlocked: "为保护隐私，已阻止加载远程图片"
+    files: "个文件", changed: "项变化", source: "来源", relations: "个关系",
+    detailLoading: "正在按需加载详情", choose: "选择一项查看详情。", unavailableFiles: "当前 HTTP Interface 尚未暴露快照文件 locator；不会回退到旧的全量项目文件接口。",
+    remoteImageBlocked: "为保护隐私，已阻止加载远程图片"
   },
   en: {
     loading: "Loading", empty: "Nothing here yet", emptyHint: "This view currently has no results.", processing: "Data is still processing",
     processingHint: "Real results appear after the platform projection completes.", forbidden: "Access denied", forbiddenHint: "Your identity cannot access this project view.",
     partial: "Some results are unavailable", partialHint: "Loaded results remain available.", failed: "Knowledge extraction failed", failedHint: "The failure is retained; retry requires a trusted job identity.",
     error: "Could not load", errorHint: "The platform could not return this view. Try again later.", paginationFailure: "More results could not be loaded. Existing results are unchanged.", retry: "Retry", retryMore: "Retry load more", retryExtraction: "Retry extraction", loadMore: "Load more", filter: "Filter current results", filterPlaceholder: "Search names, paths, or versions",
-    technical: "Technical details", open: "Open", branchFiles: "Branch snapshots", materials: "Project materials", knowledge: "Project knowledge", changes: "Change records", versions: "Version history",
+    technical: "Technical details", open: "Open", branchFiles: "Branch snapshots", materials: "Project materials", knowledge: "Project knowledge",
     bounded: "This list is capped at 500 loaded items; remaining results were not loaded.",
-    files: "files", changed: "changed", source: "Source", relations: "relations", archive: "Archive reference", documents: "Change documents", candidates: "Governance candidates",
-    detailLoading: "Loading detail on demand", choose: "Select an item to view its detail.", document: "document", unavailableFiles: "The HTTP interface does not expose a trusted snapshot-file locator yet; the legacy unbounded project-file API is not used.",
-    unavailableDiff: "The HTTP interface does not expose a trusted version-diff locator yet.", unavailableDownload: "Archive identity is available, but the authenticated download client is not wired yet.",
-    documentLoading: "Loading change document on demand", documentFailure: "The change document could not be loaded. Try again.", documentUnsupported: "Change document detail is not supported by this API client.", remoteImageBlocked: "Remote image blocked for privacy"
+    files: "files", changed: "changed", source: "Source", relations: "relations",
+    detailLoading: "Loading detail on demand", choose: "Select an item to view its detail.", unavailableFiles: "The HTTP interface does not expose a trusted snapshot-file locator yet; the legacy unbounded project-file API is not used.",
+    remoteImageBlocked: "Remote image blocked for privacy"
   }
 } as const;
 
@@ -58,8 +56,6 @@ function itemIdentity(item: Item): string {
     case "branch_snapshot": return `branch:${item.branch_name}:${item.snapshot_version}`;
     case "project_material": return `material:${item.material_id}`;
     case "knowledge_entry": return `knowledge:${item.knowledge_id}`;
-    case "change_record": return `change:${item.change_key}`;
-    case "version_record": return `version:${item.branch_name}:${item.snapshot_version}`;
   }
 }
 
@@ -309,14 +305,6 @@ function branchDesignDetail(detail: PlatformInformationDetailResponse): Platform
 }
 
 function DetailView({ detail, lang }: { detail: PlatformInformationDetailResponse; lang: Lang }) {
-  const c = COPY[lang];
-  if (detail.detail.detail_kind === "change_record") return <div className="information-detail-stack">
-    <h3>{c.documents}</h3>
-    {[...new Set(detail.detail.document_refs)].map((id) => <code key={id}>{id}</code>)}
-    <p>{c.candidates}: {detail.detail.candidate_refs.length}</p>
-    {detail.detail.archive_download_ref ? <><h3>{c.archive}</h3><code>{detail.detail.archive_download_ref.archive_id}</code><code>{detail.detail.archive_download_ref.package_hash}</code><p>{c.unavailableDownload}</p><code>ARCHIVE_AUTHENTICATED_DOWNLOAD_CLIENT_UNAVAILABLE</code></> : null}
-  </div>;
-  if (detail.detail.detail_kind === "version_diff") return <div className="information-detail-stack"><h3>{detail.detail.from_version} → {detail.detail.to_version}</h3>{[...new Set(detail.detail.changed_paths)].map((path) => <code key={path}>{path}</code>)}</div>;
   if (detail.detail.detail_kind === "branch_monitor") return <div className="information-detail-stack">{[...new Set(detail.detail.event_refs)].map((id) => <code key={id}>{id}</code>)}</div>;
   return <div className="information-detail-stack"><div className="information-detail-meta"><code>{detail.detail.media_type}</code><code>{detail.detail.content_hash}</code></div>{detail.detail.media_type === "text/markdown" ? <MarkdownPreview content={detail.detail.content} lang={lang} /> : <pre>{detail.detail.content}</pre>}</div>;
 }
@@ -362,49 +350,6 @@ export function ProjectKnowledgeInformationPanel(props: PanelProps) {
     if (raw.item_kind !== "knowledge_entry") return null;
     return itemButton(raw.knowledge_id, raw.display_title, c.open, <><span className="information-kicker">{machineLabel(raw.lifecycle_status, props.lang)}</span><strong>{raw.display_title}</strong><span>{raw.source_change_key} · {raw.relationship_count} {c.relations}</span><time>{formatTime(raw.extracted_at, props.lang)}</time></>, select);
   }} />;
-}
-
-export function ChangeRecordsInformationPanel(props: PanelProps) {
-  const c = COPY[props.lang];
-  const [record, setRecord] = useState<PlatformInformationDetailResponse | null>(null);
-  const [document, setDocument] = useState<PlatformInformationDetailResponse | null>(null);
-  const [documentId, setDocumentId] = useState<string | null>(null);
-  const [documentLoading, setDocumentLoading] = useState(false);
-  const [documentError, setDocumentError] = useState<unknown>(null);
-  const documentGeneration = useRef(0);
-  function clearRecordAndDocument(): void {
-    documentGeneration.current += 1;
-    setRecord(null); setDocument(null); setDocumentId(null); setDocumentLoading(false); setDocumentError(null);
-  }
-  useEffect(() => {
-    documentGeneration.current += 1;
-    setRecord(null); setDocument(null); setDocumentId(null); setDocumentLoading(false); setDocumentError(null);
-    return () => { documentGeneration.current += 1; };
-  }, [props.api, props.projectId]);
-  async function selectDocument(id: string): Promise<void> {
-    const generation = ++documentGeneration.current;
-    setDocumentId(id); setDocument(null); setDocumentError(null); setDocumentLoading(false);
-    if (props.api.getPlatformInformationDetail === undefined) {
-      setDocumentError(new Error("CHANGE_DOCUMENT_DETAIL_UNSUPPORTED"));
-      return;
-    }
-    setDocumentLoading(true);
-    try {
-      const value = await props.api.getPlatformInformationDetail(props.projectId, "change_records", id);
-      if (generation === documentGeneration.current) setDocument(value);
-    } catch (reason) {
-      if (generation === documentGeneration.current) setDocumentError(reason);
-    } finally {
-      if (generation === documentGeneration.current) setDocumentLoading(false);
-    }
-  }
-  return <div className="information-change-wrapper"><InformationPanel {...props} view="change_records" title={c.changes} onDetail={setRecord} onDetailStart={clearRecordAndDocument} onDetailReset={clearRecordAndDocument} onDetailError={clearRecordAndDocument} renderItem={(raw, select) => {
-    if (raw.item_kind !== "change_record") return null;
-    return itemButton(raw.change_key, raw.title, c.open, <><span className="information-kicker">{machineLabel(raw.archive_status, props.lang)} · {machineLabel(raw.knowledge_extraction_status, props.lang)}</span><strong>{raw.title}</strong><code>{raw.change_key}</code><time>{formatTime(raw.archived_at, props.lang)}</time></>, select);
-  }} />{record?.detail.detail_kind === "change_record" ? <nav className="information-document-nav" aria-label={c.documents}>{[...new Set(record.detail.document_refs)].map((id) => <button key={id} type="button" onClick={() => void selectDocument(id)}>{`${c.open} ${c.document} ${id}`}</button>)}</nav> : null}
-  {documentLoading ? <WorkspaceState technicalDetailsLabel={c.technical} state={{ kind: "loading", label: c.documentLoading }} /> : null}
-  {!documentLoading && document !== null ? <DetailView detail={document} lang={props.lang} /> : null}
-  {!documentLoading && documentError !== null ? <div className="information-terminal-state"><WorkspaceState technicalDetailsLabel={c.technical} state={{ kind: "error", title: c.error, description: documentError instanceof Error && documentError.message === "CHANGE_DOCUMENT_DETAIL_UNSUPPORTED" ? c.documentUnsupported : c.documentFailure, technicalDetails: technical(documentError) }} />{documentId === null || documentError instanceof Error && documentError.message === "CHANGE_DOCUMENT_DETAIL_UNSUPPORTED" ? null : <button type="button" onClick={() => void selectDocument(documentId)}>{c.retry}</button>}</div> : null}</div>;
 }
 
 export function BranchFilesInformationPanel(props: PanelProps) {
@@ -455,17 +400,5 @@ export function BranchFilesInformationPanel(props: PanelProps) {
       </>, () => void openDesign(snapshotDetailId, select))}
       {errors[snapshotDetailId] !== undefined ? <p className="information-files-note">{errors[snapshotDetailId]}</p> : null}
     </div>;
-  }} />;
-}
-
-export function VersionRecordsInformationPanel(props: PanelProps) {
-  const c = COPY[props.lang];
-  return <InformationPanel {...props} view="version_records" title={c.versions} renderItem={(raw, select) => {
-    if (raw.item_kind !== "version_record") return null;
-    // detail_id 为 v1 增量字段：缺失时保持只读卡片（旧服务端/旧数据）
-    if (raw.detail_id === undefined) {
-      return <article className="information-list-card static"><span className="information-kicker">{raw.branch_name}</span><strong>{raw.snapshot_version}</strong><code>{raw.diff_ref}</code><span>{raw.file_count} {c.files} · {raw.changed_file_count} {c.changed}</span><time>{formatTime(raw.uploaded_at, props.lang)}</time><p>{c.unavailableDiff}</p><code>VERSION_DIFF_LOCATOR_ROUTE_UNAVAILABLE</code></article>;
-    }
-    return itemButton(raw.detail_id, raw.snapshot_version, c.open, <><span className="information-kicker">{raw.branch_name}</span><strong>{raw.snapshot_version}</strong><code>{raw.diff_ref}</code><span>{raw.file_count} {c.files} · {raw.changed_file_count} {c.changed}</span><time>{formatTime(raw.uploaded_at, props.lang)}</time></>, select);
   }} />;
 }

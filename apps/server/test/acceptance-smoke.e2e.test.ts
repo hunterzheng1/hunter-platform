@@ -15,7 +15,7 @@ import { createBranchVersionQueryAdapter } from "../src/branch-version-query/ind
 /**
  * 阶段 14 端到端冒烟验收（有界范围）：
  * 真实 HTTP 路由 + 真实快照模块 + 真实适配器 + 内存存储，验证
- * 「版本记录 diff / 分支文件清单 / 文件内容」三条平台信息链路的完整闭环。
+ * 「分支文件清单 / 文件内容」两条平台信息链路的完整闭环。
  * 整体验收（真实 pg、真实 CLI push、owner 签字）不在本套件宣称范围内。
  */
 
@@ -96,35 +96,10 @@ describe("stage 14 acceptance smoke: platform information end-to-end", () => {
     await app.close();
   });
 
-  it("walks version diff, snapshot files, and file content over real HTTP", async () => {
+  it("walks snapshot files and file content over real HTTP", async () => {
     const auth = { authorization: "Bearer smoke-token" };
 
-    // 1. 版本记录列表 → 每项带服务端签发的 detail_id
-    const versions = await app.inject({
-      method: "GET",
-      url: `/api/v1/projects/${projectId}/information/version_records?limit=10`,
-      headers: auth
-    });
-    expect(versions.statusCode).toBe(200);
-    const versionItems = versions.json().items as Array<{ snapshot_version: string; detail_id?: string }>;
-    const pv2 = versionItems.find((item) => item.snapshot_version === "pv_0002");
-    expect(pv2?.detail_id).toBe("vr_main~pv_0002");
-
-    // 2. 版本 diff 详情 → 与前任快照的 changed_paths
-    const diff = await app.inject({
-      method: "GET",
-      url: `/api/v1/projects/${projectId}/information/version_records/${encodeURIComponent("vr_main~pv_0002")}`,
-      headers: auth
-    });
-    expect(diff.statusCode).toBe(200);
-    expect(diff.json().detail).toMatchObject({
-      detail_kind: "version_diff",
-      from_version: "pv_0001",
-      to_version: "pv_0002",
-      changed_paths: ["AGENTS.md"]
-    });
-
-    // 3. 分支文件列表 → 快照带 bf_ 定位符
+    // 1. 分支文件列表 → 快照带 bf_ 定位符
     const branches = await app.inject({
       method: "GET",
       url: `/api/v1/projects/${projectId}/information/branch_files?limit=10`,
@@ -135,7 +110,7 @@ describe("stage 14 acceptance smoke: platform information end-to-end", () => {
     const latest = snapshotItems.find((item) => item.snapshot_version === "pv_0002");
     expect(latest?.detail_id).toBe("bf_main~pv_0002");
 
-    // 4. files 子路由 → 文件带 bff_ 内容定位符
+    // 2. files 子路由 → 文件带 bff_ 内容定位符
     const files = await app.inject({
       method: "GET",
       url: `/api/v1/projects/${projectId}/information/branch_files/${encodeURIComponent("bf_main~pv_0002")}/files`,
@@ -149,7 +124,7 @@ describe("stage 14 acceptance smoke: platform information end-to-end", () => {
       detail_id: "bff_main~pv_0002~AGENTS.md"
     }]);
 
-    // 5. 文件内容详情 → 精确字节
+    // 3. 文件内容详情 → 精确字节
     const content = await app.inject({
       method: "GET",
       url: `/api/v1/projects/${projectId}/information/branch_files/${encodeURIComponent("bff_main~pv_0002~AGENTS.md")}`,
@@ -162,18 +137,18 @@ describe("stage 14 acceptance smoke: platform information end-to-end", () => {
       content_hash: digest("# agent\n")
     });
 
-    // 6. 未知定位符 → 404；畸形定位符 → 400/503 语义（fail closed，绝不 200）
+    // 4. 未知定位符 → 404；非 bff_ 形态 → 503 语义（fail closed，绝不 200）
     const unknown = await app.inject({
       method: "GET",
-      url: `/api/v1/projects/${projectId}/information/version_records/${encodeURIComponent("vr_main~pv_9999")}`,
+      url: `/api/v1/projects/${projectId}/information/branch_files/${encodeURIComponent("bff_main~pv_9999~AGENTS.md")}`,
       headers: auth
     });
     expect(unknown.statusCode).toBe(404);
     const garbage = await app.inject({
       method: "GET",
-      url: `/api/v1/projects/${projectId}/information/version_records/not-a-locator`,
+      url: `/api/v1/projects/${projectId}/information/branch_files/not-a-locator`,
       headers: auth
     });
-    expect([400, 503]).toContain(garbage.statusCode);
+    expect(garbage.statusCode).toBe(503);
   });
 });

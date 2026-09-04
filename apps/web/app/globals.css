@@ -8333,7 +8333,7 @@ aside.external-skill-detail-rail {
 .information-list-card strong { color: var(--text-heading); font-size: .9rem; }
 .information-list-card span, .information-list-card time, .information-list-card p { margin: 0; color: var(--muted); font-size: .76rem; line-height: 1.5; }
 .information-kicker { color: var(--accent) !important; font-size: .67rem !important; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
-.information-load-more, .information-pagination-failure > button, .information-terminal-state > button, .information-document-nav button { min-height: 44px; }
+.information-load-more, .information-pagination-failure > button, .information-terminal-state > button { min-height: 44px; }
 .information-load-more { width: calc(100% - 28px); margin: 0 14px 14px; }
 .information-detail { min-width: 0; min-height: 0; padding: 20px; overflow-y: auto; overscroll-behavior: contain; background: var(--code-surface); }
 .information-detail-placeholder { display: grid; min-height: 300px; place-items: center; margin: 0; color: var(--muted); text-align: center; }
@@ -8373,8 +8373,6 @@ aside.external-skill-detail-rail {
 .information-detail-meta { display: flex; flex-wrap: wrap; gap: 8px; }
 .information-terminal-state { display: grid; gap: 12px; }
 .information-terminal-state > button { justify-self: start; }
-.information-change-wrapper { display: grid; gap: 12px; }
-.information-document-nav { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); }
 
 @media (max-width: 760px) {
   .information-panel-grid { grid-template-columns: 1fr; height: auto; }

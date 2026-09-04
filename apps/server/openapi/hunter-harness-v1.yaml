@@ -2111,8 +2111,6 @@ paths:
           branch_files: "files:read",
           project_materials: "files:read",
           project_knowledge: "knowledge:read",
-          change_records: "files:read",
-          version_records: "files:read",
         }
       x-hunter-error-codes:
         "400": [VALIDATION_FAILED, PLATFORM_INFORMATION_CURSOR_INVALID]
@@ -2180,8 +2178,6 @@ paths:
           branch_files: "files:read",
           project_materials: "files:read",
           project_knowledge: "knowledge:read",
-          change_records: "files:read",
-          version_records: "files:read",
         }
       x-hunter-idempotency-header: Idempotency-Key
       x-hunter-error-codes:
@@ -2237,8 +2233,6 @@ paths:
           branch_files: "files:read",
           project_materials: "files:read",
           project_knowledge: "knowledge:read",
-          change_records: "files:read",
-          version_records: "files:read",
         }
       x-hunter-error-codes:
         "400": [VALIDATION_FAILED]
@@ -2284,8 +2278,6 @@ paths:
           branch_files: "files:read",
           project_materials: "files:read",
           project_knowledge: "knowledge:read",
-          change_records: "files:read",
-          version_records: "files:read",
         }
       x-hunter-error-codes:
         "400": [VALIDATION_FAILED]
@@ -2324,8 +2316,6 @@ paths:
           branch_files: "files:read",
           project_materials: "files:read",
           project_knowledge: "knowledge:read",
-          change_records: "files:read",
-          version_records: "files:read",
         }
       x-hunter-error-codes:
         "400": [VALIDATION_FAILED]
@@ -4106,8 +4096,6 @@ components:
           branch_files,
           project_materials,
           project_knowledge,
-          change_records,
-          version_records,
         ]
     PlatformInformationPageState:
       type: string
@@ -4123,9 +4111,6 @@ components:
           architecture,
           instruction,
           knowledge_entry,
-          change_document,
-          archive_package,
-          project_content_candidate,
         ]
     PlatformInformationSort:
       type: string
@@ -4136,7 +4121,6 @@ components:
           uploaded_at_desc_snapshot_version_asc,
           category_asc_path_asc_version_desc,
           extracted_at_desc_knowledge_id_asc,
-          archived_at_desc_change_key_asc,
         ]
     PlatformInformationPath:
       type: string
@@ -4296,14 +4280,6 @@ components:
       properties:
         blob_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
         snapshot_version: { type: string, minLength: 1, maxLength: 160 }
-    PlatformInformationArchiveDownloadRef:
-      type: object
-      additionalProperties: false
-      description: Independent archive-package download identity; it is not a knowledge or document reference.
-      required: [archive_id, package_hash]
-      properties:
-        archive_id: { type: string, minLength: 1, maxLength: 160 }
-        package_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
     PlatformInformationBranchMonitorItem:
       type: object
       additionalProperties: false
@@ -4434,73 +4410,6 @@ components:
         extracted_at: { type: string, format: date-time }
         relationship_count: { type: integer, minimum: 0 }
         sort_key: { type: string, minLength: 1, maxLength: 512 }
-    PlatformInformationChangeRecordItem:
-      type: object
-      additionalProperties: false
-      required:
-        [
-          item_kind,
-          change_key,
-          title,
-          archived_at,
-          archive_status,
-          knowledge_extraction_status,
-          document_refs,
-          candidate_count,
-          archive_download_ref,
-          sort_key,
-        ]
-      properties:
-        item_kind: { type: string, const: change_record }
-        change_key: { type: string, minLength: 1, maxLength: 160 }
-        title: { type: string, minLength: 1, maxLength: 240 }
-        archived_at: { type: string, format: date-time }
-        archive_status:
-          { type: string, enum: [absent, uploading, stored, failed] }
-        knowledge_extraction_status:
-          {
-            type: string,
-            enum: [not_scheduled, queued, extracting, ready, failed],
-          }
-        document_refs:
-          {
-            type: array,
-            maxItems: 20,
-            items: { type: string, minLength: 1, maxLength: 160 },
-          }
-        candidate_count: { type: integer, minimum: 0 }
-        archive_download_ref:
-          oneOf:
-            - {
-                $ref: "#/components/schemas/PlatformInformationArchiveDownloadRef",
-              }
-            - { type: "null" }
-        sort_key: { type: string, minLength: 1, maxLength: 512 }
-    PlatformInformationVersionRecordItem:
-      type: object
-      additionalProperties: false
-      required:
-        [
-          item_kind,
-          snapshot_version,
-          branch_name,
-          commit_sha,
-          uploaded_at,
-          file_count,
-          changed_file_count,
-          diff_ref,
-          sort_key,
-        ]
-      properties:
-        item_kind: { type: string, const: version_record }
-        snapshot_version: { type: string, minLength: 1, maxLength: 160 }
-        branch_name: { type: string, minLength: 1, maxLength: 160 }
-        commit_sha: { type: string, pattern: "^[a-f0-9]{40,64}$" }
-        uploaded_at: { type: string, format: date-time }
-        file_count: { type: integer, minimum: 0 }
-        changed_file_count: { type: integer, minimum: 0 }
-        diff_ref: { type: string, minLength: 1, maxLength: 160 }
-        sort_key: { type: string, minLength: 1, maxLength: 512 }
     PlatformInformationItem:
       oneOf:
         - { $ref: "#/components/schemas/PlatformInformationBranchMonitorItem" }
@@ -4509,8 +4418,6 @@ components:
             $ref: "#/components/schemas/PlatformInformationProjectMaterialItem",
           }
         - { $ref: "#/components/schemas/PlatformInformationKnowledgeItem" }
-        - { $ref: "#/components/schemas/PlatformInformationChangeRecordItem" }
-        - { $ref: "#/components/schemas/PlatformInformationVersionRecordItem" }
       discriminator: { propertyName: item_kind }
     PlatformInformationFailure:
       type: object
@@ -4680,8 +4587,7 @@ components:
         detail_kind:
           {
             type: string,
-            enum:
-              [branch_file, project_material, knowledge_entry, change_document],
+            enum: [branch_file, project_material, knowledge_entry],
           }
         content: { type: string, maxLength: 2000000 }
         content_hash: { type: string, pattern: "^sha256:[a-f0-9]{64}$" }
@@ -4704,45 +4610,6 @@ components:
             maxItems: 100,
             items: { type: string, minLength: 1, maxLength: 160 },
           }
-    PlatformInformationChangeDetail:
-      type: object
-      additionalProperties: false
-      required:
-        [detail_kind, document_refs, candidate_refs, archive_download_ref]
-      properties:
-        detail_kind: { type: string, const: change_record }
-        document_refs:
-          {
-            type: array,
-            maxItems: 20,
-            items: { type: string, minLength: 1, maxLength: 160 },
-          }
-        candidate_refs:
-          {
-            type: array,
-            maxItems: 100,
-            items: { type: string, minLength: 1, maxLength: 160 },
-          }
-        archive_download_ref:
-          oneOf:
-            - {
-                $ref: "#/components/schemas/PlatformInformationArchiveDownloadRef",
-              }
-            - { type: "null" }
-    PlatformInformationVersionDiffDetail:
-      type: object
-      additionalProperties: false
-      required: [detail_kind, from_version, to_version, changed_paths]
-      properties:
-        detail_kind: { type: string, const: version_diff }
-        from_version: { type: string, minLength: 1, maxLength: 160 }
-        to_version: { type: string, minLength: 1, maxLength: 160 }
-        changed_paths:
-          {
-            type: array,
-            maxItems: 1000,
-            items: { $ref: "#/components/schemas/PlatformInformationPath" },
-          }
     PlatformInformationDetailResponse:
       type: object
       additionalProperties: false
@@ -4759,10 +4626,6 @@ components:
           oneOf:
             - { $ref: "#/components/schemas/PlatformInformationContentDetail" }
             - { $ref: "#/components/schemas/PlatformInformationMonitorDetail" }
-            - { $ref: "#/components/schemas/PlatformInformationChangeDetail" }
-            - {
-                $ref: "#/components/schemas/PlatformInformationVersionDiffDetail",
-              }
           discriminator: { propertyName: detail_kind }
     KnowledgeExtractionRetryIntent:
       type: object

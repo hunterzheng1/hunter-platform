@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PlatformInformationPage } from "@hunter-harness/contracts";
 import { ProjectWorkspace } from "../components/project-workspace";
 import { ToastProvider } from "../components/ui/Toast";
-import type { ArtifactManifestModel, HunterApi, ProjectFileContent, ProjectFileMetadata } from "../lib/api";
+import type { HunterApi, ProjectFileContent, ProjectFileMetadata } from "../lib/api";
 
 const sha = (character: string) => "sha256:" + character.repeat(64);
 const files: ProjectFileMetadata[] = [
@@ -309,16 +309,12 @@ describe("ProjectWorkspace", () => {
       "分支文件",
       "项目资料",
       "项目知识",
-      "变更记录",
-      "版本记录",
       "API 密钥"
     ]);
 
     fireEvent.click(screen.getByRole("tab", { name: "项目资料" }));
     expect(screen.getByRole("status")).toHaveAttribute("data-state", "processing");
     expect(screen.getByText("项目资料查询正在接入")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "变更记录" }));
-    expect(screen.getByText("变更记录查询正在接入")).toBeInTheDocument();
   });
 
   it("keeps project knowledge mounted after its first visit", async () => {
@@ -512,89 +508,5 @@ describe("ProjectWorkspace", () => {
     fireEvent.click(harness);
     await waitFor(() => expect(details).toHaveAttribute("open"));
     expect(screen.getByText("knowledge")).toBeInTheDocument();
-  });
-
-  it("shows human version bases and paginates dense change sets", async () => {
-    const manyFiles: ArtifactManifestModel["files"] = Array.from({ length: 45 }, (_, index) => {
-      const path = `.harness/knowledge/entries/active/item-${String(index).padStart(2, "0")}.json`;
-      if (index % 2 === 0) {
-        return {
-          operation: "add" as const,
-          path,
-          file_kind: "user_editable" as const,
-          content_sha256: sha("d"),
-          size_bytes: 40
-        };
-      }
-      return {
-        operation: "modify" as const,
-        path,
-        file_kind: "user_editable" as const,
-        base_content_sha256: sha("b"),
-        content_sha256: sha("c"),
-        size_bytes: 12
-      };
-    });
-    const getArtifactManifest = vi.fn(async () => ({
-      schema_version: 1 as const,
-      project_id: "prj_one",
-      project_version: "pv_two",
-      artifact_id: "art_two",
-      manifest_sha256: sha("a"),
-      files: manyFiles
-    }));
-    render(<ProjectWorkspace api={api({
-      listProjectArtifacts: vi.fn(async () => [
-        {
-          artifact_id: "art_two",
-          project_id: "prj_one",
-          project_version: "pv_two",
-          base_project_version: "pv_one",
-          proposal_id: "prp_two",
-          changed_item_count: 45,
-          manifest_sha256: sha("a"),
-          created_at: "2026-06-21T00:00:00Z"
-        },
-        {
-          artifact_id: "art_one",
-          project_id: "prj_one",
-          project_version: "pv_one",
-          base_project_version: null,
-          proposal_id: "prp_one",
-          changed_item_count: 2,
-          manifest_sha256: sha("a"),
-          created_at: "2026-06-20T00:00:00Z"
-        }
-      ]),
-      getArtifactManifest
-    })} projectId="prj_one" />);
-
-    fireEvent.click(await screen.findByRole("tab", { name: "版本记录" }));
-    expect(await screen.findByText(/基于版本 1/)).toBeInTheDocument();
-    expect(screen.queryByText(/pv_/)).not.toBeInTheDocument();
-
-    const viewButton = screen.getAllByRole("button", { name: "查看变更" })[0];
-    if (viewButton === undefined) throw new Error("expected view-changes button");
-    fireEvent.click(viewButton);
-    expect(await screen.findByText("第 1/3 页 · 45 条")).toBeInTheDocument();
-    expect(screen.getByText(".harness/knowledge/entries/active/item-00.json")).toBeInTheDocument();
-    expect(screen.queryByText(".harness/knowledge/entries/active/item-20.json")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
-    expect(await screen.findByText("第 2/3 页 · 45 条")).toBeInTheDocument();
-    expect(screen.getByText(".harness/knowledge/entries/active/item-20.json")).toBeInTheDocument();
-    expect(getArtifactManifest).toHaveBeenCalledWith("art_two");
-  });
-
-  it("renders an empty version history with normal heading hierarchy", async () => {
-    render(<ProjectWorkspace api={api({
-      listProjectArtifacts: vi.fn(async () => [])
-    })} projectId="prj_one" />);
-
-    fireEvent.click(await screen.findByRole("tab", { name: "版本记录" }));
-
-    expect(await screen.findByRole("heading", { name: "版本记录", level: 2 })).toBeInTheDocument();
-    expect(screen.getByText("每次保存或同步文件后，平台都会保留一个版本。展开版本可查看具体改动。")).toBeInTheDocument();
-    expect(screen.getByText("还没有版本记录。保存或同步第一个文件后，版本会显示在这里。")).toBeInTheDocument();
   });
 });

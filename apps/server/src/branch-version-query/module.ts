@@ -58,11 +58,6 @@ const fileLocatorSchema = z.object({
   identity: identitySchema,
   path
 }).strict();
-const diffLocatorSchema = z.object({
-  detail_id: id,
-  from: identitySchema.nullable(),
-  to: identitySchema
-}).strict();
 const restoreEnvelopeSchema = z.object({
   actor_id: id,
   accessible_project_ids: z.array(projectId).min(1).max(100),
@@ -85,31 +80,7 @@ function parseSerialized<T>(serialized: unknown, schema: z.ZodType<T>): T | unde
   }
 }
 
-/**
- * version_records 详情定位符编码：`vr_<branch>~<project_version>`
- * （"~" 是 git 引用名的非法字符，不会出现在分支名中；两段分别 encodeURIComponent）。
- */
-function encodeVersionDetailId(branchName: string, projectVersion: string): string {
-  return `vr_${encodeURIComponent(branchName)}~${encodeURIComponent(projectVersion)}`;
-}
-
-function decodeVersionDetailId(detailId: string): { branch_name: string; project_version: string } | null {
-  const match = /^vr_([^~]+)~(.+)$/u.exec(detailId);
-  if (match === null) return null;
-  try {
-    const branchName = decodeURIComponent(match[1] ?? "");
-    const projectVersion = decodeURIComponent(match[2] ?? "");
-    if (branchName.length < 1 || branchName.length > 160 || projectVersion.length < 1 || projectVersion.length > 160) {
-      return null;
-    }
-    return { branch_name: branchName, project_version: projectVersion };
-  } catch {
-    return null;
-  }
-}
-
-/** 分支文件：快照文件清单定位符 `bf_<branch>~<project_version>`。 */
-function encodeBranchFilesDetailId(branchName: string, projectVersion: string): string {
+/** 分支文件：快照文件清单定位符 `bf_<branch>~<project_version>`。 */function encodeBranchFilesDetailId(branchName: string, projectVersion: string): string {
   return `bf_${encodeURIComponent(branchName)}~${encodeURIComponent(projectVersion)}`;
 }
 
@@ -199,8 +170,7 @@ export function createBranchVersionQueryAdapter(source: BranchSnapshotModule): B
       if (!read.ok) return { ok: false, reason_code: "BRANCH_VERSION_QUERY_INVALID" };
       if (read.mode === "legacy_read_only") return { ok: true, mode: read.mode, value: read.value };
       const query = read.value;
-      if (query.contract_kind !== "query" ||
-          (query.view !== "branch_files" && query.view !== "version_records")) {
+      if (query.contract_kind !== "query" || query.view !== "branch_files") {
         return { ok: false, reason_code: "BRANCH_VERSION_QUERY_INVALID" };
       }
       let page;
@@ -213,9 +183,7 @@ export function createBranchVersionQueryAdapter(source: BranchSnapshotModule): B
           limit: query.limit,
           cursor: query.cursor
         };
-        page = query.view === "branch_files"
-          ? await source.listBranches(input)
-          : await source.listProjectSnapshotVersions(input);
+        page = await source.listBranches(input);
       } catch {
         return { ok: false, reason_code: "BRANCH_VERSION_SOURCE_INVALID" };
       }
@@ -229,7 +197,7 @@ export function createBranchVersionQueryAdapter(source: BranchSnapshotModule): B
       } catch {
         return { ok: false, reason_code: "BRANCH_VERSION_SOURCE_INVALID" };
       }
-      const items = safePage.items.map((item) => query.view === "branch_files" ? {
+      const items = safePage.items.map((item) => ({
         item_kind: "branch_snapshot" as const,
         branch_name: item.branch_name,
         snapshot_version: item.project_version,
@@ -239,18 +207,7 @@ export function createBranchVersionQueryAdapter(source: BranchSnapshotModule): B
         changed_file_count: item.changed_file_count,
         detail_id: encodeBranchFilesDetailId(item.branch_name, item.project_version),
         sort_key: `${sortKey(item.uploaded_at, item.project_version)}|${item.branch_name}|${item.artifact_id}`
-      } : {
-        item_kind: "version_record" as const,
-        snapshot_version: item.project_version,
-        branch_name: item.branch_name,
-        commit_sha: item.commit_sha,
-        uploaded_at: item.uploaded_at,
-        file_count: item.file_count,
-        changed_file_count: item.changed_file_count,
-        diff_ref: item.diff_ref,
-        detail_id: encodeVersionDetailId(item.branch_name, item.project_version),
-        sort_key: `${sortKey(item.uploaded_at, item.project_version)}|${item.branch_name}|${item.artifact_id}`
-      });
+      }));
       const projected = platformInformationPageSchema.safeParse({
         schema_version: 1,
         contract_kind: "page",
@@ -357,56 +314,12 @@ export function createBranchVersionQueryAdapter(source: BranchSnapshotModule): B
       }
     },
 
-    async diff(serializedRequest: unknown, serializedLocator: unknown) {
-      const read = readPlatformInformationContract(serializedRequest);
-      if (!read.ok) return { ok: false as const, reason_code: "BRANCH_VERSION_DETAIL_INVALID" as const };
-      if (read.mode === "legacy_read_only") return { ok: true as const, mode: read.mode, value: read.value };
-      const request = read.value;
-      const locator = parseSerialized(serializedLocator, diffLocatorSchema);
-      if (request.contract_kind !== "detail_request" || request.view !== "version_records" ||
-          locator === undefined || locator.detail_id !== request.detail_id ||
-          locator.to.project_id !== request.project_id ||
-          (locator.from !== null && locator.from.project_id !== request.project_id)) {
-        return { ok: false as const, reason_code: "BRANCH_VERSION_DETAIL_INVALID" as const };
-      }
-      try {
-        const raw = snapshotPlain(await source.getSnapshotDiff({
-          schema_version: 1,
-          actor_id: request.query_scope.actor_id,
-          project_id: request.project_id,
-          accessible_project_ids: [...request.query_scope.accessible_project_ids],
-          from: locator.from,
-          to: locator.to
-        })) as Awaited<ReturnType<BranchSnapshotModule["getSnapshotDiff"]>>;
-        if (raw.project_id !== request.project_id || raw.diff_ref !== locator.detail_id ||
-            JSON.stringify(raw.from) !== JSON.stringify(locator.from) ||
-            JSON.stringify(raw.to) !== JSON.stringify(locator.to)) throw new Error("source identity mismatch");
-        const projected = platformInformationDetailResponseSchema.safeParse({
-          schema_version: 1,
-          contract_kind: "detail_response",
-          view: "version_records",
-          project_id: request.project_id,
-          detail_id: request.detail_id,
-          detail: {
-            detail_kind: "version_diff",
-            from_version: raw.from?.project_version ?? raw.to.project_version,
-            to_version: raw.to.project_version,
-            changed_paths: raw.changed_paths
-          }
-        });
-        if (!projected.success) throw new Error("invalid diff");
-        return { ok: true as const, mode: "current" as const, value: projected.data };
-      } catch {
-        return { ok: false as const, reason_code: "BRANCH_VERSION_SOURCE_INVALID" as const };
-      }
-    },
-
     async queryDetail(serializedRequest: unknown) {
       const read = readPlatformInformationContract(serializedRequest);
       if (!read.ok) return { ok: false as const, reason_code: "BRANCH_VERSION_DETAIL_INVALID" as const };
       if (read.mode === "legacy_read_only") return { ok: true as const, mode: read.mode, value: read.value };
       const request = read.value;
-      if (request.contract_kind !== "detail_request") {
+      if (request.contract_kind !== "detail_request" || request.view !== "branch_files") {
         return { ok: false as const, reason_code: "BRANCH_VERSION_DETAIL_INVALID" as const };
       }
       const scope = {
@@ -415,55 +328,16 @@ export function createBranchVersionQueryAdapter(source: BranchSnapshotModule): B
         project_id: request.project_id,
         accessible_project_ids: [...request.query_scope.accessible_project_ids]
       };
-      if (request.view === "branch_files") {
-        const fileRef = decodeBranchFileDetailId(request.detail_id);
-        if (fileRef === null) return { ok: false as const, reason_code: "BRANCH_VERSION_DETAIL_INVALID" as const };
-        try {
-          const found = await source.getSnapshotByVersionRef({
-            ...scope, branch_name: fileRef.branch_name, project_version: fileRef.project_version
-          });
-          if (found === null) return { ok: false as const, reason_code: "BRANCH_VERSION_NOT_FOUND" as const };
-          return await adapter.detail(serializedRequest, JSON.stringify({
-            detail_id: request.detail_id, identity: found.identity, path: fileRef.path
-          }));
-        } catch {
-          return { ok: false as const, reason_code: "BRANCH_VERSION_SOURCE_INVALID" as const };
-        }
-      }
-      if (request.view !== "version_records") {
-        return { ok: false as const, reason_code: "BRANCH_VERSION_DETAIL_INVALID" as const };
-      }
-      const ref = decodeVersionDetailId(request.detail_id);
-      if (ref === null) return { ok: false as const, reason_code: "BRANCH_VERSION_DETAIL_INVALID" as const };
+      const fileRef = decodeBranchFileDetailId(request.detail_id);
+      if (fileRef === null) return { ok: false as const, reason_code: "BRANCH_VERSION_DETAIL_INVALID" as const };
       try {
         const found = await source.getSnapshotByVersionRef({
-          ...scope, branch_name: ref.branch_name, project_version: ref.project_version
+          ...scope, branch_name: fileRef.branch_name, project_version: fileRef.project_version
         });
         if (found === null) return { ok: false as const, reason_code: "BRANCH_VERSION_NOT_FOUND" as const };
-        const predecessor = await source.getSnapshotPredecessor({ ...scope, identity: found.identity });
-        const raw = snapshotPlain(await source.getSnapshotDiff({
-          ...scope, from: predecessor?.identity ?? null, to: found.identity
-        })) as Awaited<ReturnType<BranchSnapshotModule["getSnapshotDiff"]>>;
-        if (raw.project_id !== request.project_id || raw.diff_ref !== found.record.diff_ref ||
-            JSON.stringify(raw.to) !== JSON.stringify(found.identity) ||
-            JSON.stringify(raw.from) !== JSON.stringify(predecessor?.identity ?? null)) {
-          throw new Error("source identity mismatch");
-        }
-        const projected = platformInformationDetailResponseSchema.safeParse({
-          schema_version: 1,
-          contract_kind: "detail_response",
-          view: "version_records",
-          project_id: request.project_id,
-          detail_id: request.detail_id,
-          detail: {
-            detail_kind: "version_diff",
-            from_version: raw.from?.project_version ?? raw.to.project_version,
-            to_version: raw.to.project_version,
-            changed_paths: raw.changed_paths
-          }
-        });
-        if (!projected.success) throw new Error("invalid diff");
-        return { ok: true as const, mode: "current" as const, value: projected.data };
+        return await adapter.detail(serializedRequest, JSON.stringify({
+          detail_id: request.detail_id, identity: found.identity, path: fileRef.path
+        }));
       } catch {
         return { ok: false as const, reason_code: "BRANCH_VERSION_SOURCE_INVALID" as const };
       }

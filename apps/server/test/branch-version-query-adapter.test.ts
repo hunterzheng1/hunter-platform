@@ -88,18 +88,13 @@ const branchQuery = JSON.stringify({
   sort: "uploaded_at_desc_snapshot_version_asc"
 });
 
-const versionQuery = JSON.stringify({
-  ...JSON.parse(branchQuery),
-  view: "version_records"
-});
-
 const scope = {
   actor_id: "actor_owner",
   accessible_project_ids: ["prj_stage13"],
   content_types: ["branch_file"]
 };
 
-function detailRequest(view: "branch_files" | "version_records", detailId: string): string {
+function detailRequest(view: "branch_files", detailId: string): string {
   return JSON.stringify({ schema_version: 1, contract_kind: "detail_request", view,
     project_id: "prj_stage13", query_scope: scope, detail_id: detailId });
 }
@@ -152,17 +147,6 @@ describe("BranchVersionQueryAdapter", () => {
     expect(JSON.stringify(result)).not.toContain("content");
   });
 
-  it("projects project-wide versions with stable diff references and no run events", async () => {
-    const adapter = createBranchVersionQueryAdapter(fakeModule());
-    const result = await adapter.query(versionQuery);
-    expect(result).toMatchObject({ ok: true, mode: "current", value: {
-      view: "version_records",
-      items: [{ item_kind: "version_record", snapshot_version: "pv_0002",
-        branch_name: "main", diff_ref: "diff_main_0002" }]
-    } });
-    expect(JSON.stringify(result)).not.toContain("run_");
-  });
-
   it("lists exact snapshot file refs without body content", async () => {
     const adapter = createBranchVersionQueryAdapter(fakeModule({
       async listSnapshotFiles(input) {
@@ -192,23 +176,6 @@ describe("BranchVersionQueryAdapter", () => {
       } } });
     await expect(adapter.detail(detailRequest("branch_files", "other"), JSON.stringify(locator)))
       .resolves.toEqual({ ok: false, reason_code: "BRANCH_VERSION_DETAIL_INVALID" });
-  });
-
-  it("projects version diffs only when both immutable identities and diff ref match", async () => {
-    const from = { ...identity, project_version: "pv_0001", artifact_id: "art_0001",
-      commit_sha: "d".repeat(40) };
-    const adapter = createBranchVersionQueryAdapter(fakeModule({
-      async getSnapshotDiff() {
-        return { project_id: identity.project_id, from, to: identity,
-          diff_ref: "diff_main_0002", changed_paths: ["AGENTS.md"] };
-      }
-    }));
-    const locator = { detail_id: "diff_main_0002", from, to: identity };
-    await expect(adapter.diff(detailRequest("version_records", locator.detail_id), JSON.stringify(locator)))
-      .resolves.toMatchObject({ ok: true, mode: "current", value: { detail: {
-        detail_kind: "version_diff", from_version: "pv_0001", to_version: "pv_0002",
-        changed_paths: ["AGENTS.md"]
-      } } });
   });
 
   it("turns preview plus exact 13.1 confirmation into a request-only intent and never writes", async () => {
@@ -305,12 +272,12 @@ describe("BranchVersionQueryAdapter", () => {
   it("round-trips a real non-terminal single-segment base64url cursor through 13.1 query and page", async () => {
     const source = realSnapshotModule([
       snapshotSeed(),
-      snapshotSeed({ project_version: "pv_0001", artifact_id: "art_0001",
+      snapshotSeed({ branch_name: "release", project_version: "pv_0001", artifact_id: "art_0001",
         commit_sha: "b".repeat(40), uploaded_at: "2026-08-12T08:00:00.000Z",
-        diff_ref: "diff_main_0001" })
+        diff_ref: "diff_release_0001" })
     ]);
     const adapter = createBranchVersionQueryAdapter(source);
-    const firstRequest = { ...JSON.parse(versionQuery) as Record<string, unknown>, limit: 1 };
+    const firstRequest = { ...JSON.parse(branchQuery) as Record<string, unknown>, limit: 1 };
     const first = await adapter.query(JSON.stringify(firstRequest));
     expect(first).toMatchObject({ ok: true, mode: "current", value: {
       items: [{ snapshot_version: "pv_0002" }]
@@ -396,48 +363,6 @@ describe("BranchVersionQueryAdapter", () => {
     expect(sourceReads).toBe(1);
     expect(adapter.confirmRestore(legacy, legacy)).toEqual({ ok: false,
       reason_code: "BRANCH_FILES_PULL_CONFIRMATION_INVALID" });
-  });
-
-  it("issues server-side detail_id locators on version record items and resolves them to a predecessor diff", async () => {
-    const older = snapshotSeed({
-      commit_sha: "c".repeat(40), project_version: "pv_0001", artifact_id: "art_0001",
-      diff_ref: "diff_main_0001",
-      uploaded_at: "2026-08-12T08:00:00.000Z", changed_paths: ["AGENTS.md"]
-    });
-    const newer = snapshotSeed({ uploaded_at: "2026-08-13T08:00:00.000Z", changed_file_count: 2, changed_paths: ["AGENTS.md", "src/main.ts"] });
-    const module = realSnapshotModule([older, newer]);
-    const adapter = createBranchVersionQueryAdapter(module);
-
-    const page = await adapter.query(versionQuery);
-    expect(page).toMatchObject({ ok: true });
-    const items = page.ok && page.mode === "current" ? page.value.items : [];
-    const target = items.find((item) => item.item_kind === "version_record" && item.snapshot_version === "pv_0002");
-    expect(target).toMatchObject({ detail_id: "vr_main~pv_0002" });
-
-    const detail = await adapter.queryDetail(detailRequest("version_records", "vr_main~pv_0002"));
-    expect(detail).toMatchObject({
-      ok: true,
-      value: {
-        view: "version_records",
-        detail_id: "vr_main~pv_0002",
-        detail: { detail_kind: "version_diff", from_version: "pv_0001", to_version: "pv_0002", changed_paths: ["AGENTS.md", "src/main.ts"] }
-      }
-    });
-  });
-
-  it("diffs the first snapshot of a branch against itself and rejects unknown or malformed locators", async () => {
-    const only = snapshotSeed({ uploaded_at: "2026-08-13T08:00:00.000Z" });
-    const adapter = createBranchVersionQueryAdapter(realSnapshotModule([only]));
-
-    const first = await adapter.queryDetail(detailRequest("version_records", "vr_main~pv_0002"));
-    expect(first).toMatchObject({ ok: true, value: { detail: { from_version: "pv_0002", to_version: "pv_0002" } } });
-
-    await expect(adapter.queryDetail(detailRequest("version_records", "vr_main~pv_9999")))
-      .resolves.toEqual({ ok: false, reason_code: "BRANCH_VERSION_NOT_FOUND" });
-    await expect(adapter.queryDetail(detailRequest("version_records", "not-a-locator")))
-      .resolves.toEqual({ ok: false, reason_code: "BRANCH_VERSION_DETAIL_INVALID" });
-    await expect(adapter.queryDetail(detailRequest("branch_files", "vr_main~pv_0002")))
-      .resolves.toEqual({ ok: false, reason_code: "BRANCH_VERSION_DETAIL_INVALID" });
   });
 
   it("lists snapshot files by bf_ locator with per-file bff_ content locators", async () => {

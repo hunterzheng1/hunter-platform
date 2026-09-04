@@ -17,8 +17,6 @@ const labels: Record<ProjectWorkspaceSection, string> = {
   branchFiles: "分支文件",
   materials: "项目资料",
   knowledge: "项目知识",
-  changes: "变更记录",
-  versions: "版本记录",
   apiKeys: "API 密钥"
 };
 
@@ -41,8 +39,6 @@ describe("ProjectWorkspaceShell", () => {
       "分支文件",
       "项目资料",
       "项目知识",
-      "变更记录",
-      "版本记录",
       "API 密钥"
     ]);
 
@@ -127,7 +123,7 @@ describe("ProjectWorkspaceShell", () => {
       fallback={<WorkspaceState technicalDetailsLabel="技术详情" state={{ kind: "processing", title: "查询正在接入", description: "尚无生产数据。" }} />}
     />);
 
-    expect(document.querySelectorAll('[data-slot="project-workspace-panel"]')).toHaveLength(6);
+    expect(document.querySelectorAll('[data-slot="project-workspace-panel"]')).toHaveLength(4);
     const materialsTab = screen.getByRole("tab", { name: "项目资料" });
     const materialsPanel = document.getElementById(materialsTab.getAttribute("aria-controls") ?? "");
     expect(materialsPanel).toHaveAttribute("hidden");
