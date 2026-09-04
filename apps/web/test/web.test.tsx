@@ -31,7 +31,7 @@ const overview: DashboardOverview = {
     projects: 1, workflows: 1, skills: 1, published_skills: 1,
     pending_reviews: 1, approved_proposals: 0, rejected_proposals: 0,
     artifacts: 1, project_artifacts: 1, skill_artifacts: 0,
-    local_skills: 1, external_skills: 2, active_runs: 1,
+    local_skills: 1, external_skills: 2,
     knowledge_entries: 12, knowledge_relations: 4,
     ai_requests: 8, ai_tokens: 3200, ai_cost: 0.12
   },
@@ -47,15 +47,6 @@ const overview: DashboardOverview = {
     tokens: index === 6 ? 3200 : 0,
     cost: index === 6 ? 0.12 : 0
   })),
-  active_runs: [{
-    run_id: "run_active",
-    project_id: "prj_one",
-    change_key: "checkout-flow",
-    title: "优化结算流程",
-    current_phase: "run",
-    started_at: "2026-06-22T07:30:00.000Z",
-    last_event_at: "2026-06-22T08:00:00.000Z"
-  }],
   health: [{ key: "review_backlog", label: "Review backlog", status: "attention" as const, value: "1 pending", detail: "Human review is required before pending proposals can publish." }],
   services: [{ key: "api", label: "Governance API", status: "operational" as const, detail: "Authenticated overview request completed.", checked_at: "2026-06-22T00:00:00.000Z" }],
   activity: [{ event_id: "evt_1", action: "project.resolved", target_id: "prj_one", project_id: "prj_one", actor_id: "actor_owner", created_at: "2026-06-22T00:00:00.000Z" }]
@@ -110,8 +101,6 @@ describe("Web Console", () => {
     expect(screen.getByRole("tab", { name: /当天|Today/i })).toHaveAttribute("aria-selected", "true");
     screen.getByRole("tab", { name: /7 天|7 days/i }).click();
     expect(screen.getByText("gpt-5.6-terra")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /正在运行|Active runs/i })).toBeInTheDocument();
-    expect(screen.getByText("优化结算流程")).toBeInTheDocument();
     expect(screen.getAllByText(/知识条目|Knowledge entries/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText("12").length).toBeGreaterThan(0);
     expect(screen.queryByRole("heading", { name: /版本与能力|Versions and capabilities/i })).not.toBeInTheDocument();

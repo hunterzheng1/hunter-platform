@@ -2713,7 +2713,6 @@ components:
         - trend
         - distributions
         - ai_usage
-        - active_runs
         - health
         - services
         - activity
@@ -2738,11 +2737,6 @@ components:
         ai_usage:
           type: array
           description: Daily AI request, token, and estimated cost totals for the requested window.
-          items:
-            type: object
-        active_runs:
-          type: array
-          description: Most recently active project runs visible to the authenticated actor.
           items:
             type: object
         health:

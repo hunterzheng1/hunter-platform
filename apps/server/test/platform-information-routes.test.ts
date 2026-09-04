@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
@@ -7,16 +6,14 @@ import type {
   PlatformInformationExportResult,
   PlatformInformationPage
 } from "@hunter-harness/contracts";
-import { canonicalJson, verifyPlatformInformationExportResult } from "@hunter-harness/contracts";
+import { verifyPlatformInformationExportResult } from "@hunter-harness/contracts";
 import { createServer } from "../src/app.js";
 import { projectApiKeyHash } from "../src/auth/accounts.js";
 import type { BranchVersionQueryAdapter } from "../src/branch-version-query/index.js";
 import type { ChangeRecordsQueryAdapter } from "../src/change-records-query/index.js";
 import type { ProjectKnowledgeQueryAdapter } from "../src/project-knowledge-query/index.js";
 import type { ProjectMaterialsQueryAdapter } from "../src/project-materials/query-adapter.js";
-import { createProductionPlatformInformation } from "../src/platform-information/production.js";
 import { MemoryRepository } from "../src/repositories/memory.js";
-import { MemoryRunStore } from "../src/runs/memory-store.js";
 import { MemoryArtifactStorage } from "../src/storage/memory.js";
 import type { PlatformInformationExportModule, PlatformInformationExportRecordPort,
   PlatformInformationExportDownloadPort } from "../src/platform-information-export/index.js";
@@ -320,58 +317,6 @@ describe("Platform Information HTTP routes", () => {
       503, "PLATFORM_INFORMATION_EXPORT_UNAVAILABLE",
     ]);
     expect(branchQuery).not.toHaveBeenCalled();
-  });
-
-  it("serves the real RunStore monitor path only when a Harness reader is explicitly injected", async () => {
-    await app.close();
-    const runStore = new MemoryRunStore();
-    await runStore.ensureRun({
-      runId: "run_monitor_route", projectId, changeKey: "change_monitor_route",
-      lifecycleKind: "change", branchName: "b".repeat(512),
-      sourceVersion: "plan-event-bundle/v1"
-    });
-    const machine = { lifecycle_kind: "change" as const,
-      run_id: "run_monitor_route", change_key: "change_monitor_route", phase: "plan",
-      attempt: 1, type: "phase_started" as const, producer_seq: 1 };
-    const sha = (value: string) => `sha256:${createHash("sha256").update(value).digest("hex")}`;
-    const occurred_at = "2026-08-13T10:00:00Z";
-    const planEvent = {
-      schema_version: 1 as const, ...machine,
-      event_id: `plan_event:${sha(canonicalJson({ ...machine, occurred_at })).slice(7)}`,
-      occurred_at, idempotency_key: sha(canonicalJson(machine)),
-      summary_zh: "规".repeat(2048), detail_ref: "d".repeat(512), receipt_ref: "r".repeat(512)
-    };
-    await runStore.ingestBatch({
-      projectId, runId: "run_monitor_route", events: [{
-        eventId: planEvent.event_id, producerSeq: 1, eventType: planEvent.type,
-        phase: planEvent.phase, occurredAt: planEvent.occurred_at, payload: {}, planEvent
-      }]
-    });
-    app = await createServer({
-      repository,
-      storage: new MemoryArtifactStorage(),
-      runStore,
-      platformInformation: {
-        branchVersion: { query: branchQuery, listFiles: vi.fn(), listFilesByDetailId: branchFilesPage, detail: vi.fn(), diff: vi.fn(), queryDetail: branchVersionDetail, previewRestore, confirmRestore: vi.fn() },
-        projectMaterials: { query: materialsQuery, detail: materialsDetail },
-        projectKnowledge: { queryPage: knowledgePage, queryDetail: knowledgeDetail, createRetryIntent: retryIntent },
-        changeRecords: { queryPage: changePage, queryDetail: changeDetail },
-        ...createProductionPlatformInformation({
-          runStore,
-          branchMonitorCursorSecret: "platform-route-monitor-secret-at-least-32-bytes"
-        })
-      }
-    });
-    const response = await app.inject({
-      method: "GET",
-      url: `/api/v1/projects/${projectId}/information/branch_monitor?limit=25`,
-      headers: { authorization: "Bearer route-token" }
-    });
-    expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({
-      view: "branch_monitor", page_state: "ready",
-      items: [{ run_id: "run_monitor_route", branch_name: "b".repeat(512), lifecycle_kind: "change" }]
-    });
   });
 
   it("enforces the descriptor's per-view project-key scope", async () => {

@@ -16,7 +16,6 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 
 import type { BranchVersionQueryAdapter } from "../branch-version-query/index.js";
-import type { BranchMonitorQueryAdapter } from "../branch-monitor-query/index.js";
 import type { ChangeRecordsQueryAdapter } from "../change-records-query/index.js";
 import type { ProjectKnowledgeQueryAdapter } from "../project-knowledge-query/index.js";
 import type { ProjectMaterialsQueryAdapter } from "../project-materials/query-adapter.js";
@@ -34,7 +33,6 @@ type BackendUnavailableCode = "PLATFORM_INFORMATION_UNAVAILABLE" |
   "PLATFORM_INFORMATION_EXPORT_DOWNLOAD_UNAVAILABLE";
 
 export interface PlatformInformationAdapters {
-  readonly branchMonitor?: BranchMonitorQueryAdapter;
   readonly branchVersion?: BranchVersionQueryAdapter;
   readonly projectMaterials?: ProjectMaterialsQueryAdapter;
   readonly projectKnowledge?: ProjectKnowledgeQueryAdapter;
@@ -56,12 +54,6 @@ export interface PlatformInformationRoutesOptions {
   ) => Promise<{ actor: Actor; requestId: string }>;
 }
 
-function requireBranchMonitorAdapter(
-  adapter: BranchMonitorQueryAdapter | undefined
-): BranchMonitorQueryAdapter {
-  if (adapter === undefined) unavailable("Stage 12 monitor verifier is not configured");
-  return adapter;
-}
 function requireAdapter<T>(adapter: T | undefined, name: string): T {
   if (adapter === undefined) unavailable(`${name} adapter is not configured`);
   return adapter;
@@ -260,14 +252,15 @@ async function queryPage(
   serialized: string
 ) {
   return backendOperation(async () => view === "branch_monitor"
-    ? requireBranchMonitorAdapter(adapters.branchMonitor).queryPage(serialized)
+    ? Promise.reject(new ServerDomainError(503, "PLATFORM_INFORMATION_UNAVAILABLE",
+        "branch monitor view is retired"))
     : view === "project_materials"
-      ? requireAdapter(adapters.projectMaterials, "project materials").query(serialized)
-      : view === "project_knowledge"
-        ? requireAdapter(adapters.projectKnowledge, "project knowledge").queryPage(serialized)
-        : view === "change_records"
-          ? requireAdapter(adapters.changeRecords, "change records").queryPage(serialized)
-          : requireAdapter(adapters.branchVersion, "branch version").query(serialized),
+    ? requireAdapter(adapters.projectMaterials, "project materials").query(serialized)
+    : view === "project_knowledge"
+      ? requireAdapter(adapters.projectKnowledge, "project knowledge").queryPage(serialized)
+      : view === "change_records"
+        ? requireAdapter(adapters.changeRecords, "change records").queryPage(serialized)
+        : requireAdapter(adapters.branchVersion, "branch version").query(serialized),
   "PLATFORM_INFORMATION_UNAVAILABLE", "platform information source is unavailable");
 }
 
@@ -588,9 +581,7 @@ export function registerPlatformInformationRoutes(
     }
     if (adapters === undefined) unavailable("platform information adapters are not configured");
     const serialized = canonicalRequest(actor.actorId, projectId, view, { detail_id: detailId });
-    const result = view === "branch_monitor"
-      ? await requireBranchMonitorAdapter(adapters.branchMonitor).queryDetail(serialized)
-      : view === "project_materials"
+    const result = view === "project_materials"
       ? await requireAdapter(adapters.projectMaterials, "project materials").detail(serialized)
       : view === "project_knowledge"
         ? await requireAdapter(adapters.projectKnowledge, "project knowledge").queryDetail(serialized)

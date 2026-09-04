@@ -6,7 +6,6 @@ import { Children, cloneElement, isValidElement, useId, useRef } from "react";
 import { Skeleton } from "./ui/Skeleton";
 
 export const PROJECT_WORKSPACE_SECTIONS = [
-  "monitor",
   "branchFiles",
   "materials",
   "knowledge",

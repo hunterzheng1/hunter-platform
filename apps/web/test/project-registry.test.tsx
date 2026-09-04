@@ -5,7 +5,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ProjectRegistry } from "../components/project-registry";
-import type { HunterApi, ProjectSummary, RunSummary } from "../lib/api";
+import type { HunterApi, ProjectSummary } from "../lib/api";
 import {
   formatProjectDateTime,
   paginateProjects,
@@ -23,27 +23,6 @@ function project(partial: Partial<ProjectSummary> & Pick<ProjectSummary, "projec
     latest_artifact_id: "art_x",
     created_at: "2026-01-01T00:00:00Z",
     current_file_count: 1,
-    ...partial
-  };
-}
-
-function run(projectId: string, partial: Partial<RunSummary> = {}): RunSummary {
-  return {
-    run_id: `run_${projectId}`,
-    project_id: projectId,
-    change_key: `change-${projectId}`,
-    title: `运行 ${projectId}`,
-    run_status: "running",
-    connection_status: "online",
-    sync_completeness: "complete",
-    current_phase: "test",
-    started_at: "2026-08-11T08:00:00Z",
-    ended_at: null,
-    last_event_at: "2026-08-11T08:05:00Z",
-    last_heartbeat_at: "2026-08-11T08:05:00Z",
-    server_cursor: 12,
-    workflow_status: "running",
-    result_status: "pending",
     ...partial
   };
 }
@@ -94,7 +73,6 @@ describe("ProjectRegistry list UX", () => {
       listProjects: vi.fn(async (state: "active" | "archived" = "active") => state === "active"
         ? [project({ project_id: hiddenId, display_name: "支付网关", latest_project_version: internalVersion, current_file_count: 14 })]
         : []),
-      listProjectRuns: vi.fn(async () => ({ items: [], total: 3, next_cursor: null })),
       getProjectSemanticOverview: vi.fn(async () => ({
         project_id: hiddenId,
         artifact_id: "art_test",
@@ -109,7 +87,6 @@ describe("ProjectRegistry list UX", () => {
     expect(screen.queryByText(internalVersion)).toBeNull();
     expect(screen.getByText("已有远端版本")).toBeInTheDocument();
     expect(screen.getAllByText("项目文件").length).toBeGreaterThan(0);
-    expect(await screen.findByText("3 个分支")).toBeInTheDocument();
     expect(await screen.findByText("10 条知识")).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: /搜索项目|Search projects/i }))
       .toHaveAttribute("placeholder", "按项目名称搜索");
@@ -117,35 +94,32 @@ describe("ProjectRegistry list UX", () => {
       .toHaveAttribute("data-layout", "two-column");
   });
 
-  it("loads latest run summaries only for projects on the visible page", async () => {
+  it("loads knowledge previews only for projects on the visible page", async () => {
     const items = Array.from({ length: 13 }, (_, index) => project({
       project_id: `prj_${String(index + 1).padStart(2, "0")}`,
       display_name: `项目 ${String(index + 1).padStart(2, "0")}`,
       updated_at: "2026-08-11T08:00:00Z"
     }));
-    const listProjectRuns = vi.fn(async (projectId: string) => ({
-      items: [run(projectId)],
-      total: 7,
-      next_cursor: null
+    const getProjectSemanticOverview = vi.fn(async (projectId: string) => ({
+      project_id: projectId,
+      artifact_id: "art_test",
+      counts: { documents: 18, knowledge: 10, rules: 2, changes: 3, architecture: 1, agent_instructions: 2, edges: 8 }
     }));
     const api = {
       listProjects: vi.fn(async (state: "active" | "archived" = "active") => state === "active" ? items : []),
-      listProjectRuns
+      getProjectSemanticOverview
     } as unknown as HunterApi;
 
     render(<ProjectRegistry api={api} />);
 
     expect(await screen.findByRole("heading", { name: "项目 01" })).toBeInTheDocument();
-    await waitFor(() => expect(listProjectRuns).toHaveBeenCalledTimes(PROJECT_LIST_PAGE_SIZE));
-    expect(listProjectRuns).not.toHaveBeenCalledWith("prj_11", expect.anything());
-    expect(screen.getByText("运行 prj_01")).toBeInTheDocument();
-    expect(screen.getAllByText("运行中").length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/当前阶段：测试/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText("共 7 次").length).toBeGreaterThan(0);
+    await waitFor(() => expect(getProjectSemanticOverview).toHaveBeenCalledTimes(PROJECT_LIST_PAGE_SIZE));
+    expect(getProjectSemanticOverview).not.toHaveBeenCalledWith("prj_11");
+    expect(screen.getAllByText("10 条知识").length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole("button", { name: /下一页|Next/i }));
-    await waitFor(() => expect(listProjectRuns).toHaveBeenCalledTimes(items.length));
-    expect(await screen.findByText("运行 prj_11")).toBeInTheDocument();
+    await waitFor(() => expect(getProjectSemanticOverview).toHaveBeenCalledTimes(items.length));
+    expect(await screen.findByRole("heading", { name: "项目 11" })).toBeInTheDocument();
   });
 
   it("shows newest projects first with second-precision timestamps and pages at 6", async () => {

@@ -130,15 +130,6 @@ describe("ProjectWorkspace", () => {
         page_state: "empty", sort: "uploaded_at_desc_snapshot_version_asc", items: [], next_cursor: null, failures: []
       })),
       listProjectFiles: vi.fn(async () => ({ project_id: "prj_one", project_version: "pv_one", total: 5, items: archiveFiles })),
-      listProjectRuns: vi.fn(async () => ({
-        items: [{
-          run_id: "run_required", project_id: "prj_one", change_key: "required-indicators-raw-config",
-          title: "所需指标返回指标原始配置与指标ID", run_status: "completed", connection_status: "offline",
-          sync_completeness: "complete", current_phase: null, started_at: "2026-06-20T00:00:00Z",
-          ended_at: "2026-06-20T01:00:00Z", last_event_at: "2026-06-20T01:00:00Z",
-          last_heartbeat_at: null, server_cursor: 10
-        }], total: 1, next_cursor: null
-      })),
       getProjectFileContent: vi.fn(async (_projectId, path) => ({
         ...(archiveFiles.find((file) => file.path === path) as ProjectFileMetadata),
         project_id: "prj_one",
@@ -161,8 +152,9 @@ describe("ProjectWorkspace", () => {
     fireEvent.click(await screen.findByRole("tab", { name: "分支文件" }));
     const primaryBranch = await screen.findByRole("button", { name: /知识库配置上传绑定.*kb-config-upload-binding/ });
     expect(primaryBranch).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /所需指标返回指标原始配置与指标ID.*required-indicators-raw-config/ })).toBeInTheDocument();
-    expect(screen.queryByText(/requiredindicatorsraw配置/u)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /required-indicators-raw-config/u })).toBeInTheDocument();
+    // run 标题已随监控链路退役：分支名走词表兜底展示。
+    expect(screen.getByText(/requiredindicatorsraw配置/u)).toBeInTheDocument();
     expect(screen.queryByText("已归档")).not.toBeInTheDocument();
 
     expect(await screen.findByRole("heading", { name: "设计方案" })).toBeInTheDocument();
@@ -314,7 +306,6 @@ describe("ProjectWorkspace", () => {
     render(<ProjectWorkspace api={api()} projectId="prj_one" />);
 
     expect((await screen.findAllByRole("tab")).map((tab) => tab.textContent)).toEqual([
-      "分支监控",
       "分支文件",
       "项目资料",
       "项目知识",

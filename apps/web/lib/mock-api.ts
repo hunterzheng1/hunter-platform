@@ -49,7 +49,6 @@ import { bootstrapSkills } from "./catalog";
 import { findDemoSourceSkill, sapFieldMapper } from "./demo-skills/sap-field-mapper";
 import { ApiClientError } from "./api";
 import { platformInformationErrorStatus, type PlatformInformationOperationName } from "./platform-information-api";
-import { mockChangeArchive } from "./mock-archive";
 import type {
   AiJobState,
   HunterApi,
@@ -68,8 +67,6 @@ import type {
   ProposalDetailModel,
   ReviewInput,
   ReviewResult,
-  RunSummary,
-  RunEventSummary,
   KnowledgeIngestListItem,
 } from "./api";
 
@@ -692,7 +689,7 @@ const MOCK_DASHBOARD: DashboardOverview = {
     projects: 5, workflows: 1, skills: MOCK_SKILLS.length, published_skills: MOCK_SKILLS.length,
     pending_reviews: 3, approved_proposals: 2, rejected_proposals: 1,
     artifacts: 15, project_artifacts: 3, skill_artifacts: 12,
-    local_skills: MOCK_SKILLS.length, external_skills: 2, active_runs: 1,
+    local_skills: MOCK_SKILLS.length, external_skills: 2,
     knowledge_entries: 18, knowledge_relations: 7,
     ai_requests: 26, ai_tokens: 18_400, ai_cost: 0.42
   },
@@ -726,11 +723,6 @@ const MOCK_DASHBOARD: DashboardOverview = {
     { date: "2026-06-21", requests: 4, tokens: 3_100, cost: 0.07 },
     { date: "2026-06-22", requests: 5, tokens: 4_500, cost: 0.09 }
   ],
-  active_runs: [{
-    run_id: "run_demo_active", project_id: "prj_demo_1", change_key: "checkout-observability",
-    title: "完善结算链路监控", current_phase: "run",
-    started_at: "2026-06-22T10:20:00.000Z", last_event_at: "2026-06-22T11:52:00.000Z"
-  }],
   health: [
     { key: "review_backlog", label: "Review backlog", status: "attention", value: "3 pending", detail: "Human review is required before pending proposals can publish." },
     { key: "review_outcome", label: "Review outcome", status: "healthy", value: "2/3 approved", detail: "Calculated from recorded review decisions." },
@@ -796,113 +788,6 @@ function clone<T>(value: T): T {
 
 function delay<T>(value: T): Promise<T> {
   return new Promise((resolve) => setTimeout(() => resolve(value), DELAY_MS));
-}
-
-// ── Mock runs（运行监控 demo 数据）────────────────────────
-
-interface MockRunSeed {
-  id: string;
-  title: string;
-  changeKey: string;
-  run_status: string;
-  connection_status: string;
-  sync_completeness: string;
-  current_phase: string | null;
-  ageMin: number;
-  durationMin: number | null;
-}
-
-const MOCK_RUN_SEED: MockRunSeed[] = [
-  { id: "run_7f3a91c2", title: "空间治理生产发布", changeKey: "spatial-governance-production-release", run_status: "running", connection_status: "online", sync_completeness: "partial", current_phase: "review", ageMin: 4, durationMin: null },
-  { id: "run_2b8e04d5", title: "修复门禁策略校准", changeKey: "fix-gate-policy", run_status: "succeeded", connection_status: "offline", sync_completeness: "complete", current_phase: null, ageMin: 62, durationMin: 18 },
-  { id: "run_9c1d47a8", title: "知识裁决周检", changeKey: "knowledge-closeout", run_status: "failed", connection_status: "offline", sync_completeness: "partial", current_phase: "test", ageMin: 190, durationMin: 7 },
-  { id: "run_4e6b02f1", title: "语义索引重建", changeKey: "semantic-index-rebuild", run_status: "queued", connection_status: "online", sync_completeness: "pending", current_phase: null, ageMin: 260, durationMin: null },
-  { id: "run_5a0c83e9", title: "归档报告管线优化", changeKey: "archive-report-pipeline", run_status: "succeeded", connection_status: "offline", sync_completeness: "complete", current_phase: null, ageMin: 1440, durationMin: 23 }
-];
-
-/** 真实 harness 事件词汇（Hunter-Harness events.ndjson schema_version 3）。 */
-const MOCK_RUN_EVENT_FLOW: Array<{ type: string; phase: string | null; tone: "info" | "success" | "warning" | "danger" }> = [
-  { type: "phase.start", phase: "plan", tone: "info" },
-  { type: "decision", phase: "plan", tone: "info" },
-  { type: "phase.end", phase: "plan", tone: "success" },
-  { type: "phase.start", phase: "run", tone: "info" },
-  { type: "command", phase: "run", tone: "info" },
-  { type: "artifact", phase: "run", tone: "success" },
-  { type: "phase.end", phase: "run", tone: "success" },
-  { type: "phase.start", phase: "test", tone: "info" },
-  { type: "verification", phase: "test", tone: "success" },
-  { type: "phase.end", phase: "test", tone: "success" },
-  { type: "phase.start", phase: "review", tone: "info" },
-  { type: "phase.end", phase: "review", tone: "success" },
-  { type: "phase.start", phase: "submit", tone: "info" },
-  { type: "phase.end", phase: "submit", tone: "success" },
-  { type: "phase.start", phase: "archive", tone: "info" },
-  { type: "artifact", phase: "archive", tone: "success" },
-  { type: "phase.end", phase: "archive", tone: "success" }
-];
-
-function buildMockRuns(projectId: string): RunSummary[] {
-  const base = Date.now();
-  return MOCK_RUN_SEED.map((seed, index) => {
-    const started = new Date(base - seed.ageMin * 60_000);
-    const ended = seed.durationMin === null ? null : new Date(started.getTime() + seed.durationMin * 60_000);
-    const live = seed.run_status === "running" || seed.run_status === "queued";
-    return {
-      run_id: `${seed.id}_${projectId.slice(0, 6)}${index}`,
-      project_id: projectId,
-      change_key: seed.changeKey,
-      title: seed.title,
-      run_status: seed.run_status,
-      connection_status: seed.connection_status,
-      sync_completeness: seed.sync_completeness,
-      current_phase: seed.current_phase,
-      started_at: started.toISOString(),
-      ended_at: ended === null ? null : ended.toISOString(),
-      last_event_at: (live ? new Date(base - 20_000) : ended ?? started).toISOString(),
-      last_heartbeat_at: live ? new Date(base - 15_000).toISOString() : null,
-      server_cursor: (index + 1) * 10
-    };
-  });
-}
-
-function buildMockRunEvents(run: RunSummary): RunEventSummary[] {
-  const start = run.started_at === null ? Date.now() : Date.parse(run.started_at);
-  const end = run.ended_at === null ? Date.parse(run.last_event_at ?? "") : Date.parse(run.ended_at);
-  const isFailed = run.run_status === "failed";
-  const isSucceeded = run.run_status === "succeeded";
-  const isQueued = run.run_status === "queued";
-
-  let flow = [...MOCK_RUN_EVENT_FLOW];
-  if (isQueued) {
-    flow = [];
-  } else if (isFailed) {
-    // 在 test 阶段的 verification 失败并被封存
-    const failIndex = flow.findIndex((item) => item.type === "verification" && item.phase === "test");
-    flow = flow.slice(0, failIndex + 1).map((item, index) =>
-      index === failIndex
-        ? { ...item, tone: "danger" as const }
-        : item
-    );
-  } else if (!isSucceeded && run.current_phase !== null) {
-    // 进行中：截断到当前阶段的 phase.start 之后一条
-    const phaseStart = flow.findIndex((item) => item.type === "phase.start" && item.phase === run.current_phase);
-    flow = flow.slice(0, Math.max(phaseStart + 2, 3));
-  }
-
-  const count = flow.length;
-  return flow.map((item, index) => {
-    const at = new Date(start + ((end - start) || 60_000) * (index / Math.max(1, count - 1)) * 0.9);
-    return {
-      server_cursor: index + 1,
-      run_id: run.run_id,
-      event_id: `evt_${run.run_id.slice(4, 12)}_${String(index + 1).padStart(3, "0")}`,
-      producer_seq: index + 1,
-      event_type: item.type,
-      phase: item.phase,
-      occurred_at: at.toISOString(),
-      payload: { tone: item.tone }
-    };
-  });
 }
 
 export class MockApiClient implements HunterApi {
@@ -1261,19 +1146,6 @@ export class MockApiClient implements HunterApi {
   async syncWorkflowFamily(_slug: string): Promise<{ updated: boolean; version?: string }> {
     void _slug;
     return delay({ updated: false });
-  }
-
-  async getChangeArchive(_projectId: string, changeKey: string) {
-    void _projectId;
-    const archive = mockChangeArchive(changeKey);
-    return delay(archive);
-  }
-
-  async getChangeArchiveContent(_projectId: string, changeKey: string, path: string) {
-    void _projectId;
-    const archive = mockChangeArchive(changeKey);
-    const file = archive.files.find((item) => item.path === path);
-    return delay({ content: file?.content ?? `# ${path}\n` });
   }
 
   async listProjectSemanticRules(projectId: string): Promise<SemanticDocument[]> {
@@ -1731,33 +1603,6 @@ export class MockApiClient implements HunterApi {
   }
   async applyFixSuggestion(slug: string, agent: RegistryAgent): Promise<DraftState> {
     return this.getSkillDraft(slug, agent);
-  }
-
-  // ── Runs（运行监控 demo）────────────────────────────────
-  async listProjectRuns(
-    projectId: string,
-    _options?: { limit?: number; cursor?: string | null; status?: string }
-  ): Promise<{ items: RunSummary[]; total: number; next_cursor: string | null }> {
-    void _options;
-    const items = buildMockRuns(projectId);
-    return delay({ items, total: items.length, next_cursor: null });
-  }
-
-  async getProjectRun(projectId: string, runId: string): Promise<RunSummary> {
-    const run = buildMockRuns(projectId).find((item) => item.run_id === runId);
-    if (run === undefined) throw new ApiClientError(404, "NOT_FOUND", "run not found");
-    return delay(clone(run));
-  }
-
-  async listProjectRunEvents(
-    projectId: string,
-    runId: string,
-    afterCursor?: number
-  ): Promise<{ items: RunEventSummary[]; next_cursor: number }> {
-    const run = buildMockRuns(projectId).find((item) => item.run_id === runId);
-    if (run === undefined) return delay({ items: [], next_cursor: afterCursor ?? 0 });
-    const events = buildMockRunEvents(run).filter((item) => item.server_cursor > (afterCursor ?? 0));
-    return delay({ items: clone(events), next_cursor: run.server_cursor });
   }
 
   // ── Knowledge ingest（候选审核 demo）────────────────────

@@ -26,7 +26,6 @@ import { useI18n } from "../lib/i18n";
 import { runPreservingWindowScroll } from "../lib/preserve-scroll";
 import { ProjectSemanticPanels } from "./project-semantic-panels";
 import { ProjectVersionsPanel } from "./project-versions-panel";
-import { RunsMonitor } from "./runs-monitor";
 import {
   ProjectWorkspaceShell,
   WorkspaceFilterBar,
@@ -42,7 +41,6 @@ interface WorkspaceData {
   files: ProjectFileMetadata[];
   overview: SemanticOverview | null;
   branchProjectionAvailable: boolean;
-  runTitles: Map<string, string>;
 }
 
 interface ProjectFileContentCacheEntry {
@@ -255,7 +253,7 @@ const COPY = {
   zh: {
     back: "返回项目列表",
     eyebrow: "项目工作台",
-    tabs: { monitor: "分支监控", branchFiles: "分支文件", materials: "项目资料", knowledge: "项目知识", changes: "变更记录", versions: "版本记录", apiKeys: "API 密钥" },
+    tabs: { branchFiles: "分支文件", materials: "项目资料", knowledge: "项目知识", changes: "变更记录", versions: "版本记录", apiKeys: "API 密钥" },
     loading: "正在加载项目工作台",
     pendingMaterialsTitle: "项目资料查询正在接入",
     pendingMaterialsDescription: "规则、架构事实、架构约束、指令和配置将在查询 Adapter 接通后显示。",
@@ -331,7 +329,7 @@ const COPY = {
   en: {
     back: "Back to projects",
     eyebrow: "Project workbench",
-    tabs: { monitor: "Branch monitor", branchFiles: "Branch files", materials: "Project materials", knowledge: "Project knowledge", changes: "Changes", versions: "Version history", apiKeys: "API keys" },
+    tabs: { branchFiles: "Branch files", materials: "Project materials", knowledge: "Project knowledge", changes: "Changes", versions: "Version history", apiKeys: "API keys" },
     loading: "Loading project workspace",
     pendingMaterialsTitle: "Project materials query is being connected",
     pendingMaterialsDescription: "Rules, architecture facts and constraints, instructions, and configuration will appear after the query adapter is connected.",
@@ -556,21 +554,7 @@ async function loadWorkspace(api: HunterApi, projectId: string): Promise<Workspa
     // the existence of a snapshot must not hide real .harness/archive files.
     api.listProjectFiles?.(projectId) ?? Promise.resolve(null)
   ]);
-  const runTitles = new Map<string, string>();
-  if (snapshot !== null && snapshot !== undefined && archiveBranchGroups(snapshot.items) !== null && api.listProjectRuns !== undefined) {
-    try {
-      const runs = await api.listProjectRuns(projectId, { limit: 100, cursor: null });
-      for (const run of runs.items) {
-        const title = run.title?.trim();
-        if (title !== undefined && title !== "" && title !== run.change_key && !runTitles.has(run.change_key)) {
-          runTitles.set(run.change_key, title);
-        }
-      }
-    } catch {
-      // Archive files remain readable when run-monitor titles are unavailable.
-    }
-  }
-  return { project, artifacts, files: snapshot?.items ?? [], overview, branchProjectionAvailable, runTitles };
+  return { project, artifacts, files: snapshot?.items ?? [], overview, branchProjectionAvailable };
 }
 
 export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId: string }) {
@@ -578,7 +562,7 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
   const toast = useToast();
   const copy = COPY[lang];
   const [data, setData] = useState<WorkspaceData | null>(null);
-  const [activeTab, setActiveTab] = useState<ProjectWorkspaceSection>("monitor");
+  const [activeTab, setActiveTab] = useState<ProjectWorkspaceSection>("branchFiles");
   const [knowledgeActivated, setKnowledgeActivated] = useState(false);
   const [selectedArchiveBranch, setSelectedArchiveBranch] = useState<string | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -594,7 +578,7 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
   const workspaceRequest = useRef(0);
 
   useEffect(() => {
-    setActiveTab("monitor");
+    setActiveTab("branchFiles");
     setKnowledgeActivated(false);
     setSelectedArchiveBranch(null);
   }, [api, projectId]);
@@ -868,13 +852,12 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
         setActiveTab(section);
       })}
       slots={{
-        monitor: { content: <RunsMonitor api={api} projectId={projectId} /> },
         branchFiles: { content: archiveBranches !== null && activeArchiveBranch !== null ? <div className="runs-split archive-branches-shell">
       <aside className="runs-list-panel archive-branches-panel">
         <div className="runs-list-head"><div><h2>{copy.archiveBranches}<span className="runs-list-count">{archiveBranches.length}</span></h2><p>{copy.archiveBranchesHint}</p></div></div>
         <ul className="runs-list archive-branch-options">
           {archiveBranches.map((branch) => {
-            const displayName = branchDisplayName(branch.name, lang, data.runTitles.get(branch.name));
+            const displayName = branchDisplayName(branch.name, lang);
             return <li key={branch.name}><button
               type="button"
               className={activeArchiveBranch.name === branch.name ? "active" : ""}
@@ -895,7 +878,7 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
         </ul>
       </aside>
       <main className="runs-detail archive-branch-detail">
-        <div className="runs-detail-head"><div><h2>{branchDisplayName(activeArchiveBranch.name, lang, data.runTitles.get(activeArchiveBranch.name))}</h2><p className="runs-mono">{activeArchiveBranch.name}</p></div><div className="archive-branch-meta"><span>{copy.branchFileCount(activeArchiveBranch.files.length)}</span><time dateTime={activeArchiveBranch.updatedAt}>{copy.branchUpdated}：{new Date(activeArchiveBranch.updatedAt).toLocaleDateString(lang === "zh" ? "zh-CN" : "en-US")}</time></div></div>
+        <div className="runs-detail-head"><div><h2>{branchDisplayName(activeArchiveBranch.name, lang)}</h2><p className="runs-mono">{activeArchiveBranch.name}</p></div><div className="archive-branch-meta"><span>{copy.branchFileCount(activeArchiveBranch.files.length)}</span><time dateTime={activeArchiveBranch.updatedAt}>{copy.branchUpdated}：{new Date(activeArchiveBranch.updatedAt).toLocaleDateString(lang === "zh" ? "zh-CN" : "en-US")}</time></div></div>
         <div className="archive-branch-browser archive-branch-design-browser">
           <div className="archive-content-pane">
             {activeArchiveDesignFile === null ? <div className="project-file-placeholder archive-file-placeholder"><Icon name="file" size={24} /><h3>{copy.noDesignFile}</h3></div> : activeArchiveFile === null ? <div className="project-file-placeholder archive-file-placeholder"><Icon name="file" size={24} /><h3>{copy.loadingContent}</h3></div> : <section className="archive-file-content">

@@ -5,7 +5,6 @@ import {
 
 import type { RegistryStore } from "../registry/store.js";
 import type { ServerRepository } from "../repositories/interfaces.js";
-import type { RunStore } from "../runs/store.js";
 import type { SemanticStore } from "../semantic/store.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -60,7 +59,6 @@ function countBy(values: readonly string[]): Array<{ key: string; count: number 
 export async function buildDashboardOverview(input: {
   repository: ServerRepository;
   registry: RegistryStore;
-  runStore: RunStore;
   semanticStore: SemanticStore;
   actorId: string;
   days: number;
@@ -68,7 +66,7 @@ export async function buildDashboardOverview(input: {
 }): Promise<DashboardOverview> {
   const now = input.now ?? new Date();
   const projects = await allProjects(input.repository, input.actorId);
-  const [projectProposals, projectArtifacts, auditEvents, projectRuns, semanticOverviews] = await Promise.all([
+  const [projectProposals, projectArtifacts, auditEvents, semanticOverviews] = await Promise.all([
     allProjectRows(projects, (projectId, cursor) => input.repository.listProposals({
       actorId: input.actorId, projectId, limit: 100, cursor, status: null
     })),
@@ -76,11 +74,6 @@ export async function buildDashboardOverview(input: {
       actorId: input.actorId, projectId, limit: 100, cursor
     })),
     input.repository.listAuditEvents({ actorId: input.actorId, limit: 12 }),
-    Promise.all(projects.map((project) => input.runStore.listRuns(project.projectId, {
-      limit: 20,
-      cursor: null,
-      status: "running"
-    }))),
     Promise.all(projects.map((project) => input.semanticStore.overview(project.projectId)))
   ]);
   const skills = input.registry.listSkills();
@@ -123,12 +116,6 @@ export async function buildDashboardOverview(input: {
     return artifact.source_proposal_id !== "" && artifact.content_sha256.startsWith("sha256:");
   }).length;
   const generatedAt = now.toISOString();
-  const activeRuns = projectRuns.flatMap((page) => page.items)
-    .sort((left, right) =>
-      (right.lastEventAt ?? right.startedAt ?? right.createdAt)
-        .localeCompare(left.lastEventAt ?? left.startedAt ?? left.createdAt)
-    );
-  const activeRunCount = projectRuns.reduce((total, page) => total + page.total, 0);
   const knowledgeTotals = semanticOverviews.reduce((totals, item) => ({
     knowledge: totals.knowledge + item.counts.knowledge,
     rules: totals.rules + item.counts.rules,
@@ -208,7 +195,6 @@ export async function buildDashboardOverview(input: {
       skill_artifacts: skillArtifacts.length,
       local_skills: skills.length,
       external_skills: externalSkills.length,
-      active_runs: activeRunCount,
       knowledge_entries: knowledgeTotals.knowledge,
       knowledge_relations: knowledgeTotals.relations,
       ai_requests: aiTotals.requests,
@@ -229,15 +215,6 @@ export async function buildDashboardOverview(input: {
       ]
     },
     ai_usage: aiUsage,
-    active_runs: activeRuns.slice(0, 6).map((run) => ({
-      run_id: run.runId,
-      project_id: run.projectId,
-      change_key: run.changeKey,
-      title: run.title,
-      current_phase: run.currentPhase,
-      started_at: run.startedAt,
-      last_event_at: run.lastEventAt
-    })),
     health,
     services: [
       { key: "api", label: "Governance API", status: "operational", detail: "Authenticated overview request completed.", checked_at: generatedAt },

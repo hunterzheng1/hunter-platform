@@ -11,7 +11,6 @@ import { PostgresRegistryPersistence } from "./registry/persistence.js";
 import { runMigrations } from "./repositories/migrate.js";
 import { PostgresRepository } from "./repositories/postgres.js";
 import { PgSemanticStore } from "./semantic/pg-store.js";
-import { PgRunStore } from "./runs/pg-store.js";
 import { LocalArtifactStorage } from "./storage/local.js";
 import { decodeNpmCredentialEncryptionKey } from "./npm/credentials.js";
 import { createProductionPlatformInformationFromEnvironment } from "./platform-information/production.js";
@@ -88,7 +87,6 @@ const credentialKeyValue = await secret("HUNTER_HARNESS_CREDENTIAL_KEY", false);
 const npmCredentialEncryptionKey = credentialKeyValue === undefined
   ? null
   : decodeNpmCredentialEncryptionKey(credentialKeyValue);
-const runStore = new PgRunStore(pool);
 const knowledgeQuery = createPgKnowledgeQueryHttpService(pool);
 const remoteContentUploadCas = await createRemoteContentUploadLocalCas({
   root: process.env.HUNTER_REMOTE_CONTENT_UPLOAD_ROOT ?? `${artifactRoot}/remote-content-uploads`,
@@ -105,7 +103,6 @@ const remoteSync = createPgRemoteSyncHttpService({
 });
 const platformInformation = await createProductionPlatformInformationFromEnvironment({
   pool,
-  runStore,
   platformInformationExportRoot: process.env.HUNTER_PLATFORM_INFORMATION_EXPORT_ROOT
     ?? `${artifactRoot}/platform-information-exports`,
 });
@@ -237,7 +234,6 @@ const app = await createServer({
   registryPersistence: new PostgresRegistryPersistence(pool),
   aiJobStore: new PgAiJobStore(pool),
   semanticStore: new PgSemanticStore(pool),
-  runStore,
   knowledgeQuery,
   remoteContentUpload,
   remoteSync,

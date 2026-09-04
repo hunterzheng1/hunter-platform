@@ -86,33 +86,6 @@ export interface KnowledgeIngestListItem {
   projected_at: string | null;
 }
 
-export interface RunPhaseSummary {
-  id: string;
-  started_at: string;
-  ended_at: string | null;
-  duration_ms: number | null;
-  total_duration_ms?: number | null;
-  attempt_count?: number;
-  active_attempt?: number | null;
-  latest_status?: string | null;
-  preparation_attempt_count?: number;
-  active_preparation?: number | null;
-  blocked_preparation_count?: number;
-  latest_preparation?: RunPhasePreparationSummary | null;
-  preparations?: RunPhasePreparationSummary[];
-  validity?: "current" | "stale" | "pending" | "unknown";
-  attempts?: Array<{
-    attempt: number;
-    run_id?: string | null;
-    trigger?: string | null;
-    from_phase?: string | null;
-    started_at: string;
-    ended_at: string | null;
-    status: string | null;
-    duration_ms: number | null;
-  }>;
-}
-
 export interface NpmPublishingCredentialStatus {
   scope: string | null;
   source: "none" | "deployment" | "managed";
@@ -121,75 +94,6 @@ export interface NpmPublishingCredentialStatus {
   expires_at: string | null;
   last_verified_at: string | null;
   can_manage: boolean;
-}
-
-export interface RunPhasePreparationSummary {
-  attempt: number;
-  run_id?: string | null;
-  trigger?: string | null;
-  from_phase?: string | null;
-  started_at: string;
-  ended_at: string | null;
-  status: string | null;
-  duration_ms: number | null;
-  code: string | null;
-  message: string | null;
-}
-
-export interface RunSummary {
-  run_id: string;
-  project_id: string;
-  change_key: string;
-  title: string | null;
-  run_status: string;
-  connection_status: string;
-  sync_completeness: string;
-  current_phase: string | null;
-  started_at: string | null;
-  ended_at: string | null;
-  last_event_at: string | null;
-  last_heartbeat_at: string | null;
-  server_cursor: number;
-  active_phase?: string | null;
-  preparing_phase?: string | null;
-  waiting_for_phase?: string | null;
-  workflow_status?: "running" | "preparing" | "waiting" | "completed" | "failed" | "abandoned" | "superseded";
-  result_status?: "pending" | "warning" | "success" | "failure";
-  planned_phases?: string[] | null;
-  skipped_phases?: unknown[];
-  phase_plan_source?: string;
-  closure_disposition?: "completed" | "abandoned" | "superseded" | null;
-  closure_reason?: string | null;
-  timing_breakdown?: {
-    product_verification_ms: number;
-    process_evidence_ms: number;
-    user_wait_ms: number;
-    wall_clock_reported_ms: number;
-  };
-  file_breakdown?: { product_files: number; process_evidence_files: number };
-  phases?: RunPhaseSummary[];
-}
-
-export interface ChangeArchiveSummary {
-  changeKey: string;
-  archivedAt: string | null;
-  files: Array<{
-    path: string;
-    sizeBytes: number;
-    kind: "design" | "plan" | "report" | "evidence" | "meta" | "log" | "knowledge";
-    tier: "core" | "supporting" | "diagnostic";
-  }>;
-}
-
-export interface RunEventSummary {
-  server_cursor: number;
-  run_id: string;
-  event_id: string;
-  producer_seq: number;
-  event_type: string;
-  phase: string | null;
-  occurred_at: string;
-  payload: Record<string, unknown>;
 }
 
 export interface ProjectSummary {
@@ -401,8 +305,6 @@ export interface HunterApi {
   diffWorkflowFamilyDraft?(slug: string, profile?: string): Promise<SkillDiffFile[]>;
   listWorkflowFamilyVersions?(slug: string): Promise<WorkflowFamilyVersionSummary[]>;
   syncWorkflowFamily?(slug: string): Promise<{ updated: boolean; version?: string }>;
-  getChangeArchive?(projectId: string, changeKey: string): Promise<ChangeArchiveSummary>;
-  getChangeArchiveContent?(projectId: string, changeKey: string, path: string): Promise<{ content: string }>;
   downloadWorkflowFamilyArtifact?(slug: string, profile: string, version?: string): Promise<{ blob: Blob; hash: string; filename: string }>;
   getProjectWorkflowBinding?(projectId: string): Promise<RegistryProjectWorkflowBinding | null>;
   bindProjectWorkflow?(projectId: string, familySlug: string, profile: string, revision: number | null, version?: string | null): Promise<RegistryProjectWorkflowBinding>;
@@ -460,26 +362,6 @@ export interface HunterApi {
     projectId: string,
     body: PlatformInformationRetryExtractionHttpRequest,
   ): Promise<KnowledgeExtractionRetryIntent>;
-  listProjectRuns?(
-    projectId: string,
-    options?: { limit?: number; cursor?: string | null; status?: string }
-  ): Promise<{ items: RunSummary[]; total: number; next_cursor: string | null }>;
-  getProjectRun?(projectId: string, runId: string): Promise<RunSummary>;
-  listProjectRunEvents?(
-    projectId: string,
-    runId: string,
-    afterCursor?: number
-  ): Promise<{ items: RunEventSummary[]; next_cursor: number }>;
-  streamProjectRunEvents?(
-    projectId: string,
-    runId: string,
-    afterCursor: number,
-    handlers: {
-      onEvent: (event: RunEventSummary) => void;
-      onRun?: (run: RunSummary) => void;
-      onError?: (error: unknown) => void;
-    }
-  ): Promise<{ abort: () => void } | null>;
   uploadSkillDraft?(form: FormData, agent: RegistryAgent): Promise<DraftState>;
   getSkillDraft?(slug: string, agent: RegistryAgent): Promise<DraftState>;
   discardSkillDraft?(slug: string, agent: RegistryAgent, revision: number): Promise<{ slug: string; discarded: boolean }>;
@@ -1381,164 +1263,12 @@ export class HttpHunterApi implements HunterApi {
     );
   }
 
-  async listProjectRuns(
-    projectId: string,
-    options: { limit?: number; cursor?: string | null; status?: string } = {}
-  ): Promise<{ items: RunSummary[]; total: number; next_cursor: string | null }> {
-    const items: RunSummary[] = [];
-    let cursor: string | null = options.cursor ?? null;
-    let total: number;
-    const pageLimit = options.limit ?? 100;
-    const singlePage = options.cursor !== undefined;
-    do {
-      const query = new URLSearchParams({ limit: String(pageLimit) });
-      if (cursor !== null) query.set("cursor", cursor);
-      if (options.status !== undefined) query.set("status", options.status);
-      const result = await this.request<{
-        items: RunSummary[];
-        total: number;
-        next_cursor: string | null;
-      }>(
-        "GET",
-        "/api/v1/projects/" + encodeURIComponent(projectId) + "/runs?" + query.toString()
-      );
-      items.push(...result.items);
-      total = result.total;
-      cursor = result.next_cursor;
-      if (singlePage) break;
-    } while (cursor !== null);
-    return { items, total, next_cursor: singlePage ? cursor : null };
-  }
-
   async syncWorkflowFamily(slug: string): Promise<{ updated: boolean; version?: string }> {
     return this.request(
       "POST",
       "/api/v1/workflow-families/" + encodeURIComponent(slug) + "/sync",
       {}
     );
-  }
-
-  async getChangeArchive(projectId: string, changeKey: string): Promise<ChangeArchiveSummary> {
-    return this.request(
-      "GET",
-      "/api/v1/projects/" + encodeURIComponent(projectId) +
-        "/changes/" + encodeURIComponent(changeKey) + "/archive"
-    );
-  }
-
-  async getChangeArchiveContent(
-    projectId: string,
-    changeKey: string,
-    path: string
-  ): Promise<{ content: string }> {
-    return this.request(
-      "GET",
-      "/api/v1/projects/" + encodeURIComponent(projectId) +
-        "/changes/" + encodeURIComponent(changeKey) +
-        "/archive/content?path=" + encodeURIComponent(path)
-    );
-  }
-
-  async getProjectRun(projectId: string, runId: string): Promise<RunSummary> {
-    const result = await this.request<{ run: RunSummary }>(
-      "GET",
-      "/api/v1/projects/" + encodeURIComponent(projectId) +
-        "/runs/" + encodeURIComponent(runId)
-    );
-    return result.run;
-  }
-
-  async listProjectRunEvents(
-    projectId: string,
-    runId: string,
-    afterCursor = 0
-  ): Promise<{ items: RunEventSummary[]; next_cursor: number }> {
-    return this.request(
-      "GET",
-      "/api/v1/projects/" + encodeURIComponent(projectId) +
-        "/runs/" + encodeURIComponent(runId) +
-        "/events?after_cursor=" + encodeURIComponent(String(afterCursor))
-    );
-  }
-
-  /**
-   * SSE stream via fetch (Authorization header supported). Returns null if the
-   * stream cannot be opened; callers should fall back to REST polling.
-   */
-  async streamProjectRunEvents(
-    projectId: string,
-    runId: string,
-    afterCursor: number,
-    handlers: {
-      onEvent: (event: RunEventSummary) => void;
-      onRun?: (run: RunSummary) => void;
-      onError?: (error: unknown) => void;
-    }
-  ): Promise<{ abort: () => void } | null> {
-    const token = this.tokenProvider();
-    if (token === null || token === "") return null;
-    const controller = new AbortController();
-    const path =
-      "/api/v1/projects/" + encodeURIComponent(projectId) +
-      "/runs/" + encodeURIComponent(runId) +
-      "/stream?after_cursor=" + encodeURIComponent(String(afterCursor));
-    try {
-      const response = await this.fetch(this.baseUrl + path, {
-        headers: {
-          Accept: "text/event-stream",
-          Authorization: "Bearer " + token,
-          "X-Request-Id": globalThis.crypto.randomUUID(),
-          ...(afterCursor > 0 ? { "Last-Event-ID": String(afterCursor) } : {})
-        },
-        signal: controller.signal
-      });
-      if (!response.ok || response.body === null) {
-        handlers.onError?.(new ApiClientError(response.status, "SSE_FAILED", "SSE stream failed"));
-        return null;
-      }
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      void (async () => {
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) {
-              if (!controller.signal.aborted) {
-                handlers.onError?.(new Error("SSE_STREAM_CLOSED"));
-              }
-              break;
-            }
-            buffer += decoder.decode(value, { stream: true });
-            const chunks = buffer.split("\n\n");
-            buffer = chunks.pop() ?? "";
-            for (const chunk of chunks) {
-              const lines = chunk.split("\n");
-              let eventName = "message";
-              const dataLines: string[] = [];
-              for (const line of lines) {
-                if (line.startsWith("event:")) eventName = line.slice(6).trim();
-                else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
-              }
-              if (dataLines.length === 0) continue;
-              try {
-                const data = JSON.parse(dataLines.join("\n")) as unknown;
-                if (eventName === "event") handlers.onEvent(data as RunEventSummary);
-                else if (eventName === "run" || eventName === "snapshot") handlers.onRun?.(data as RunSummary);
-              } catch {
-                // ignore malformed SSE payloads
-              }
-            }
-          }
-        } catch (error) {
-          if (!controller.signal.aborted) handlers.onError?.(error);
-        }
-      })();
-      return { abort: () => controller.abort() };
-    } catch (error) {
-      handlers.onError?.(error);
-      return null;
-    }
   }
 
   private async multipartRequest<T>(path: string, formData: FormData): Promise<T> {

@@ -101,13 +101,6 @@ export function DashboardConsole({ api: propApi }: { api?: HunterApi }) {
       icon: "skill" as const
     },
     {
-      label: t.dashboard.activeBranches,
-      value: overview.metrics.active_runs,
-      detail: t.dashboard.activeBranchesHint,
-      href: "/projects",
-      icon: "activity" as const
-    },
-    {
       label: t.dashboard.knowledgeEntries,
       value: overview.metrics.knowledge_entries,
       detail: t.dashboard.knowledgeRelationsHint.replace("{count}", String(overview.metrics.knowledge_relations)),
@@ -173,18 +166,6 @@ export function DashboardConsole({ api: propApi }: { api?: HunterApi }) {
           </div>
           <AiUsageChart records={filteredAiUsage} range={aiRange} locale={locale} />
           <AiModelUsage records={filteredAiUsage} />
-        </section>
-        <section className="panel dashboard-runs-panel">
-          <div className="panel-title dashboard-panel-title"><div><p className="eyebrow">{t.dashboard.liveWork}</p><h2>{t.dashboard.activeRuns}</h2></div><span>{t.dashboard.activeRunCount.replace("{count}", String(overview.metrics.active_runs))}</span></div>
-          {overview.active_runs.length === 0 ? <Empty>{t.dashboard.noActiveRuns}</Empty> : <ul className="dashboard-run-list">
-            {overview.active_runs.slice(0, 4).map((run) => <li key={run.run_id}>
-              <Link href={`/projects/${run.project_id}`}>
-                <span className="dashboard-run-pulse" aria-hidden="true" />
-                <div><strong>{run.title?.trim() || run.change_key}</strong><small>{projectNames.get(run.project_id) ?? t.dashboard.projectScope} · {run.current_phase === null ? t.dashboard.preparing : statusLabel(run.current_phase, t)}</small></div>
-                <time dateTime={run.last_event_at ?? run.started_at ?? undefined}>{formatRelativeTime(run.last_event_at ?? run.started_at, lang)}</time>
-              </Link>
-            </li>)}
-          </ul>}
         </section>
       </div>
 
@@ -365,17 +346,6 @@ function AiModelUsage({ records }: { records: AiQuotaUsage[] }) {
     <div className="dashboard-model-strip">{models.map((model, index) => <i key={model.model} style={{ width: `${(model.requests / total) * 100}%`, background: palette[index % palette.length] }} />)}</div>
     <div className="dashboard-model-legend">{models.slice(0, 6).map((model, index) => <div key={model.model}><i style={{ background: palette[index % palette.length] }} /><strong>{model.model}</strong><span>{model.requests} · {new Intl.NumberFormat().format(model.tokens)} Token</span><b>${model.cost.toFixed(2)}</b></div>)}</div>
   </div>;
-}
-
-function formatRelativeTime(value: string | null, lang: "zh" | "en"): string {
-  if (value === null) return lang === "zh" ? "刚刚开始" : "Just started";
-  const minutes = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60_000));
-  if (minutes < 1) return lang === "zh" ? "刚刚" : "Now";
-  if (minutes < 60) return lang === "zh" ? `${minutes} 分钟前` : `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return lang === "zh" ? `${hours} 小时前` : `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return lang === "zh" ? `${days} 天前` : `${days}d ago`;
 }
 
 export function AuthTokenForm() {

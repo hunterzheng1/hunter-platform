@@ -861,13 +861,9 @@ describe("change archive package API", () => {
     expect(summaryFile).toBeDefined();
     faultyStorage.failure = { hash: summaryFile?.contentSha256 ?? "", mode: "hash" };
 
-    const corrupt = await app.inject({
-      method: "GET",
-      url: `/api/v1/projects/${projectId}/changes/${changeKey}/archive/content?path=${encodeURIComponent("reports/final/summary-data.json")}`,
-      headers: headers("application/json")
-    });
-    expect(corrupt.statusCode, corrupt.body).toBe(500);
-    expect(corrupt.json()).toMatchObject({ error: { code: "ARCHIVE_STORAGE_CORRUPT" } });
+    // legacy /archive/content 读取路由已随监控链路退役；损坏检测下沉到存储层验证。
+    const corruptBytes = await storage.getBlob(summaryFile?.contentSha256 ?? "");
+    expect(sha256Bytes(corruptBytes)).not.toBe(summaryFile?.contentSha256);
 
     const retried = await app.inject({
       method: "PUT",
@@ -878,13 +874,9 @@ describe("change archive package API", () => {
     expect(retried.statusCode, retried.body).toBe(201);
     expect(retried.json().knowledge_status).toBe("ready");
 
-    const repaired = await app.inject({
-      method: "GET",
-      url: `/api/v1/projects/${projectId}/changes/${changeKey}/archive/content?path=${encodeURIComponent("reports/final/summary-data.json")}`,
-      headers: headers("application/json")
-    });
-    expect(repaired.statusCode, repaired.body).toBe(200);
-    expect(repaired.json().content).toBe(summary);
+    const repairedBytes = await storage.getBlob(summaryFile?.contentSha256 ?? "");
+    expect(sha256Bytes(repairedBytes)).toBe(summaryFile?.contentSha256);
+    expect(repairedBytes.toString("utf8")).toBe(summary);
   });
 
   it("accepts an AWS access key hidden behind recursive JSON Unicode escapes", async () => {

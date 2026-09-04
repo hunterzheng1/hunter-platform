@@ -14,7 +14,6 @@ import {
 import { PgBranchSnapshotPort } from "../branch-snapshots/pg.js";
 import { createBranchSnapshotModule } from "../branch-snapshots/module.js";
 import { createBranchVersionQueryAdapter } from "../branch-version-query/index.js";
-import { createBranchMonitorQueryAdapter } from "../branch-monitor-query/index.js";
 import {
   ProjectMaterialsCursorAuthority,
   PgProjectMaterialsSource,
@@ -31,10 +30,6 @@ import {
   PgProjectKnowledgeSource,
   ProjectKnowledgeCursorAuthority
 } from "../project-knowledge-query/index.js";
-import { createRunStoreBranchMonitorSource } from "../runs/branch-monitor-source.js";
-import { createProductionBranchMonitorTrust } from "../runs/production-branch-monitor-trust.js";
-import { createStage12MonitorVerifierAdapter } from "../runs/stage12-monitor-verifier.js";
-import type { RunStore } from "../runs/store.js";
 import {
   createLocalPlatformInformationExportArtifactPort,
   createPlatformInformationExportModule,
@@ -44,12 +39,10 @@ import {
 import type { PlatformInformationAdapters } from "./routes.js";
 
 export interface ProductionPlatformInformationOptions {
-  readonly runStore: RunStore;
-  readonly branchMonitorCursorSecret: string | undefined;
-  /** The independent signing secret for project-materials cursors. */
-  readonly projectMaterialsCursorSecret?: string;
   /** The shared production pool used by branch snapshots and materials. */
   readonly pool?: Pool;
+  /** The independent signing secret for project-materials cursors. */
+  readonly projectMaterialsCursorSecret?: string;
   /** The independent signing secret for project-knowledge cursors. */
   readonly projectKnowledgeCursorSecret?: string;
   /** The independent signing secret for archive-backed change cursors. */
@@ -57,7 +50,6 @@ export interface ProductionPlatformInformationOptions {
 }
 
 export interface ProductionPlatformInformationEnvironmentOptions {
-  readonly runStore: RunStore;
   readonly pool?: Pool;
   readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly readSecretFile?: (path: string) => Promise<string>;
@@ -97,10 +89,6 @@ function exportPageSource(adapters: PlatformInformationAdapters): PlatformInform
         const adapter = adapters.projectMaterials;
         if (adapter === undefined) throw new Error("PLATFORM_INFORMATION_EXPORT_SOURCE_UNAVAILABLE");
         result = await adapter.query(JSON.stringify(query));
-      } else if (query.view === "branch_monitor") {
-        const adapter = adapters.branchMonitor;
-        if (adapter === undefined) throw new Error("PLATFORM_INFORMATION_EXPORT_SOURCE_UNAVAILABLE");
-        result = await adapter.queryPage(JSON.stringify(query));
       } else {
         throw new Error("PLATFORM_INFORMATION_EXPORT_SOURCE_UNAVAILABLE");
       }
@@ -128,18 +116,6 @@ function exportPageSource(adapters: PlatformInformationAdapters): PlatformInform
 export function createProductionPlatformInformation(
   options: ProductionPlatformInformationOptions
 ): PlatformInformationAdapters {
-  const trust = createProductionBranchMonitorTrust(options.branchMonitorCursorSecret);
-  const branchMonitor = trust === undefined
-    ? undefined
-    : createBranchMonitorQueryAdapter({
-        source_port: createRunStoreBranchMonitorSource(options.runStore, trust.cursorPort),
-        stage12_verifier_port: createStage12MonitorVerifierAdapter({
-          eventBundleReader: trust.eventBundleReader,
-          runStore: options.runStore
-        }),
-        cursor_verifier: trust.cursorPort
-      });
-
   // 分支文件 / 版本记录视图：依赖 branch snapshot 存储（Pg），无独立游标密钥
   // （PgBranchSnapshotPort 自带持久化 cursor verifier），pool 存在即可组合。
   let branchVersion: PlatformInformationAdapters["branchVersion"];
@@ -220,7 +196,6 @@ export function createProductionPlatformInformation(
   }
 
   return Object.freeze({
-    ...(branchMonitor === undefined ? {} : { branchMonitor }),
     ...(branchVersion === undefined ? {} : { branchVersion }),
     ...(projectMaterials === undefined ? {} : { projectMaterials }),
     ...(projectKnowledge === undefined ? {} : { projectKnowledge }),
@@ -280,14 +255,8 @@ export async function createProductionPlatformInformationFromEnvironment(
     async (path: string): Promise<string> => await readFile(path, "utf8")
   );
 
-  const [branchMonitorCursorSecret, projectMaterialsCursorSecret, projectKnowledgeCursorSecret, changeRecordsCursorSecret] =
+  const [projectMaterialsCursorSecret, projectKnowledgeCursorSecret, changeRecordsCursorSecret] =
     await Promise.all([
-      resolveCursorSecret({
-        environment,
-        envName: "HUNTER_BRANCH_MONITOR_CURSOR_SECRET",
-        readSecretFile,
-        poolAvailable: options.pool !== undefined
-      }),
       resolveCursorSecret({
         environment,
         envName: "HUNTER_PROJECT_MATERIALS_CURSOR_SECRET",
@@ -309,8 +278,6 @@ export async function createProductionPlatformInformationFromEnvironment(
     ]);
 
   const base = createProductionPlatformInformation({
-    runStore: options.runStore,
-    branchMonitorCursorSecret,
     ...(options.pool === undefined ? {} : { pool: options.pool }),
     ...(projectMaterialsCursorSecret === undefined ? {} : { projectMaterialsCursorSecret }),
     ...(projectKnowledgeCursorSecret === undefined ? {} : { projectKnowledgeCursorSecret }),

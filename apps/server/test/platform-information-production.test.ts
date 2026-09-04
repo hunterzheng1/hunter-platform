@@ -7,7 +7,6 @@ import type { Pool } from "pg";
 
 import { createProductionPlatformInformationFromEnvironment } from
   "../src/platform-information/production.js";
-import { MemoryRunStore } from "../src/runs/memory-store.js";
 
 describe("production Platform Information cursor secret fallback", () => {
   it("composes all views with ephemeral cursor secrets when only a pool is available", async () => {
@@ -17,15 +16,13 @@ describe("production Platform Information cursor secret fallback", () => {
       const pool = { query } as unknown as Pool;
       const adapters = await createProductionPlatformInformationFromEnvironment({
         pool,
-        runStore: new MemoryRunStore(),
         environment: {}
       });
 
-      expect(adapters.branchMonitor).toBeDefined();
       expect(adapters.projectMaterials).toBeDefined();
       expect(adapters.projectKnowledge).toBeDefined();
       expect(adapters.changeRecords).toBeDefined();
-      expect(warn).toHaveBeenCalledTimes(4);
+      expect(warn).toHaveBeenCalledTimes(3);
       expect(String(warn.mock.calls[0]?.[0])).toContain("CURSOR_SECRET");
     } finally {
       warn.mockRestore();
@@ -36,7 +33,6 @@ describe("production Platform Information cursor secret fallback", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
       const adapters = await createProductionPlatformInformationFromEnvironment({
-        runStore: new MemoryRunStore(),
         environment: {}
       });
 
@@ -55,7 +51,6 @@ describe("production Platform Information cursor secret fallback", () => {
     const query = vi.fn().mockResolvedValue({ rows: [] });
     const adapters = await createProductionPlatformInformationFromEnvironment({
       pool: { query } as unknown as Pool,
-      runStore: new MemoryRunStore(),
       environment: {}
     });
 
@@ -89,7 +84,6 @@ describe("production Platform Information cursor secret fallback", () => {
       const pool = { query } as unknown as Pool;
       const first = await createProductionPlatformInformationFromEnvironment({
         pool,
-        runStore: new MemoryRunStore(),
         environment: { HUNTER_PROJECT_KNOWLEDGE_CURSOR_SECRET: "explicit-knowledge-secret-012345" }
       });
       expect(first.projectKnowledge).toBeDefined();
@@ -121,7 +115,7 @@ describe("production Platform Information export lifecycle", () => {
       .mockResolvedValueOnce({ query: ownerQuery, release: releaseOwner })
       .mockResolvedValueOnce({ query: rejectedQuery, release: releaseRejected });
     const pool = { connect } as unknown as Pool;
-    const options = { pool, runStore: new MemoryRunStore(),
+    const options = { pool,
       platformInformationExportRoot: join(parent, "cas") };
 
     const active = await createProductionPlatformInformationFromEnvironment(options);
@@ -141,7 +135,6 @@ describe("production Platform Information export lifecycle", () => {
     const pool = { query } as unknown as Pool;
     const adapters = await createProductionPlatformInformationFromEnvironment({
       pool,
-      runStore: new MemoryRunStore(),
       environment: {
         HUNTER_PROJECT_KNOWLEDGE_CURSOR_SECRET: "knowledge-secret-012345678901234"
       }
@@ -171,7 +164,6 @@ describe("production Platform Information export lifecycle", () => {
     const query = vi.fn().mockResolvedValue({ rows: [] });
     const adapters = await createProductionPlatformInformationFromEnvironment({
       pool: { query } as unknown as Pool,
-      runStore: new MemoryRunStore(),
       environment: {
         HUNTER_CHANGE_RECORDS_CURSOR_SECRET: "change-secret-012345678901234567"
       }

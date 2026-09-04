@@ -14,7 +14,6 @@ import {
 afterEach(cleanup);
 
 const labels: Record<ProjectWorkspaceSection, string> = {
-  monitor: "分支监控",
   branchFiles: "分支文件",
   materials: "项目资料",
   knowledge: "项目知识",
@@ -27,19 +26,18 @@ describe("ProjectWorkspaceShell", () => {
   it("exposes the canonical navigation order and keyboard-selects one linked panel", () => {
     const onSectionChange = vi.fn();
     render(<ProjectWorkspaceShell
-      activeSection="monitor"
+      activeSection="branchFiles"
       ariaLabel="项目工作台"
       labels={labels}
       onSectionChange={onSectionChange}
       fallback={<p>待接入</p>}
       slots={{
-        monitor: { content: <p>运行内容</p> },
+        branchFiles: { content: <p>分支内容</p> },
         knowledge: { content: <p>知识内容</p>, keepMounted: true }
       }}
     />);
 
     expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
-      "分支监控",
       "分支文件",
       "项目资料",
       "项目知识",
@@ -48,16 +46,16 @@ describe("ProjectWorkspaceShell", () => {
       "API 密钥"
     ]);
 
-    const monitor = screen.getByRole("tab", { name: "分支监控" });
-    expect(monitor).toHaveAttribute("tabindex", "0");
+    const branchFiles = screen.getByRole("tab", { name: "分支文件" });
+    expect(branchFiles).toHaveAttribute("tabindex", "0");
     const activePanel = screen.getByRole("tabpanel");
-    expect(monitor).toHaveAttribute("aria-controls", activePanel.id);
-    expect(activePanel).toHaveTextContent("运行内容");
+    expect(branchFiles).toHaveAttribute("aria-controls", activePanel.id);
+    expect(activePanel).toHaveTextContent("分支内容");
     expect(screen.getByText("知识内容").closest("[role=tabpanel]")).toHaveAttribute("hidden");
 
-    fireEvent.keyDown(monitor, { key: "ArrowRight" });
-    expect(onSectionChange).toHaveBeenLastCalledWith("branchFiles");
-    fireEvent.keyDown(monitor, { key: "End" });
+    fireEvent.keyDown(branchFiles, { key: "ArrowRight" });
+    expect(onSectionChange).toHaveBeenLastCalledWith("materials");
+    fireEvent.keyDown(branchFiles, { key: "End" });
     expect(onSectionChange).toHaveBeenLastCalledWith("apiKeys");
   });
 
@@ -105,14 +103,14 @@ describe("ProjectWorkspaceShell", () => {
   });
 
   it("keeps tab and panel ids unique across multiple shells", () => {
-    const slots = { monitor: { content: <p>运行内容</p> } };
+    const slots = { branchFiles: { content: <p>分支内容</p> } };
     render(<>
-      <ProjectWorkspaceShell activeSection="monitor" ariaLabel="项目一" labels={labels} onSectionChange={vi.fn()} slots={slots} fallback={<p>尚未接入</p>} />
-      <ProjectWorkspaceShell activeSection="monitor" ariaLabel="项目二" labels={labels} onSectionChange={vi.fn()} slots={slots} fallback={<p>尚未接入</p>} />
+      <ProjectWorkspaceShell activeSection="branchFiles" ariaLabel="项目一" labels={labels} onSectionChange={vi.fn()} slots={slots} fallback={<p>尚未接入</p>} />
+      <ProjectWorkspaceShell activeSection="branchFiles" ariaLabel="项目二" labels={labels} onSectionChange={vi.fn()} slots={slots} fallback={<p>尚未接入</p>} />
     </>);
 
-    const tabs = screen.getAllByRole("tab", { name: "分支监控" });
-    const panels = screen.getAllByRole("tabpanel", { name: "分支监控" });
+    const tabs = screen.getAllByRole("tab", { name: "分支文件" });
+    const panels = screen.getAllByRole("tabpanel", { name: "分支文件" });
     expect(new Set(tabs.map((tab) => tab.id)).size).toBe(2);
     expect(new Set(panels.map((panel) => panel.id)).size).toBe(2);
     expect(tabs[0]).toHaveAttribute("aria-controls", panels[0]?.id);
@@ -121,15 +119,15 @@ describe("ProjectWorkspaceShell", () => {
 
   it("always renders one panel per tab and uses an honest fallback for a missing slot", () => {
     const { rerender } = render(<ProjectWorkspaceShell
-      activeSection="monitor"
+      activeSection="branchFiles"
       ariaLabel="项目工作台"
       labels={labels}
       onSectionChange={vi.fn()}
-      slots={{ monitor: { content: <p>运行内容</p> } }}
+      slots={{ branchFiles: { content: <p>分支内容</p> } }}
       fallback={<WorkspaceState technicalDetailsLabel="技术详情" state={{ kind: "processing", title: "查询正在接入", description: "尚无生产数据。" }} />}
     />);
 
-    expect(document.querySelectorAll('[data-slot="project-workspace-panel"]')).toHaveLength(7);
+    expect(document.querySelectorAll('[data-slot="project-workspace-panel"]')).toHaveLength(6);
     const materialsTab = screen.getByRole("tab", { name: "项目资料" });
     const materialsPanel = document.getElementById(materialsTab.getAttribute("aria-controls") ?? "");
     expect(materialsPanel).toHaveAttribute("hidden");
@@ -139,7 +137,7 @@ describe("ProjectWorkspaceShell", () => {
       ariaLabel="项目工作台"
       labels={labels}
       onSectionChange={vi.fn()}
-      slots={{ monitor: { content: <p>运行内容</p> } }}
+      slots={{ branchFiles: { content: <p>分支内容</p> } }}
       fallback={<WorkspaceState technicalDetailsLabel="技术详情" state={{ kind: "processing", title: "查询正在接入", description: "尚无生产数据。" }} />}
     />);
     expect(screen.getByRole("tabpanel", { name: "项目资料" })).toHaveTextContent("查询正在接入");
@@ -147,7 +145,7 @@ describe("ProjectWorkspaceShell", () => {
 
   it("marks every shared interaction as a touch target", () => {
     render(<>
-      <ProjectWorkspaceShell activeSection="monitor" ariaLabel="项目工作台" labels={labels} onSectionChange={vi.fn()} slots={{}} fallback={<p>待接入</p>} />
+      <ProjectWorkspaceShell activeSection="branchFiles" ariaLabel="项目工作台" labels={labels} onSectionChange={vi.fn()} slots={{}} fallback={<p>待接入</p>} />
       <WorkspaceFilterBar label="筛选" query="" placeholder="搜索" onQueryChange={vi.fn()}>
         <button type="button">全部</button>
       </WorkspaceFilterBar>

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { browserApi, type HunterApi, type ProjectSummary, type RunSummary } from "../lib/api";
+import { browserApi, type HunterApi, type ProjectSummary } from "../lib/api";
 import { useI18n } from "../lib/i18n";
 import { mockApi } from "../lib/mock-api";
 import {
@@ -26,30 +26,8 @@ function resolveApi(): HunterApi {
   return process.env.NEXT_PUBLIC_HUNTER_HARNESS_DEMO === "true" ? mockApi : browserApi();
 }
 
-interface ProjectRunPreview {
-  state: "ready" | "error";
-  latest: RunSummary | null;
-  total: number;
+interface ProjectCardPreview {
   knowledgeCount: number | null;
-}
-
-function runTitle(run: RunSummary): string {
-  return run.title?.trim() || run.change_key;
-}
-
-function runPhase(run: RunSummary): string | null {
-  return run.active_phase
-    ?? run.preparing_phase
-    ?? run.waiting_for_phase
-    ?? run.current_phase;
-}
-
-function runTone(run: RunSummary): "success" | "danger" | "warning" | "info" | "neutral" {
-  if (run.result_status === "failure" || ["failed", "error"].includes(run.run_status)) return "danger";
-  if (run.result_status === "warning" || ["partial", "queued", "pending", "delayed"].includes(run.run_status)) return "warning";
-  if (["succeeded", "complete", "completed"].includes(run.run_status) || run.result_status === "success") return "success";
-  if (["running", "preparing"].includes(run.run_status)) return "info";
-  return "neutral";
 }
 
 export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
@@ -71,7 +49,7 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [createdProject, setCreatedProject] = useState<ProjectSummary | null>(null);
-  const [runPreviews, setRunPreviews] = useState<Record<string, ProjectRunPreview>>({});
+  const [cardPreviews, setCardPreviews] = useState<Record<string, ProjectCardPreview>>({});
   const dialogRef = useRef<HTMLElement | null>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const busyRef = useRef(false);
@@ -81,9 +59,9 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
   const copy = lang === "zh" ? {
     eyebrow: "项目工作区", title: "项目", description: "集中查看项目文件、知识状态与版本记录。",
     active: "当前项目", trash: "回收站", search: "搜索项目", searchPlaceholder: "按项目名称搜索",
-    files: "项目文件", branches: "开发分支", knowledge: "知识库", versioned: "已有版本", recentlyUpdated: "近 7 天更新",
+    files: "项目文件", knowledge: "知识库", versioned: "已有版本", recentlyUpdated: "近 7 天更新",
     remoteVersion: "已有远端版本", firstSync: "等待首次同步", fileUnit: "个文件", updated: "更新于",
-    branchCount: (n: number) => `${n} 个分支`, knowledgeCount: (n: number) => `${n} 条知识`,
+    knowledgeCount: (n: number) => `${n} 条知识`,
     archive: "移到回收站", restore: "恢复", purge: "永久删除", emptyTrash: "清空回收站",
     noProjects: "还没有项目。运行 npx hunter-harness 完成首次同步后会显示在这里。", noTrash: "回收站是空的。",
     noMatch: "没有符合搜索条件的项目。", trashHint: "项目会在回收站保留 30 天，到期后自动清理。",
@@ -98,17 +76,13 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
     createdTitle: "项目已创建",
     createdBody: "进入项目后，在「API 密钥」页签发密钥并执行 npx hunter-harness connect，即可开始首次同步。",
     openProject: "打开项目",
-    createUnsupported: "服务端尚未支持 Web 端创建项目（端点落地中）。当前请先用 CLI：npx hunter-harness 首次同步会自动创建项目。",
-    latestRun: "最新运行", runLoading: "正在加载运行摘要…", runUnavailable: "运行摘要暂不可用",
-    noRuns: "暂无运行记录", currentPhase: "当前阶段：{phase}", result: "结果：{result}",
-    lastActivity: "最近活动", runTotal: (n: number) => `共 ${n} 次`,
-    phaseNames: { plan: "计划", run: "编码", test: "测试", review: "评审", package: "打包", apidoc: "接口文档", submit: "提交", archive: "归档" } as Record<string, string>
+    createUnsupported: "服务端尚未支持 Web 端创建项目（端点落地中）。当前请先用 CLI：npx hunter-harness 首次同步会自动创建项目。"
   } : {
     eyebrow: "Project workspace", title: "Projects", description: "View project files, knowledge health, and version history in one place.",
     active: "Active projects", trash: "Recycle bin", search: "Search projects", searchPlaceholder: "Search by project name",
-    files: "Project files", branches: "Development branches", knowledge: "Knowledge base", versioned: "With versions", recentlyUpdated: "Updated in 7 days",
+    files: "Project files", knowledge: "Knowledge base", versioned: "With versions", recentlyUpdated: "Updated in 7 days",
     remoteVersion: "Remote version available", firstSync: "Awaiting first sync", fileUnit: "files", updated: "Updated",
-    branchCount: (n: number) => `${n} branches`, knowledgeCount: (n: number) => `${n} knowledge entries`,
+    knowledgeCount: (n: number) => `${n} knowledge entries`,
     archive: "Move to recycle bin", restore: "Restore", purge: "Delete permanently", emptyTrash: "Empty recycle bin",
     noProjects: "No projects yet. Run npx hunter-harness to complete the first sync.", noTrash: "The recycle bin is empty.",
     noMatch: "No projects match your search.", trashHint: "Projects remain in the recycle bin for 30 days, then are removed automatically.",
@@ -123,11 +97,7 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
     createdTitle: "Project created",
     createdBody: "Open the project, issue an API key under “API keys”, then run npx hunter-harness connect to start the first sync.",
     openProject: "Open project",
-    createUnsupported: "The server does not support web-side project creation yet (endpoint in progress). For now, run npx hunter-harness — the first sync creates the project automatically.",
-    latestRun: "Latest run", runLoading: "Loading run summary…", runUnavailable: "Run summary unavailable",
-    noRuns: "No runs yet", currentPhase: "Current phase: {phase}", result: "Result: {result}",
-    lastActivity: "Last activity", runTotal: (n: number) => `${n} total`,
-    phaseNames: { plan: "Plan", run: "Code", test: "Test", review: "Review", package: "Package", apidoc: "API docs", submit: "Submit", archive: "Archive" } as Record<string, string>
+    createUnsupported: "The server does not support web-side project creation yet (endpoint in progress). For now, run npx hunter-harness — the first sync creates the project automatically."
   };
 
   const source = view === "active" ? projects ?? [] : archived;
@@ -189,38 +159,27 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
   }, [query, view]);
 
   useEffect(() => {
-    const listRuns = api.listProjectRuns?.bind(api);
     const getOverview = api.getProjectSemanticOverview?.bind(api);
-    if (projects === null || view !== "active" || listRuns === undefined || visibleProjectKey === "") return;
+    if (projects === null || view !== "active" || visibleProjectKey === "") return;
     const missingIds = pageItems
       .map((project) => project.project_id)
-      .filter((projectId) => runPreviews[projectId] === undefined && !pendingRunRequests.current.has(projectId));
+      .filter((projectId) => cardPreviews[projectId] === undefined && !pendingRunRequests.current.has(projectId));
     if (missingIds.length === 0) return;
 
     let mounted = true;
     for (const projectId of missingIds) pendingRunRequests.current.add(projectId);
-    void Promise.all(missingIds.map(async (projectId): Promise<[string, ProjectRunPreview]> => {
+    void Promise.all(missingIds.map(async (projectId): Promise<[string, ProjectCardPreview]> => {
       try {
-        const [runsResult, overviewResult] = await Promise.allSettled([
-          listRuns(projectId, { limit: 1, cursor: null }),
-          getOverview === undefined ? Promise.resolve(null) : getOverview(projectId)
-        ]);
-        const runs = runsResult.status === "fulfilled" ? runsResult.value : null;
-        const overview = overviewResult.status === "fulfilled" ? overviewResult.value : null;
-        return [projectId, {
-          state: runs === null ? "error" : "ready",
-          latest: runs?.items[0] ?? null,
-          total: runs?.total ?? 0,
-          knowledgeCount: overview?.counts.knowledge ?? null
-        }];
+        const overview = getOverview === undefined ? null : await getOverview(projectId);
+        return [projectId, { knowledgeCount: overview?.counts.knowledge ?? null }];
       } catch {
-        return [projectId, { state: "error", latest: null, total: 0, knowledgeCount: null }];
+        return [projectId, { knowledgeCount: null }];
       } finally {
         pendingRunRequests.current.delete(projectId);
       }
     })).then((entries) => {
       if (!mounted) return;
-      setRunPreviews((current) => {
+      setCardPreviews((current) => {
         const next = { ...current };
         for (const [projectId, preview] of entries) next[projectId] = preview;
         return next;
@@ -348,16 +307,7 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
       ) : pageItems.map((project) => {
         const version = project.latest_project_version;
         const hasVersion = version !== null && version !== "";
-        const preview = runPreviews[project.project_id];
-        const latestRun = preview?.state === "ready" ? preview.latest : null;
-        const phase = latestRun === null ? null : runPhase(latestRun);
-        const runStatus = latestRun === null
-          ? null
-          : ((t.status as Record<string, string>)[latestRun.run_status] ?? latestRun.run_status.replaceAll("_", " "));
-        const resultStatus = latestRun?.result_status === undefined || latestRun.result_status === "pending"
-          ? null
-          : ((t.status as Record<string, string>)[latestRun.result_status] ?? latestRun.result_status);
-        const runTime = latestRun?.last_event_at ?? latestRun?.started_at ?? null;
+        const preview = cardPreviews[project.project_id];
         return <article key={project.project_id} className="project-list-card" data-slot="project-card">
           {view === "active" ? <Link href={`/projects/${project.project_id}`} className="project-list-link" aria-label={project.display_name} /> : null}
           <header className="project-card-header" data-slot="project-card-header">
@@ -378,26 +328,10 @@ export function ProjectRegistry({ api: propApi }: { api?: HunterApi }) {
           </header>
           <dl className="project-card-meta" data-slot="project-card-meta">
             <div><dt><Icon name="file" size={13} /> {copy.files}</dt><dd>{project.current_file_count ?? 0} {copy.fileUnit}</dd></div>
-            <div><dt><Icon name="workflow" size={13} /> {copy.branches}</dt><dd>{copy.branchCount(preview?.total ?? 0)}</dd></div>
             <div><dt><Icon name="brain" size={13} /> {copy.knowledge}</dt><dd>{preview?.knowledgeCount === null || preview?.knowledgeCount === undefined ? "—" : copy.knowledgeCount(preview.knowledgeCount)}</dd></div>
             <div><dt><Icon name="clock" size={13} /> {copy.updated}</dt><dd><time dateTime={project.updated_at ?? project.created_at}>{formatProjectDateTime(project.updated_at ?? project.created_at, lang)}</time></dd></div>
           </dl>
-          {view === "active" ? <section className="project-run-preview" data-slot="project-run-preview" aria-label={`${project.display_name} · ${copy.latestRun}`}>
-            <div className="project-run-heading"><span>{copy.latestRun}</span>{preview?.state === "ready" ? <small>{copy.runTotal(preview.total)}</small> : null}</div>
-            {api.listProjectRuns === undefined || preview?.state === "error" ? <p className="project-run-empty"><Icon name="warning" size={14} /> {copy.runUnavailable}</p>
-              : preview === undefined ? <p className="project-run-loading" aria-busy="true"><Icon name="loading" className="spin" size={14} /> {copy.runLoading}</p>
-                : latestRun === null ? <p className="project-run-empty"><Icon name="info" size={14} /> {copy.noRuns}</p>
-                  : <div className="project-run-content">
-                    <div className="project-run-title-row">
-                      <strong>{runTitle(latestRun)}</strong>
-                      <span className={`project-run-status tone-${runTone(latestRun)}`}>{runStatus}</span>
-                    </div>
-                    <p>
-                      {phase !== null ? <span>{copy.currentPhase.replace("{phase}", copy.phaseNames[phase] ?? phase)}</span> : resultStatus !== null ? <span>{copy.result.replace("{result}", resultStatus)}</span> : null}
-                      {runTime === null ? null : <time dateTime={runTime}>{copy.lastActivity} {formatProjectDateTime(runTime, lang)}</time>}
-                    </p>
-                  </div>}
-          </section> : <div className="project-archived-actions" data-slot="project-card-actions">
+          {view === "active" ? null : <div className="project-archived-actions" data-slot="project-card-actions">
             <div><button type="button" onClick={() => setPendingAction({ kind: "restore", project })}>{copy.restore}</button><button type="button" className="secondary danger" onClick={() => setPendingAction({ kind: "purge", project })}>{copy.purge}</button></div>
             {project.purge_after !== null && project.purge_after !== undefined ? <small>{copy.purgeAt} {formatProjectDateTime(project.purge_after, lang)}</small> : null}
           </div>}

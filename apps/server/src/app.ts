@@ -158,9 +158,6 @@ import {
   requestProjectKey
 } from "./auth/tokens.js";
 import {
-  archiveRootPrefix,
-  buildChangeArchive,
-  resolveArchiveContentPath,
   validateArchiveChangeKey
 } from "./archive/change-archive.js";
 import {
@@ -202,18 +199,6 @@ import {
   prepareKnowledgeIngestPayload,
   projectPendingKnowledge
 } from "./semantic/knowledge-projection.js";
-import { MemoryRunStore } from "./runs/memory-store.js";
-import { createRunStoreBranchMonitorSource } from "./runs/branch-monitor-source.js";
-import type { BranchMonitorCursorPort } from "./runs/branch-monitor-cursor.js";
-import {
-  createStage12MonitorVerifierAdapter,
-  type PlanQualityEventBundleReaderPort
-} from "./runs/stage12-monitor-verifier.js";
-import { registerRunRoutes } from "./runs/routes.js";
-import type { RunStore } from "./runs/store.js";
-import {
-  createBranchMonitorQueryAdapter,
-} from "./branch-monitor-query/index.js";
 import {
   registerPlatformInformationRoutes,
   type PlatformInformationAdapters
@@ -250,7 +235,6 @@ export interface CreateServerOptions {
   bootstrapBundle?: BootstrapBundle;
   registryPersistence?: RegistryPersistence;
   semanticStore?: SemanticStore;
-  runStore?: RunStore;
   /** Stage 13 read-only query adapters. Routes fail closed with 503 when absent. */
   platformInformation?: PlatformInformationAdapters;
   /** Remote Sync HTTP service. Absent deployments fail closed with 503. */
@@ -263,11 +247,6 @@ export interface CreateServerOptions {
   branchSnapshotProducer?: BranchSnapshotProducer;
   /** 06A knowledge queue pipeline. 归档上传成功后事务入队（best-effort，失败仅告警不阻塞上传）。 */
   knowledgePipeline?: KnowledgePipeline;
-  /** Required trust dependencies for Stage 13 branch-monitor reads. Absent means explicit 503. */
-  branchMonitorTrust?: {
-    readonly eventBundleReader: PlanQualityEventBundleReaderPort;
-    readonly cursorPort: BranchMonitorCursorPort;
-  };
   // AiJobStore ???PG ??? PgAiJobStore ????? + ?? recoverOrphans??? MemoryAiJobStore ??? fallback?
   aiJobStore?: AiJobStore;
   // AI LlmClient ????? createLlmClient ?? DeepSeek?????? mock?
@@ -790,17 +769,6 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   // AiJobStore ???�3.2??PG ??? PgAiJobStore ???????? MemoryAiJobStore ??? fallback?
   const aiJobStore = options.aiJobStore ?? new MemoryAiJobStore();
   const semanticStore = options.semanticStore ?? new SemanticMemoryStore();
-  const runStore = options.runStore ?? new MemoryRunStore();
-  const branchMonitor = options.branchMonitorTrust === undefined
-    ? undefined
-    : createBranchMonitorQueryAdapter({
-        source_port: createRunStoreBranchMonitorSource(runStore, options.branchMonitorTrust.cursorPort),
-        stage12_verifier_port: createStage12MonitorVerifierAdapter({
-          eventBundleReader: options.branchMonitorTrust.eventBundleReader,
-          runStore
-        }),
-        cursor_verifier: options.branchMonitorTrust.cursorPort
-      });
   const codexService = options.codexService ?? new CodexAppServerService(config.codexHome);
   // R3???????? running/pending job?PG ??? failed ?? partial unique index?memory no-op??
   await aiJobStore.recoverOrphans();
@@ -1217,14 +1185,13 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   app.get("/api/v1/dashboard/overview", async (request, reply) => {
     const { actor, requestId } = await authenticated(request, repository);
     const query = z.object({ days: z.coerce.number().int().min(7).max(30).default(7) }).strict().parse(request.query);
-    const overview = await buildDashboardOverview({
-      repository,
-      registry,
-      runStore,
-      semanticStore,
-      actorId: actor.actorId,
-      days: query.days
-    });
+  const overview = await buildDashboardOverview({
+    repository,
+    registry,
+    semanticStore,
+    actorId: actor.actorId,
+    days: query.days
+  });
     reply.header("X-Request-Id", requestId);
     return { ...overview, request_id: requestId };
   });
@@ -3270,68 +3237,6 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     }
   );
 
-  app.get("/api/v1/projects/:projectId/changes/:changeKey/archive", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository, "files:read");
-    const { projectId, changeKey } = request.params as { projectId: string; changeKey: string };
-    requireArchiveChangeKey(changeKey);
-    await repository.getProject(actor.actorId, projectId);
-    const files = await repository.listProjectFiles(actor.actorId, projectId);
-    const prefix = archiveRootPrefix(changeKey);
-    const archive = buildChangeArchive({
-      changeKey,
-      files: files
-        .filter((file) => file.path.startsWith(prefix))
-        .map((file) => ({
-          path: file.path,
-          sizeBytes: file.sizeBytes,
-          updatedAt: file.updatedAt
-        }))
-    });
-    reply.header("X-Request-Id", requestId);
-    return { ...archive, request_id: requestId };
-  });
-
-  app.get("/api/v1/projects/:projectId/changes/:changeKey/archive/content", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository, "files:read");
-    const { projectId, changeKey } = request.params as { projectId: string; changeKey: string };
-    requireArchiveChangeKey(changeKey);
-    await repository.getProject(actor.actorId, projectId);
-    const query = z.object({
-      path: z.string().min(1)
-    }).strict().parse(request.query);
-    let absolutePath: string;
-    try {
-      absolutePath = resolveArchiveContentPath(changeKey, query.path);
-    } catch {
-      throw new ServerDomainError(400, "ARCHIVE_PATH_INVALID", "archive path is invalid");
-    }
-    const file = await repository.getProjectFile(actor.actorId, projectId, absolutePath);
-    const bytes = await storage.getBlob(file.contentSha256);
-    if (bytes.byteLength !== file.sizeBytes || sha256Bytes(bytes) !== file.contentSha256) {
-      throw new ServerDomainError(
-        500,
-        "ARCHIVE_STORAGE_CORRUPT",
-        "stored archive content does not match its repository metadata"
-      );
-    }
-    let content: string;
-    try {
-      content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    } catch {
-      throw new ServerDomainError(422, "PROJECT_FILE_INVALID", "archive file is not UTF-8 text");
-    }
-    reply.header("X-Request-Id", requestId);
-    return {
-      changeKey,
-      path: query.path.replaceAll("\\", "/").replace(/^\/+/, "").startsWith(".harness/")
-        ? query.path
-        : query.path,
-      sizeBytes: file.sizeBytes,
-      content,
-      request_id: requestId
-    };
-  });
-
   app.get("/api/v1/projects/:projectId/semantic/rules", async (request, reply) => {
     const { actor, requestId } = await authenticated(request, repository);
     const { projectId } = request.params as { projectId: string };
@@ -4485,16 +4390,12 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     scheduleProjectsCurrent: scheduleSemanticIndexesCurrent
   });
 
-  registerRunRoutes(app, { repository, runStore, authenticated });
   registerPlatformInformationRoutes(app, {
     repository,
     authenticated,
-    ...(options.platformInformation === undefined && branchMonitor === undefined
+    ...(options.platformInformation === undefined
       ? {}
-      : { adapters: {
-          ...(options.platformInformation ?? {}),
-          ...(branchMonitor === undefined ? {} : { branchMonitor })
-      } })
+      : { adapters: options.platformInformation })
   });
   registerRemoteSyncHttpRoutes(app, {
     repository,
