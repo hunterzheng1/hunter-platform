@@ -108,7 +108,7 @@ describe("remote content upload HTTP v1 contract", () => {
     }
   });
 
-  it("freezes one binary upload plus scoped ambiguity lookup under server authority", () => {
+  it("freezes one bounded binary file upload plus scoped ambiguity lookup under server authority", () => {
     expect(remoteContentUploadHttpScopeSchema.options).toEqual([
       "archive:read", "archive:write", "files:read", "files:write"
     ]);
@@ -118,24 +118,25 @@ describe("remote content upload HTTP v1 contract", () => {
       REMOTE_CONTENT_UPLOAD_HTTP_MAX_EXPIRY_MS,
       REMOTE_CONTENT_UPLOAD_HTTP_MAX_REMOTE_SYNC_FILE_BYTES
     ]).toEqual([512 * 1024 * 1024, 1024 * 1024, 15 * 60_000, 10 * 1024 * 1024]);
-    expect(REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS.upload_content).toMatchObject({
+    expect(REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS.upload_remote_sync_file).toMatchObject({
       method: "POST",
-      path: "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/content-upload",
-      operation_id: "stageRemoteContentUpload",
+      path: "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/file-upload",
+      operation_id: "stageRemoteSyncFileUpload",
       request_placement: "path_headers_and_binary_body",
-      request_media_type: "application/zip",
+      request_media_type: "application/octet-stream",
       body_transport: "single_bounded_stream",
       auth: {
         actor_source: "authenticated_principal",
         project_allowlist_source: "server_authority",
-        project_key_scope: "archive:write"
+        project_key_scope: "files:write"
       },
       request_descriptor_schema: "RemoteContentUploadHttpRequestDescriptor",
       success_status: 201,
       replay_status: 200,
       success_schema: "RemoteContentUploadHttpResult"
     });
-    expect(REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS.upload_content.identity_bindings).toEqual([
+    expect(REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS.upload_remote_sync_file.identity_bindings).toEqual([
+      ["descriptor.purpose", "response.record.purpose"],
       ["path.project_id", "response.record.source.project_id"],
       ["path.branch_name", "response.record.source.branch_name"],
       ["auth.actor_id", "response.record.source.actor_id"],
@@ -147,30 +148,15 @@ describe("remote content upload HTTP v1 contract", () => {
       ["header.X-Change-Key", "response.record.source.change_key"],
       ["header.X-Upload-Expires-In-Ms", "response.record.created_at..expires_at"]
     ]);
-    expect(REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS.upload_status).toMatchObject({
-      method: "GET",
-      path: "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/content-upload/status",
-      operation_id: "getRemoteContentUploadStatus",
-      request_placement: "path_and_headers",
-      request_descriptor_schema: "RemoteContentUploadHttpStatusDescriptor",
-      success_status: 200,
-      success_schema: "RemoteContentUploadHttpStatus",
-      auth: { project_key_scope: "archive:read" }
-    });
-    expect(REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS.upload_remote_sync_file).toMatchObject({
-      method: "POST",
-      path: "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/file-upload",
-      operation_id: "stageRemoteSyncFileUpload",
-      request_media_type: "application/octet-stream",
-      auth: { project_key_scope: "files:write" },
-      request_descriptor_schema: "RemoteContentUploadHttpRequestDescriptor"
-    });
     expect(REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS.remote_sync_file_status).toMatchObject({
       method: "GET",
       path: "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/file-upload/status",
       operation_id: "getRemoteSyncFileUploadStatus",
-      auth: { project_key_scope: "files:read" },
-      request_descriptor_schema: "RemoteContentUploadHttpStatusDescriptor"
+      request_placement: "path_and_headers",
+      request_descriptor_schema: "RemoteContentUploadHttpStatusDescriptor",
+      success_status: 200,
+      success_schema: "RemoteContentUploadHttpStatus",
+      auth: { project_key_scope: "files:read" }
     });
     expect(JSON.stringify(REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS)).not.toMatch(
       /base64|range|resum|filesystem|file_path|caller_path/iu
@@ -283,7 +269,7 @@ describe("remote content upload HTTP v1 contract", () => {
       "REMOTE_CONTENT_UPLOAD_NOT_FOUND", "REMOTE_CONTENT_UPLOAD_EXPIRED",
       "REMOTE_CONTENT_UPLOAD_MEDIA_TYPE_UNSUPPORTED"
     ]);
-    expect(REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS.upload_content.errors).toEqual({
+    expect(REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS.upload_remote_sync_file.errors).toEqual({
       400: ["VALIDATION_FAILED", "REMOTE_CONTENT_UPLOAD_INPUT_INVALID", "REMOTE_CONTENT_UPLOAD_STREAM_INVALID",
         "REMOTE_CONTENT_UPLOAD_HASH_MISMATCH", "REMOTE_CONTENT_UPLOAD_SIZE_MISMATCH"],
       401: ["AUTH_REQUIRED", "TOKEN_INVALID", "SESSION_INVALID"],

@@ -18,7 +18,6 @@ import { createProductionPlatformInformationFromEnvironment } from "./platform-i
 import { createPgKnowledgeQueryHttpService } from "./knowledge-query-http/index.js";
 import { createRemoteContentUploadLocalCas, createPgRemoteContentUploadHttpService } from "./remote-content-upload-pg/index.js";
 import { createRemoteContentUploadResolver } from "./remote-content-upload-pg/resolver.js";
-import { createPgRemoteSyncArchiveV2 } from "./remote-sync-archive-pg/index.js";
 import { createBranchSnapshotProducer } from "./branch-snapshots/producer.js";
 import { createPgRemoteSyncCommitPort, createPgRemoteSyncHttpService } from "./remote-sync-pg/index.js";
 import { createPgKnowledgePipelinePorts } from "./knowledge-pipeline/pg.js";
@@ -96,7 +95,6 @@ const remoteContentUploadCas = await createRemoteContentUploadLocalCas({
 });
 const remoteContentUpload = createPgRemoteContentUploadHttpService({ pool, cas: remoteContentUploadCas });
 const remoteContentUploadResolver = createRemoteContentUploadResolver({ pool, cas: remoteContentUploadCas });
-const remoteSyncArchive = createPgRemoteSyncArchiveV2({ pool });
 const remoteSyncCommitPort = createPgRemoteSyncCommitPort({ pool });
 const branchSnapshotProducer = createBranchSnapshotProducer({ commit_port: remoteSyncCommitPort });
 const remoteSync = createPgRemoteSyncHttpService({
@@ -243,7 +241,6 @@ const app = await createServer({
   knowledgeQuery,
   remoteContentUpload,
   remoteSync,
-  remoteSyncArchive,
   branchSnapshotProducer,
   platformInformation,
   knowledgePipeline,
@@ -326,7 +323,6 @@ async function shutdown(signal: string): Promise<void> {
   await app.close();
   await remoteContentUpload.close();
   await remoteSync.close();
-  await remoteSyncArchive.close();
   await pool.end();
 }
 process.once("SIGTERM", () => {

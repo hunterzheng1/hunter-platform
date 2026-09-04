@@ -12,6 +12,4 @@ export * from "./storage/memory.js";
 export * from "./remote-sync-http/index.js";
 export * from "./knowledge-query-http/index.js";
 export * from "./remote-content-upload-http/index.js";
-export * from "./remote-sync-archive-http/index.js";
-export * from "./remote-sync-archive-pg/index.js";
 export * from "./registry/persistence.js";

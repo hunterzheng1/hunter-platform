@@ -26,7 +26,6 @@ function uploadResult(input: {
   readonly sizeBytes: number;
   readonly outcome?: "new" | "replay";
   readonly expiresInMs?: number;
-  readonly purpose?: RemoteContentUploadHttpRecord["purpose"];
   readonly source?: Partial<RemoteContentUploadHttpSource>;
 }): RemoteContentUploadHttpResult {
   const uploadRef = {
@@ -44,7 +43,7 @@ function uploadResult(input: {
       ...input.source
     },
     idempotency_key: IDEMPOTENCY_KEY,
-    purpose: input.purpose ?? "remote_archive",
+    purpose: "remote_sync_file",
     content_sha256: input.sha256,
     size_bytes: input.sizeBytes,
     upload_ref: uploadRef,
@@ -71,7 +70,7 @@ describe("Remote Content Upload HTTP routes", () => {
 
   it("authenticates before reporting an absent adapter", async () => {
     app = await createServer({ repository, storage: new MemoryArtifactStorage() });
-    const url = `/api/v1/projects/${projectId}/branches/main/remote-sync/content-upload/status`;
+    const url = `/api/v1/projects/${projectId}/branches/main/remote-sync/file-upload/status`;
     expect((await app.inject({ method: "GET", url })).statusCode).toBe(401);
     const response = await app.inject({ method: "GET", url, headers: { authorization: "Bearer upload-token",
       "idempotency-key": `sha256:${"a".repeat(64)}` } });
@@ -83,42 +82,12 @@ describe("Remote Content Upload HTTP routes", () => {
     app = await createServer({ repository, storage: new MemoryArtifactStorage() });
     const response = await app.inject({
       method: "GET",
-      url: `/api/v1/projects/%20${projectId}/branches/main/remote-sync/content-upload/status`,
+      url: `/api/v1/projects/%20${projectId}/branches/main/remote-sync/file-upload/status`,
       headers: { "idempotency-key": IDEMPOTENCY_KEY }
     });
 
     expect(response.statusCode).toBe(401);
     expect(response.json().error.code).toBe("AUTH_REQUIRED");
-  });
-
-  it("streams bounded binary chunks and returns new then status", async () => {
-    const bytes = Buffer.from("PK\u0003\u0004streamed zip"); const sha = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
-    let serviceValidation: unknown;
-    const stage = vi.fn(async (input: Parameters<RemoteContentUploadHttpServicePort["stage"]>[0]) => {
-      const chunks = []; for await (const chunk of input.chunks) chunks.push(chunk);
-      expect(Buffer.concat(chunks.map((item) => Buffer.from(item.bytes)))).toEqual(bytes);
-      const upload_ref = { ref_id: `bounded_upload:${"A".repeat(43)}` as const, sha256: sha, size_bytes: bytes.length };
-      const body = { schema_version: 1 as const, upload_id: `remote_content_upload:${"A".repeat(43)}` as const,
-        source: { project_id: projectId, branch_name: "main", actor_id: "actor_upload" },
-        idempotency_key: `sha256:${"a".repeat(64)}` as const, purpose: "remote_archive" as const,
-        content_sha256: sha, size_bytes: bytes.length, upload_ref: { ...upload_ref }, state: "stored" as const,
-        created_at: "2026-08-15T00:00:00.000Z", expires_at: "2026-08-15T00:01:00.000Z" };
-      const result = { outcome: "new" as const, upload_ref, record: { ...body, record_hash: remoteContentUploadHttpRecordHash(body) } };
-      expect(remoteContentUploadHttpResultSchema.safeParse(result)).toMatchObject({ success: true });
-      serviceValidation = validateRemoteContentUploadHttpResult(result);
-      return result;
-    });
-    const status = vi.fn();
-    const service = { stage, status } as unknown as RemoteContentUploadHttpServicePort;
-    app = await createServer({ repository, storage: new MemoryArtifactStorage(), remoteContentUpload: service });
-    const response = await app.inject({ method: "POST",
-      url: `/api/v1/projects/${projectId}/branches/main/remote-sync/content-upload`, payload: bytes,
-      headers: { authorization: "Bearer upload-token", "content-type": "application/zip",
-        "content-length": String(bytes.length), "idempotency-key": `sha256:${"a".repeat(64)}`,
-        "x-content-sha256": sha, "x-upload-expires-in-ms": "60000" } });
-    expect(serviceValidation).toMatchObject({ success: true });
-    if (response.statusCode !== 201) expect(response.json()).toEqual({ expected_status: 201 });
-    expect(stage).toHaveBeenCalledOnce();
   });
 
   it("stages raw Remote Sync file bytes under files authority and an exact purpose", async () => {
@@ -133,7 +102,7 @@ describe("Remote Content Upload HTTP routes", () => {
       const received = [];
       for await (const chunk of input.chunks) received.push(Buffer.from(chunk.bytes));
       expect(Buffer.concat(received)).toEqual(bytes);
-      return uploadResult({ projectId, sha256: sha, sizeBytes: bytes.length, purpose: "remote_sync_file" });
+      return uploadResult({ projectId, sha256: sha, sizeBytes: bytes.length });
     });
     const service = { stage, status: vi.fn() } satisfies RemoteContentUploadHttpServicePort;
     app = await createServer({ repository, storage: new MemoryArtifactStorage(), remoteContentUpload: service });
@@ -229,11 +198,11 @@ describe("Remote Content Upload HTTP routes", () => {
 
     const response = await app.inject({
       method: "POST",
-      url: `/api/v1/projects/${projectId}/branches/main/remote-sync/content-upload`,
+      url: `/api/v1/projects/${projectId}/branches/main/remote-sync/file-upload`,
       payload: bytes,
       headers: {
         authorization: "Bearer upload-token",
-        "content-type": "application/zip",
+        "content-type": "application/octet-stream",
         "content-length": String(bytes.length),
         "idempotency-key": IDEMPOTENCY_KEY,
         "x-content-sha256": declaredHash,
@@ -249,7 +218,7 @@ describe("Remote Content Upload HTTP routes", () => {
   });
 
   it("fails closed when a hostile stage returns before consuming a bad stream", async () => {
-    const bytes = Buffer.from("PK\u0003\u0004lazy stream must be consumed");
+    const bytes = Buffer.from("lazy stream must be consumed");
     const declaredHash = `sha256:${"f".repeat(64)}` as const;
     const stage = vi.fn(async () => uploadResult({ projectId, sha256: declaredHash, sizeBytes: bytes.length }));
     const service = { stage, status: vi.fn() } satisfies RemoteContentUploadHttpServicePort;
@@ -257,11 +226,11 @@ describe("Remote Content Upload HTTP routes", () => {
 
     const response = await app.inject({
       method: "POST",
-      url: `/api/v1/projects/${projectId}/branches/main/remote-sync/content-upload`,
+      url: `/api/v1/projects/${projectId}/branches/main/remote-sync/file-upload`,
       payload: bytes,
       headers: {
         authorization: "Bearer upload-token",
-        "content-type": "application/zip",
+        "content-type": "application/octet-stream",
         "content-length": String(bytes.length),
         "idempotency-key": IDEMPOTENCY_KEY,
         "x-content-sha256": declaredHash,
@@ -275,7 +244,7 @@ describe("Remote Content Upload HTTP routes", () => {
   });
 
   it("rejects a syntactically valid service result whose content hash is not request-bound", async () => {
-    const bytes = Buffer.from("PK\u0003\u0004request identity");
+    const bytes = Buffer.from("request identity");
     const requestSha = `sha256:${createHash("sha256").update(bytes).digest("hex")}` as const;
     const service = {
       stage: vi.fn(async () => uploadResult({
@@ -289,11 +258,11 @@ describe("Remote Content Upload HTTP routes", () => {
 
     const response = await app.inject({
       method: "POST",
-      url: `/api/v1/projects/${projectId}/branches/main/remote-sync/content-upload`,
+      url: `/api/v1/projects/${projectId}/branches/main/remote-sync/file-upload`,
       payload: bytes,
       headers: {
         authorization: "Bearer upload-token",
-        "content-type": "application/zip",
+        "content-type": "application/octet-stream",
         "content-length": String(bytes.length),
         "idempotency-key": IDEMPOTENCY_KEY,
         "x-content-sha256": requestSha,
@@ -306,7 +275,7 @@ describe("Remote Content Upload HTTP routes", () => {
   });
 
   it("returns replay as 200 and preserves the full optional request identity", async () => {
-    const bytes = Buffer.from("PK\u0003\u0004replayed content");
+    const bytes = Buffer.from("replayed content");
     const sha256 = `sha256:${createHash("sha256").update(bytes).digest("hex")}` as const;
     let descriptor: Parameters<RemoteContentUploadHttpServicePort["stage"]>[0]["descriptor"] | undefined;
     const service = {
@@ -327,11 +296,11 @@ describe("Remote Content Upload HTTP routes", () => {
 
     const response = await app.inject({
       method: "POST",
-      url: `/api/v1/projects/${projectId}/branches/main/remote-sync/content-upload`,
+      url: `/api/v1/projects/${projectId}/branches/main/remote-sync/file-upload`,
       payload: bytes,
       headers: {
         authorization: "Bearer upload-token",
-        "content-type": "application/zip",
+        "content-type": "application/octet-stream",
         "content-length": String(bytes.length),
         "idempotency-key": IDEMPOTENCY_KEY,
         "x-content-sha256": sha256,
@@ -377,7 +346,7 @@ describe("Remote Content Upload HTTP routes", () => {
     app = await createServer({ repository, storage: new MemoryArtifactStorage(), remoteContentUpload: service });
     const request = () => app.inject({
       method: "GET",
-      url: `/api/v1/projects/${projectId}/branches/main/remote-sync/content-upload/status`,
+      url: `/api/v1/projects/${projectId}/branches/main/remote-sync/file-upload/status`,
       headers: {
         authorization: "Bearer upload-token",
         "idempotency-key": IDEMPOTENCY_KEY,
@@ -419,7 +388,7 @@ describe("Remote Content Upload HTTP routes", () => {
 
     const response = await app.inject({
       method: "GET",
-      url: `/api/v1/projects/${projectId}/branches/main/remote-sync/content-upload/status`,
+      url: `/api/v1/projects/${projectId}/branches/main/remote-sync/file-upload/status`,
       headers: { authorization: "Bearer upload-token", "idempotency-key": IDEMPOTENCY_KEY }
     });
 
@@ -433,7 +402,7 @@ describe("Remote Content Upload HTTP routes", () => {
   });
 
   it("fails closed when an adapter reports a known content-upload code for the wrong endpoint", async () => {
-    const bytes = Buffer.from("PK\u0003\u0004wrong-endpoint-code");
+    const bytes = Buffer.from("wrong-endpoint-code");
     const sha256 = `sha256:${createHash("sha256").update(bytes).digest("hex")}` as const;
     const service = {
       stage: async () => { throw Object.assign(new Error("stage-secret"), { code: "REMOTE_CONTENT_UPLOAD_SCOPE_MISMATCH" }); },
@@ -441,12 +410,12 @@ describe("Remote Content Upload HTTP routes", () => {
     } satisfies RemoteContentUploadHttpServicePort;
     app = await createServer({ repository, storage: new MemoryArtifactStorage(), remoteContentUpload: service });
     const [upload, status] = await Promise.all([
-      app.inject({ method: "POST", url: `/api/v1/projects/${projectId}/branches/main/remote-sync/content-upload`,
+      app.inject({ method: "POST", url: `/api/v1/projects/${projectId}/branches/main/remote-sync/file-upload`,
         headers: {
-          authorization: "Bearer upload-token", "content-type": "application/zip", "content-length": String(bytes.length),
+          authorization: "Bearer upload-token", "content-type": "application/octet-stream", "content-length": String(bytes.length),
           "idempotency-key": IDEMPOTENCY_KEY, "x-content-sha256": sha256, "x-upload-expires-in-ms": "60000"
         }, payload: bytes }),
-      app.inject({ method: "GET", url: `/api/v1/projects/${projectId}/branches/main/remote-sync/content-upload/status`,
+      app.inject({ method: "GET", url: `/api/v1/projects/${projectId}/branches/main/remote-sync/file-upload/status`,
         headers: { authorization: "Bearer upload-token", "idempotency-key": IDEMPOTENCY_KEY } })
     ]);
     for (const response of [upload, status]) {
@@ -462,11 +431,35 @@ describe("Remote Content Upload HTTP routes", () => {
       status: async () => { throw Object.assign(new Error("auth-secret"), { code: "AUTH_REQUIRED" }); }
     } satisfies RemoteContentUploadHttpServicePort;
     app = await createServer({ repository, storage: new MemoryArtifactStorage(), remoteContentUpload: service });
-    const response = await app.inject({ method: "GET", url: `/api/v1/projects/${projectId}/branches/main/remote-sync/content-upload/status`,
+    const response = await app.inject({ method: "GET", url: `/api/v1/projects/${projectId}/branches/main/remote-sync/file-upload/status`,
       headers: { authorization: "Bearer upload-token", "idempotency-key": IDEMPOTENCY_KEY } });
     expect(response.statusCode).toBe(503);
     expect(response.json().error.code).toBe("REMOTE_UNAVAILABLE");
     expect(response.body).not.toContain("auth-secret");
+  });
+
+  it("validates the staged result shape against the contract schema", async () => {
+    const bytes = Buffer.from("schema check", "utf8");
+    const sha = `sha256:${createHash("sha256").update(bytes).digest("hex")}` as const;
+    let serviceValidation: unknown;
+    const stage = vi.fn(async (input: Parameters<RemoteContentUploadHttpServicePort["stage"]>[0]) => {
+      const chunks = []; for await (const chunk of input.chunks) chunks.push(chunk);
+      expect(Buffer.concat(chunks.map((item) => Buffer.from(item.bytes)))).toEqual(bytes);
+      const result = uploadResult({ projectId, sha256: sha, sizeBytes: bytes.length });
+      expect(remoteContentUploadHttpResultSchema.safeParse(result)).toMatchObject({ success: true });
+      serviceValidation = validateRemoteContentUploadHttpResult(result);
+      return result;
+    });
+    const service = { stage, status: vi.fn() } satisfies RemoteContentUploadHttpServicePort;
+    app = await createServer({ repository, storage: new MemoryArtifactStorage(), remoteContentUpload: service });
+    const response = await app.inject({ method: "POST",
+      url: `/api/v1/projects/${projectId}/branches/main/remote-sync/file-upload`, payload: bytes,
+      headers: { authorization: "Bearer upload-token", "content-type": "application/octet-stream",
+        "content-length": String(bytes.length), "idempotency-key": IDEMPOTENCY_KEY,
+        "x-content-sha256": sha, "x-upload-expires-in-ms": "60000" } });
+    expect(serviceValidation).toMatchObject({ success: true });
+    expect(response.statusCode).toBe(201);
+    expect(stage).toHaveBeenCalledOnce();
   });
 
 });

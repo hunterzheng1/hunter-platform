@@ -43,7 +43,7 @@ function stagedFixture(expiresAt = "2026-08-15T00:01:00.000Z") {
     upload_id: `remote_content_upload:${refToken}`,
     source,
     idempotency_key: idempotencyKey,
-    purpose: "remote_archive" as const,
+    purpose: "remote_sync_file" as const,
     content_sha256: contentSha256,
     size_bytes: 17,
     upload_ref: uploadRef,
@@ -122,110 +122,11 @@ describe("Pg remote content upload durable records", () => {
     expect(migration).toContain("WHERE acknowledged=false");
   });
 
-  it("indexes committed and active archive upload references used by content GC", async () => {
-    const migration = await readFile(fileURLToPath(new URL("../migrations/028_remote_archive_upload_live_refs.sql", import.meta.url)), "utf8");
-    expect(migration).toContain("remote_archive_v2_committed_upload_ref_idx");
-    expect(migration).toContain("remote_archive_v2_records");
-    expect(migration).toContain("project_id");
-    expect(migration).toContain("record_json->'upload_ref'->>'sha256'");
-    expect(migration).toContain("record_json->'upload_ref'->>'size_bytes'");
-    expect(migration).toContain("WHERE state='committed'");
-    expect(migration).toContain("remote_archive_v2_active_upload_ref_idx");
-    expect(migration).toContain("record_json->'lease'->>'expires_at'");
-    expect(migration).toContain("WHERE state IN ('prepared','committing')");
-  });
-
-  it("keeps archive-committed package bytes live after the upload expires", async () => {
-    const input = stagedFixture("2026-08-15T00:01:00.000Z");
-    const candidateQueries: string[] = [];
-    const liveQueries: string[] = [];
-    let archiveCommitted = false;
-    const pool = poolFor((sql) => {
-      if (sql.includes("FROM remote_content_upload_cas_objects c")) {
-        candidateQueries.push(sql);
-        // The archive commit becomes visible after the bounded candidate scan
-        // but before the per-object advisory recheck.
-        archiveCommitted = true;
-        return { rows: [{ content_sha256: input.content_sha256, size_bytes: input.size_bytes }], rowCount: 1 };
-      }
-      if (sql.includes("FROM remote_content_upload_cas_objects") && sql.includes("FOR UPDATE")) {
-        return { rows: [{ content_sha256: input.content_sha256, size_bytes: input.size_bytes,
-          state: "ready", gc_batch_id: null }], rowCount: 1 };
-      }
-      if (sql.includes("SELECT 1 FROM remote_content_uploads")) {
-        liveQueries.push(sql);
-        const exactArchiveReference = archiveCommitted && sql.includes("remote_archive_v2_records") &&
-          sql.includes("state='committed'") && sql.includes("upload_ref") &&
-          sql.includes("size_bytes");
-        return exactArchiveReference ? { rows: [{ live: 1 }], rowCount: 1 } : empty();
-      }
-      return empty();
-    });
-    const records = new PgRemoteContentUploadRecordPort(pool);
-
-    const claim = await records.claimGarbage({
-      project_id: input.project_id,
-      now: "2026-08-15T00:02:00.000Z",
-      limit: 1,
-      worker_id: "worker_gc",
-      lease_until: "2026-08-15T00:03:00.000Z",
-    });
-
-    expect(claim.refs).toEqual([]);
-    expect(candidateQueries).toHaveLength(1);
-    expect(candidateQueries[0]).toContain("remote_archive_v2_records");
-    expect(liveQueries).toHaveLength(1);
-  });
-
-  it("pins prepared and committing archive bytes only while the archive lease is active", async () => {
-    const input = stagedFixture("2026-08-15T00:01:00.000Z");
-    const leaseExpiresAt = "2026-08-15T00:03:00.000Z";
-
-    for (const scenario of [
-      { state: "prepared", now: "2026-08-15T00:02:00.000Z", expectedRefs: 0 },
-      { state: "committing", now: "2026-08-15T00:02:00.000Z", expectedRefs: 0 },
-      { state: "prepared", now: "2026-08-15T00:04:00.000Z", expectedRefs: 1 },
-    ] as const) {
-      let archiveVisible = false;
-      const candidateQueries: string[] = [];
-      const liveQueries: string[] = [];
-      const pool = poolFor((sql) => {
-        if (sql.includes("FROM remote_content_upload_cas_objects c")) {
-          candidateQueries.push(sql);
-          archiveVisible = true;
-          return { rows: [{ content_sha256: input.content_sha256, size_bytes: input.size_bytes }], rowCount: 1 };
-        }
-        if (sql.includes("FROM remote_content_upload_cas_objects") && sql.includes("FOR UPDATE")) {
-          return { rows: [{ content_sha256: input.content_sha256, size_bytes: input.size_bytes,
-            state: "ready", gc_batch_id: null }], rowCount: 1 };
-        }
-        if (sql.includes("SELECT 1 FROM remote_content_uploads")) {
-          liveQueries.push(sql);
-          const activeArchivePredicate = sql.includes("IN ('prepared','committing')") &&
-            sql.includes("record_json->'lease'->>'expires_at'") && sql.includes("upload_ref") &&
-            sql.includes("size_bytes");
-          const active = archiveVisible && activeArchivePredicate &&
-            (scenario.state === "prepared" || scenario.state === "committing") &&
-            Date.parse(leaseExpiresAt) > Date.parse(scenario.now);
-          return active ? { rows: [{ live: 1 }], rowCount: 1 } : empty();
-        }
-        return empty();
-      });
-      const records = new PgRemoteContentUploadRecordPort(pool);
-
-      const claim = await records.claimGarbage({
-        project_id: input.project_id,
-        now: scenario.now,
-        limit: 1,
-        worker_id: `worker_${scenario.state}`,
-        lease_until: new Date(Date.parse(scenario.now) + 60_000).toISOString(),
-      });
-
-      expect(claim.refs).toHaveLength(scenario.expectedRefs);
-      expect(candidateQueries[0]).toContain("IN ('prepared','committing')");
-      expect(candidateQueries[0]).toContain("record_json->'lease'->>'expires_at'");
-      expect(liveQueries).toHaveLength(1);
-    }
+  it("drops the retired remote archive v2 table and its GC liveness indexes", async () => {
+    const migration = await readFile(fileURLToPath(new URL("../migrations/036_drop_remote_archive_v2.sql", import.meta.url)), "utf8");
+    expect(migration).toContain("DROP TABLE IF EXISTS remote_archive_v2_records");
+    expect(migration).toContain("DROP INDEX IF EXISTS remote_archive_v2_committed_upload_ref_idx");
+    expect(migration).toContain("DROP INDEX IF EXISTS remote_archive_v2_active_upload_ref_idx");
   });
 
   it("pins a Remote Sync committing upload ref across HTTP expiry in every GC phase", async () => {
@@ -234,6 +135,8 @@ describe("Pg remote content upload durable records", () => {
     expect(source).not.toMatch(/p\.state='committed' OR \(p\.state IN \('prepared','committing'\)/u);
     expect(source.match(/p\.files_json @>/gu)).toHaveLength(4);
     expect(source).not.toContain("jsonb_array_elements(p.files_json)");
+    // remote_archive_v2_records 整链退役后，GC 存活探测不得再引用该表。
+    expect(source).not.toContain("remote_archive_v2_records");
 
     const input = stagedFixture("2026-08-15T00:01:00.000Z");
     const pool = poolFor((sql) => {

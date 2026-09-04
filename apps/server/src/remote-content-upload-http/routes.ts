@@ -415,14 +415,6 @@ export function registerRemoteContentUploadHttpRoutes(
 
     const uploadRoutes = [
       {
-        path: "/api/v1/projects/:projectId/branches/:branchName/remote-sync/content-upload",
-        purpose: "remote_archive" as const,
-        mediaType: "application/zip" as const,
-        scope: "archive:write" as const,
-        operation: "upload_content" as const,
-        maxBytes: REMOTE_CONTENT_UPLOAD_HTTP_MAX_BYTES,
-      },
-      {
         path: "/api/v1/projects/:projectId/branches/:branchName/remote-sync/file-upload",
         purpose: "remote_sync_file" as const,
         mediaType: "application/octet-stream" as const,
@@ -432,12 +424,6 @@ export function registerRemoteContentUploadHttpRoutes(
       },
     ];
     const statusRoutes = [
-      {
-        path: "/api/v1/projects/:projectId/branches/:branchName/remote-sync/content-upload/status",
-        purpose: "remote_archive" as const,
-        scope: "archive:read" as const,
-        operation: "upload_status" as const,
-      },
       {
         path: "/api/v1/projects/:projectId/branches/:branchName/remote-sync/file-upload/status",
         purpose: "remote_sync_file" as const,

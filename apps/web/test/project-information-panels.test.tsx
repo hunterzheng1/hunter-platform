@@ -100,11 +100,12 @@ describe("project information panels", () => {
     expect(screen.queryByText("Codebase Conventions")).not.toBeInTheDocument();
     const rows = screen.getAllByRole("row");
     expect(rows).toHaveLength(3);
-    const [headerRow, designRow, planRow] = rows;
-    expect(within(designRow ?? headerRow).getByText("设计文档")).toBeInTheDocument();
-    expect(within(designRow ?? headerRow).getByText("docs/designs/")).toBeInTheDocument();
-    expect(within(planRow ?? headerRow).getByText("计划与跟踪")).toBeInTheDocument();
-    expect(within(planRow ?? headerRow).getByText("docs/plans/")).toBeInTheDocument();
+    const [headerRow, designRow, planRow] = rows as [HTMLElement, HTMLElement, HTMLElement];
+    expect(within(headerRow).getByText("位置")).toBeInTheDocument();
+    expect(within(designRow).getByText("设计文档")).toBeInTheDocument();
+    expect(within(designRow).getByText("docs/designs/")).toBeInTheDocument();
+    expect(within(planRow).getByText("计划与跟踪")).toBeInTheDocument();
+    expect(within(planRow).getByText("docs/plans/")).toBeInTheDocument();
   });
 
   it("does not let stale detail overwrite a newer project and localizes the open action", async () => {

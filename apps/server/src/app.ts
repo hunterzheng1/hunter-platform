@@ -227,7 +227,6 @@ import {
   type KnowledgeQueryHttpServicePort
 } from "./knowledge-query-http/index.js";
 import { registerRemoteContentUploadHttpRoutes, type RemoteContentUploadHttpServicePort } from "./remote-content-upload-http/index.js";
-import { registerRemoteSyncArchiveHttpRoutes, type RemoteSyncArchiveHttpServicePort } from "./remote-sync-archive-http/index.js";
 import type { BranchSnapshotProducer } from "./branch-snapshots/producer.js";
 import { SemanticMemoryStore } from "./semantic/memory-store.js";
 import {
@@ -260,8 +259,6 @@ export interface CreateServerOptions {
   knowledgeQuery?: KnowledgeQueryHttpServicePort;
   /** Bounded raw archive upload seam. Production main injects it; absent deployments fail closed with 503. */
   remoteContentUpload?: RemoteContentUploadHttpServicePort;
-  /** Remote Archive v2 lifecycle seam. Absent deployments fail closed with 503. */
-  remoteSyncArchive?: RemoteSyncArchiveHttpServicePort;
   /** Transaction-bound Remote Sync → Branch Snapshot producer. */
   branchSnapshotProducer?: BranchSnapshotProducer;
   /** 06A knowledge queue pipeline. 归档上传成功后事务入队（best-effort，失败仅告警不阻塞上传）。 */
@@ -1038,7 +1035,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
         ? "SKILL_UPLOAD_TOO_LARGE"
         : route === "/api/v1/projects/:projectId/changes/:changeKey/archive-package"
           ? "ARCHIVE_PACKAGE_TOO_LARGE"
-          : route === "/api/v1/projects/:projectId/branches/:branchName/remote-sync/content-upload"
+          : route === "/api/v1/projects/:projectId/branches/:branchName/remote-sync/file-upload"
             ? "REMOTE_CONTENT_UPLOAD_TOO_LARGE"
           : "PROPOSAL_TOO_LARGE";
       message = "Request body exceeds the configured limit.";
@@ -4511,8 +4508,6 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
   registerRemoteContentUploadHttpRoutes(app, { repository, authenticated,
     ...(options.remoteContentUpload === undefined ? {} : { service: options.remoteContentUpload }) });
-  registerRemoteSyncArchiveHttpRoutes(app, { repository, authenticated,
-    ...(options.remoteSyncArchive === undefined ? {} : { service: options.remoteSyncArchive }) });
 
   const cleanupExpiredProjects = async (): Promise<void> => {
     const now = new Date().toISOString();

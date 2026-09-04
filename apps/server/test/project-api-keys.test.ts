@@ -114,44 +114,28 @@ describe("project-scoped API keys (P2)", () => {
     expect(info.json()).toMatchObject({ project_id: projectId, scopes: ["platform:read"] });
   });
 
-  it("issues archive scopes and enforces read versus write upload access", async () => {
-    const readKey = await issueKey(["archive:read"]);
-    const readStatus = await app.inject({
-      method: "GET",
-      url: `/api/v1/projects/${projectId}/branches/main/remote-sync/content-upload/status`,
-      headers: {
-        authorization: "Bearer " + readKey.apiKey,
-        "idempotency-key": `sha256:${"a".repeat(64)}`
-      }
-    });
-    expect(readStatus.statusCode).toBe(503);
-    expect(readStatus.json().error.code).toBe("REMOTE_UNAVAILABLE");
-    const readUpload = await app.inject({
-      method: "POST",
-      url: `/api/v1/projects/${projectId}/branches/main/remote-sync/content-upload`,
-      headers: { authorization: "Bearer " + readKey.apiKey }
-    });
-    expect(readUpload.statusCode).toBe(403);
-    expect(readUpload.json().error.code).toBe("PROJECT_KEY_SCOPE");
-
+  it("issues archive scopes and enforces write ingest access", async () => {
     const writeKey = await issueKey(["archive:write"]);
-    const writeUpload = await app.inject({
+    const writeIngest = await app.inject({
       method: "POST",
-      url: `/api/v1/projects/${projectId}/branches/main/remote-sync/content-upload`,
+      url: `/api/v1/projects/${projectId}/archives:ingest`,
       headers: {
         authorization: "Bearer " + writeKey.apiKey,
         "content-type": "application/zip"
       }
     });
-    expect(writeUpload.statusCode).toBe(503);
-    expect(writeUpload.json().error.code).toBe("REMOTE_UNAVAILABLE");
-    const writeStatus = await app.inject({
-      method: "GET",
-      url: `/api/v1/projects/${projectId}/branches/main/remote-sync/content-upload/status`,
-      headers: { authorization: "Bearer " + writeKey.apiKey }
+    // scope 通过，请求因缺少协议头被拒（业务校验层）。
+    expect(writeIngest.statusCode).toBe(400);
+    expect(writeIngest.json().error.code).toBe("ARCHIVE_INGEST_INPUT_INVALID");
+
+    const readKey = await issueKey(["archive:read"]);
+    const readIngest = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectId}/archives:ingest`,
+      headers: { authorization: "Bearer " + readKey.apiKey }
     });
-    expect(writeStatus.statusCode).toBe(403);
-    expect(writeStatus.json().error.code).toBe("PROJECT_KEY_SCOPE");
+    expect(readIngest.statusCode).toBe(403);
+    expect(readIngest.json().error.code).toBe("PROJECT_KEY_SCOPE");
   });
 
   it("allows knowledge:read only for the key's bound project", async () => {

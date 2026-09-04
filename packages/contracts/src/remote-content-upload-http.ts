@@ -300,16 +300,6 @@ const validation = Object.freeze([
   "REMOTE_CONTENT_UPLOAD_SIZE_MISMATCH"
 ] as const);
 const unavailable = Object.freeze(["REMOTE_UNAVAILABLE"] as const);
-const readAuth = Object.freeze({
-  actor_source: "authenticated_principal" as const,
-  project_allowlist_source: "server_authority" as const,
-  project_key_scope: "archive:read" as const
-});
-const writeAuth = Object.freeze({
-  actor_source: "authenticated_principal" as const,
-  project_allowlist_source: "server_authority" as const,
-  project_key_scope: "archive:write" as const
-});
 const fileReadAuth = Object.freeze({
   actor_source: "authenticated_principal" as const,
   project_allowlist_source: "server_authority" as const,
@@ -330,65 +320,6 @@ const operation = <const T extends object>(
 });
 
 export const REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS = Object.freeze({
-  upload_content: operation({
-    method: "POST" as const,
-    path: "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/content-upload" as const,
-    operation_id: "stageRemoteContentUpload" as const,
-    request_placement: "path_headers_and_binary_body" as const,
-    request_media_type: "application/zip" as const,
-    body_transport: "single_bounded_stream" as const,
-    auth: writeAuth,
-    request_descriptor_schema: "RemoteContentUploadHttpRequestDescriptor" as const,
-    success_status: 201 as const,
-    replay_status: 200 as const,
-    success_schema: "RemoteContentUploadHttpResult" as const,
-    identity_bindings: Object.freeze([
-      Object.freeze(["path.project_id", "response.record.source.project_id"] as const),
-      Object.freeze(["path.branch_name", "response.record.source.branch_name"] as const),
-      Object.freeze(["auth.actor_id", "response.record.source.actor_id"] as const),
-      Object.freeze(["header.Idempotency-Key", "response.record.idempotency_key"] as const),
-      Object.freeze(["header.X-Content-SHA256", "body_stream.content_sha256"] as const),
-      Object.freeze(["header.Content-Length", "body_stream.content_length_bytes"] as const),
-      Object.freeze(["header.X-Commit-SHA", "response.record.source.commit_sha"] as const),
-      Object.freeze(["header.X-Client-Id", "response.record.source.client_id"] as const),
-      Object.freeze(["header.X-Change-Key", "response.record.source.change_key"] as const),
-      Object.freeze(["header.X-Upload-Expires-In-Ms", "response.record.created_at..expires_at"] as const)
-    ])
-  }, {
-    400: validation,
-    401: unauthorized,
-    403: forbidden,
-    409: Object.freeze(["REMOTE_CONTENT_UPLOAD_IDEMPOTENCY_CONFLICT"] as const),
-    410: Object.freeze(["REMOTE_CONTENT_UPLOAD_EXPIRED"] as const),
-    413: Object.freeze(["REMOTE_CONTENT_UPLOAD_TOO_LARGE"] as const),
-    415: Object.freeze(["REMOTE_CONTENT_UPLOAD_MEDIA_TYPE_UNSUPPORTED"] as const),
-    499: Object.freeze(["REMOTE_CONTENT_UPLOAD_ABORTED"] as const),
-    503: unavailable
-  }),
-  upload_status: operation({
-    method: "GET" as const,
-    path: "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/content-upload/status" as const,
-    operation_id: "getRemoteContentUploadStatus" as const,
-    request_placement: "path_and_headers" as const,
-    auth: readAuth,
-    request_descriptor_schema: "RemoteContentUploadHttpStatusDescriptor" as const,
-    success_status: 200 as const,
-    success_schema: "RemoteContentUploadHttpStatus" as const,
-    identity_bindings: Object.freeze([
-      Object.freeze(["path.project_id", "response.record.source.project_id"] as const),
-      Object.freeze(["path.branch_name", "response.record.source.branch_name"] as const),
-      Object.freeze(["auth.actor_id", "response.record.source.actor_id"] as const),
-      Object.freeze(["header.Idempotency-Key", "response.record.idempotency_key"] as const),
-      Object.freeze(["header.X-Commit-SHA", "response.record.source.commit_sha"] as const),
-      Object.freeze(["header.X-Client-Id", "response.record.source.client_id"] as const),
-      Object.freeze(["header.X-Change-Key", "response.record.source.change_key"] as const)
-    ])
-  }, {
-    400: validation,
-    401: unauthorized,
-    403: Object.freeze([...forbidden, "REMOTE_CONTENT_UPLOAD_SCOPE_MISMATCH"] as const),
-    503: unavailable
-  }),
   upload_remote_sync_file: operation({
     method: "POST" as const,
     path: "/api/v1/projects/{project_id}/branches/{branch_name}/remote-sync/file-upload" as const,

@@ -20,7 +20,7 @@ describe("remote content upload reference resolver", () => {
       upload_id: `remote_content_upload:${"A".repeat(43)}`,
       source: { project_id: "prj_upload", branch_name: "main", actor_id: "actor_upload", client_id: "cli_upload" },
       idempotency_key: `sha256:${"b".repeat(64)}`,
-      purpose: "remote_archive" as const,
+      purpose: "remote_sync_file" as const,
       content_sha256: contentHash,
       size_bytes: 3,
       upload_ref: ref,
@@ -38,7 +38,7 @@ describe("remote content upload reference resolver", () => {
     };
     const resolver = createRemoteContentUploadResolver({ pool: { query } as never, cas });
     const stream = await resolver.resolve({
-      purpose: "remote_archive",
+      purpose: "remote_sync_file",
       source: record.source, upload_ref: ref, now: "2026-08-15T00:00:30.000Z"
     });
     const chunks: Uint8Array[] = [];
