@@ -220,7 +220,9 @@ describe("project information panels", () => {
     expect(screen.getAllByRole("button", { name: /Open/ })).toHaveLength(3);
   });
 
-  it("keeps ordinary list rendering bounded after repeated cursor pages", async () => {
+  it("keeps ordinary list rendering bounded after repeated cursor pages", { timeout: 120_000 }, async () => {
+    // 刻意渲染 12 页 × 50 行做边界验证，是全文件最慢用例；负载下会超 30s
+    // 默认预算（§9.3「bounded-rendering 超时」）。只放宽这一条，不动整文件。
     const list = vi.fn(async (_project: string, _view: PlatformInformationPage["view"], query?: { cursor?: string | null }) => {
       const pageNumber = query?.cursor === null || query?.cursor === undefined ? 0 : Number(query.cursor);
       const items = Array.from({ length: 50 }, (_, index) => ({

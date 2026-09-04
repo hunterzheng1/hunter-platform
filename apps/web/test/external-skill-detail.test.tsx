@@ -6,6 +6,11 @@ import type { ReactElement } from "react";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// jsdom 下每个用例的 beforeEach 都完整启动一次 fastify server（15 个用例×
+// createServer），负载下启动+渲染叠加会超 30s 默认预算（§9.3 已知负载 flake，
+// 仅超时无断言错误）。放宽本文件预算，全局 30s 保持不变。
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
+
 import { ExternalSkillDetail } from "../components/external-skill-detail";
 import { ToastProvider } from "../components/ui/Toast";
 import { ApiClientError, type HunterApi } from "../lib/api";
