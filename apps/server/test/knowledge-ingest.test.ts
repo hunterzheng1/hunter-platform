@@ -6,6 +6,10 @@ import { MemoryRepository } from "../src/repositories/memory.js";
 import { SemanticMemoryStore } from "../src/semantic/memory-store.js";
 import { MemoryArtifactStorage } from "../src/storage/memory.js";
 
+// 归档日期用当天：judge 的 age penalty 按日历天数扣分，固定日期会让
+// auto-promote 断言在约 22 天后随日历漂移失败（2026-08-29 起实锤）。
+const TODAY = new Date().toISOString().slice(0, 10);
+
 function entry(id: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     schemaVersion: 1,
@@ -18,7 +22,7 @@ function entry(id: string, overrides: Record<string, unknown> = {}): Record<stri
     body: `Body for ${id}: use scrypt for password hashing.`,
     keywords: ["auth", "scrypt"],
     source: {
-      archive: "2026-08-06-auth-change",
+      archive: `${TODAY}-auth-change`,
       summaryData: "reports/final/summary-data.json",
       summarySha256: "sha256:" + "0".repeat(64),
       sourceCommit: "abc1234",
@@ -28,9 +32,9 @@ function entry(id: string, overrides: Record<string, unknown> = {}): Record<stri
     },
     scope: { sourceFiles: ["apps/server/src/auth/accounts.ts"] },
     lifecycle: {
-      createdAt: "2026-08-06T00:00:00Z",
-      verifiedAt: "2026-08-06T00:00:00Z",
-      lastCheckedAt: "2026-08-06T00:00:00Z",
+      createdAt: `${TODAY}T00:00:00Z`,
+      verifiedAt: `${TODAY}T00:00:00Z`,
+      lastCheckedAt: `${TODAY}T00:00:00Z`,
       confidence: "medium",
       supersedes: [],
       supersededBy: null,

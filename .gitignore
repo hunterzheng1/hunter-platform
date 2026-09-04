@@ -94,3 +94,4 @@ temp/
 
 # ===== 本机迁移核对临时文件 =====
 .harness-status-before.txt
+.autoloop/
