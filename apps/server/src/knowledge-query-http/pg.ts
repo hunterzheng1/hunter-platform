@@ -462,13 +462,6 @@ function responseForFailure(
   return response;
 }
 
-function storedGeneration(receipt: ReceiptRow): number {
-  const raw = receipt.index_generation;
-  const match = typeof raw === "string" ? /^(?:knowledge_generation:)?(\d+)$/.exec(raw) : null;
-  if (match !== null) return Number(match[1]);
-  return 0;
-}
-
 function storedResponse(
   row: ReceiptRow,
   request: KnowledgeQueryHttpRequest,
@@ -612,7 +605,7 @@ export class PgKnowledgeQueryHttpService implements KnowledgeQueryHttpServicePor
           // 代内数据更新也要失效缓存：同代内"先查空 → 新条目提交 → 再查"时，
           // 仅靠代际比较仍会命中空结果缓存。取该代最后一条结果提交时间：不晚于
           // 收据创建时间（含查不到新鲜度信息的降级路径）才允许重放。
-          let mayReplay = true;
+          let mayReplay: boolean;
           try {
             const dataFreshnessRow = await transactionQuery<Record<string, unknown>>(
               client,

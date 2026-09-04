@@ -80,36 +80,6 @@ interface ArchiveBranchGroup {
   updatedAt: string;
 }
 
-type ArchiveFileCategory = "plan" | "spec" | "report" | "document" | "other";
-
-interface ArchiveFileGroup {
-  category: ArchiveFileCategory;
-  files: ArchiveBranchGroup["files"];
-}
-
-const ARCHIVE_CATEGORY_ORDER: readonly ArchiveFileCategory[] = ["plan", "spec", "report", "document", "other"];
-
-function archiveFileCategory(relativePath: string): ArchiveFileCategory {
-  const normalized = relativePath.toLowerCase();
-  if (/(^|\/)(plans?|implementation)(\/|$)|(^|[-_.])plan([-_.]|$)/u.test(normalized)) return "plan";
-  if (/(^|\/)(specs?|design)(\/|$)|(^|[-_.])(spec|design)([-_.]|$)/u.test(normalized)) return "spec";
-  if (/(^|\/)(reports?|summary)(\/|$)|(^|[-_.])(report|summary)([-_.]|$)/u.test(normalized)) return "report";
-  if (/\.(md|mdx|txt|adoc)$/u.test(normalized)) return "document";
-  return "other";
-}
-
-function archiveFileGroups(files: ArchiveBranchGroup["files"]): ArchiveFileGroup[] {
-  const groups = new Map<ArchiveFileCategory, ArchiveBranchGroup["files"]>();
-  for (const entry of files) {
-    const category = archiveFileCategory(entry.relativePath);
-    groups.set(category, [...(groups.get(category) ?? []), entry]);
-  }
-  return ARCHIVE_CATEGORY_ORDER.flatMap((category) => {
-    const entries = groups.get(category);
-    return entries === undefined ? [] : [{ category, files: entries }];
-  });
-}
-
 const BRANCH_TITLES_ZH: Readonly<Record<string, string>> = {
   "kb-config-upload-binding": "知识库配置上传绑定",
   "usage-stats-cli-reporting": "CLI 使用统计报告"
@@ -140,25 +110,12 @@ function archiveFileParts(relativePath: string): { name: string; directory: stri
   return { name: segments.at(-1) ?? relativePath, directory: segments.slice(0, -1).join(" / ") };
 }
 
-function archiveFileDisplayName(branchName: string, fileName: string): string {
-  const prefix = `${branchName}-`;
-  const shortened = fileName.startsWith(prefix) ? fileName.slice(prefix.length) : fileName;
-  return shortened === "" ? fileName : shortened;
-}
-
 function archiveDesignMarkdown(content: string): string {
   const withoutLeadingMetadata = content
     .replace(/^\uFEFF?[ \t]*---[ \t]*\r?\n(?:(?:schema_version|artifact_type|content_hash|generated):[^\r\n]*\r?\n)+[ \t]*---[ \t]*(?:\r?\n)?/iu, "")
     .replace(/^\uFEFF?\s*(?:(?:schema_version|artifact_type|content_hash|generated):[^\r\n]*(?:\r?\n|$))+/iu, "");
   const requirementsStart = /^(?:#{1,6})\s+(?:requirements|需求)(?:[ \t#]|$)[^\r\n]*(?:\r?\n|$)/imu.exec(withoutLeadingMetadata);
   return (requirementsStart === null ? withoutLeadingMetadata : withoutLeadingMetadata.slice(0, requirementsStart.index)).trim();
-}
-
-function isHarnessGeneratedPlan(relativePath: string, content: string | undefined): boolean {
-  if (content === undefined || !/^plans\//u.test(relativePath)) return false;
-  const endFm = content.indexOf("---\n", 4);
-  if (endFm === -1) return false;
-  return /^generated:\s*true\s*$/m.test(content.slice(4, endFm));
 }
 
 type ReadableJson = null | boolean | number | string | ReadableJson[] | { [key: string]: ReadableJson };
@@ -624,7 +581,6 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
   const [activeTab, setActiveTab] = useState<ProjectWorkspaceSection>("monitor");
   const [knowledgeActivated, setKnowledgeActivated] = useState(false);
   const [selectedArchiveBranch, setSelectedArchiveBranch] = useState<string | null>(null);
-  const [openArchiveCategories, setOpenArchiveCategories] = useState<Set<ArchiveFileCategory>>(() => new Set(["plan", "spec"]));
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [contentByPath, setContentByPath] = useState<Map<string, ProjectFileContentCacheEntry>>(new Map());
   const [loadingContent, setLoadingContent] = useState(false);
@@ -641,7 +597,6 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
     setActiveTab("monitor");
     setKnowledgeActivated(false);
     setSelectedArchiveBranch(null);
-    setOpenArchiveCategories(new Set(["plan", "spec"]));
   }, [api, projectId]);
 
   useEffect(() => {
@@ -774,7 +729,6 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
     }
     if (selectedPath !== activeArchiveDesignFile.file.path) void choose(activeArchiveDesignFile.file);
     // This intentionally reacts only to a branch/data change, not to the unstable choose closure.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeArchiveBranch?.name, activeArchiveDesignFile?.file.path]);
 
   function beginAdd(): void {
@@ -929,7 +883,6 @@ export function ProjectWorkspace({ api, projectId }: { api: HunterApi; projectId
               onClick={() => {
                 contentRequest.current += 1;
                 setSelectedArchiveBranch(branch.name);
-                setOpenArchiveCategories(new Set(["plan", "spec"]));
                 setSelectedPath(null);
                 setDraft(null);
                 setLoadingContent(false);

@@ -15,6 +15,8 @@ export default tseslint.config(
       ".codebuddy/**",
       ".cursor/**",
       ".codegraph/**",
+      ".harness/**",
+      ".autoloop/**",
       "resources/**",
       "packages/core/test/fixtures/**"
     ]

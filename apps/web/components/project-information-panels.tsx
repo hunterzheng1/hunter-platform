@@ -417,8 +417,10 @@ export function BranchFilesInformationPanel(props: PanelProps) {
       return;
     }
     setErrors((previous) => {
-      const next = { ...previous };
-      delete next[snapshotDetailId];
+      const next: Record<string, string> = {};
+      for (const [key, value] of Object.entries(previous)) {
+        if (key !== snapshotDetailId) next[key] = value;
+      }
       return next;
     });
     try {
