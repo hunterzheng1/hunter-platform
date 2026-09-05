@@ -13,6 +13,12 @@ import type { Pool, PoolClient, QueryResultRow } from "pg";
 
 import { KnowledgePipelineError } from "./errors.js";
 import { changeSummaryPaths } from "./memory-ports.js";
+import { rankLexical, relevanceTokens } from "./search-rank.js";
+
+// 词项路径单次查询取回并参与打分的行数上限：取回行按 updated_at 预排序，
+// 相关度重排在该窗口内进行。知识结果按归档有界累积（单 job ≤20 条），
+// 400 行远超正常项目规模，同时防住敌意膨胀的表。
+const KNOWLEDGE_QUERY_CANDIDATE_ROWS = 400;
 import {
   changeDocumentIdentity,
   changeDocumentVersion,
@@ -1614,7 +1620,32 @@ export class PgKnowledgeIndex implements KnowledgeIndex {
       fail("KNOWLEDGE_QUERY_INVALID");
     }
     const needle = query.query as string;
+    // 词项召回 + 相关度排序（2026-09 审查报告·查询节）：整串子串对自然语言
+    // 问题 8/8 零命中；分词后按词项预筛（命中集合是子串匹配的超集，不丢行）
+    // 再在 Node 侧打分排序。全停用词/单字符查询分不出词项时保留子串语义。
+    const terms = relevanceTokens(needle);
     return safeStorage(async () => {
+      if (terms.length === 0) {
+        const result = await execute(
+          `SELECT project_id, knowledge_id, content_kind, status, content_hash, display_title, summary, entry_type, body, keywords,
+                  reusability_scope, confidence, source_archive_ids, source_change_keys,
+                  source_candidate_ids, source_refs, extractor_version, prompt_version,
+                  index_schema_version, generation, created_at, updated_at
+             FROM knowledge_pipeline_results
+            WHERE project_id=$1 AND content_kind='knowledge_entry' AND status='active'
+              AND (position(lower($2) in lower(display_title)) > 0 OR
+                   position(lower($2) in lower(summary)) > 0 OR
+                   position(lower($2) in lower(reusability_scope)) > 0 OR
+                   position(lower($2) in lower(body)) > 0 OR
+                   position(lower($2) in lower(coalesce(keywords::text, ''))) > 0 OR
+                   EXISTS (SELECT 1 FROM jsonb_array_elements_text(source_refs) ref
+                            WHERE position(lower($2) in lower(ref)) > 0))
+            ORDER BY updated_at DESC, knowledge_id ASC LIMIT $3`,
+          [projectId, needle, Number(query.limit)]
+        );
+        return result.rows.map((row) => resultFromRow(row));
+      }
+      const termPlaceholders = terms.map((_, index) => `(lower($${index + 2}))`).join(",");
       const result = await execute(
         `SELECT project_id, knowledge_id, content_kind, status, content_hash, display_title, summary, entry_type, body, keywords,
                 reusability_scope, confidence, source_archive_ids, source_change_keys,
@@ -1622,17 +1653,27 @@ export class PgKnowledgeIndex implements KnowledgeIndex {
                 index_schema_version, generation, created_at, updated_at
            FROM knowledge_pipeline_results
           WHERE project_id=$1 AND content_kind='knowledge_entry' AND status='active'
-            AND (position(lower($2) in lower(display_title)) > 0 OR
-                 position(lower($2) in lower(summary)) > 0 OR
-                 position(lower($2) in lower(reusability_scope)) > 0 OR
-                 position(lower($2) in lower(body)) > 0 OR
-                 position(lower($2) in lower(coalesce(keywords::text, ''))) > 0 OR
-                 EXISTS (SELECT 1 FROM jsonb_array_elements_text(source_refs) ref
-                          WHERE position(lower($2) in lower(ref)) > 0))
-          ORDER BY updated_at DESC, knowledge_id ASC LIMIT $3`,
-        [projectId, needle, Number(query.limit)]
+            AND EXISTS (
+              SELECT 1 FROM (VALUES ${termPlaceholders}) AS term(v)
+              WHERE position(term.v in lower(display_title)) > 0
+                 OR position(term.v in lower(summary)) > 0
+                 OR position(term.v in lower(reusability_scope)) > 0
+                 OR position(term.v in lower(coalesce(body, ''))) > 0
+                 OR position(term.v in lower(coalesce(keywords::text, ''))) > 0
+                 OR EXISTS (SELECT 1 FROM jsonb_array_elements_text(source_refs) ref
+                             WHERE position(term.v in lower(ref)) > 0))
+          ORDER BY updated_at DESC, knowledge_id ASC
+          LIMIT ${KNOWLEDGE_QUERY_CANDIDATE_ROWS}`,
+        [projectId, ...terms]
       );
-      return result.rows.map((row) => resultFromRow(row));
+      const ranked = rankLexical(terms, result.rows.map((row) => resultFromRow(row)));
+      return ranked
+        .sort((left, right) =>
+          right.score - left.score ||
+          (right.doc.updated_at ?? "").localeCompare(left.doc.updated_at ?? "") ||
+          (left.doc.knowledge_id < right.doc.knowledge_id ? -1 : left.doc.knowledge_id > right.doc.knowledge_id ? 1 : 0))
+        .slice(0, Number(query.limit))
+        .map((entry) => entry.doc);
     }, true);
   }
 }
