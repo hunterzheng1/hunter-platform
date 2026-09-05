@@ -8,7 +8,7 @@ import {
   knowledgeCandidatesForArchive
 } from "../src/knowledge-pipeline/extractor.js";
 import { MemoryArchiveStore } from "../src/knowledge-pipeline/memory-ports.js";
-import { deriveKnowledgeCandidatesFromSummary }
+import { deriveKnowledgeCandidatesFromSummary, derivePlanKnowledgeFromArchive }
   from "../src/knowledge-pipeline/summary-candidates.js";
 import type { KnowledgeCandidate } from "@hunter-harness/contracts";
 
@@ -235,5 +235,81 @@ describe("knowledge candidates derived from an archived summary", () => {
     expect(derived[0]?.keywords).toEqual(["a.ts", "core", "YELLOW", "FIXED"]);
     expect(derived[0]?.source_refs).toEqual(["src/core/a.ts#L42"]);
     expect(derived[2]?.provenance.source_kind).toBe("archive");
+  });
+});
+
+
+const DESIGN_MD = [
+  "# simple-mode-adoption-design",
+  "",
+  "## Goal",
+  "",
+  "让用量上报在离线时也不丢失数据。",
+  "",
+  "## User-visible outcome",
+  "",
+  "离线期间的事件在恢复后补报。",
+  "",
+  "## Requirements",
+  "",
+  "- requirement:req-001 [failure_behavior]: git/diff 失败跳过规模判定、不阻断 propose",
+  "",
+  "## Risks",
+  "",
+  "- 遥测失败可能拖慢命令",
+  "- Mitigation: 上报失败不阻断 commit",
+  "",
+  "## Invariants",
+  "",
+  "- None.",
+  "",
+  "## Tradeoffs",
+  "",
+  "- 否决独立 /opsx-quick-simple 入口，因为会制造第二入口、与现有流程分裂",
+  "- 采纳在既有 propose 流程内加 Simple 标记",
+  "- None.",
+  "",
+  "## Compatibility boundaries",
+  "",
+  "- 旧 proposal 没有 auto-scale 字段时不受影响",
+  "- None.",
+  ""
+].join("\n");
+
+describe("plan knowledge derived from design sections", () => {
+  const input = {
+    changeKey: "simple-mode-adoption",
+    archiveId: "arc_plan",
+    producerVersion: "1",
+    createdAt: now
+  };
+
+  it("extracts goal, tradeoffs, and compatibility boundaries alongside risks", () => {
+    const zip = new AdmZip();
+    zip.addFile("plans/simple-mode-adoption-design.md", Buffer.from(DESIGN_MD, "utf8"));
+    const candidates = derivePlanKnowledgeFromArchive(zip.toBuffer(), input);
+
+    const goal = candidates.find((candidate) => candidate.summary.includes("离线时也不丢失数据"));
+    expect(goal?.body).toContain("目标：");
+    expect(goal?.body).toContain("用户可见结果：");
+
+    const decisions = candidates.filter((candidate) => candidate.entry_type === "decision");
+    expect(decisions).toHaveLength(2);
+    expect(decisions[0]?.summary).toContain("否决独立 /opsx-quick-simple 入口");
+    expect(decisions.every((candidate) => !candidate.summary.includes("None."))).toBe(true);
+
+    const compat = candidates.filter((candidate) => candidate.entry_type === "api-contract");
+    expect(compat).toHaveLength(1);
+    expect(compat[0]?.summary).toContain("旧 proposal 没有 auto-scale 字段时不受影响");
+  });
+
+  it("derives the same candidate ids on every run (mirror of the python builder)", () => {
+    const zip = new AdmZip();
+    zip.addFile("plans/simple-mode-adoption-design.md", Buffer.from(DESIGN_MD, "utf8"));
+    const first = derivePlanKnowledgeFromArchive(zip.toBuffer(), input);
+    const second = derivePlanKnowledgeFromArchive(zip.toBuffer(), input);
+    expect(first.map((candidate) => candidate.candidate_id)).toEqual(
+      second.map((candidate) => candidate.candidate_id)
+    );
   });
 });

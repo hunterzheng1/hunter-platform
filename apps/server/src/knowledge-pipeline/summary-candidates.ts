@@ -356,6 +356,83 @@ function requirementsFromDesign(
   return out;
 }
 
+function goalFromDesign(
+  designText: string,
+  input: { changeKey: string; archiveId: string; producerVersion: string; createdAt: string }
+): KnowledgeCandidate | null {
+  // mirrors harness/scripts/harness_knowledge_candidates.py _goal_from_design
+  // 变更意图（目标/用户可见结果）是自然语言检索最重要的知识。
+  const sections = markdownSections(designText);
+  const goalLines = (sections.get("Goal") ?? []).map((line) => line.trim()).filter((line) => line.length > 0);
+  if (goalLines.length === 0) return null;
+  const summary = goalLines.join(" ");
+  let body = `目标：${summary}`;
+  const outcomeLines = (sections.get("User-visible outcome") ?? [])
+    .map((line) => line.trim()).filter((line) => line.length > 0);
+  if (outcomeLines.length > 0) body += "\n用户可见结果：" + outcomeLines.join(" ");
+  return makePlanCandidate({
+    ...input,
+    kind: "requirement",
+    entryType: "requirement",
+    summary,
+    body,
+    keywords: ["目标", "goal", "requirement"],
+    sourceRefs: planSourceRefs(input.changeKey, `plans/${input.changeKey}-design.md`)
+  });
+}
+
+function tradeoffsFromDesign(
+  designText: string,
+  input: { changeKey: string; archiveId: string; producerVersion: string; createdAt: string }
+): KnowledgeCandidate[] {
+  // mirrors harness/scripts/harness_knowledge_candidates.py _tradeoffs_from_design
+  // 被否决的备选方案及理由是下一次决策最需要的知识（2026-09 审查报告）。
+  const sections = markdownSections(designText);
+  const out: KnowledgeCandidate[] = [];
+  for (const line of sections.get("Tradeoffs") ?? []) {
+    const stripped = line.trim();
+    if (!stripped.startsWith("- ")) continue;
+    const text = unescapeMarkdown(stripped.slice(2).trim());
+    if (!text || text === "None.") continue;
+    out.push(makePlanCandidate({
+      ...input,
+      kind: "decision",
+      entryType: "decision",
+      summary: text,
+      body: `取舍：${text}`,
+      keywords: ["tradeoff", "decision", "取舍"],
+      sourceRefs: planSourceRefs(input.changeKey, `plans/${input.changeKey}-design.md`)
+    }));
+  }
+  return out;
+}
+
+function compatibilityFromDesign(
+  designText: string,
+  input: { changeKey: string; archiveId: string; producerVersion: string; createdAt: string }
+): KnowledgeCandidate[] {
+  // mirrors harness/scripts/harness_knowledge_candidates.py _compatibility_from_design
+  // 兼容边界决定升级与回滚的判断（2026-09 审查报告）。
+  const sections = markdownSections(designText);
+  const out: KnowledgeCandidate[] = [];
+  for (const line of sections.get("Compatibility boundaries") ?? []) {
+    const stripped = line.trim();
+    if (!stripped.startsWith("- ")) continue;
+    const text = unescapeMarkdown(stripped.slice(2).trim());
+    if (!text || text === "None.") continue;
+    out.push(makePlanCandidate({
+      ...input,
+      kind: "compatibility",
+      entryType: "api-contract",
+      summary: text,
+      body: `兼容边界：${text}`,
+      keywords: ["compatibility", "api-contract", "兼容"],
+      sourceRefs: planSourceRefs(input.changeKey, `plans/${input.changeKey}-design.md`)
+    }));
+  }
+  return out;
+}
+
 function risksFromDesign(
   designText: string,
   input: { changeKey: string; archiveId: string; producerVersion: string; createdAt: string }
@@ -500,8 +577,12 @@ export function derivePlanKnowledgeFromArchive(packageBytes: Uint8Array, input: 
     if (designEntry) {
       const designText = new TextDecoder("utf-8", { fatal: true }).decode(designEntry.getData());
       collect(requirementsFromDesign(designText, input));
+      const goal = goalFromDesign(designText, input);
+      if (goal !== null) collect([goal]);
       collect(risksFromDesign(designText, input));
       collect(invariantsFromDesign(designText, input));
+      collect(tradeoffsFromDesign(designText, input));
+      collect(compatibilityFromDesign(designText, input));
     }
     const planPath = `plans/${input.changeKey}-plan.md`;
     const planEntry = zip.getEntry(planPath);
