@@ -193,6 +193,22 @@ describe("knowledge extractor", () => {
     expect(drafts[0]?.display_title.length).toBeGreaterThan(0);
   });
 
+  it("keeps up to twenty qualified drafts in candidate order, aligned with the storage limit", async () => {
+    const store = new MemoryArchiveStore();
+    await store.putIfAbsent(archive({
+      knowledge_candidates: Array.from({ length: 25 }, (_, index) => ({
+        ...candidate(`bulk-${index}`, 0.9),
+        content_hash: `sha256:${index.toString(16).padStart(64, "0")}`
+      }))
+    }));
+    const extractor = createKnowledgeExtractor({ archive_store: store });
+    const drafts = await extractor.extract({ job: job() });
+    // 与入库侧单 job 上限（20）对齐：第 6..20 条不再被中段截掉（2026-09 审查报告）。
+    expect(drafts).toHaveLength(20);
+    expect(drafts[0]?.source_candidate_id).toBe("kc_bulk-0");
+    expect(drafts[19]?.source_candidate_id).toBe("kc_bulk-19");
+  });
+
   it("fails retryable when the archive is absent and non-retryable on identity drift", async () => {
     const store = new MemoryArchiveStore();
     const extractor = createKnowledgeExtractor({ archive_store: store });

@@ -15,7 +15,9 @@ import { KnowledgePipelineError } from "./errors.js";
 
 /** 与服务端入库裁决同一阈值（semantic/knowledge-judge 的 DEFAULT_MIN_CONFIDENCE）。 */
 const AUTO_PROMOTE_MIN_CONFIDENCE = 0.82;
-const MAX_RESULT_DRAFTS = 5;
+// 必须与入库侧单 job 结果上限（pg.ts validateCommitInput 的 20）一致：
+// 旧值 5 会在管道中段把第 6 条起的合格候选静默截掉（2026-09 审查报告·数据入口节）。
+const MAX_RESULT_DRAFTS = 20;
 const SUMMARY_PATH = "reports/final/summary-data.json";
 /** Bounded read: a summary is text, and a hostile entry must not exhaust memory. */
 const MAX_SUMMARY_BYTES = 8 * 1024 * 1024;

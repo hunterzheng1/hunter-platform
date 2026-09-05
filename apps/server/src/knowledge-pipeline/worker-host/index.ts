@@ -131,6 +131,9 @@ const maxSnapshotNodes = 4096;
 const maxSnapshotString = 1_048_576;
 const maxCandidates = 256;
 const maxSourceRefs = 64;
+// 与 extractor MAX_RESULT_DRAFTS / 入库侧单 job 上限（20）对齐；旧值 5 会把
+// 6..20 条草稿的回执判成 KNOWLEDGE_WORKER_PORT_INVALID（2026-09 审查报告·数据入口节）。
+const maxKnowledgeResultCount = 20;
 const maxDocuments = 64;
 
 const changeReasonCodes = new Set([
@@ -527,7 +530,7 @@ function readKnowledgeRecord(value: unknown, includeCandidates: boolean): Knowle
   const count = record.result_count;
   const reason = record.reason_code;
   if (output !== undefined) result.output_hash = hash(output, "KNOWLEDGE_WORKER_PORT_INVALID");
-  if (count !== undefined) result.result_count = boundedInteger(count, 5, "KNOWLEDGE_WORKER_PORT_INVALID");
+  if (count !== undefined) result.result_count = boundedInteger(count, maxKnowledgeResultCount, "KNOWLEDGE_WORKER_PORT_INVALID");
   if (reason !== undefined) {
     const safe = text(reason, 128, "KNOWLEDGE_WORKER_PORT_INVALID");
     if (!knowledgeReasonCodes.has(safe) && !hostReasonCodes.has(safe)) throw new SnapshotFailure("KNOWLEDGE_WORKER_PORT_INVALID");

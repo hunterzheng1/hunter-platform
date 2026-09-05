@@ -187,7 +187,7 @@ describe("knowledge candidates derived from an archived summary", () => {
     expect(brokenZip).toEqual([]);
   });
 
-  it("honours the commit contract by selecting at most five derived results", async () => {
+  it("keeps derived results up to the commit-side cap of twenty instead of truncating at five", async () => {
     const risks = Array.from({ length: 6 }, (_, index) => ({
       phase: `phase-${index + 1}`,
       severity: "WARN",
@@ -203,8 +203,9 @@ describe("knowledge candidates derived from an archived summary", () => {
         }
       })
     }));
+    // 与入库侧单 job 上限（20）对齐：6 条派生结果必须全部保留（2026-09 审查报告）。
     expect(drafts.map((draft) => draft.summary)).toEqual([
-      "风险-1", "风险-2", "风险-3", "风险-4", "风险-5"
+      "风险-1", "风险-2", "风险-3", "风险-4", "风险-5", "风险-6"
     ]);
   });
 
