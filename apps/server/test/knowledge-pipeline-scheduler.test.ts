@@ -209,6 +209,26 @@ describe("knowledge extractor", () => {
     expect(drafts[19]?.source_candidate_id).toBe("kc_bulk-19");
   });
 
+  it("keeps version numbers and identifiers intact in display titles", async () => {
+    const store = new MemoryArchiveStore();
+    await store.putIfAbsent(archive({
+      knowledge_candidates: [
+        { ...candidate("title-node", 0.9), summary: "Node engines>=14. 才能安装。" },
+        { ...candidate("title-scope", 0.9), summary: "AgentScope 2.x 序列化契约升级前需要重跑存储契约测试" },
+        { ...candidate("title-lines", 0.9), summary: "首行结论\n第二行细节" }
+      ]
+    }));
+    const extractor = createKnowledgeExtractor({ archive_store: store });
+    const drafts = await extractor.extract({ job: job() });
+    const titleOf = (id: string) =>
+      drafts.find((draft) => draft.source_candidate_id === `kc_${id}`)?.display_title;
+    // ASCII 句点不再截断（线上曾产出 "engines>=14"、"AgentScope 2" 坏标题）。
+    expect(titleOf("title-node")).toBe("Node engines>=14. 才能安装");
+    expect(titleOf("title-scope")).toBe("AgentScope 2.x 序列化契约升级前需要重跑存储契约测试");
+    // 换行仍是最小切分单位。
+    expect(titleOf("title-lines")).toBe("首行结论");
+  });
+
   it("fails retryable when the archive is absent and non-retryable on identity drift", async () => {
     const store = new MemoryArchiveStore();
     const extractor = createKnowledgeExtractor({ archive_store: store });

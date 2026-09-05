@@ -82,7 +82,10 @@ export function knowledgeCandidatesForArchive(
 }
 
 function displayTitle(candidate: KnowledgeCandidate): string {
-  const firstSentence = candidate.summary.split(/[\n。.!！?？]/u)
+  // 只按换行与全角句读切分：ASCII 的 . ! ? 会出现在版本号/标识符里
+  // （engines>=14、AgentScope 2.x），按句点截会产出"engines>=14"这类坏标题
+  // （2026-09 审查报告·页面节）。
+  const firstSentence = candidate.summary.split(/[\n。！？]/u)
     .map((part) => part.trim())
     .find((part) => part.length > 0);
   const title = (firstSentence ?? candidate.summary).trim();
