@@ -313,6 +313,7 @@ export interface HunterApi {
     projectId: string,
     options?: { limit?: number; cursor?: string | null; includeBody?: boolean }
   ): Promise<{ items: SemanticDocument[]; total: number; next_cursor: string | null }>;
+  getProjectSemanticKnowledgeDocument?(projectId: string, documentId: string): Promise<SemanticDocument>;
   listProjectSemanticRules?(projectId: string): Promise<SemanticDocument[]>;
   listProjectSemanticArchitecture?(projectId: string): Promise<SemanticDocument[]>;
   listProjectSemanticChanges?(
@@ -1171,6 +1172,15 @@ export class HttpHunterApi implements HunterApi {
       if (singlePage) break;
     } while (cursor !== null);
     return { items, total, next_cursor: singlePage ? cursor : null };
+  }
+
+  async getProjectSemanticKnowledgeDocument(projectId: string, documentId: string): Promise<SemanticDocument> {
+    const result = await this.request<{ document: SemanticDocument }>(
+      "GET",
+      "/api/v1/projects/" + encodeURIComponent(projectId) +
+        "/semantic/knowledge/" + encodeURIComponent(documentId)
+    );
+    return result.document;
   }
 
   async listProjectSemanticRules(projectId: string): Promise<SemanticDocument[]> {

@@ -10100,6 +10100,52 @@ aside.external-skill-detail-rail {
   background: transparent;
 }
 
+/* 2026-09 阅读化改造：kind 分组标题与"来源与历史"展开区 */
+.knowledge-kind-group {
+  margin: 14px 0 4px;
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.knowledge-hit-list li.knowledge-kind-start {
+  list-style: none;
+}
+
+.knowledge-source {
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  color: var(--muted);
+  font-size: .8rem;
+}
+
+.knowledge-source summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.knowledge-source dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 14px;
+  margin: 10px 0 0;
+}
+
+.knowledge-source dt { color: var(--muted); }
+.knowledge-source dd { margin: 0; overflow-wrap: anywhere; }
+.knowledge-source pre {
+  margin: 10px 0 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--raised);
+  overflow: auto;
+  font-size: .74rem;
+}
+
 .knowledge-review-toolbar {
   display: flex;
   flex-wrap: wrap;

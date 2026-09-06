@@ -1141,6 +1141,14 @@ export class MockApiClient implements HunterApi {
     return delay({ items, total: items.length, next_cursor: null });
   }
 
+  async getProjectSemanticKnowledgeDocument(projectId: string, documentId: string): Promise<SemanticDocument> {
+    const document = mockProjectKnowledge(projectId).find((item) => item.document_id === documentId);
+    if (document === undefined) {
+      throw new ApiClientError(404, "KNOWLEDGE_DOCUMENT_NOT_FOUND", "knowledge document not found");
+    }
+    return delay(document);
+  }
+
   async syncWorkflowFamily(_slug: string): Promise<{ updated: boolean; version?: string }> {
     void _slug;
     return delay({ updated: false });

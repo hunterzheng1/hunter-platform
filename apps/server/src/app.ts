@@ -2751,6 +2751,21 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
     };
   });
 
+  app.get("/api/v1/projects/:projectId/semantic/knowledge/:documentId", async (request, reply) => {
+    const { actor, requestId } = await authenticated(request, repository);
+    const { projectId, documentId } = request.params as { projectId: string; documentId: string };
+    await repository.getProject(actor.actorId, projectId);
+    await ensureSemanticIndexCurrent(actor.actorId, projectId);
+    // 列表先摘要（include_body=0），正文在详情打开时按 documentId 单取
+    // （2026-09 审查报告·页面节：列表先取摘要，打开详情再取正文）。
+    const document = await semanticStore.getDocument(projectId, documentId);
+    if (document === null || (document.kind !== "knowledge_entry" && document.kind !== "knowledge_markdown")) {
+      throw new ServerDomainError(404, "KNOWLEDGE_DOCUMENT_NOT_FOUND", "knowledge document not found");
+    }
+    reply.header("X-Request-Id", requestId);
+    return { document, request_id: requestId };
+  });
+
   app.post("/api/v1/projects/:projectId/semantic/knowledge/:documentId/deprecate", async (request, reply) => {
     const { actor, requestId } = await authenticated(request, repository);
     const { projectId, documentId } = request.params as { projectId: string; documentId: string };
