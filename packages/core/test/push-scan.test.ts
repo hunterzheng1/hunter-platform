@@ -1,25 +1,17 @@
-import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { initializeProject } from "../src/project/initialize.js";
 import { pushProject } from "../src/push/push.js";
+import { scaffoldTestProject } from "./fixtures/test-project.js";
 
 const resourcesRoot = fileURLToPath(new URL("../../workflow-data-harness", import.meta.url));
 
 describe("pushProject sensitive scan UX", () => {
   async function initRoot(): Promise<string> {
-    const root = await mkdtemp(join(tmpdir(), "hh-push-scan-"));
-    await initializeProject({
-      projectRoot: root,
-      resourcesRoot,
-      config: { agents: ["claude-code"], profile: "general" },
-      dryRun: false
-    });
-    return root;
+    return scaffoldTestProject("hh-push-scan-");
   }
 
   it("throws SENSITIVE_CONTENT_BLOCKED with findings details when blocked", async () => {
@@ -67,7 +59,7 @@ describe("pushProject sensitive scan UX", () => {
   it("excludes generated Python caches before scan and proposal construction", async () => {
     const root = await initRoot();
     const relativePath =
-      ".claude/skills/harness-knowledge-ingest/scripts/__pycache__/" +
+      ".agents/skills/harness-knowledge-ingest/scripts/__pycache__/" +
       "harness_knowledge.cpython-311.pyc";
     const cachePath = join(root, ...relativePath.split("/"));
     await mkdir(join(cachePath, ".."), { recursive: true });
@@ -98,12 +90,18 @@ describe("pushProject sensitive scan UX", () => {
     );
   });
 
-  it("still scans user-authored Python files in adapter skills", async () => {
+  it("exempts harness-* working copies but still scans managed-root user files", async () => {
     const root = await initRoot();
-    const skillRoot = join(root, ".claude", "skills", "harness-local", "scripts");
-    await mkdir(skillRoot, { recursive: true });
+    // v1 固定投影约定：skills 根下 harness-* 前缀 = Bundle working copy，豁免扫描；
+    // 用户自写内容放在受管根下，照常扫描。
+    const workingCopyDir = join(root, ".agents", "skills", "harness-local", "scripts");
+    await mkdir(workingCopyDir, { recursive: true });
     await writeFile(
-      join(skillRoot, "unsafe.py"),
+      join(workingCopyDir, "unsafe.py"),
+      "header = 'Authorization: Bearer blocked-secret-token-1234567890'\n"
+    );
+    await writeFile(
+      join(root, ".harness", "rules", "unsafe.py"),
       "header = 'Authorization: Bearer blocked-secret-token-1234567890'\n"
     );
 
@@ -117,7 +115,7 @@ describe("pushProject sensitive scan UX", () => {
       details: {
         findings: expect.arrayContaining([
           expect.objectContaining({
-            path: ".claude/skills/harness-local/scripts/unsafe.py",
+            path: ".harness/rules/unsafe.py",
             rule_id: "HH_AUTHORIZATION_BEARER"
           })
         ])
@@ -129,7 +127,7 @@ describe("pushProject sensitive scan UX", () => {
     const root = await initRoot();
     const scriptsRoot = join(
       root,
-      ".claude",
+      ".agents",
       "skills",
       "harness-local",
       "scripts"

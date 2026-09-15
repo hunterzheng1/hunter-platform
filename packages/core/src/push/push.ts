@@ -5,10 +5,8 @@ import {
   artifactManifestSchema,
   baselineManifestSchema,
   canonicalJson,
-  harnessAgentSchema,
   projectConfigSchema,
   type BaselineManifest,
-  type HarnessAgent,
   type ProjectConfig
 } from "@hunter-harness/contracts";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
@@ -26,11 +24,6 @@ import {
   resolvePushAuth
 } from "./credentials.js";
 import type { SensitiveFinding } from "../security/scanner.js";
-import {
-  managedBundleTargets,
-  parseHarnessProfile
-} from "../project/profile-bundle.js";
-import { getAdapters } from "../project/agent-adapters.js";
 import { uuidV7 } from "../project/uuid-v7.js";
 import { atomicWriteJson } from "../state/atomic.js";
 import { readBaseline } from "../state/baseline.js";
@@ -135,14 +128,13 @@ const SHARED_MANAGED_FILES = [
   ".harness/project.yaml",
   ".harness/context-index.json"
 ];
+// v1 固定单一投影：.agents/skills + AGENTS.md，CodeBuddy 双写 .codebuddy/skills。
+const FIXED_SKILL_ROOTS = [".agents/skills", ".codebuddy/skills"];
 
 /** Only final archive summaries are pushable — never the whole archive tree. */
 const ARCHIVE_SUMMARY_PATH =
   /^\.harness\/archive\/[^/]+\/reports\/final\/summary-data\.json$/u;
 
-// init 写入的已安装 Harness Bundle 清单：记录 Bundle 安装的受管文件路径。
-// push 对这些文件豁免敏感扫描（Harness 自有文件含教学示例，非用户引入的 secret），
-// 但仍照常 propose（diff-proposal 不变）。
 async function exists(path: string): Promise<boolean> {
   try {
     await lstat(path);
@@ -206,13 +198,6 @@ async function walkArchiveSummaries(root: string, output: string[]): Promise<voi
   }
 }
 
-function enabledHarnessAgents(project: ProjectConfig): HarnessAgent[] {
-  return project.adapters.enabled.flatMap((agent) => {
-    const parsed = harnessAgentSchema.safeParse(agent);
-    return parsed.success ? [parsed.data] : [];
-  });
-}
-
 async function walkHarnessEntries(
   root: string,
   directory: string,
@@ -232,18 +217,11 @@ async function walkHarnessEntries(
 }
 
 async function managedFiles(
-  projectRoot: string,
-  project: ProjectConfig
+  projectRoot: string
 ): Promise<Record<string, string>> {
   const root = resolve(projectRoot);
-  const paths = [];
-  const adapters = getAdapters(enabledHarnessAgents(project));
-  const managedFiles = [
-    ...SHARED_MANAGED_FILES,
-    ...(adapters.some((adapter) => adapter.name === "claude-code") ? ["CLAUDE.md"] : []),
-    ...(adapters.some((adapter) => adapter.name === "codebuddy") ? ["CODEBUDDY.md"] : [])
-  ];
-  for (const path of managedFiles) {
+  const paths: string[] = [];
+  for (const path of SHARED_MANAGED_FILES) {
     if (await exists(join(root, path))) {
       paths.push(path);
     }
@@ -252,14 +230,8 @@ async function managedFiles(
     await walkFiles(root, join(root, path), paths);
   }
   await walkArchiveSummaries(root, paths);
-  for (const adapter of adapters) {
-    if (adapter.rulesRoot !== null) {
-      await walkHarnessEntries(root, join(root, adapter.rulesRoot), paths);
-    }
-    await walkHarnessEntries(root, join(root, adapter.skillsRoot), paths);
-    if (adapter.agentsRoot !== null) {
-      await walkHarnessEntries(root, join(root, adapter.agentsRoot), paths);
-    }
+  for (const skillsRoot of FIXED_SKILL_ROOTS) {
+    await walkHarnessEntries(root, join(root, skillsRoot), paths);
   }
   const result: Record<string, string> = {};
   for (const path of [...new Set(paths)].sort()) {
@@ -589,17 +561,15 @@ export async function pushProject(options: PushProjectOptions) {
   const root = resolve(options.projectRoot);
   let project = await readProject(root);
   let baseline = await readBaseline(root);
-  const profile = parseHarnessProfile(project.project.profiles[0]);
-  const installedPaths = profile === null
-    ? new Set<string>()
-    : new Set(await Promise.all(
-      enabledHarnessAgents(project).map((agent) =>
-        managedBundleTargets(options.resourcesRoot, profile, agent)
-      )
-    ).then((targets) => targets.flatMap((target) => [...target])));
+  // 敏感扫描豁免集 = Bundle working copies（固定投影 skills 根下的 harness-* 条目）。
+  const installedHarnessEntries: string[] = [];
+  for (const skillsRoot of FIXED_SKILL_ROOTS) {
+    await walkHarnessEntries(root, join(root, skillsRoot), installedHarnessEntries);
+  }
+  const installedPaths = new Set(installedHarnessEntries);
   let preview = makePreview(
     baseline,
-    await managedFiles(root, project),
+    await managedFiles(root),
     options.confirmedProjectLocal ?? [],
     installedPaths
   );
@@ -672,7 +642,7 @@ export async function pushProject(options: PushProjectOptions) {
     );
     preview = makePreview(
       baseline,
-      await managedFiles(root, project),
+      await managedFiles(root),
       options.confirmedProjectLocal ?? [],
       installedPaths
     );
@@ -705,7 +675,7 @@ export async function pushProject(options: PushProjectOptions) {
     await atomicWriteJson(workflowPath, workflow);
     preview = makePreview(
       baseline,
-      await managedFiles(root, project),
+      await managedFiles(root),
       options.confirmedProjectLocal ?? [],
       installedPaths,
       workflow.created_at
@@ -726,7 +696,7 @@ export async function pushProject(options: PushProjectOptions) {
       await atomicWriteJson(workflowPath, workflow);
       preview = makePreview(
         baseline,
-        await managedFiles(root, project),
+        await managedFiles(root),
         options.confirmedProjectLocal ?? [],
         installedPaths,
         workflow.created_at

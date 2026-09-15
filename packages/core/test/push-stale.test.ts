@@ -1,5 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -8,7 +7,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import { canonicalJson, type ProjectConfig } from "@hunter-harness/contracts";
 
-import { initializeProject } from "../src/project/initialize.js";
 import {
   formatStaleBaselineMessage,
   pushProject,
@@ -16,6 +14,7 @@ import {
 } from "../src/push/push.js";
 import { readBaseline, writeBaseline } from "../src/state/baseline.js";
 import { sha256Bytes } from "../src/fs/hash.js";
+import { scaffoldTestProject } from "./fixtures/test-project.js";
 
 const resourcesRoot = fileURLToPath(new URL("../../workflow-data-harness", import.meta.url));
 
@@ -36,14 +35,7 @@ describe("pushProject stale baseline UX", () => {
     expect(message).not.toContain("item-19.json");
   });
   async function initRoot(): Promise<string> {
-    const root = await mkdtemp(join(tmpdir(), "hh-push-stale-"));
-    await initializeProject({
-      projectRoot: root,
-      resourcesRoot,
-      config: { agents: ["claude-code"], profile: "general" },
-      dryRun: false
-    });
-    return root;
+    return scaffoldTestProject("hh-push-stale-");
   }
 
   async function bindProject(
@@ -274,7 +266,7 @@ describe("pushProject stale baseline UX", () => {
     const projectId = "prj_stale_behind";
     await bindProject(root, projectId, null);
     await writeFile(
-      join(root, ".claude", "rules", "unsafe.md"),
+      join(root, ".harness", "rules", "unsafe.md"),
       "Authorization: Bearer blocked-secret-token-1234567890\n"
     );
     const fetch = vi.fn(async (input: string | URL | Request) => {

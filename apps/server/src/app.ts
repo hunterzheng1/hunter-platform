@@ -220,12 +220,6 @@ import {
 } from "./semantic/store.js";
 import { registerSemanticMcpRoutes } from "./mcp/register.js";
 import { randomUUID } from "node:crypto";
-import {
-  buildInstructionProposal,
-  instructionProposalRequestSchema,
-  loadServerRecentChanges,
-  mergeRecentChanges
-} from "./instructions/proposal.js";
 
 export interface CreateServerOptions {
   repository: ServerRepository;
@@ -2826,47 +2820,6 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
       request_id: requestId
     };
   });
-
-  app.post(
-    "/api/v1/projects/:projectId/instruction-proposals",
-    async (request, reply) => {
-      const { actor, requestId } = await authenticated(request, repository, "push");
-      const { projectId } = request.params as { projectId: string };
-      const project = await repository.getProject(actor.actorId, projectId);
-      const body = instructionProposalRequestSchema.parse(request.body);
-      const serverRecentChanges = await loadServerRecentChanges({
-        actorId: actor.actorId,
-        projectId,
-        repository,
-        storage
-      });
-      const result = await mutation(request, repository, actor, requestId, async () => {
-        const proposal = buildInstructionProposal({
-          projectId,
-          projectName: project.displayName,
-          request: {
-            ...body,
-            recent_changes: mergeRecentChanges(serverRecentChanges, body.recent_changes)
-          }
-        });
-        await writeAudit(repository, {
-          actorId: actor.actorId,
-          projectId,
-          action: "instructions.proposed",
-          targetId: proposal.proposal_id,
-          requestId,
-          details: {
-            finding_count: proposal.findings.length,
-            file_count: proposal.files.length,
-            rule_candidate_count: proposal.rule_candidates.length,
-            language: proposal.language
-          }
-        });
-        return { statusCode: 201, body: { ...proposal } };
-      });
-      return send(reply, requestId, result);
-    }
-  );
 
   app.put(
     "/api/v1/projects/:projectId/changes/:changeKey/archive-package",

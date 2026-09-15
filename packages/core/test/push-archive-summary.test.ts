@@ -1,24 +1,17 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { initializeProject } from "../src/project/initialize.js";
 import { pushProject } from "../src/push/push.js";
+import { scaffoldTestProject } from "./fixtures/test-project.js";
 
 const resourcesRoot = fileURLToPath(new URL("../../workflow-data-harness", import.meta.url));
 
 describe("pushProject archive summaries", () => {
   it("includes only archive summary-data.json in the dry-run preview", async () => {
-    const root = await mkdtemp(join(tmpdir(), "hh-push-archive-"));
-    await initializeProject({
-      projectRoot: root,
-      resourcesRoot,
-      config: { agents: ["claude-code"], profile: "general" },
-      dryRun: false
-    });
+    const root = await scaffoldTestProject("hh-push-archive-");
 
     const archiveName = "2026-07-16-sample-change";
     const summaryRel =

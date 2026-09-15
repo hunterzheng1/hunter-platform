@@ -16,13 +16,6 @@ Hunter Platform 是归档和知识的耐久端：
 
 客户端知识查询只调用 `/api/v1/semantic/search`，平台不可用时不提供本地 fallback。查询是只读 FTS；归档 ingest 对相同且已 ready 的包幂等短路，失败可用服务端已保存的原 ZIP 重试，并受 50 MiB 包/展开上限、10 MiB 单文件上限和 100 文件上限保护。日志和报告不会进入索引；大规模部署仍应监控归档队列、语义文档总量与重建耗时。
 
-项目文档使用“审计—提案—确认应用”：
-
-- `POST /api/v1/projects/{project_id}/instruction-proposals` 结合项目类型、现有文档、Codebase Map、服务端已保存的近期归档总结和公开最佳实践，生成中文、无托管标记的提案；
-- 提案不会修改仓库，客户端按基线 hash 审阅并事务化应用；
-- 重复审计会稳定复用“项目特定约定/规则”区，不会递归嵌套旧模板；Codebase Map 和近期变更也纳入敏感信息扫描；
-- 每次变更的经验只形成 `auto_apply=false` 的规则候选；重复证据会聚合并提高人工采纳建议，但不会自动写入规则。
-
 数据库迁移 `012_change_archive_packages.sql` 保存原包身份、artifact 与知识状态。API 合同位于 `apps/server/openapi/hunter-harness-v1.yaml`，并与 Hunter-Harness 仓库的合同副本保持一致。
 
 ## Requirements

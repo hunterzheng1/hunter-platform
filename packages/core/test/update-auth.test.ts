@@ -1,28 +1,18 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ProjectConfig } from "@hunter-harness/contracts";
 
-import { initializeProject } from "../src/project/initialize.js";
 import { UpdateWorkflowError, updateProject } from "../src/update/update.js";
 import { writeLocalCredentials } from "../src/push/credentials.js";
-
-const resourcesRoot = fileURLToPath(new URL("../../workflow-data-harness", import.meta.url));
+import { scaffoldTestProject } from "./fixtures/test-project.js";
 
 describe("updateProject auth credentials.local fallback", () => {
   async function initBoundRoot(): Promise<string> {
-    const root = await mkdtemp(join(tmpdir(), "hh-update-auth-"));
-    await initializeProject({
-      projectRoot: root,
-      resourcesRoot,
-      config: { agents: ["claude-code"], profile: "general" },
-      dryRun: false
-    });
+    const root = await scaffoldTestProject("hh-update-auth-");
     const projectPath = join(root, ".harness", "project.yaml");
     const project = parseYaml(await readFile(projectPath, "utf8")) as ProjectConfig;
     const next: ProjectConfig = {
