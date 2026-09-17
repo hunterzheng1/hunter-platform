@@ -328,14 +328,9 @@ export function layoutWorkflowFamilyNpmFiles(
   };
   for (const profile of version.profiles) {
     for (const file of profile.sourceFiles) {
-      let path = file.path;
-      if (path.startsWith(`${profile.profile}/`)) {
-        path = `harness/bundles/${path}`;
-      } else if (path.startsWith("manifests/")) {
-        path = `harness/manifests/${profile.profile}/${path.slice("manifests/".length)}`;
-      } else if (!path.startsWith("harness/")) {
-        path = `harness/bundles/${profile.profile}/${path}`;
-      }
+      // v1 flat layout: profile files are already relative to the harness/ root
+      // (bundles/<surface>/, manifests/, contracts/, ...).
+      const path = file.path.startsWith("harness/") ? file.path : `harness/${file.path}`;
       add(path, file.content);
     }
   }

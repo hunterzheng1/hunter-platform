@@ -14,7 +14,6 @@ import type {
   NpmPublishingCredentialRecord,
   ProjectApiKeyRecord,
   ProjectFileRecord,
-  ProjectKeyScope,
   ProjectRecord,
   ProposalRecord,
   ProposalSessionRecord,
@@ -54,7 +53,6 @@ function projectApiKeyFrom(row: QueryResultRow): ProjectApiKeyRecord {
     projectId: String(row.project_id),
     actorId: String(row.actor_id),
     label: String(row.label),
-    scopes: (Array.isArray(row.scopes) ? row.scopes : []) as ProjectKeyScope[],
     createdAt: timestamp(row.created_at),
     revokedAt: row.revoked_at == null ? null : timestamp(row.revoked_at),
     lastUsedAt: row.last_used_at == null ? null : timestamp(row.last_used_at),
@@ -470,12 +468,11 @@ export class PostgresRepository implements ServerRepository {
     projectId: string;
     actorId: string;
     label: string;
-    scopes: ProjectKeyScope[];
     keyCiphertext?: string | null;
   }): Promise<ProjectApiKeyRecord> {
     const result = await this.pool.query(
-      `INSERT INTO project_api_keys(key_id, key_hash, project_id, actor_id, label, scopes, key_ciphertext)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+      `INSERT INTO project_api_keys(key_id, key_hash, project_id, actor_id, label, key_ciphertext)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
       [
         input.keyId,
@@ -483,7 +480,6 @@ export class PostgresRepository implements ServerRepository {
         input.projectId,
         input.actorId,
         input.label,
-        JSON.stringify(input.scopes),
         input.keyCiphertext ?? null
       ]
     );

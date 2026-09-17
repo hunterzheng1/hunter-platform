@@ -51,20 +51,20 @@ describe("project-scoped API keys (P2)", () => {
     await app.close();
   });
 
-  async function issueKey(scopes: string[]): Promise<{ keyId: string; apiKey: string }> {
+  async function issueKey(): Promise<{ keyId: string; apiKey: string }> {
     const response = await app.inject({
       method: "POST",
       url: `/api/v1/projects/${projectId}/api-keys`,
       headers: { authorization: "Bearer " + sessionToken },
-      payload: { label: "test key", scopes }
+      payload: { label: "test key" }
     });
     expect(response.statusCode).toBe(201);
     const body = response.json();
     return { keyId: body.key_id as string, apiKey: body.api_key as string };
   }
 
-  it("issues a key with hh_ prefix, plaintext shown once, hash-only listing", async () => {
-    const { apiKey } = await issueKey(["push", "files:read"]);
+  it("issues a key with hh_ prefix, plaintext shown once, hash-only listing without scopes", async () => {
+    const { apiKey } = await issueKey();
     expect(apiKey.startsWith("hh_")).toBe(true);
 
     const list = await app.inject({
@@ -76,11 +76,11 @@ describe("project-scoped API keys (P2)", () => {
     const items = list.json().items as Array<Record<string, unknown>>;
     expect(items).toHaveLength(1);
     expect(items[0]).not.toHaveProperty("api_key");
-    expect(items[0]?.scopes).toEqual(["push", "files:read"]);
+    expect(items[0]).not.toHaveProperty("scopes");
   });
 
-  it("authorizes in-scope routes and reports key info", async () => {
-    const { apiKey } = await issueKey(["files:read"]);
+  it("authorizes project keys on declared routes and reports key info without scopes", async () => {
+    const { apiKey } = await issueKey();
 
     const files = await app.inject({
       method: "GET",
@@ -98,48 +98,28 @@ describe("project-scoped API keys (P2)", () => {
     expect(info.json()).toMatchObject({
       kind: "project-key",
       project_id: projectId,
-      project_display_name: "demo",
-      scopes: ["files:read"]
+      project_display_name: "demo"
     });
+    expect(info.json()).not.toHaveProperty("scopes");
   });
 
-  it("issues the formal platform:read scope", async () => {
-    const { apiKey } = await issueKey(["platform:read"]);
-    const info = await app.inject({
-      method: "GET",
-      url: "/api/v1/auth/key-info",
-      headers: { authorization: "Bearer " + apiKey }
-    });
-    expect(info.statusCode).toBe(200);
-    expect(info.json()).toMatchObject({ project_id: projectId, scopes: ["platform:read"] });
-  });
-
-  it("issues archive scopes and enforces write ingest access", async () => {
-    const writeKey = await issueKey(["archive:write"]);
-    const writeIngest = await app.inject({
+  it("passes project keys through to the archive ingest business layer", async () => {
+    const { apiKey } = await issueKey();
+    const ingest = await app.inject({
       method: "POST",
       url: `/api/v1/projects/${projectId}/archives:ingest`,
       headers: {
-        authorization: "Bearer " + writeKey.apiKey,
+        authorization: "Bearer " + apiKey,
         "content-type": "application/zip"
       }
     });
-    // scope 通过，请求因缺少协议头被拒（业务校验层）。
-    expect(writeIngest.statusCode).toBe(400);
-    expect(writeIngest.json().error.code).toBe("ARCHIVE_INGEST_INPUT_INVALID");
-
-    const readKey = await issueKey(["archive:read"]);
-    const readIngest = await app.inject({
-      method: "POST",
-      url: `/api/v1/projects/${projectId}/archives:ingest`,
-      headers: { authorization: "Bearer " + readKey.apiKey }
-    });
-    expect(readIngest.statusCode).toBe(403);
-    expect(readIngest.json().error.code).toBe("PROJECT_KEY_SCOPE");
+    // 项目 key 通过路由准入（该端点声明接受项目 key），请求因缺少协议头被业务层拒绝。
+    expect(ingest.statusCode).toBe(400);
+    expect(ingest.json().error.code).toBe("ARCHIVE_INGEST_INPUT_INVALID");
   });
 
-  it("allows knowledge:read only for the key's bound project", async () => {
-    const { apiKey } = await issueKey(["knowledge:read"]);
+  it("allows project keys only for the bound project", async () => {
+    const { apiKey } = await issueKey();
 
     const ownProject = await app.inject({
       method: "GET",
@@ -164,12 +144,10 @@ describe("project-scoped API keys (P2)", () => {
     expect(otherProject.json().error.code).toBe("PROJECT_KEY_MISMATCH");
   });
 
-  it("lets a push-scoped key read the project it is bound to", async () => {
+  it("lets a project key read the project it is bound to", async () => {
     // push 流程的第一个调用就是 GET /api/v1/projects/{id}（取 baseline 与版本），
-    // 之后才轮到 projects:resolve。该路由此前没声明 scope，project key 走
-    // default-deny 被 403，push 在 project_id 都没解析出来时就整体失败——现场
-    // 表现是"分支文件里没有 plan/spec"，因为它们全靠这条推送上传。
-    const { apiKey } = await issueKey(["push"]);
+    // 之后才轮到 projects:resolve。该路由已声明接受项目 key。
+    const { apiKey } = await issueKey();
 
     const project = await app.inject({
       method: "GET",
@@ -181,34 +159,8 @@ describe("project-scoped API keys (P2)", () => {
     expect(project.json().project_id).toBe(projectId);
   });
 
-  it("still denies the project read to a key without push scope", async () => {
-    const { apiKey } = await issueKey(["knowledge:read"]);
-
-    const project = await app.inject({
-      method: "GET",
-      url: `/api/v1/projects/${projectId}`,
-      headers: { authorization: "Bearer " + apiKey, "x-request-id": uuidV7() }
-    });
-
-    expect(project.statusCode).toBe(403);
-    expect(project.json().error.code).toBe("PROJECT_KEY_SCOPE");
-  });
-
-  it("rejects out-of-scope and unscoped routes", async () => {
-    const { apiKey } = await issueKey(["files:read"]);
-
-    const push = await app.inject({
-      method: "POST",
-      url: `/api/v1/projects/${projectId}/proposal-sessions`,
-      headers: {
-        authorization: "Bearer " + apiKey,
-        "x-request-id": uuidV7(),
-        "idempotency-key": uuidV7()
-      },
-      payload: {}
-    });
-    expect(push.statusCode).toBe(403);
-    expect(push.json().error.code).toBe("PROJECT_KEY_SCOPE");
+  it("rejects routes that do not accept project keys", async () => {
+    const { apiKey } = await issueKey();
 
     const dashboard = await app.inject({
       method: "GET",
@@ -216,13 +168,14 @@ describe("project-scoped API keys (P2)", () => {
       headers: { authorization: "Bearer " + apiKey, "x-request-id": uuidV7() }
     });
     expect(dashboard.statusCode).toBe(403);
+    expect(dashboard.json().error.code).toBe("PROJECT_KEY_SCOPE");
   });
 
   it("rejects keys used against a different project", async () => {
-    const { apiKey } = await issueKey(["files:read"]);
+    const { apiKey } = await issueKey();
     const other = await app.inject({
       method: "GET",
-      url: "/api/v1/projects/prj_other/files",
+      url: `/api/v1/projects/prj_other/files`,
       headers: { authorization: "Bearer " + apiKey, "x-request-id": uuidV7() }
     });
     expect(other.statusCode).toBe(403);
@@ -230,7 +183,7 @@ describe("project-scoped API keys (P2)", () => {
   });
 
   it("revokes keys", async () => {
-    const { keyId, apiKey } = await issueKey(["files:read"]);
+    const { keyId, apiKey } = await issueKey();
 
     const revoke = await app.inject({
       method: "DELETE",
@@ -253,7 +206,7 @@ describe("project-scoped API keys (P2)", () => {
       method: "POST",
       url: `/api/v1/projects/${projectId}/api-keys`,
       headers: { authorization: "Bearer legacy-token" },
-      payload: { label: "x", scopes: ["push"] }
+      payload: { label: "x" }
     });
     expect(denied.statusCode).toBe(403);
   });
@@ -310,7 +263,7 @@ describe("API key reveal（可恢复查看）", () => {
       method: "POST",
       url: `/api/v1/projects/${projectId}/api-keys`,
       headers: { authorization: "Bearer " + sessionToken },
-      payload: { label: "reveal me", scopes: ["push"] }
+      payload: { label: "reveal me" }
     });
     expect(created.statusCode).toBe(201);
     const body = created.json() as { key_id: string; api_key: string; revealable: boolean };
@@ -337,7 +290,7 @@ describe("API key reveal（可恢复查看）", () => {
       method: "POST",
       url: `/api/v1/projects/${projectId}/api-keys`,
       headers: { authorization: "Bearer " + sessionToken },
-      payload: { label: "legacy", scopes: ["push"] }
+      payload: { label: "legacy" }
     });
     const body = created.json() as { key_id: string; revealable: boolean };
     expect(body.revealable).toBe(false);
@@ -358,7 +311,7 @@ describe("API key reveal（可恢复查看）", () => {
       method: "POST",
       url: `/api/v1/projects/${projectId}/api-keys`,
       headers: { authorization: "Bearer " + sessionToken },
-      payload: { label: "guard", scopes: ["push"] }
+      payload: { label: "guard" }
     });
     const body = created.json() as { key_id: string; api_key: string };
 

@@ -3,7 +3,6 @@
   "enums": {
     "content_kind": [
       "config",
-      "rule",
       "architecture",
       "instruction",
       "branch_file",
@@ -15,7 +14,6 @@
     ],
     "sync_scope": [
       "config",
-      "rules",
       "architecture",
       "instructions",
       "branch_files",
@@ -24,7 +22,7 @@
     "sync_direction": ["push", "pull"],
     "sync_action": ["add", "modify", "delete", "restore", "rename", "no_change"],
     "conflict_resolution": ["keep_local", "accept_remote", "skip", "cancel"],
-    "project_content_candidate_type": ["rule", "architecture-decision", "glossary"],
+    "project_content_candidate_type": ["architecture-decision", "glossary"],
     "project_content_candidate_status": [
       "pending",
       "proposed",
@@ -222,8 +220,8 @@
         "action": "modify"
       },
       {
-        "path": ".harness/rules/security.md",
-        "content_kind": "rule",
+        "path": "docs/plans/plan-2026-09.md",
+        "content_kind": "branch_file",
         "size": 1024,
         "content_hash": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
         "action": "add"
@@ -257,17 +255,6 @@
         "sync_scope": "config",
         "pull_policy": "regular",
         "content_scan_policy": "skip_content_scan"
-      }
-    },
-    {
-      "name": "rule",
-      "input": {"schema_version": 1, "path": ".harness/rules/security.md"},
-      "expected": {
-        "schema_version": 1,
-        "content_kind": "rule",
-        "sync_scope": "rules",
-        "pull_policy": "regular",
-        "content_scan_policy": "required"
       }
     },
     {

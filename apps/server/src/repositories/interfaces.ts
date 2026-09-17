@@ -54,20 +54,6 @@ export interface NpmPublishingCredentialRecord {
   updatedAt: string;
 }
 
-export const PROJECT_KEY_SCOPES = [
-  "push",
-  "knowledge:read",
-  "knowledge:write",
-  "progress:write",
-  "platform:read",
-  "files:read",
-  "files:write"
-  ,"archive:read",
-  "archive:write"
-] as const;
-
-export type ProjectKeyScope = (typeof PROJECT_KEY_SCOPES)[number];
-
 export interface KnowledgeIngestRecord {
   projectId: string;
   entryId: string;
@@ -102,7 +88,6 @@ export interface ProjectApiKeyRecord {
   projectId: string;
   actorId: string;
   label: string;
-  scopes: ProjectKeyScope[];
   createdAt: string;
   revokedAt: string | null;
   lastUsedAt: string | null;
@@ -386,7 +371,6 @@ export interface ServerRepository extends TransactionRepository {
     projectId: string;
     actorId: string;
     label: string;
-    scopes: ProjectKeyScope[];
     keyCiphertext?: string | null;
   }): Promise<ProjectApiKeyRecord>;
   listProjectApiKeys(projectId: string): Promise<ProjectApiKeyRecord[]>;

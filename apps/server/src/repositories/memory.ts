@@ -15,7 +15,6 @@ import type {
   KnowledgeIngestRecord,
   NpmPublishingCredentialRecord,
   ProjectApiKeyRecord,
-  ProjectKeyScope,
   ServerRepository,
   TransactionRepository,
   UserRecord
@@ -207,7 +206,6 @@ export class MemoryRepository implements ServerRepository {
     projectId: string;
     actorId: string;
     label: string;
-    scopes: ProjectKeyScope[];
     keyCiphertext?: string | null;
   }): Promise<ProjectApiKeyRecord> {
     const record: ProjectApiKeyRecord = {
@@ -215,7 +213,6 @@ export class MemoryRepository implements ServerRepository {
       projectId: input.projectId,
       actorId: input.actorId,
       label: input.label,
-      scopes: [...input.scopes],
       createdAt: new Date().toISOString(),
       revokedAt: null,
       lastUsedAt: null,

@@ -39,11 +39,11 @@ describe("Remote Sync PG push content refs", () => {
     const contentHash = hash(bytes);
     const ref = { ref_id: `bounded_upload:${"B".repeat(43)}`, sha256: contentHash, size_bytes: bytes.length };
     const result = await materializeRemoteSyncPushFiles({
-      files: [{ path: ".harness/rules/a.md", content_hash: contentHash, size: bytes.length, upload_ref: ref }],
+      files: [{ path: ".harness/codebase/map/architecture.md", content_hash: contentHash, size: bytes.length, upload_ref: ref }],
       operations: [],
       resolveUpload: async () => (async function* () { yield bytes; })(),
     });
-    expect(result[0]).toMatchObject({ content_kind: "rule", action: "no_change" });
+    expect(result[0]).toMatchObject({ content_kind: "architecture", action: "no_change" });
   });
 
   it("copies resolver chunks before a producer can mutate their shared backing bytes", async () => {

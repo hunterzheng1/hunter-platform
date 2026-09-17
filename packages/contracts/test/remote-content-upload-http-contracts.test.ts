@@ -11,7 +11,6 @@ import {
   REMOTE_CONTENT_UPLOAD_HTTP_ERROR_CODES,
   REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS,
   remoteContentUploadHttpRecordHash,
-  remoteContentUploadHttpScopeSchema,
   validateRemoteContentUploadHttpRequestDescriptor,
   validateRemoteContentUploadHttpErrorEnvelope,
   validateRemoteContentUploadHttpResult,
@@ -108,10 +107,7 @@ describe("remote content upload HTTP v1 contract", () => {
     }
   });
 
-  it("freezes one bounded binary file upload plus scoped ambiguity lookup under server authority", () => {
-    expect(remoteContentUploadHttpScopeSchema.options).toEqual([
-      "archive:read", "archive:write", "files:read", "files:write"
-    ]);
+  it("freezes bounded binary file upload and ambiguity lookup under server authority", () => {
     expect([
       REMOTE_CONTENT_UPLOAD_HTTP_MAX_BYTES,
       REMOTE_CONTENT_UPLOAD_HTTP_MAX_CHUNK_BYTES,
@@ -127,8 +123,7 @@ describe("remote content upload HTTP v1 contract", () => {
       body_transport: "single_bounded_stream",
       auth: {
         actor_source: "authenticated_principal",
-        project_allowlist_source: "server_authority",
-        project_key_scope: "files:write"
+        project_allowlist_source: "server_authority"
       },
       request_descriptor_schema: "RemoteContentUploadHttpRequestDescriptor",
       success_status: 201,
@@ -155,8 +150,7 @@ describe("remote content upload HTTP v1 contract", () => {
       request_placement: "path_and_headers",
       request_descriptor_schema: "RemoteContentUploadHttpStatusDescriptor",
       success_status: 200,
-      success_schema: "RemoteContentUploadHttpStatus",
-      auth: { project_key_scope: "files:read" }
+      success_schema: "RemoteContentUploadHttpStatus"
     });
     expect(JSON.stringify(REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS)).not.toMatch(
       /base64|range|resum|filesystem|file_path|caller_path/iu

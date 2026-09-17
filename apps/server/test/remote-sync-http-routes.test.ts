@@ -226,12 +226,8 @@ describe("Remote Sync HTTP routes", () => {
       outcome: "conflict", error: { code: "SYNC_IDEMPOTENCY_CONFLICT", retryable: false }
     });
     await repository.createProjectApiKey({
-      keyId: "key-remote-read", keyHash: projectApiKeyHash("remote-read-key"), projectId,
-      actorId: "actor_remote", label: "read", scopes: ["files:read"]
-    });
-    await repository.createProjectApiKey({
       keyId: "key-remote-write", keyHash: projectApiKeyHash("remote-write-key"), projectId,
-      actorId: "actor_remote", label: "write", scopes: ["files:write"]
+      actorId: "actor_remote", label: "write"
     });
     app = await createServer({ repository, storage: new MemoryArtifactStorage(), remoteSync: service });
     const common = { authorization: "Bearer remote-token", "idempotency-key": "lease-canonical" };
@@ -276,13 +272,6 @@ describe("Remote Sync HTTP routes", () => {
       }
     });
     expect(committed.statusCode).toBe(409);
-    const denied = await app.inject({
-      method: "POST",
-      url: `/api/v1/projects/${projectId}/branches/main/remote-sync/leases`,
-      headers: { authorization: "Bearer remote-read-key", "idempotency-key": "read-key" },
-      payload: { source: { project_id: projectId, branch_name: "main", actor_id: "actor_remote" } }
-    });
-    expect(denied.statusCode).toBe(403);
     const allowed = await app.inject({
       method: "POST",
       url: `/api/v1/projects/${projectId}/branches/main/remote-sync/leases`,

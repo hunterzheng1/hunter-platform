@@ -166,7 +166,7 @@ describe("Web governance API", () => {
       baseProjectVersion: "pv_1",
       baseManifestHash: sha("a"),
       action: "modify",
-      path: ".claude/rules/review.md",
+      path: ".harness/knowledge/rules/review.md",
       baseContentHash: sha("c"),
       content: "updated",
       fileKind: "user_editable",

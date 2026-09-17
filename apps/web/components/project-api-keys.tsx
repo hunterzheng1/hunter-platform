@@ -9,12 +9,9 @@ import { Icon } from "./ui/icons";
 import { Modal } from "./ui/Modal";
 import { ToastFeedback } from "./ui/Toast";
 
-const SCOPES = ["push", "knowledge:read", "knowledge:write", "progress:write", "platform:read", "files:read", "files:write", "archive:read", "archive:write"] as const;
-
 interface KeyItem {
   key_id: string;
   label: string;
-  scopes: string[];
   created_at: string;
   revoked_at: string | null;
   last_used_at: string | null;
@@ -31,7 +28,6 @@ const COPY = {
     keyCopied: "已复制。",
     steps: [
       "填写用途标签",
-      "勾选权限范围",
       "签发密钥",
       "复制明文密钥",
       "在本机执行 npx hunter-harness connect <平台地址> 并粘贴密钥"
@@ -39,8 +35,6 @@ const COPY = {
     label: "用途标签",
     labelRequired: "用途标签为必填项。",
     requiredHint: "必填",
-    scopes: "权限范围",
-    scopesRequired: "请至少勾选一项权限。",
     create: "签发密钥",
     creating: "签发中…",
     created: "新密钥（请立即复制，仅显示一次）",
@@ -64,25 +58,13 @@ const COPY = {
     goLogin: "前往登录",
     failed: "操作失败，请重试。",
     loading: "加载中…",
-    refresh: "刷新",
-    scopeHints: {
-      push: "上传归档/提案文件到平台",
-      "knowledge:read": "查询该项目的远端知识",
-      "knowledge:write": "向项目知识库写入内容",
-      "platform:read": "读取项目工作台与分支监控",
-      "progress:write": "上报运行事件 / 心跳（运行监控）",
-      "files:read": "读取项目文件快照",
-      "files:write": "推送/拉取项目文件（RemoteSync）",
-      "archive:read": "读取远端归档上传状态",
-      "archive:write": "上传远端归档内容"
-    } as Record<(typeof SCOPES)[number], string>
+    refresh: "刷新"
   },
   en: {
     title: "Project API keys",
     lede: "Keys let the local hunter-harness CLI talk to this platform. Plaintext is shown only once — copy it immediately.",
     steps: [
       "Enter a purpose label",
-      "Select scopes",
       "Issue the key",
       "Copy the plaintext key",
       "Run npx hunter-harness connect <platform-url> locally and paste the key"
@@ -90,8 +72,6 @@ const COPY = {
     label: "Purpose label",
     labelRequired: "A purpose label is required.",
     requiredHint: "required",
-    scopes: "Scopes",
-    scopesRequired: "Select at least one scope.",
     create: "Issue key",
     creating: "Issuing…",
     created: "New key (copy now — shown only once)",
@@ -119,18 +99,7 @@ const COPY = {
     goLogin: "Go to sign in",
     failed: "The operation failed. Please retry.",
     loading: "Loading…",
-    refresh: "Refresh",
-    scopeHints: {
-      push: "Upload archive / proposal files to the platform",
-      "knowledge:read": "Search this project's remote knowledge",
-      "knowledge:write": "Write knowledge entries (ingest)",
-      "platform:read": "Read project workspace and branch monitoring",
-      "progress:write": "Report run events / heartbeats (run monitor)",
-      "files:read": "Read project file snapshots",
-      "files:write": "Push/pull project files (RemoteSync)",
-      "archive:read": "Read remote archive upload status",
-      "archive:write": "Upload remote archive content"
-    } as Record<(typeof SCOPES)[number], string>
+    refresh: "Refresh"
   }
 } as const;
 
@@ -139,7 +108,6 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
   const copy = COPY[lang];
   const [items, setItems] = useState<KeyItem[] | null>(null);
   const [label, setLabel] = useState("");
-  const [scopes, setScopes] = useState<string[]>([...SCOPES]);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [plaintext, setPlaintext] = useState<string | null>(null);
@@ -152,7 +120,6 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
   const [pendingRevoke, setPendingRevoke] = useState<KeyItem | null>(null);
   const [revoking, setRevoking] = useState(false);
   const [labelError, setLabelError] = useState<string | null>(null);
-  const [scopeError, setScopeError] = useState<string | null>(null);
   const [needLogin, setNeedLogin] = useState(false);
 
   function showError(text: string): void {
@@ -204,10 +171,8 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
 
   function validate(): boolean {
     const nextLabelError = label.trim() === "" ? copy.labelRequired : null;
-    const nextScopeError = scopes.length === 0 ? copy.scopesRequired : null;
     setLabelError(nextLabelError);
-    setScopeError(nextScopeError);
-    return nextLabelError === null && nextScopeError === null;
+    return nextLabelError === null;
   }
 
   async function handleReveal(item: KeyItem): Promise<void> {
@@ -252,7 +217,7 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
           "Content-Type": "application/json",
           Authorization: "Bearer " + token
         },
-        body: JSON.stringify({ label: label.trim(), scopes })
+        body: JSON.stringify({ label: label.trim() })
       });
       if (!response.ok) {
         const authFail = response.status === 401 || response.status === 403;
@@ -294,16 +259,6 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
     }
   }
 
-  function toggleScope(scope: string): void {
-    setScopes((current) => {
-      const next = current.includes(scope)
-        ? current.filter((item) => item !== scope)
-        : [...current, scope];
-      if (next.length > 0) setScopeError(null);
-      return next;
-    });
-  }
-
   async function copyPlaintext(): Promise<void> {
     if (plaintext === null) return;
     try {
@@ -330,7 +285,7 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
     }
   }
 
-  const canIssue = !busy && label.trim() !== "" && scopes.length > 0;
+  const canIssue = !busy && label.trim() !== "";
 
   return (
     <section className="api-keys-panel">
@@ -369,33 +324,13 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
           {labelError === null ? null : <span className="form-error">{labelError}</span>}
         </label>
 
-        <fieldset className="form-field">
-          <legend className="form-label">{copy.scopes} <abbr title={copy.requiredHint}>*</abbr></legend>
-          <div className="api-keys-scopes">
-            {SCOPES.map((scope) => (
-              <label key={scope} className="api-keys-scope-row">
-                <input
-                  type="checkbox"
-                  checked={scopes.includes(scope)}
-                  onChange={() => toggleScope(scope)}
-                />
-                <span>
-                  <strong>{scope}</strong>
-                  <small>{copy.scopeHints[scope]}</small>
-                </span>
-              </label>
-            ))}
-          </div>
-          {scopeError === null ? null : <span className="form-error">{scopeError}</span>}
-        </fieldset>
-
         <button
           type="button"
           className="primary"
           disabled={!canIssue}
           onClick={() => void handleCreate()}
           onMouseDown={() => {
-            if (label.trim() === "" || scopes.length === 0) validate();
+            if (label.trim() === "") validate();
           }}
         >
           {busy ? copy.creating : copy.create}
@@ -445,7 +380,6 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
           <thead>
             <tr>
               <th>{copy.label}</th>
-              <th>{copy.scopes}</th>
               <th>{copy.lastUsed}</th>
               <th />
             </tr>
@@ -454,7 +388,6 @@ export function ProjectApiKeysPanel({ projectId }: { projectId: string }) {
             {items.map((item) => (
               <tr key={item.key_id} className={item.revoked_at !== null ? "api-key-revoked" : ""}>
                 <td>{item.label}</td>
-                <td>{item.scopes.join(", ")}</td>
                 <td>{item.last_used_at === null ? copy.never : item.last_used_at.slice(0, 19).replace("T", " ")}</td>
                 <td>
                   {item.revoked_at !== null ? (

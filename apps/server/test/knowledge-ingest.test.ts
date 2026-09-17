@@ -172,7 +172,7 @@ describe("server-side knowledge ingest (P3)", () => {
     expect(response.statusCode).toBe(400);
   });
 
-  it("enforces knowledge:write scope for project API keys", async () => {
+  it("accepts project API keys on the knowledge ingest route", async () => {
     await app.inject({
       method: "POST",
       url: "/api/v1/auth/register",
@@ -185,28 +185,21 @@ describe("server-side knowledge ingest (P3)", () => {
     });
     const sessionToken = (login.json() as { token: string }).token;
 
-    async function issueKey(scopes: string[]): Promise<string> {
-      const response = await app.inject({
-        method: "POST",
-        url: `/api/v1/projects/${projectId}/api-keys`,
-        headers: { authorization: `Bearer ${sessionToken}` },
-        payload: { label: "ci", scopes }
-      });
-      expect(response.statusCode).toBe(201);
-      return (response.json() as { api_key: string }).api_key;
-    }
+    const keyResponse = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectId}/api-keys`,
+      headers: { authorization: `Bearer ${sessionToken}` },
+      payload: { label: "ci" }
+    });
+    expect(keyResponse.statusCode).toBe(201);
+    const key = (keyResponse.json() as { api_key: string }).api_key;
 
-    async function ingestWithKey(key: string): Promise<number> {
-      const response = await app.inject({
-        method: "POST",
-        url: `/api/v1/projects/${projectId}/knowledge/ingest`,
-        headers: { authorization: `Bearer ${key}` },
-        payload: { schema_version: 1, entries: [entry("kn-400")] }
-      });
-      return response.statusCode;
-    }
-
-    expect(await ingestWithKey(await issueKey(["files:read"]))).toBe(403);
-    expect(await ingestWithKey(await issueKey(["knowledge:write"]))).toBe(202);
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/projects/${projectId}/knowledge/ingest`,
+      headers: { authorization: `Bearer ${key}` },
+      payload: { schema_version: 1, entries: [entry("kn-400")] }
+    });
+    expect(response.statusCode).toBe(202);
   });
 });

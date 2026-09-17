@@ -65,7 +65,7 @@ function knowledgeCandidate(
 
 function projectCandidate(
   id: string,
-  candidateType: ProjectContentCandidate["candidate_type"] = "rule"
+  candidateType: ProjectContentCandidate["candidate_type"] = "glossary"
 ): ProjectContentCandidate {
   return {
     schema_version: 1,
@@ -1749,12 +1749,12 @@ describe("knowledge pipeline v1", () => {
   it("strictly separates knowledge candidates from governed project content", async () => {
     const { pipeline } = setup();
     const knowledge = knowledgeCandidate("split");
-    const rule = projectCandidate("rule", "rule");
+    const glossary = projectCandidate("glossary", "glossary");
     const architecture = projectCandidate("architecture", "architecture-decision");
     const receipt = await pipeline.acceptArchive(input("split", {
       knowledge_candidates: [{ ...knowledge, source_change_key: "change-split" }],
       project_content_candidates: [
-        { ...rule, source_change_key: "change-split" },
+        { ...glossary, source_change_key: "change-split" },
         { ...architecture, source_change_key: "change-split" }
       ]
     }));
@@ -1765,16 +1765,6 @@ describe("knowledge pipeline v1", () => {
     expect(job.knowledge_candidates).toEqual([
       { ...knowledge, source_change_key: "change-split" }
     ]);
-
-    const page = await pipeline.listRuleCandidates({
-      project_id: "prj_06a",
-      limit: 10
-    });
-    expect(page.items).toEqual([{
-      ...rule,
-      source_change_key: "change-split",
-      provenance: { ...rule.provenance, source_ref: "arc_split" }
-    }]);
   });
 
   it("queries only active knowledge entries through a bounded index query", async () => {
@@ -2105,34 +2095,6 @@ describe("knowledge pipeline v1", () => {
       results: [resultDraft(candidate, { summary: "different output" })]
     })).rejects.toMatchObject<Partial<KnowledgePipelineError>>({
       reason_code: "KNOWLEDGE_COMPLETE_CONFLICT"
-    });
-  });
-
-  it("uses stable opaque pagination with storage-level rule/status filtering and limit", async () => {
-    const { pipeline, jobRepository } = setup();
-    for (const id of ["page-a", "page-b", "page-c"]) {
-      await pipeline.acceptArchive(input(id, {
-        knowledge_candidates: [],
-        project_content_candidates: [projectCandidate(id)]
-      }));
-    }
-
-    const first = await pipeline.listRuleCandidates({ project_id: "prj_06a", limit: 2 });
-    const second = await pipeline.listRuleCandidates({
-      project_id: "prj_06a",
-      cursor: first.next_cursor,
-      limit: 2
-    });
-
-    expect(first.items).toHaveLength(2);
-    expect(first.next_cursor).toEqual(expect.any(String));
-    expect(second.items).toHaveLength(1);
-    expect(new Set([...first.items, ...second.items].map((item) => item.candidate_id)).size).toBe(3);
-    expect(jobRepository.lastCandidateQuery()).toMatchObject({
-      project_id: "prj_06a",
-      candidate_type: "rule",
-      status: "pending",
-      limit: 2
     });
   });
 

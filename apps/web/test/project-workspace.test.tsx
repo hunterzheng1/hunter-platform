@@ -60,8 +60,6 @@ function api(overrides: Partial<HunterApi> = {}): HunterApi {
       project_id: "prj_one",
       content: path.endsWith(".md") ? "# Architecture" : "{}"
     })),
-    listProjectProposals: vi.fn(async () => []),
-    listAllProposals: vi.fn(async () => []),
     listProjectArtifacts: vi.fn(async () => [{
       artifact_id: "art_one",
       project_id: "prj_one",
@@ -81,7 +79,6 @@ function api(overrides: Partial<HunterApi> = {}): HunterApi {
       artifact_id: "art_two",
       received_files: 1
     })),
-    getProposal: vi.fn(async () => { throw new Error("not used"); }),
     ...overrides
   };
 }

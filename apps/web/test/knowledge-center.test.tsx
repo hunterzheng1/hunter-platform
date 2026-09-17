@@ -43,7 +43,6 @@ describe("KnowledgeCenter (P3)", () => {
         { project_id: "prj_demo", display_name: "演示项目", role: "owner", created_at: "2026-01-01T00:00:00Z" }
       ]),
       listProjectSemanticKnowledge,
-      listKnowledgeEntries: vi.fn().mockResolvedValue([]),
       getKnowledgeProjectionStatus: vi.fn().mockResolvedValue({ pending_count: 0, pending_capped: false })
     } as unknown as HunterApi;
 

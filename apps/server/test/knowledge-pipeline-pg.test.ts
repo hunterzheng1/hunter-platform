@@ -161,7 +161,7 @@ function projectCandidateRow(overrides: Record<string, unknown> = {}) {
       producer_version: "2",
       created_at: now
     },
-    candidate_type: "rule",
+    candidate_type: "architecture-decision",
     evidence_refs: ["attestations/verification.json#pg"],
     rationale: "A durable project rule.",
     proposed_content: "Use the durable project rule.",
@@ -169,7 +169,7 @@ function projectCandidateRow(overrides: Record<string, unknown> = {}) {
   };
   return {
     project_id: "prj_pg_fixture",
-    candidate_type: "rule",
+    candidate_type: "architecture-decision",
     content_hash: candidate.content_hash,
     candidate_id: candidate.candidate_id,
     status: "pending",
@@ -744,7 +744,7 @@ describe("PostgreSQL knowledge pipeline ports", () => {
     }));
     const page = await port.listProjectContentCandidates({
       project_id: "prj_pg_fixture",
-      candidate_type: "rule",
+      candidate_type: "architecture-decision",
       status: "pending",
       limit: 1
     });
@@ -752,7 +752,7 @@ describe("PostgreSQL knowledge pipeline ports", () => {
     const cursor = JSON.parse(Buffer.from(page.next_cursor ?? "", "base64url").toString("utf8")) as Record<string, unknown>;
     expect(cursor).toMatchObject({
       project_id: "prj_pg_fixture",
-      candidate_type: "rule",
+      candidate_type: "architecture-decision",
       status: "pending"
     });
     expect(queries[0]).toContain("candidate_type");
@@ -763,7 +763,7 @@ describe("PostgreSQL knowledge pipeline ports", () => {
     }])));
     await expect(corruptPort.listProjectContentCandidates({
       project_id: "prj_pg_fixture",
-      candidate_type: "rule",
+      candidate_type: "architecture-decision",
       status: "pending",
       limit: 1
     })).rejects.toMatchObject({ reason_code: "PROJECT_CANDIDATE_CORRUPT" });
@@ -776,14 +776,14 @@ describe("PostgreSQL knowledge pipeline ports", () => {
     }));
     const cursor = Buffer.from(JSON.stringify({
       project_id: "prj_pg_fixture",
-      candidate_type: "rule",
+      candidate_type: "architecture-decision",
       status: "pending",
       created_at: now,
       candidate_id: "pcc_missing"
     })).toString("base64url");
     await expect(port.listProjectContentCandidates({
       project_id: "prj_pg_fixture",
-      candidate_type: "rule",
+      candidate_type: "architecture-decision",
       status: "pending",
       cursor,
       limit: 1
@@ -797,7 +797,7 @@ describe("PostgreSQL knowledge pipeline ports", () => {
       return result([]);
     }));
     const query: Record<string, unknown> = {
-      candidate_type: "rule",
+      candidate_type: "architecture-decision",
       status: "pending",
       limit: 1
     };

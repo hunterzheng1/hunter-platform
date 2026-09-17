@@ -9,8 +9,8 @@ import {
 describe("file policy matrix", () => {
   it.each([
     ["CLAUDE.md", "user_editable", "diff-proposal"],
-    [".claude/rules/harness-general.md", "user_editable", "diff-proposal"],
-    [".claude/skills/harness-review/SKILL.md", "user_editable", "diff-proposal"],
+    [".claude/rules/harness-general.md", "external_unmanaged", "never"],
+    [".claude/skills/harness-review/SKILL.md", "external_unmanaged", "never"],
     [".harness/knowledge/business/rule.md", "user_editable", "diff-proposal"],
     [".harness/knowledge/entries/active/sample.json", "user_editable", "diff-proposal"],
     [".harness/knowledge/entries/candidate/sample.json", "user_editable", "diff-proposal"],
@@ -37,9 +37,9 @@ describe("file policy matrix", () => {
     [".agent-skills/harness-review.md", "user_editable", "diff-proposal"],
     ["CODEBUDDY.md", "user_editable", "diff-proposal"],
     [".agents/skills/harness-review/SKILL.md", "user_editable", "diff-proposal"],
-    [".cursor/skills/harness-review/SKILL.md", "user_editable", "diff-proposal"],
+    [".cursor/skills/harness-review/SKILL.md", "external_unmanaged", "never"],
     [".codebuddy/skills/harness-review/SKILL.md", "user_editable", "diff-proposal"],
-    [".codebuddy/agents/harness-reviewer.md", "user_editable", "diff-proposal"],
+    [".codebuddy/agents/harness-reviewer.md", "external_unmanaged", "never"],
     [".claude/skills/harness-review/scripts/__pycache__/tool.cpython-311.pyc", "generated_cache", "never"],
     [".agents/skills/harness-review/scripts/tool.PYO", "generated_cache", "never"],
     [".cursor/skills/harness-review/.pytest_cache/CACHEDIR.TAG", "generated_cache", "never"],
@@ -62,7 +62,7 @@ describe("file policy matrix", () => {
   });
 
   it("skips dirty editable files during update", () => {
-    const policy = classifyFile(".claude/rules/harness-general.md");
+    const policy = classifyFile(".agents/skills/harness-review/SKILL.md");
     expect(decideUpdate(policy, true)).toEqual({
       apply: false,
       reason: "local-dirty"
@@ -80,10 +80,8 @@ describe("file policy matrix", () => {
     expect(classifyFile("CODEBUDDY.md").edit_policy).toBe("managed-block-only");
     for (const path of [
       ".agents/skills/harness-review/SKILL.md",
-      ".cursor/skills/harness-review/SKILL.md",
       ".cursor/rules/harness-general.mdc",
-      ".codebuddy/skills/harness-review/SKILL.md",
-      ".codebuddy/agents/harness-reviewer.md"
+      ".codebuddy/skills/harness-review/SKILL.md"
     ]) {
       expect(classifyFile(path)).toMatchObject({
         file_kind: "user_editable",

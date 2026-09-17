@@ -5,11 +5,10 @@ import { z } from "zod";
 
 import type {
   ProjectApiKeyRecord,
-  ProjectKeyScope,
   ServerRepository,
   UserRecord
 } from "../repositories/interfaces.js";
-import { PROJECT_KEY_SCOPES, ServerDomainError } from "../repositories/interfaces.js";
+import { ServerDomainError } from "../repositories/interfaces.js";
 import {
   generateInviteCode,
   generateProjectApiKey,
@@ -52,8 +51,7 @@ const loginSchema = z.object({
 }).strict();
 
 const createKeySchema = z.object({
-  label: z.string().min(1).max(100),
-  scopes: z.array(z.enum(PROJECT_KEY_SCOPES)).min(1)
+  label: z.string().min(1).max(100)
 }).strict();
 
 function auditRequestId(request: FastifyRequest): string {
@@ -70,7 +68,6 @@ function publicProjectKey(key: ProjectApiKeyRecord): Record<string, unknown> {
     key_id: key.keyId,
     project_id: key.projectId,
     label: key.label,
-    scopes: key.scopes,
     created_at: key.createdAt,
     revoked_at: key.revokedAt,
     last_used_at: key.lastUsedAt,
@@ -216,7 +213,6 @@ export function registerAuthRoutes(app: FastifyInstance, options: AuthRoutesOpti
         actor_id: actor.actorId,
         project_id: key.projectId,
         project_display_name: project.displayName,
-        scopes: key.scopes,
         label: key.label
       };
     }
@@ -242,7 +238,6 @@ export function registerAuthRoutes(app: FastifyInstance, options: AuthRoutesOpti
       projectId,
       actorId: user.actorId,
       label: body.label,
-      scopes: body.scopes as ProjectKeyScope[],
       keyCiphertext: wrapKey === null ? null : encryptProjectKey(plaintext, wrapKey)
     });
     // 哈希用于认证；密文（配置了包裹密钥时）支持已登录用户再次查看

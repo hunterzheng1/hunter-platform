@@ -8,13 +8,9 @@ export const REMOTE_CONTENT_UPLOAD_HTTP_MAX_REMOTE_SYNC_FILE_BYTES = 10 * 1024 *
 export const REMOTE_CONTENT_UPLOAD_HTTP_MAX_CHUNK_BYTES = 1024 * 1024;
 export const REMOTE_CONTENT_UPLOAD_HTTP_MAX_EXPIRY_MS = 15 * 60_000;
 
-export const remoteContentUploadHttpScopeSchema = z.enum([
-  "archive:read", "archive:write", "files:read", "files:write"
-]);
 export const remoteContentUploadHttpAuthSchema = z.object({
   actor_source: z.literal("authenticated_principal"),
-  project_allowlist_source: z.literal("server_authority"),
-  project_key_scope: remoteContentUploadHttpScopeSchema
+  project_allowlist_source: z.literal("server_authority")
 }).strict();
 
 const remoteContentUploadHttpErrorCodeValues = [
@@ -302,13 +298,11 @@ const validation = Object.freeze([
 const unavailable = Object.freeze(["REMOTE_UNAVAILABLE"] as const);
 const fileReadAuth = Object.freeze({
   actor_source: "authenticated_principal" as const,
-  project_allowlist_source: "server_authority" as const,
-  project_key_scope: "files:read" as const
+  project_allowlist_source: "server_authority" as const
 });
 const fileWriteAuth = Object.freeze({
   actor_source: "authenticated_principal" as const,
-  project_allowlist_source: "server_authority" as const,
-  project_key_scope: "files:write" as const
+  project_allowlist_source: "server_authority" as const
 });
 const operation = <const T extends object>(
   value: T,
@@ -383,7 +377,6 @@ export const REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS = Object.freeze({
   })
 });
 
-export type RemoteContentUploadHttpScope = z.infer<typeof remoteContentUploadHttpScopeSchema>;
 export type RemoteContentUploadHttpAuth = z.infer<typeof remoteContentUploadHttpAuthSchema>;
 export type RemoteContentUploadHttpErrorCode = z.infer<typeof remoteContentUploadHttpErrorCodeSchema>;
 export type RemoteContentUploadHttpErrorEnvelope = z.infer<typeof remoteContentUploadHttpErrorEnvelopeSchema>;

@@ -30,15 +30,12 @@ import {
   remoteSyncHttpMaxChunkBytes,
   remoteSyncHttpMaxFileBytes
 } from "@hunter-harness/contracts";
-import type {
-  RemoteSyncHttpScope
-} from "@hunter-harness/contracts";
 import { createHash } from "node:crypto";
 import { isProxy, isUint8Array } from "node:util/types";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 
-import type { Actor, ProjectKeyScope, ServerRepository } from "../repositories/interfaces.js";
+import type { Actor, ServerRepository } from "../repositories/interfaces.js";
 import { ServerDomainError } from "../repositories/interfaces.js";
 import type {
   RemoteSyncHttpContentStream,
@@ -52,7 +49,7 @@ export interface RemoteSyncHttpRoutesOptions {
   readonly authenticated: (
     request: FastifyRequest,
     repository: ServerRepository,
-    projectScope?: ProjectKeyScope
+    allowProjectKey?: boolean
   ) => Promise<{ actor: Actor; requestId: string }>;
 }
 
@@ -527,7 +524,7 @@ export function registerRemoteSyncHttpRoutes(
 
   app.post(fastifyPath(REMOTE_SYNC_HTTP_OPERATIONS.acquire_lease.path), async (request, reply) => {
     const params = pathParams(request);
-    const { actor, requestId } = await authenticated(request, repository, "files:write");
+    const { actor, requestId } = await authenticated(request, repository, true);
     await bindProject(repository, actor.actorId, params.projectId);
     const body = parseBody(remoteSyncLeaseAcquireHttpRequestSchema, request.body, "remote sync lease request is invalid");
     const source = sourceFor(params, actor.actorId, body.source);
@@ -540,7 +537,7 @@ export function registerRemoteSyncHttpRoutes(
 
   const renewLeaseRoute = async (request: FastifyRequest, reply: FastifyReply) => {
     const params = pathParams(request);
-    const { actor, requestId } = await authenticated(request, repository, "files:write");
+    const { actor, requestId } = await authenticated(request, repository, true);
     await bindProject(repository, actor.actorId, params.projectId);
     const body = parseBody(remoteSyncLeaseRenewHttpRequestSchema, request.body, "remote sync lease renewal is invalid");
     if (leaseIdFromRequest(request, "renew") !== body.lease.lease_id) {
@@ -558,7 +555,7 @@ export function registerRemoteSyncHttpRoutes(
 
   const releaseLeaseRoute = async (request: FastifyRequest, reply: FastifyReply) => {
     const params = pathParams(request);
-    const { actor, requestId } = await authenticated(request, repository, "files:write");
+    const { actor, requestId } = await authenticated(request, repository, true);
     await bindProject(repository, actor.actorId, params.projectId);
     const body = parseBody(remoteSyncLeaseReleaseHttpRequestSchema, request.body, "remote sync lease release is invalid");
     if (leaseIdFromRequest(request, "release") !== body.lease.lease_id) {
@@ -586,7 +583,7 @@ export function registerRemoteSyncHttpRoutes(
 
   app.get(fastifyPath(REMOTE_SYNC_HTTP_OPERATIONS.snapshot.path), async (request, reply) => {
     const params = pathParams(request);
-    const { actor, requestId } = await authenticated(request, repository, "files:read");
+    const { actor, requestId } = await authenticated(request, repository, true);
     await bindProject(repository, actor.actorId, params.projectId);
     const query = parseBody(z.object({ expected_revision: z.string().min(1).max(160).optional() }).strict(), request.query,
       "remote sync snapshot query is invalid");
@@ -605,7 +602,7 @@ export function registerRemoteSyncHttpRoutes(
     const params = pathParams(request);
     const snapshotId = parseBody(z.string().min(1).max(160), (request.params as Record<string, unknown>).snapshotId,
       "remote sync snapshot id is invalid");
-    const { actor, requestId } = await authenticated(request, repository, "files:read");
+    const { actor, requestId } = await authenticated(request, repository, true);
     await bindProject(repository, actor.actorId, params.projectId);
     const query = request.query as Record<string, unknown>;
     const source = sourceFor(params, actor.actorId);
@@ -649,7 +646,7 @@ export function registerRemoteSyncHttpRoutes(
 
   const preparePushRoute = async (request: FastifyRequest, reply: FastifyReply) => {
     const params = pathParams(request);
-    const { actor, requestId } = await authenticated(request, repository, "files:write");
+    const { actor, requestId } = await authenticated(request, repository, true);
     await bindProject(repository, actor.actorId, params.projectId);
     const body = parseBody(remoteSyncPushPrepareHttpRequestSchema, request.body, "remote sync push prepare request is invalid");
     const source = sourceFor(params, actor.actorId, body.source);
@@ -665,7 +662,7 @@ export function registerRemoteSyncHttpRoutes(
 
   const commitPushRoute = async (request: FastifyRequest, reply: FastifyReply) => {
     const params = pathParams(request);
-    const { actor, requestId } = await authenticated(request, repository, "files:write");
+    const { actor, requestId } = await authenticated(request, repository, true);
     await bindProject(repository, actor.actorId, params.projectId);
     const body = parseBody(remoteSyncPushCommitHttpRequestSchema, request.body, "remote sync push commit request is invalid");
     const routeLeaseId = (request.params as Record<string, unknown>).leaseId;
@@ -698,7 +695,7 @@ export function registerRemoteSyncHttpRoutes(
 
   app.get(fastifyPath(REMOTE_SYNC_HTTP_OPERATIONS.push_status.path), async (request, reply) => {
     const params = pathParams(request);
-    const { actor, requestId } = await authenticated(request, repository, "files:write");
+    const { actor, requestId } = await authenticated(request, repository, true);
     await bindProject(repository, actor.actorId, params.projectId);
     const rawQuery = request.query as Record<string, unknown>;
     const source = sourceFromQuery(params, actor.actorId, rawQuery);
@@ -720,7 +717,7 @@ export function registerRemoteSyncHttpRoutes(
 
   app.get(fastifyPath(REMOTE_SYNC_HTTP_OPERATIONS.push_receipt.path), async (request, reply) => {
     const params = pathParams(request);
-    const { actor, requestId } = await authenticated(request, repository, "files:write");
+    const { actor, requestId } = await authenticated(request, repository, true);
     await bindProject(repository, actor.actorId, params.projectId);
     const prepareId = parseBody(prepareIdSchema, (request.params as Record<string, unknown>).prepareId,
       "remote sync push receipt id is invalid");
@@ -741,7 +738,7 @@ export function registerRemoteSyncHttpRoutes(
 
   app.post(fastifyPath(REMOTE_SYNC_HTTP_OPERATIONS.pull.path), async (request, reply) => {
     const params = pathParams(request);
-    const { actor, requestId } = await authenticated(request, repository, "files:read");
+    const { actor, requestId } = await authenticated(request, repository, true);
     await bindProject(repository, actor.actorId, params.projectId);
     const body = parseBody(remoteSyncPullHttpRequestSchema, request.body, "remote sync pull request is invalid");
     const source = sourceFor(params, actor.actorId, body.source);
@@ -762,4 +759,3 @@ export function registerRemoteSyncHttpRoutes(
   });
 }
 
-export type { RemoteSyncHttpScope };

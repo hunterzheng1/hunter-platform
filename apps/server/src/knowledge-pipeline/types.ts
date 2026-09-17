@@ -236,11 +236,6 @@ export interface KnowledgeResult {
   keywords?: string[];
 }
 
-export interface CandidatePage {
-  items: ProjectContentCandidate[];
-  next_cursor?: string;
-}
-
 export interface EnqueueKnowledgeExtractionInput {
   archive_id: string;
   extractor_version: string;
@@ -251,12 +246,6 @@ export interface EnqueueKnowledgeExtractionInput {
 export interface QueryKnowledgeInput {
   project_id: string;
   query: string;
-  limit: number;
-}
-
-export interface ListRuleCandidatesInput {
-  project_id: string;
-  cursor?: string;
   limit: number;
 }
 
@@ -302,6 +291,5 @@ export interface KnowledgePipeline {
   retryKnowledgeExtraction(job_id: string): Promise<JobReceipt>;
   queryKnowledge(input: QueryKnowledgeInput): Promise<KnowledgeResult[]>;
   pipelineStatus(project_id: string): Promise<KnowledgePipelineStats>;
-  listRuleCandidates(input: ListRuleCandidatesInput): Promise<CandidatePage>;
   worker: KnowledgePipelineWorker;
 }

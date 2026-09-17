@@ -76,16 +76,6 @@ export interface AiJobState {
   expiresAt: string;
 }
 
-/** Raw knowledge ingest entry as returned by GET .../knowledge/entries. */
-export interface KnowledgeIngestListItem {
-  entry_id: string;
-  status: string;
-  content_sha256: string;
-  payload: Record<string, unknown>;
-  updated_at: string;
-  projected_at: string | null;
-}
-
 export interface NpmPublishingCredentialStatus {
   scope: string | null;
   source: "none" | "deployment" | "managed";
@@ -184,17 +174,6 @@ export interface ProjectSemanticGraph {
   indexed_documents: number;
 }
 
-export interface ProposalSummary {
-  proposal_id: string;
-  project_id: string;
-  status: string;
-  created_at: string;
-  changed_item_count: number;
-  risk_count: number;
-  base_project_version: string | null;
-  created_by: string;
-}
-
 export interface ArtifactSummary {
   artifact_id: string;
   project_id: string;
@@ -206,41 +185,6 @@ export interface ArtifactSummary {
   created_at: string;
 }
 
-export interface ProposalDetailModel {
-  schema_version: 1;
-  proposal_id: string;
-  project_id: string;
-  status: string;
-  created_by: string;
-  created_at: string;
-  items: Array<{ item_id: string; operation: FileOperation }>;
-  scan_summary: { redacted: true };
-  review_history: Array<{
-    review_id: string;
-    decision: string;
-    created_at: string;
-  }>;
-}
-
-export interface ReviewInput {
-  decision: "approve" | "reject" | "need_more_evidence" | "split" | "auto-approved";
-  comment: string | null;
-  target_scope: string;
-  split_groups: Array<{
-    name: string;
-    item_ids: string[];
-    target_scope: string;
-  }>;
-}
-
-export interface ReviewResult {
-  review_id: string;
-  proposal_id: string;
-  decision: ReviewInput["decision"];
-  artifact_id: string | null;
-  child_proposal_ids: string[];
-}
-
 export interface HunterApi {
   getDashboardOverview(days?: number): Promise<DashboardOverview>;
   listProjects(state?: "active" | "archived"): Promise<ProjectSummary[]>;
@@ -249,8 +193,6 @@ export interface HunterApi {
     withKey?: boolean;
   }): Promise<ProjectSummary & { api_key?: string; key_id?: string }>;
   getProject(projectId: string): Promise<ProjectDetailModel>;
-  listProjectProposals(projectId: string): Promise<ProposalSummary[]>;
-  listAllProposals(): Promise<ProposalSummary[]>;
   listProjectArtifacts(projectId: string): Promise<ArtifactSummary[]>;
   listAllArtifacts(): Promise<ArtifactSummary[]>;
   getArtifactManifest(artifactId: string): Promise<ArtifactManifestModel>;
@@ -261,8 +203,6 @@ export interface HunterApi {
   archiveProject?(projectId: string): Promise<ProjectLifecycleResult>;
   restoreProject?(projectId: string): Promise<ProjectLifecycleResult>;
   purgeProject?(projectId: string): Promise<ProjectLifecycleResult>;
-  getProposal(proposalId: string): Promise<ProposalDetailModel>;
-  reviewProposal?(proposalId: string, input: ReviewInput): Promise<ReviewResult>;
   listSkills?(filters?: Record<string, string>): Promise<RegistrySkillDetail[]>;
   getSkillCatalogOrder?(): Promise<SkillCatalogOrder>;
   updateSkillCatalogOrder?(input: UpdateSkillCatalogOrderRequest): Promise<SkillCatalogOrder>;
@@ -322,19 +262,10 @@ export interface HunterApi {
   ): Promise<{ items: SemanticDocument[]; total: number; next_cursor: string | null }>;
   getProjectSemanticGraph?(projectId: string, focusDocumentId?: string): Promise<ProjectSemanticGraph>;
   searchSemanticDocuments?(query: string, projectId?: string): Promise<Array<{ document: SemanticDocument; project_id: string }>>;
-  listKnowledgeEntries?(projectId: string, options?: {
-    status?: string;
-    limit?: number;
-  }): Promise<KnowledgeIngestListItem[]>;
   getKnowledgeProjectionStatus?(projectId: string): Promise<{
     pending_count: number;
     pending_capped: boolean;
   }>;
-  updateKnowledgeEntryStatus?(
-    projectId: string,
-    entryId: string,
-    status: string
-  ): Promise<{ entry_id: string; status: string; updated_at: string }>;
   listPlatformInformation?(
     projectId: string,
     view: PlatformInformationPage["view"],
@@ -612,21 +543,6 @@ export class HttpHunterApi implements HunterApi {
     return this.request("DELETE", "/api/v1/projects/" + encodeURIComponent(projectId) + "/purge");
   }
 
-  async listProjectProposals(projectId: string): Promise<ProposalSummary[]> {
-    const result = await this.request<{ items: ProposalSummary[] }>(
-      "GET",
-      "/api/v1/projects/" + encodeURIComponent(projectId) + "/proposals?limit=100"
-    );
-    return result.items.map((item) => ({ ...item, project_id: projectId }));
-  }
-
-  async listAllProposals(): Promise<ProposalSummary[]> {
-    const projects = await this.listProjects();
-    return (await Promise.all(projects.map(async (project) =>
-      this.listProjectProposals(project.project_id)
-    ))).flat().sort((left, right) => right.created_at.localeCompare(left.created_at));
-  }
-
   async listProjectArtifacts(projectId: string): Promise<ArtifactSummary[]> {
     const result = await this.request<{ items: ArtifactSummary[] }>(
       "GET",
@@ -720,13 +636,6 @@ export class HttpHunterApi implements HunterApi {
       manifest_sha256: await sha256Text(canonicalJson([operation])),
       base_artifact_id: input.baseArtifactId ?? null
     });
-  }
-
-  async getProposal(proposalId: string): Promise<ProposalDetailModel> {
-    return this.request(
-      "GET",
-      "/api/v1/proposals/" + encodeURIComponent(proposalId)
-    );
   }
 
   async listSkills(filters: Record<string, string> = {}): Promise<RegistrySkillDetail[]> {
@@ -1235,21 +1144,6 @@ export class HttpHunterApi implements HunterApi {
     return result.items;
   }
 
-  async listKnowledgeEntries(
-    projectId: string,
-    options: { status?: string; limit?: number } = {}
-  ): Promise<KnowledgeIngestListItem[]> {
-    const params = new URLSearchParams();
-    if (options.status !== undefined) params.set("status", options.status);
-    if (options.limit !== undefined) params.set("limit", String(options.limit));
-    const query = params.toString() === "" ? "" : "?" + params.toString();
-    const result = await this.request<{ items: KnowledgeIngestListItem[]; projected_pending?: number }>(
-      "GET",
-      "/api/v1/projects/" + encodeURIComponent(projectId) + "/knowledge/entries" + query
-    );
-    return result.items;
-  }
-
   async getKnowledgeProjectionStatus(projectId: string): Promise<{
     pending_count: number;
     pending_capped: boolean;
@@ -1257,19 +1151,6 @@ export class HttpHunterApi implements HunterApi {
     return this.request(
       "GET",
       "/api/v1/projects/" + encodeURIComponent(projectId) + "/knowledge/projection-status"
-    );
-  }
-
-  async updateKnowledgeEntryStatus(
-    projectId: string,
-    entryId: string,
-    status: string
-  ): Promise<{ entry_id: string; status: string; updated_at: string }> {
-    return this.request(
-      "POST",
-      "/api/v1/projects/" + encodeURIComponent(projectId) +
-        "/knowledge/entries/" + encodeURIComponent(entryId) + "/status",
-      { status }
     );
   }
 

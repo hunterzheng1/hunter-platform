@@ -29,7 +29,6 @@ import type {
   KnowledgeResult,
   KnowledgeResultDraft,
   KnowledgePipeline,
-  ListRuleCandidatesInput,
   QueryKnowledgeInput,
   RetryArchiveTaskPlanningInput,
   StoredArchive,
@@ -598,20 +597,6 @@ export function createKnowledgePipeline(
     });
   }
 
-  async function listRuleCandidates(input: ListRuleCandidatesInput) {
-    validateLimit(input.limit);
-    if (input.project_id === "") {
-      throw new KnowledgePipelineError("PROJECT_ID_INVALID", false);
-    }
-    return dependencies.job_repository.listProjectContentCandidates({
-      project_id: input.project_id,
-      candidate_type: "rule",
-      status: "pending",
-      ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-      limit: input.limit
-    });
-  }
-
   async function startKnowledgeExtraction(job_id: string): Promise<KnowledgeExtractionJob> {
     return dependencies.job_repository.startKnowledgeJob(job_id, dependencies.clock());
   }
@@ -737,7 +722,6 @@ export function createKnowledgePipeline(
     retryKnowledgeExtraction,
     queryKnowledge,
     pipelineStatus,
-    listRuleCandidates,
     worker: {
       startKnowledgeExtraction,
       completeKnowledgeExtraction,

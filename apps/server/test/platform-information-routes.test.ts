@@ -159,26 +159,19 @@ describe("Platform Information HTTP routes", () => {
     expect(materialsQuery).toHaveBeenCalledTimes(2);
   });
 
-  it("requires platform:read for export and keeps the proof allowlist scoped to the bound project", async () => {
+  it("accepts a project key for export and keeps the proof allowlist scoped to the bound project", async () => {
     await repository.createProjectApiKey({
       keyId: "key_export_platform", keyHash: projectApiKeyHash("project-export-platform-key"),
-      projectId, actorId: "actor_routes", label: "export", scopes: ["platform:read"]
-    });
-    await repository.createProjectApiKey({
-      keyId: "key_export_files", keyHash: projectApiKeyHash("project-export-files-key"),
-      projectId, actorId: "actor_routes", label: "files", scopes: ["files:read"]
+      projectId, actorId: "actor_routes", label: "export"
     });
     const url = `/api/v1/projects/${projectId}/information/project_materials:export-all`;
     const allowed = await app.inject({ method: "GET", url,
       headers: { authorization: "Bearer project-export-platform-key" } });
-    const denied = await app.inject({ method: "GET", url,
-      headers: { authorization: "Bearer project-export-files-key" } });
     expect(allowed.statusCode).toBe(200);
     expect(allowed.json().range.query_scope).toEqual({
       actor_id: "actor_routes", accessible_project_ids: [projectId],
       content_types: ["config", "rule", "architecture", "instruction"]
     });
-    expect([denied.statusCode, denied.json().error.code]).toEqual([403, "PROJECT_KEY_SCOPE"]);
   });
 
   it("fails closed on export cursor non-progress without returning a partial proof", async () => {
@@ -314,26 +307,7 @@ describe("Platform Information HTTP routes", () => {
     expect(branchQuery).not.toHaveBeenCalled();
   });
 
-  it("enforces the descriptor's per-view project-key scope", async () => {
-    await repository.createProjectApiKey({
-      keyId: "key_routes",
-      keyHash: projectApiKeyHash("project-route-key"),
-      projectId,
-      actorId: "actor_routes",
-      label: "monitor only",
-      scopes: ["platform:read"]
-    });
-    const response = await app.inject({
-      method: "GET",
-      url: `/api/v1/projects/${projectId}/information/project_materials`,
-      headers: { authorization: "Bearer project-route-key" }
-    });
-    expect(response.statusCode).toBe(403);
-    expect(response.json().error.code).toBe("PROJECT_KEY_SCOPE");
-    expect(materialsQuery).not.toHaveBeenCalled();
-  });
-
-  it("rejects a correctly scoped project key on a different project", async () => {
+  it("rejects a project key on a different project", async () => {
     const other = await repository.resolveProject({
       actorId: "actor_routes",
       localProjectKey: "local-other",
@@ -345,8 +319,7 @@ describe("Platform Information HTTP routes", () => {
       keyHash: projectApiKeyHash("project-bound-route-key"),
       projectId,
       actorId: "actor_routes",
-      label: "files",
-      scopes: ["files:read"]
+      label: "files"
     });
     const response = await app.inject({
       method: "GET",
@@ -819,14 +792,11 @@ describe("Platform Information HTTP routes", () => {
     expect(findReady).toHaveBeenCalledTimes(2);
   });
 
-  it("uses the selected view scope when authorizing export downloads", async () => {
+  it("authorizes export downloads for project keys", async () => {
     await app.close();
     await repository.createProjectApiKey({ keyId: "key_download_files",
       keyHash: projectApiKeyHash("download-files-key"), projectId, actorId: "actor_routes",
-      label: "files", scopes: ["files:read"] });
-    await repository.createProjectApiKey({ keyId: "key_download_platform",
-      keyHash: projectApiKeyHash("download-platform-key"), projectId, actorId: "actor_routes",
-      label: "platform", scopes: ["platform:read"] });
+      label: "files" });
     const receipt = {
       export_id: "export_routes_scope", project_id: projectId, view: "project_materials",
       artifact: { media_type: "application/x-ndjson", byte_count: 3,
@@ -846,10 +816,7 @@ describe("Platform Information HTTP routes", () => {
     const url = `/api/v1/projects/${projectId}/information/project_materials/exports/export_routes_scope`;
     const allowed = await app.inject({ method: "GET", url,
       headers: { authorization: "Bearer download-files-key" } });
-    const denied = await app.inject({ method: "GET", url,
-      headers: { authorization: "Bearer download-platform-key" } });
     expect(allowed.statusCode).toBe(200);
-    expect(denied.statusCode).toBe(403);
     expect(getReadyForDownload).toHaveBeenCalledOnce();
   });
 

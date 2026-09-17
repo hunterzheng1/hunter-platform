@@ -106,10 +106,10 @@ describe("project current files API", () => {
   it("materializes the current tree and loads file content only when requested", async () => {
     const projectId = await resolveProject();
     const initial = {
-      ".claude/rules/a.md": "# A v1\n",
-      ".claude/rules/b.md": "# B\n",
-      ".claude/rules/c.md": "# C\n",
-      ".claude/rules/untouched.md": "# Untouched\n"
+      ".cursor/rules/a.md": "# A v1\n",
+      ".cursor/rules/b.md": "# B\n",
+      ".cursor/rules/c.md": "# C\n",
+      ".cursor/rules/untouched.md": "# Untouched\n"
     };
     const initialOperations = Object.entries(initial).map(([path, content]) => ({
       operation: "add",
@@ -139,9 +139,9 @@ describe("project current files API", () => {
       project_version: expect.stringMatching(/^pv_/),
       items: expect.arrayContaining([
         expect.objectContaining({
-          path: ".claude/rules/a.md",
+          path: ".cursor/rules/a.md",
           file_kind: "user_editable",
-          content_sha256: sha256Bytes(initial[".claude/rules/a.md"])
+          content_sha256: sha256Bytes(initial[".cursor/rules/a.md"])
         })
       ])
     });
@@ -150,20 +150,20 @@ describe("project current files API", () => {
     const firstProjectVersion = firstList.json().project_version as string;
     const firstArtifactId = first.json().artifact_id as string;
     const updatedA = "# A v2\n";
-    const updatedB = initial[".claude/rules/b.md"];
+    const updatedB = initial[".cursor/rules/b.md"];
     const operations = [
       {
         operation: "modify",
-        path: ".claude/rules/a.md",
+        path: ".cursor/rules/a.md",
         file_kind: "user_editable",
-        base_content_sha256: sha256Bytes(initial[".claude/rules/a.md"]),
+        base_content_sha256: sha256Bytes(initial[".cursor/rules/a.md"]),
         content_sha256: sha256Bytes(updatedA),
         size_bytes: Buffer.byteLength(updatedA)
       },
       {
         operation: "rename",
-        from_path: ".claude/rules/b.md",
-        to_path: ".claude/rules/renamed-b.md",
+        from_path: ".cursor/rules/b.md",
+        to_path: ".cursor/rules/renamed-b.md",
         file_kind: "user_editable",
         base_content_sha256: sha256Bytes(updatedB),
         content_sha256: sha256Bytes(updatedB),
@@ -171,13 +171,13 @@ describe("project current files API", () => {
       },
       {
         operation: "delete",
-        path: ".claude/rules/c.md",
+        path: ".cursor/rules/c.md",
         file_kind: "user_editable",
-        base_content_sha256: sha256Bytes(initial[".claude/rules/c.md"]),
+        base_content_sha256: sha256Bytes(initial[".cursor/rules/c.md"]),
         tombstone: {
           deleted_at: new Date().toISOString(),
           reason: "no longer needed",
-          previous_sha256: sha256Bytes(initial[".claude/rules/c.md"])
+          previous_sha256: sha256Bytes(initial[".cursor/rules/c.md"])
         }
       }
     ];
@@ -200,9 +200,9 @@ describe("project current files API", () => {
     });
     expect(current.statusCode).toBe(200);
     expect(current.json().items.map((item: { path: string }) => item.path)).toEqual([
-      ".claude/rules/a.md",
-      ".claude/rules/renamed-b.md",
-      ".claude/rules/untouched.md"
+      ".cursor/rules/a.md",
+      ".cursor/rules/renamed-b.md",
+      ".cursor/rules/untouched.md"
     ]);
 
     const semanticRules = await app.inject({
@@ -212,26 +212,26 @@ describe("project current files API", () => {
     });
     expect(semanticRules.statusCode).toBe(200);
     expect(semanticRules.json().items.map((item: { source_path: string }) => item.source_path)).toEqual([
-      ".claude/rules/a.md",
-      ".claude/rules/renamed-b.md",
-      ".claude/rules/untouched.md"
+      ".cursor/rules/a.md",
+      ".cursor/rules/renamed-b.md",
+      ".cursor/rules/untouched.md"
     ]);
 
     const content = await app.inject({
       method: "GET",
-      url: `/api/v1/projects/${projectId}/files/content?path=${encodeURIComponent(".claude/rules/a.md")}`,
+      url: `/api/v1/projects/${projectId}/files/content?path=${encodeURIComponent(".cursor/rules/a.md")}`,
       headers: headers()
     });
     expect(content.statusCode).toBe(200);
     expect(content.json()).toMatchObject({
-      path: ".claude/rules/a.md",
+      path: ".cursor/rules/a.md",
       content: updatedA,
       content_sha256: sha256Bytes(updatedA)
     });
 
     const removed = await app.inject({
       method: "GET",
-      url: `/api/v1/projects/${projectId}/files/content?path=${encodeURIComponent(".claude/rules/c.md")}`,
+      url: `/api/v1/projects/${projectId}/files/content?path=${encodeURIComponent(".cursor/rules/c.md")}`,
       headers: headers()
     });
     expect(removed.statusCode).toBe(404);
@@ -240,7 +240,7 @@ describe("project current files API", () => {
     const otherProjectId = await resolveProject();
     const sharedOperation = [{
       operation: "add",
-      path: ".claude/rules/shared.md",
+      path: ".cursor/rules/shared.md",
       file_kind: "user_editable",
       content_sha256: sha256Bytes(updatedA),
       size_bytes: Buffer.byteLength(updatedA)
@@ -267,10 +267,10 @@ describe("project current files API", () => {
     });
     expect(purged.statusCode).toBe(200);
     expect(await storage.hasBlob(sha256Bytes(updatedA))).toBe(true);
-    expect(await storage.hasBlob(sha256Bytes(initial[".claude/rules/untouched.md"]))).toBe(false);
+    expect(await storage.hasBlob(sha256Bytes(initial[".cursor/rules/untouched.md"]))).toBe(false);
     expect(new TextDecoder().decode(
-      await storage.getBlob(sha256Bytes(initial[".claude/rules/untouched.md"]))
-    )).toBe(initial[".claude/rules/untouched.md"]);
+      await storage.getBlob(sha256Bytes(initial[".cursor/rules/untouched.md"]))
+    )).toBe(initial[".cursor/rules/untouched.md"]);
 
     await app.close();
     app = await createServer({
@@ -279,7 +279,7 @@ describe("project current files API", () => {
       config: { projectBlobGcGraceMs: 0 }
     });
     expect(await storage.hasBlob(sha256Bytes(updatedA))).toBe(true);
-    expect(await storage.hasBlob(sha256Bytes(initial[".claude/rules/untouched.md"]))).toBe(false);
+    expect(await storage.hasBlob(sha256Bytes(initial[".cursor/rules/untouched.md"]))).toBe(false);
 
     await app.inject({ method: "DELETE", url: `/api/v1/projects/${otherProjectId}`, headers: headers() });
     await app.inject({ method: "DELETE", url: `/api/v1/projects/${otherProjectId}/purge`, headers: headers() });
@@ -302,7 +302,7 @@ describe("project current files API", () => {
       projectId,
       [{
         operation: "add",
-        path: ".claude/rules/empty.md",
+        path: ".cursor/rules/empty.md",
         file_kind: "user_editable",
         content_sha256: emptyHash,
         size_bytes: 0
@@ -315,7 +315,7 @@ describe("project current files API", () => {
 
     const content = await app.inject({
       method: "GET",
-      url: `/api/v1/projects/${projectId}/files/content?path=${encodeURIComponent(".claude/rules/empty.md")}`,
+      url: `/api/v1/projects/${projectId}/files/content?path=${encodeURIComponent(".cursor/rules/empty.md")}`,
       headers: headers()
     });
     expect(content.statusCode).toBe(200);
@@ -327,7 +327,7 @@ describe("project current files API", () => {
     const hash = sha256Bytes(content);
     const operation = {
       operation: "add",
-      path: ".claude/rules/reused.md",
+      path: ".cursor/rules/reused.md",
       file_kind: "user_editable",
       content_sha256: hash,
       size_bytes: Buffer.byteLength(content)

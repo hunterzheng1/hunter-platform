@@ -97,8 +97,9 @@ const workflowSourceManifestSchema = z.object({
   schema_version: z.literal(1),
   family_slug: registrySlugSchema,
   display_name: z.string().trim().min(1).max(120),
-  required_profiles: z.array(registrySlugSchema).min(1).max(32)
-    .refine((profiles) => new Set(profiles).size === profiles.length, "profile names must be unique"),
+  // v1: single fixed "general" profile; optional so published 1.0.x packages
+  // (which omit the field entirely) remain importable.
+  required_profiles: z.array(z.literal("general")).max(1).optional(),
   bundle_version: registrySemverSchema,
   content_sha256: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   minimumCliVersion: registrySemverSchema.optional(),
@@ -584,33 +585,17 @@ function sourceDisplayName(value: string): string {
     .join(" ");
 }
 
-function profileFilesFromPackage(allFiles: SourceFile[], profile: string): SourceFile[] {
-  const prefixes: Array<{ source: string; destination: string }> = [
-    { source: `harness/bundles/${profile}/`, destination: "" },
-    { source: `harness/manifests/${profile}/`, destination: "manifests/" },
-    { source: `profiles/${profile}/`, destination: "" },
-    { source: `${profile}/`, destination: "" }
-  ];
+// v1 harness layout: every file under harness/ (bundles/<surface>/, manifests/,
+// contracts/, protocols/, scripts/) belongs to the single "general" profile,
+// mirrored with the harness/ prefix stripped.
+function profileFilesFromPackage(allFiles: SourceFile[]): SourceFile[] {
   const out: SourceFile[] = [];
   for (const file of allFiles) {
-    for (const prefix of prefixes) {
-      if (!file.path.startsWith(prefix.source)) continue;
-      const relative = file.path.slice(prefix.source.length);
-      if (relative.length > 0) out.push({ path: `${prefix.destination}${relative}`, content: file.content });
-      break;
-    }
+    if (!file.path.startsWith("harness/")) continue;
+    const relative = file.path.slice("harness/".length);
+    if (relative.length > 0) out.push({ path: relative, content: file.content });
   }
   return out.sort((left, right) => left.path.localeCompare(right.path));
-}
-
-function detectedProfileNames(files: SourceFile[], manifest: WorkflowSourceManifest | null): string[] {
-  if (manifest !== null) return manifest.required_profiles;
-  const discovered = new Set<string>();
-  for (const file of files) {
-    const match = /^(?:harness\/bundles|profiles)\/([^/]+)\//.exec(file.path);
-    if (match?.[1] !== undefined && /^[a-z0-9][a-z0-9-]*$/.test(match[1])) discovered.add(match[1]);
-  }
-  return [...discovered].sort();
 }
 
 function firstSemver(...values: unknown[]): string | null {
@@ -665,18 +650,14 @@ function inspectFiles(
       `${metadata.canonicalUtf8ReplacementPaths.length} trusted Markdown file(s) used the package's canonical UTF-8 replacement decoding; manifest content integrity was verified.`
     );
   }
-  const declaredProfiles = detectedProfileNames(files, manifest);
-  for (const profile of declaredProfiles) {
-    const contents = profileFilesFromPackage(files, profile);
-    if (contents.length === 0) {
-      warnings.push(`Profile ${profile} was declared but contains no files.`);
-      continue;
-    }
-    profileFiles.set(profile, contents);
+  const declaredProfiles = ["general"];
+  const contents = profileFilesFromPackage(files);
+  if (contents.length > 0) {
+    profileFiles.set("general", contents);
   }
   if (manifest === null) warnings.push("hunter-workflow-family.json was not found; profiles were inferred from directories.");
   if (remoteVersion === null) warnings.push("No semantic workflow package version was detected.");
-  if (profileFiles.size === 0) warnings.push("No workflow profiles were found under harness/bundles or profiles.");
+  if (profileFiles.size === 0) warnings.push("No workflow bundle files were found under harness/.");
 
   let pathsReady = true;
   for (const [profile, contents] of profileFiles) {
@@ -1100,12 +1081,6 @@ export async function prepareWorkflowFamilySync(
       warnings: loaded.inspection.warnings
     });
   }
-  const missing = family.required_profiles.find((profile) => !loaded.profileFiles.has(profile));
-  if (missing !== undefined) {
-    throw new ServerDomainError(422, "WORKFLOW_PROFILE_MISSING", "workflow source is missing a required profile", {
-      profile: missing
-    });
-  }
   const remoteVersion = loaded.inspection.remote_version;
   let result: WorkflowFamilySyncResult;
   if (remoteVersion !== null && family.latest_version !== null) {
@@ -1133,10 +1108,7 @@ export async function prepareWorkflowFamilySync(
     slug: family.slug,
     familyRevision: family.revision,
     familySource: family.source,
-    profiles: family.required_profiles.map((profile) => ({
-      profile,
-      files: loaded.profileFiles.get(profile) ?? []
-    })),
+    profiles: [{ profile: "general", files: loaded.profileFiles.get("general") ?? [] }],
     inspection: loaded.inspection,
     allowTrustedSourceFindings: loaded.allowTrustedSourceFindings,
     result,

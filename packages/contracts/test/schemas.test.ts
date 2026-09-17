@@ -143,7 +143,6 @@ describe("stage 13 platform information contract mirror", () => {
       expect(operation.request_id_header).toBe("X-Request-Id");
       expect(operation.errors[401]).toEqual(["AUTH_REQUIRED", "TOKEN_INVALID", "SESSION_INVALID"]);
     }
-    expect(PLATFORM_INFORMATION_HTTP_OPERATIONS.list.auth.project_key_scope_by_view.branch_monitor).toBe("platform:read");
     expect(apiErrorEnvelopeSchema.safeParse({ error: {
       code: "PLATFORM_INFORMATION_EXPORT_UNAVAILABLE", message: "export unavailable",
       request_id: "0198f012-3456-7abc-8def-0123456789ab", details: {},
@@ -1458,12 +1457,14 @@ describe("content-sync canonical mirror", () => {
     // 2026-08-18（二）：knowledgeCandidateSchema 增补可选的 entry_type / body /
     // keywords，供知识候选携带入库投影所需字段；entry_type 与 knowledge.ts 的
     // knowledgeIngestEntryTypeSchema 逐值对齐，漂移会让桥静默丢条目。
-    // 与 Hunter-Harness/packages/contracts/src/content-sync.ts 逐字节镜像。
+    // 2026-09-17：rule/rules 内容分类随 v1 瘦身退役（候选评审流已删，存量
+    // 数据库行按 unknown/deprecated 容忍）；本文件相对 Hunter-Harness 客户端
+    // 同名契约含服务端 WI-E2 增量（validation_status 等），不再逐字节镜像。
     expect(contentSyncSha256(source)).toBe(
-      "16b697ac128dcbd29d63d91b3e4951dc5e6965727bcc070089086e76b83bf518"
+      "4d22eba8ff6f348e624fd9ab4c97a35b900bac642d77dade31ce159498ee4d9a"
     );
     expect(contentSyncSha256(current)).toBe(
-      "a5d700084708255d25a9be7de889024c5c8ce644dd671f300251369fa6fcdb4c"
+      "86cc5631bd28331700d6025eacd8781685ca400fcd71d164ab82280e23df0401"
     );
     expect(contentSyncSha256(legacy)).toBe(
       "5945db02c0fb5906d76d0ed85f82ccfb84c49d6c366780214f7052fa1656992a"
@@ -1474,12 +1475,12 @@ describe("content-sync canonical mirror", () => {
     const fixture = await readContentSyncFixture("content-sync-v1-current.json");
     const enums = fixture.enums as Record<string, unknown>;
     expect(contentKindSchema.options).toEqual([
-      "config", "rule", "architecture", "instruction", "branch_file",
+      "config", "architecture", "instruction", "branch_file",
       "change_document", "archive_package", "knowledge_entry",
       "knowledge_candidate", "project_content_candidate"
     ]);
     expect(syncScopeSchema.options).toEqual([
-      "config", "rules", "architecture", "instructions", "branch_files", "archive"
+      "config", "architecture", "instructions", "branch_files", "archive"
     ]);
     expect(syncDirectionSchema.options).toEqual(["push", "pull"]);
     expect(syncActionSchema.options).toEqual([
@@ -1524,7 +1525,7 @@ describe("content-sync canonical mirror", () => {
     expectTypeOf(versions).toEqualTypeOf<SnapshotVersionPage>();
     expectTypeOf(files).toEqualTypeOf<SnapshotFilePage>();
     expect(files.items.map((item) => item.path)).toEqual([
-      ".harness/project.yaml", ".harness/rules/security.md", "AGENTS.md"
+      ".harness/project.yaml", "docs/plans/plan-2026-09.md", "AGENTS.md"
     ]);
 
     for (const [schema, value] of [

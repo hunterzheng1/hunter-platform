@@ -74,19 +74,16 @@ function api(overrides: Partial<HunterApi> = {}): HunterApi {
     getAiUsage: vi.fn(async () => dashboardAiUsage),
     listProjects: vi.fn(async () => projects),
     listSkills: vi.fn(async () => []),
-    listAllProposals: vi.fn(async () => []),
     listAllArtifacts: vi.fn(async () => []),
     getProject: vi.fn(async () => {
       const project = projects[0];
       if (project === undefined) throw new Error("fixture project missing");
       return { ...project, request_id: "req" };
     }),
-    listProjectProposals: vi.fn(async () => []),
     listProjectArtifacts: vi.fn(async () => []),
     getArtifactManifest: vi.fn(async () => ({ schema_version: 1, project_id: "prj_one", project_version: "pv_1", artifact_id: "art_1", manifest_sha256: "sha", files: [] })),
     getArtifactText: vi.fn(async () => ""),
     createProjectFileProposal: vi.fn(async () => ({ proposal_id: "prp", status: "pending" })),
-    getProposal: vi.fn(async () => ({ schema_version: 1, proposal_id: "prp", project_id: "prj_one", status: "approved", created_by: "a", created_at: "2026-06-20T00:00:00Z", items: [], scan_summary: { redacted: true }, review_history: [] })),
     ...overrides
   } as unknown as HunterApi;
 }

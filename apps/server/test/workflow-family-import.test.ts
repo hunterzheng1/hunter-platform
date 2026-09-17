@@ -141,7 +141,7 @@ function workflowEntries(
       schema_version: 1,
       family_slug: "harness",
       display_name: "Harness",
-      required_profiles: ["general", "java"],
+      required_profiles: ["general"],
       bundle_version: "0.2.53",
       content_sha256: contentSha256,
       workflowPackageVersion: packageVersion,
@@ -299,7 +299,7 @@ describe("workflow family source import API", () => {
         description: "Harness workflow family data package"
       }
     });
-    expect(response.json().profiles.map((entry: { profile: string }) => entry.profile)).toEqual(["general", "java"]);
+    expect(response.json().profiles.map((entry: { profile: string }) => entry.profile)).toEqual(["general"]);
   });
 
   it("imports inspected profiles as a new workflow-family draft", async () => {
@@ -321,12 +321,11 @@ describe("workflow family source import API", () => {
     expect(response.statusCode).toBe(201);
     expect(response.json().family).toMatchObject({
       slug: "harness",
-      required_profiles: ["general", "java"],
+      required_profiles: ["general"],
       source: { type: "npm", ref: packageName }
     });
     expect(response.json().draft.profiles).toEqual([
-      { profile: "general", file_count: 2 },
-      { profile: "java", file_count: 2 }
+      { profile: "general", file_count: 4 }
     ]);
     expect(response.json().draft.draftVersion).toBe(packageVersion);
     expect(response.body).not.toContain("sourceFiles");
@@ -338,10 +337,9 @@ describe("workflow family source import API", () => {
       headers: headers()
     });
     expect(draft.statusCode).toBe(200);
-    expect(draft.json().required_profiles).toEqual(["general", "java"]);
+    expect(draft.json().required_profiles).toEqual(["general"]);
     expect(draft.json().profiles).toEqual([
-      { profile: "general", file_count: 2 },
-      { profile: "java", file_count: 2 }
+      { profile: "general", file_count: 4 }
     ]);
     expect(draft.body).not.toContain("sourceFiles");
 
@@ -349,7 +347,7 @@ describe("workflow family source import API", () => {
       workflowFamilyDrafts?: Array<[string, { profiles?: Array<Record<string, unknown>> }]>
     };
     const persistedProfiles = persisted.workflowFamilyDrafts?.[0]?.[1].profiles ?? [];
-    expect(persistedProfiles).toHaveLength(2);
+    expect(persistedProfiles).toHaveLength(1);
     expect(persistedProfiles[0]).toHaveProperty("source_blob_sha256");
     expect(persistedProfiles[0]).not.toHaveProperty("sourceFiles");
   });
@@ -527,8 +525,7 @@ describe("workflow family source import API", () => {
     const retried = await app.inject(request);
     expect(retried.statusCode).toBe(200);
     expect(retried.json().profiles).toEqual([
-      expect.objectContaining({ profile: "general", file_count: 2 }),
-      expect.objectContaining({ profile: "java", file_count: 2 })
+      expect.objectContaining({ profile: "general", file_count: 4 })
     ]);
     expect(retried.body).not.toContain("sourceFiles");
   });
@@ -628,7 +625,7 @@ describe("workflow family source import API", () => {
     expect(imported.json().error.code).toBe("WORKFLOW_SOURCE_NOT_READY");
   });
 
-  it("replaces all synced profiles atomically when a later profile is invalid", async () => {
+  it("replaces the synced general profile atomically when the new source is not ready", async () => {
     const imported = await app.inject({
       method: "POST",
       url: "/api/v1/workflow-families/import",
@@ -645,25 +642,25 @@ describe("workflow family source import API", () => {
     });
     expect(imported.statusCode).toBe(201);
 
-    npmTarball = await tarGz(workflowEntries("package/", {
-      "harness/bundles/general/AGENTS.md": "# Changed general harness\n",
-      "harness/bundles/java/private-key.pem": "-----BEGIN PRIVATE KEY-----\nsecret\n"
-    }));
+    npmTarball = tarGzRawFiles(Object.entries(workflowEntries("package/", {
+      "harness/bundles/general/Foo.md": "upper-case path\n",
+      "harness/bundles/general/foo.md": "lower-case path\n"
+    })));
     const sync = await app.inject({
       method: "POST",
       url: "/api/v1/workflow-families/harness/sync",
       headers: headers(),
       payload: {}
     });
-    expect(sync.statusCode).toBe(200);
+    expect(sync.statusCode).toBe(422);
+    expect(sync.json().error.code).toBe("WORKFLOW_SOURCE_NOT_READY");
 
     const draft = await app.inject({
       method: "GET",
       url: "/api/v1/workflow-families/harness/draft",
       headers: headers()
     });
-    const general = draft.json().profiles.find((entry: { profile: string }) => entry.profile === "general");
-    expect(general).toEqual({ profile: "general", file_count: 2 });
+    expect(draft.json().profiles).toEqual([{ profile: "general", file_count: 4 }]);
     expect(draft.json().revision).toBeGreaterThanOrEqual(imported.json().draft.revision);
   });
 
@@ -689,7 +686,7 @@ describe("workflow family source import API", () => {
       source_digest: sourceDigest,
       suggested: { slug: "harness" }
     });
-    expect(response.json().profiles.map((entry: { profile: string }) => entry.profile)).toEqual(["general", "java"]);
+    expect(response.json().profiles.map((entry: { profile: string }) => entry.profile)).toEqual(["general"]);
     expect(response.json().warnings).toContainEqual(expect.stringContaining("matching published artifact"));
 
     const imported = await app.inject({
@@ -708,7 +705,7 @@ describe("workflow family source import API", () => {
     });
     expect(imported.statusCode).toBe(201);
     expect(imported.json().family.source).toEqual({ type: "github", ref });
-    expect(imported.json().draft.profiles.map((entry: { profile: string }) => entry.profile)).toEqual(["general", "java"]);
+    expect(imported.json().draft.profiles.map((entry: { profile: string }) => entry.profile)).toEqual(["general"]);
   });
 
   it("resolves slash-bearing GitHub branches without changing the exact source", async () => {

@@ -10,7 +10,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { isProxy } from "node:util/types";
 import { z } from "zod";
 
-import type { Actor, ProjectKeyScope, ServerRepository } from "../repositories/interfaces.js";
+import type { Actor, ServerRepository } from "../repositories/interfaces.js";
 import { ServerDomainError } from "../repositories/interfaces.js";
 import type { KnowledgeQueryHttpServicePort } from "./ports.js";
 
@@ -20,7 +20,7 @@ export interface KnowledgeQueryHttpRoutesOptions {
   readonly authenticated: (
     request: FastifyRequest,
     repository: ServerRepository,
-    projectScope?: ProjectKeyScope
+    allowProjectKey?: boolean
   ) => Promise<{ readonly actor: Actor; readonly requestId: string }>;
 }
 
@@ -219,7 +219,7 @@ export function registerKnowledgeQueryHttpRoutes(
   app.post(KNOWLEDGE_QUERY_HTTP_OPERATIONS.query.path
     .replace("{project_id}", ":projectId"), async (request, reply) => {
     const projectId = projectParam(request);
-    const { actor, requestId } = await options.authenticated(request, options.repository, "knowledge:read");
+    const { actor, requestId } = await options.authenticated(request, options.repository, true);
     await bindProject(options.repository, actor.actorId, projectId);
     const body = parseBody(request.body);
     if (body.project_id !== projectId) {

@@ -23,7 +23,7 @@ import type {
   PlatformInformationExportRecordPort,
   PlatformInformationExportDownloadPort,
 } from "../platform-information-export/index.js";
-import type { Actor, ProjectKeyScope, ServerRepository } from "../repositories/interfaces.js";
+import type { Actor, ServerRepository } from "../repositories/interfaces.js";
 import { ServerDomainError } from "../repositories/interfaces.js";
 
 type PlatformInformationView = z.infer<typeof platformInformationViewSchema>;
@@ -48,7 +48,7 @@ export interface PlatformInformationRoutesOptions {
   readonly authenticated: (
     request: FastifyRequest,
     repository: ServerRepository,
-    projectScope?: ProjectKeyScope
+    allowProjectKey?: boolean
   ) => Promise<{ actor: Actor; requestId: string }>;
 }
 
@@ -65,22 +65,18 @@ const projectIdSchema = z.string().regex(/^prj_[A-Za-z0-9_-]{1,156}$/u);
 
 const policies = Object.freeze({
   branch_monitor: Object.freeze({
-    scope: "platform:read" as const,
     content_types: Object.freeze(["run_event"] as const),
     sort: "last_event_at_desc_run_id_asc" as const
   }),
   branch_files: Object.freeze({
-    scope: "files:read" as const,
     content_types: Object.freeze(["branch_file"] as const),
     sort: "uploaded_at_desc_snapshot_version_asc" as const
   }),
   project_materials: Object.freeze({
-    scope: "files:read" as const,
     content_types: Object.freeze(["config", "rule", "architecture", "instruction"] as const),
     sort: "category_asc_path_asc_version_desc" as const
   }),
   project_knowledge: Object.freeze({
-    scope: "knowledge:read" as const,
     content_types: Object.freeze(["knowledge_entry"] as const),
     sort: "extracted_at_desc_knowledge_id_asc" as const
   })
@@ -282,7 +278,7 @@ export function registerPlatformInformationRoutes(
       throw new ServerDomainError(400, "VALIDATION_FAILED", "information view is invalid");
     }
     const view = viewResult.data;
-    const { actor, requestId } = await authenticated(request, repository, policies[view].scope);
+    const { actor, requestId } = await authenticated(request, repository, true);
     await bindProject(repository, actor.actorId, projectId);
     if (adapters === undefined) unavailable("platform information adapters are not configured");
 
@@ -310,7 +306,7 @@ export function registerPlatformInformationRoutes(
       throw new ServerDomainError(400, "VALIDATION_FAILED", "information view is invalid");
     }
     const view = viewResult.data;
-    const { actor, requestId } = await authenticated(request, repository, "platform:read");
+    const { actor, requestId } = await authenticated(request, repository, true);
     await bindProject(repository, actor.actorId, projectId);
     if (adapters === undefined) unavailable("platform information adapters are not configured");
     const raw = rawListQuerySchema.safeParse(request.query);
@@ -414,7 +410,7 @@ export function registerPlatformInformationRoutes(
       throw new ServerDomainError(400, "VALIDATION_FAILED", "information view is invalid");
     }
     const view = viewResult.data;
-    const { actor, requestId } = await authenticated(request, repository, policies[view].scope);
+    const { actor, requestId } = await authenticated(request, repository, true);
     await bindProject(repository, actor.actorId, projectId, "PLATFORM_INFORMATION_EXPORT_UNAVAILABLE");
     if (adapters?.export_module === undefined || adapters.export_records === undefined) {
       throw new ServerDomainError(503, "PLATFORM_INFORMATION_EXPORT_UNAVAILABLE",
@@ -481,7 +477,7 @@ export function registerPlatformInformationRoutes(
       throw new ServerDomainError(400, "VALIDATION_FAILED", "export download request is invalid");
     }
     const view = viewResult.data;
-    const { actor, requestId } = await authenticated(request, repository, policies[view].scope);
+    const { actor, requestId } = await authenticated(request, repository, true);
     await bindProject(repository, actor.actorId, projectId,
       "PLATFORM_INFORMATION_EXPORT_DOWNLOAD_UNAVAILABLE");
     if (adapters?.export_records === undefined || adapters.export_download === undefined) {
@@ -528,7 +524,7 @@ export function registerPlatformInformationRoutes(
     if (detailId.length === 0 || detailId.length > 512) {
       throw new ServerDomainError(400, "VALIDATION_FAILED", "information files request is invalid");
     }
-    const { actor, requestId } = await authenticated(request, repository, policies.branch_files.scope);
+    const { actor, requestId } = await authenticated(request, repository, true);
     await bindProject(repository, actor.actorId, projectId);
     if (adapters === undefined) unavailable("platform information adapters are not configured");
 
@@ -556,7 +552,7 @@ export function registerPlatformInformationRoutes(
       throw new ServerDomainError(400, "VALIDATION_FAILED", "information detail request is invalid");
     }
     const view = viewResult.data;
-    const { actor, requestId } = await authenticated(request, repository, policies[view].scope);
+    const { actor, requestId } = await authenticated(request, repository, true);
     await bindProject(repository, actor.actorId, projectId);
     if (view === "branch_files" && !detailId.startsWith("bff_")) {
       // 快照级 bf_ 定位符没有详情语义（应走 files 子路由）；未知形态一律诚实 503。
@@ -579,7 +575,7 @@ export function registerPlatformInformationRoutes(
 
   app.post(fastifyPath(PLATFORM_INFORMATION_HTTP_OPERATIONS.preview_restore), async (request, reply) => {
     const projectId = requireProjectId((request.params as { projectId: string }).projectId);
-    const { actor, requestId } = await authenticated(request, repository, "files:read");
+    const { actor, requestId } = await authenticated(request, repository, true);
     await bindProject(repository, actor.actorId, projectId);
     const body = platformInformationPreviewRestoreHttpRequestSchema.safeParse(request.body);
     if (!body.success || body.data.project_id !== projectId) {
@@ -599,7 +595,7 @@ export function registerPlatformInformationRoutes(
 
   app.post(fastifyPath(PLATFORM_INFORMATION_HTTP_OPERATIONS.confirm_restore), async (request, reply) => {
     const projectId = requireProjectId((request.params as { projectId: string }).projectId);
-    const { actor, requestId } = await authenticated(request, repository, "files:read");
+    const { actor, requestId } = await authenticated(request, repository, true);
     await bindProject(repository, actor.actorId, projectId);
     const validation = validatePlatformInformationConfirmRestoreHttpRequest(
       JSON.stringify(request.body),
@@ -615,7 +611,7 @@ export function registerPlatformInformationRoutes(
 
   app.post(fastifyPath(PLATFORM_INFORMATION_HTTP_OPERATIONS.retry_extraction), async (request, reply) => {
     const projectId = requireProjectId((request.params as { projectId: string }).projectId);
-    const { actor, requestId } = await authenticated(request, repository, "knowledge:write");
+    const { actor, requestId } = await authenticated(request, repository, true);
     await bindProject(repository, actor.actorId, projectId);
     const body = platformInformationRetryExtractionHttpRequestSchema.safeParse(request.body);
     if (!body.success) routeFailure("PROJECT_KNOWLEDGE_RETRY_REQUEST_INVALID", "retry");

@@ -105,7 +105,6 @@ describe("OpenAPI v1 contract", () => {
         operationId?: string;
         "x-hunter-auth-source"?: string;
         "x-hunter-project-allowlist-source"?: string;
-        "x-hunter-project-key-scope"?: string;
         "x-hunter-error-codes"?: Record<string, string[]>;
         parameters?: Array<{ name?: string; in?: string; required?: boolean; schema?: { type?: string; minLength?: number; maxLength?: number } }>;
         requestBody?: { content?: Record<string, unknown> };
@@ -119,7 +118,6 @@ describe("OpenAPI v1 contract", () => {
       operationId: REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS.upload_remote_sync_file.operation_id,
       "x-hunter-auth-source": "authenticated_principal",
       "x-hunter-project-allowlist-source": "server_authority",
-      "x-hunter-project-key-scope": "files:write",
       requestBody: { content: { "application/octet-stream": expect.anything() } },
     });
     expect(fileUpload?.responses?.["201"]?.content?.["application/json"]?.schema?.$ref)
@@ -129,8 +127,7 @@ describe("OpenAPI v1 contract", () => {
     expect(fileStatus).toMatchObject({
       operationId: REMOTE_CONTENT_UPLOAD_HTTP_OPERATIONS.remote_sync_file_status.operation_id,
       "x-hunter-auth-source": "authenticated_principal",
-      "x-hunter-project-allowlist-source": "server_authority",
-      "x-hunter-project-key-scope": "files:read"
+      "x-hunter-project-allowlist-source": "server_authority"
     });
     expect(fileStatus?.responses?.["200"]?.content?.["application/json"]?.schema?.$ref)
       .toBe("#/components/schemas/RemoteContentUploadHttpStatus");
@@ -582,13 +579,6 @@ describe("stage 13 platform information OpenAPI contracts", () => {
       expect(operation?.operationId).toBe(descriptor.operation_id);
       expect(operation?.["x-hunter-auth-source"]).toBe("authenticated_principal");
       expect(operation?.["x-hunter-project-allowlist-source"]).toBe("server_authority");
-      if ("project_key_scope_by_view" in descriptor.auth) {
-        expect(operation?.["x-hunter-project-key-scope-by-view"])
-          .toEqual(descriptor.auth.project_key_scope_by_view);
-      } else {
-        expect(operation?.["x-hunter-project-key-scope"])
-          .toBe(descriptor.auth.project_key_scope);
-      }
       if ("validator_id" in descriptor) {
         expect(operation?.["x-hunter-validator-id"]).toBe(descriptor.validator_id);
       } else {
@@ -775,7 +765,6 @@ describe("Remote Sync HTTP OpenAPI contracts", () => {
       expect(operation?.operationId).toBe(descriptor.operation_id);
       expect(operation?.["x-hunter-auth-source"]).toBe("authenticated_principal");
       expect(operation?.["x-hunter-project-allowlist-source"]).toBe("server_authority");
-      expect(operation?.["x-hunter-project-key-scope"]).toBe(descriptor.auth.project_key_scope);
       expect(operation?.["x-hunter-error-codes"]).toEqual(Object.fromEntries(
         Object.entries(descriptor.errors).map(([status, codes]) => [status, [...codes]]),
       ));

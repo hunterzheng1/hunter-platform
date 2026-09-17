@@ -3,7 +3,6 @@ import type { FastifyRequest } from "fastify";
 import type {
   Actor,
   ProjectApiKeyRecord,
-  ProjectKeyScope,
   ServerRepository
 } from "../repositories/interfaces.js";
 import { ServerDomainError } from "../repositories/interfaces.js";
@@ -31,21 +30,15 @@ export function requestProjectKey(request: FastifyRequest): ProjectApiKeyRecord 
 }
 
 /**
- * Enforce project-key scoping on a route. No-op for session/api-token auth.
+ * Enforce project-key project binding on a route. No-op for session/api-token auth.
  * When the route addresses a specific project, a mismatching key is rejected.
  */
-export function assertProjectKeyScope(
+export function assertProjectKeyBinding(
   request: FastifyRequest,
-  scope: ProjectKeyScope,
   projectId: string
 ): void {
   const key = requestProjectKey(request);
   if (key === undefined) return;
-  if (!key.scopes.includes(scope)) {
-    throw new ServerDomainError(403, "PROJECT_KEY_SCOPE", "API key lacks required scope", {
-      required_scope: scope
-    });
-  }
   if (projectId !== key.projectId) {
     throw new ServerDomainError(403, "PROJECT_KEY_MISMATCH", "API key is bound to another project");
   }

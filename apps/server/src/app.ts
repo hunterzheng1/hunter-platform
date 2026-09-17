@@ -153,7 +153,7 @@ import {
 } from "./auth/accounts.js";
 import { registerAuthRoutes, requireSessionUser } from "./auth/routes.js";
 import {
-  assertProjectKeyScope,
+  assertProjectKeyBinding,
   authenticateRequest,
   requestProjectKey
 } from "./auth/tokens.js";
@@ -186,12 +186,11 @@ import type { RegistryPersistence } from "./registry/persistence.js";
 import type {
   Actor,
   IdempotencyRecord,
-  ProjectKeyScope,
   ProjectRecord,
   ServerRepository,
   TransactionRepository
 } from "./repositories/interfaces.js";
-import { PROJECT_KEY_SCOPES, ServerDomainError } from "./repositories/interfaces.js";
+import { ServerDomainError } from "./repositories/interfaces.js";
 import type { ArtifactStorage } from "./storage/interface.js";
 import { buildSemanticIndex } from "./semantic/indexer.js";
 import {
@@ -502,12 +501,12 @@ function resolveUploadFiles(
 async function authenticated(
   request: FastifyRequest,
   repository: ServerRepository,
-  projectScope?: ProjectKeyScope
+  allowProjectKey?: boolean
 ): Promise<{ actor: Actor; requestId: string }> {
   const actor = await authenticateRequest(request, repository);
   if (requestProjectKey(request) !== undefined) {
-    // Project API keys are default-deny: only routes that declare a scope accept them.
-    if (projectScope === undefined) {
+    // Project API keys are default-deny: only routes that explicitly allow them accept them.
+    if (allowProjectKey !== true) {
       throw new ServerDomainError(
         403,
         "PROJECT_KEY_SCOPE",
@@ -527,7 +526,7 @@ async function authenticated(
         "project API keys require a project-bound route"
       );
     }
-    assertProjectKeyScope(request, projectScope, projectId);
+    assertProjectKeyBinding(request, projectId);
   }
   return { actor, requestId: routeRequestId(request) };
 }
@@ -1191,7 +1190,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   app.post("/api/v1/projects:resolve", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository, "push");
+    const { actor, requestId } = await authenticated(request, repository, true);
     const body = resolveSchema.parse(request.body);
     const result = await mutation(request, repository, actor, requestId, async () => {
       const resolved = await repository.resolveProject({
@@ -1240,7 +1239,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   // default-deny 被 403，push 在 project_id 尚未解析时就整体失败——现场表现是
   // 平台上"分支文件里没有 plan/spec"，因为它们全靠这条推送上传。
   app.get("/api/v1/projects/:projectId", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository, "push");
+    const { actor, requestId } = await authenticated(request, repository, true);
     const { projectId } = request.params as { projectId: string };
     const project = await repository.getProject(actor.actorId, projectId);
     reply.header("X-Request-Id", requestId);
@@ -1338,8 +1337,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
         keyHash: projectApiKeyHash(plaintext),
         projectId: project.projectId,
         actorId: actor.actorId,
-        label: "initial",
-        scopes: [...PROJECT_KEY_SCOPES]
+        label: "initial"
       });
       return {
         statusCode: 201,
@@ -1421,7 +1419,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   app.get("/api/v1/projects/:projectId/files", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository, "files:read");
+    const { actor, requestId } = await authenticated(request, repository, true);
     const { projectId } = request.params as { projectId: string };
     const project = await repository.getProject(actor.actorId, projectId);
     const files = await repository.listProjectFiles(actor.actorId, projectId);
@@ -1443,7 +1441,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   app.get("/api/v1/projects/:projectId/files/content", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository, "files:read");
+    const { actor, requestId } = await authenticated(request, repository, true);
     const { projectId } = request.params as { projectId: string };
     const query = request.query as Record<string, string | undefined>;
     if (query.path === undefined || query.path.length === 0) {
@@ -1473,7 +1471,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   app.post("/api/v1/projects/:projectId/proposal-sessions", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository, "push");
+    const { actor, requestId } = await authenticated(request, repository, true);
     const { projectId } = request.params as { projectId: string };
     const body = sessionSchema.parse(request.body);
     const result = await mutation(request, repository, actor, requestId, async () => {
@@ -1551,7 +1549,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   app.post("/api/v1/proposal-sessions/:sessionId/blobs:query", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository, "push");
+    const { actor, requestId } = await authenticated(request, repository, true);
     const { sessionId } = request.params as { sessionId: string };
     const body = blobQuerySchema.parse(request.body);
     const result = await mutation(request, repository, actor, requestId, async () => {
@@ -1573,7 +1571,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   app.put("/api/v1/proposal-sessions/:sessionId/blobs/:hash", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository, "push");
+    const { actor, requestId } = await authenticated(request, repository, true);
     const { sessionId, hash } = request.params as { sessionId: string; hash: string };
     const result = await mutation(request, repository, actor, requestId, async () => {
       const session = await repository.getProposalSession(actor.actorId, sessionId);
@@ -1638,7 +1636,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   app.post(
     "/api/v1/proposal-sessions/:sessionId(^ups_[^:]+):finalize",
     async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository, "push");
+    const { actor, requestId } = await authenticated(request, repository, true);
     const { sessionId } = request.params as { sessionId: string };
     const body = finalizeProposalSchema.parse(request.body);
     const result = await mutation(request, repository, actor, requestId, async () => {
@@ -1819,7 +1817,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   app.get("/api/v1/projects/:projectId/update-manifest", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository, "files:read");
+    const { actor, requestId } = await authenticated(request, repository, true);
     const { projectId } = request.params as { projectId: string };
     await repository.getProject(actor.actorId, projectId);
     const query = request.query as Record<string, string | undefined>;
@@ -1847,7 +1845,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   app.get("/api/v1/artifacts/:artifactId/manifest", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository, "files:read");
+    const { actor, requestId } = await authenticated(request, repository, true);
     const { artifactId } = request.params as { artifactId: string };
     const artifact = await repository.getArtifact(actor.actorId, artifactId);
     reply.header("X-Request-Id", requestId);
@@ -1856,7 +1854,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   });
 
   app.get("/api/v1/artifacts/:artifactId/blobs/:hash", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository, "files:read");
+    const { actor, requestId } = await authenticated(request, repository, true);
     const { artifactId, hash } = request.params as { artifactId: string; hash: string };
     const artifact = await repository.getArtifact(actor.actorId, artifactId);
     if (!artifact.manifest.files.some((operation) =>
@@ -2594,7 +2592,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   // P3: server-side knowledge ingest — idempotent batch upsert with content-hash
   // dedupe; projection into the semantic index runs asynchronously (outbox drain).
   app.post("/api/v1/projects/:projectId/knowledge/ingest", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository, "knowledge:write");
+    const { actor, requestId } = await authenticated(request, repository, true);
     const { projectId } = request.params as { projectId: string };
     await repository.getProject(actor.actorId, projectId);
     const body = z.object({
@@ -2824,7 +2822,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   app.put(
     "/api/v1/projects/:projectId/changes/:changeKey/archive-package",
     async (request, reply) => {
-      const { actor, requestId } = await authenticated(request, repository, "push");
+      const { actor, requestId } = await authenticated(request, repository, true);
       const { projectId, changeKey } = request.params as { projectId: string; changeKey: string };
       requireArchiveChangeKey(changeKey);
       const contentType = request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase();
@@ -2977,7 +2975,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   app.post(
     "/api/v1/projects/:projectId/changes/:changeKey/archive-package/validate",
     async (request, reply) => {
-      const { actor, requestId } = await authenticated(request, repository, "push");
+      const { actor, requestId } = await authenticated(request, repository, true);
       const { projectId, changeKey } = request.params as { projectId: string; changeKey: string };
       requireArchiveChangeKey(changeKey);
       const contentType = request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase();
@@ -3015,7 +3013,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   app.get(
     "/api/v1/projects/:projectId/changes/:changeKey/archive-package",
     async (request, reply) => {
-      const { actor, requestId } = await authenticated(request, repository, "files:read");
+      const { actor, requestId } = await authenticated(request, repository, true);
       const { projectId, changeKey } = request.params as { projectId: string; changeKey: string };
       requireArchiveChangeKey(changeKey);
       const record = await repository.getChangeArchivePackage(actor.actorId, projectId, changeKey);
@@ -3027,7 +3025,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   app.get(
     "/api/v1/projects/:projectId/changes/:changeKey/archive-package/download",
     async (request, reply) => {
-      const { actor, requestId } = await authenticated(request, repository, "files:read");
+      const { actor, requestId } = await authenticated(request, repository, true);
       const { projectId, changeKey } = request.params as { projectId: string; changeKey: string };
       requireArchiveChangeKey(changeKey);
       const record = await repository.getChangeArchivePackage(actor.actorId, projectId, changeKey);
@@ -3051,7 +3049,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   app.post(
     "/api/v1/projects/:projectId/archives:ingest",
     async (request, reply) => {
-      const { actor, requestId } = await authenticated(request, repository, "archive:write");
+      const { actor, requestId } = await authenticated(request, repository, true);
       const { projectId } = request.params as { projectId: string };
       const protocolHeader = (name: string): string => {
         const value = request.headers[name];
@@ -3371,7 +3369,7 @@ export async function createServer(options: CreateServerOptions): Promise<Fastif
   app.addHook("onClose", async () => codexService.close());
 
   app.get("/api/v1/projects/:projectId/semantic/search", async (request, reply) => {
-    const { actor, requestId } = await authenticated(request, repository, "knowledge:read");
+    const { actor, requestId } = await authenticated(request, repository, true);
     const { projectId } = request.params as { projectId: string };
     await repository.getProject(actor.actorId, projectId);
     await ensureSemanticIndexCurrent(actor.actorId, projectId);

@@ -25,8 +25,7 @@ describe("project-bound API key on unbound routes", () => {
       keyHash: projectApiKeyHash(rawKey),
       projectId,
       actorId: "actor_pk",
-      label: "env-key",
-      scopes: ["push"]
+      label: "env-key"
     });
     app = await createServer({ repository, storage: new MemoryArtifactStorage() });
   });

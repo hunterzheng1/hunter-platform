@@ -140,7 +140,7 @@ describe("/api/v1 governed server", () => {
     const hash = sha256Bytes(content);
     const operation = {
       operation: "add",
-      path: ".claude/rules/approved.md",
+      path: ".cursor/rules/approved.md",
       file_kind: "user_editable",
       content_sha256: hash,
       size_bytes: Buffer.byteLength(content)
@@ -273,7 +273,7 @@ describe("/api/v1 governed server", () => {
         content,
         operation: {
           operation: "add",
-          path: `.claude/rules/${name}.md`,
+          path: `.cursor/rules/${name}.md`,
           file_kind: "user_editable",
           content_sha256: sha256Bytes(content),
           size_bytes: Buffer.byteLength(content)
@@ -414,14 +414,14 @@ describe("/api/v1 governed server", () => {
         base_manifest_hash: sha256Bytes(canonicalJson({})),
         proposal_manifest: { files: [{
           operation: "add",
-          path: ".claude/rules/too-large.md",
+          path: ".cursor/rules/too-large.md",
           file_kind: "user_editable",
           content_sha256: "sha256:" + "b".repeat(64),
           size_bytes: 10 * 1024 * 1024 + 1
         }] },
         artifact_manifest: { schema_version: 1, files: [{
           operation: "add",
-          path: ".claude/rules/too-large.md",
+          path: ".cursor/rules/too-large.md",
           file_kind: "user_editable",
           content_sha256: "sha256:" + "b".repeat(64),
           size_bytes: 10 * 1024 * 1024 + 1
@@ -435,7 +435,7 @@ describe("/api/v1 governed server", () => {
     const hash = sha256Bytes(secret);
     const operation = {
       operation: "add",
-      path: ".claude/rules/unsafe.md",
+      path: ".cursor/rules/unsafe.md",
       file_kind: "user_editable",
       content_sha256: hash,
       size_bytes: Buffer.byteLength(secret)

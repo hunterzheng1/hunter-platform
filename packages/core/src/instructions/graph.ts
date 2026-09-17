@@ -305,7 +305,7 @@ function ownershipOf(path: string): "project" | "harness-managed" | "generated" 
   ) {
     return "generated";
   }
-  if (path.startsWith(".harness/rules/") || path === "AGENTS.md" || path === "CLAUDE.md") {
+  if (path === "AGENTS.md") {
     return "harness-managed";
   }
   return "project";
@@ -313,7 +313,7 @@ function ownershipOf(path: string): "project" | "harness-managed" | "generated" 
 
 export async function validateInstructionGraph(
   projectRoot: string,
-  entrypoint = "CLAUDE.md"
+  entrypoint = "AGENTS.md"
 ): Promise<InstructionGraphResult> {
   const root = resolve(projectRoot);
   const entry = resolve(root, entrypoint);
@@ -433,7 +433,7 @@ export async function validateInstructionGraph(
       const targetRelative = projectRelative(root, target);
       if (
         rel === ".harness/context-index.json" &&
-        ["AGENTS.md", "CLAUDE.md", "CODEBUDDY.md"].includes(targetRelative)
+        targetRelative === "AGENTS.md"
       ) {
         edges.push({
           from: rel,

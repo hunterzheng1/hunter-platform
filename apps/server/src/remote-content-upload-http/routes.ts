@@ -18,7 +18,7 @@ import {
   type RemoteContentUploadHttpResult
 } from "@hunter-harness/contracts";
 
-import type { Actor, ProjectKeyScope, ServerRepository } from "../repositories/interfaces.js";
+import type { Actor, ServerRepository } from "../repositories/interfaces.js";
 import { ServerDomainError } from "../repositories/interfaces.js";
 import type { RemoteContentUploadChunk, RemoteContentUploadHttpServicePort } from "./ports.js";
 
@@ -28,7 +28,7 @@ export interface RemoteContentUploadHttpRoutesOptions {
   readonly authenticated: (
     request: FastifyRequest,
     repository: ServerRepository,
-    scope?: ProjectKeyScope
+    allowProjectKey?: boolean
   ) => Promise<{ readonly actor: Actor; readonly requestId: string }>;
 }
 
@@ -418,7 +418,6 @@ export function registerRemoteContentUploadHttpRoutes(
         path: "/api/v1/projects/:projectId/branches/:branchName/remote-sync/file-upload",
         purpose: "remote_sync_file" as const,
         mediaType: "application/octet-stream" as const,
-        scope: "files:write" as const,
         operation: "upload_remote_sync_file" as const,
         maxBytes: REMOTE_CONTENT_UPLOAD_HTTP_MAX_REMOTE_SYNC_FILE_BYTES,
       },
@@ -427,7 +426,6 @@ export function registerRemoteContentUploadHttpRoutes(
       {
         path: "/api/v1/projects/:projectId/branches/:branchName/remote-sync/file-upload/status",
         purpose: "remote_sync_file" as const,
-        scope: "files:read" as const,
         operation: "remote_sync_file_status" as const,
       },
     ];
@@ -436,7 +434,7 @@ export function registerRemoteContentUploadHttpRoutes(
       route.path,
       { bodyLimit: route.maxBytes },
       async (request, reply) => {
-        const { actor, requestId } = await options.authenticated(request, options.repository, route.scope);
+        const { actor, requestId } = await options.authenticated(request, options.repository, true);
         const path = pathParams(request);
         await bindProject(options.repository, actor.actorId, path.project_id);
         rejectUnsupportedRequestFeatures(request);
@@ -497,7 +495,7 @@ export function registerRemoteContentUploadHttpRoutes(
     for (const route of statusRoutes) child.get(
       route.path,
       async (request, reply) => {
-        const { actor, requestId } = await options.authenticated(request, options.repository, route.scope);
+        const { actor, requestId } = await options.authenticated(request, options.repository, true);
         const path = pathParams(request);
         await bindProject(options.repository, actor.actorId, path.project_id);
         rejectUnsupportedRequestFeatures(request);

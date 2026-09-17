@@ -60,14 +60,9 @@ import type {
   ProjectFileContent,
   ProjectLifecycleResult,
   ProjectSemanticGraph,
-  ProposalSummary,
   ArtifactSummary,
   ArtifactManifestModel,
   ProjectFileMetadata,
-  ProposalDetailModel,
-  ReviewInput,
-  ReviewResult,
-  KnowledgeIngestListItem,
 } from "./api";
 
 // ── Rich mock data for local dev / demo ─────────────────────
@@ -153,13 +148,10 @@ const MOCK_PROJECTS: ProjectSummary[] = [
 ];
 
 const MOCK_PROJECT_FILE_PATHS = [
-  ".claude/rules/harness-general.md",
-  ".claude/skills/harness-plan/SKILL.md",
-  ".claude/skills/harness-run/SKILL.md",
-  ".claude/skills/harness-test/SKILL.md",
-  ".claude/skills/harness-archive/SKILL.md",
-  ".cursor/rules/harness-general.mdc",
-  ".cursor/skills/harness-sync/SKILL.md",
+  ".agents/skills/harness-plan/SKILL.md",
+  ".agents/skills/harness-run/SKILL.md",
+  ".codebuddy/skills/harness-test/SKILL.md",
+  ".codebuddy/skills/harness-archive/SKILL.md",
   ".harness/knowledge/architecture.md",
   ".harness/knowledge/index.json",
   ".harness/knowledge/entries/active/decision-one.json",
@@ -201,69 +193,6 @@ const MOCK_PROJECT_FILES: ProjectFileMetadata[] = MOCK_PROJECT_FILE_PATHS.map((p
   project_version: "v2.4.1",
   updated_at: "2026-07-14T08:30:00Z"
 }));
-
-const MOCK_PROPOSALS: ProposalSummary[] = [
-  {
-    proposal_id: "prop_a1b2c3",
-    project_id: "agent-harness",
-    status: "pending_review",
-    created_at: "2026-06-20T10:00:00Z",
-    changed_item_count: 3,
-    risk_count: 0,
-    base_project_version: "v2.4.0",
-    created_by: "alice",
-  },
-  {
-    proposal_id: "prop_d4e5f6",
-    project_id: "skill-registry",
-    status: "pending_review",
-    created_at: "2026-06-19T15:30:00Z",
-    changed_item_count: 7,
-    risk_count: 1,
-    base_project_version: "v1.7.2",
-    created_by: "bob",
-  },
-  {
-    proposal_id: "prop_g7h8i9",
-    project_id: "governance-api",
-    status: "pending_review",
-    created_at: "2026-06-18T09:45:00Z",
-    changed_item_count: 2,
-    risk_count: 0,
-    base_project_version: "v3.0.1",
-    created_by: "carol",
-  },
-  {
-    proposal_id: "prop_j0k1l2",
-    project_id: "agent-harness",
-    status: "approved",
-    created_at: "2026-06-15T08:00:00Z",
-    changed_item_count: 5,
-    risk_count: 0,
-    base_project_version: "v2.3.1",
-    created_by: "alice",
-  },
-  {
-    proposal_id: "prop_m3n4o5",
-    project_id: "review-dashboard",
-    status: "rejected",
-    created_at: "2026-06-14T13:00:00Z",
-    changed_item_count: 1,
-    risk_count: 0,
-    base_project_version: "v0.9.2",
-    created_by: "dave",
-  },
-  {
-    proposal_id: "prop_p6q7r8",
-    project_id: "skill-registry",
-    status: "approved",
-    created_at: "2026-06-12T11:00:00Z",
-    changed_item_count: 4,
-    risk_count: 0,
-    base_project_version: "v1.7.0",
-    created_by: "bob",
-  },
-];
 
 const MOCK_ARTIFACTS: ArtifactSummary[] = [
   {
@@ -321,7 +250,7 @@ const MOCK_ARTIFACTS: ArtifactSummary[] = [
 const MOCK_MANIFEST_FILES: Record<string, ArtifactManifestModel["files"]> = {
   art_a7f3c91b: [
     { operation: "add", path: ".harness/knowledge/entries/active/reuse-llm.json", file_kind: "user_editable", content_sha256: "sha256:" + "a".repeat(64), size_bytes: 1200 },
-    { operation: "modify", path: ".claude/rules/harness-general.md", file_kind: "user_editable", base_content_sha256: "sha256:" + "b".repeat(64), content_sha256: "sha256:" + "c".repeat(64), size_bytes: 840 },
+    { operation: "modify", path: ".agents/skills/harness-review/SKILL.md", file_kind: "user_editable", base_content_sha256: "sha256:" + "b".repeat(64), content_sha256: "sha256:" + "c".repeat(64), size_bytes: 840 },
     { operation: "modify", path: "AGENTS.md", file_kind: "user_editable", base_content_sha256: "sha256:" + "d".repeat(64), content_sha256: "sha256:" + "e".repeat(64), size_bytes: 2100 },
     { operation: "add", path: ".harness/archive/2026-06-15-sample/reports/final/summary-data.json", file_kind: "generated_reviewable", content_sha256: "sha256:" + "f".repeat(64), size_bytes: 4096 },
     {
@@ -350,7 +279,7 @@ const MOCK_MANIFEST_FILES: Record<string, ArtifactManifestModel["files"]> = {
       if (op === "modify") {
         return {
           operation: "modify" as const,
-          path: `.claude/rules/bulk-${n}.md`,
+          path: `.agents/skills/harness-bulk/bulk-${n}.md`,
           file_kind: "user_editable" as const,
           base_content_sha256: "sha256:" + String((index + 1) % 10).repeat(64),
           content_sha256: "sha256:" + String((index + 2) % 10).repeat(64),
@@ -386,7 +315,7 @@ const MOCK_MANIFEST_FILES: Record<string, ArtifactManifestModel["files"]> = {
   art_c9f5e13d: [
     { operation: "add", path: "AGENTS.md", file_kind: "user_editable", content_sha256: "sha256:" + "7".repeat(64), size_bytes: 1800 },
     { operation: "add", path: ".harness/project.yaml", file_kind: "user_editable", content_sha256: "sha256:" + "8".repeat(64), size_bytes: 420 },
-    { operation: "add", path: ".claude/rules/harness-general.md", file_kind: "user_editable", content_sha256: "sha256:" + "9".repeat(64), size_bytes: 700 }
+    { operation: "add", path: ".agents/skills/harness-general/SKILL.md", file_kind: "user_editable", content_sha256: "sha256:" + "9".repeat(64), size_bytes: 700 }
   ]
 };
 
@@ -510,7 +439,7 @@ const MOCK_WORKFLOW_FAMILIES: WorkflowFamily[] = [{
   family_id: "wff_harness",
   slug: "harness",
   displayName: "Harness 工作流",
-  description: "hunter-harness CLI 的标准变更工作流：计划 → 编码 → 测试 → 评审 → 提交 → 归档（java overlay 另含打包与接口文档条件阶段）。",
+  description: "hunter-harness CLI 的标准变更工作流：计划 → 编码 → 测试 → 评审 → 提交 → 归档。",
   tags: ["harness", "sdd"],
   latest_version: "0.2.51",
   required_profiles: ["general"],
@@ -615,7 +544,7 @@ const MOCK_AGENT_TOOLS: AgentTool[] = [
 const MOCK_HARNESS_VERSIONS: WorkflowFamilyVersionSummary[] = [
   { version: "0.2.51", changeNote: "events-sync 断点续传与 ACK 游标修复", created_at: "2026-08-01T09:20:00Z" },
   { version: "0.2.50", changeNote: "archive 阶段产出归一化报告 normalizedReport", created_at: "2026-07-25T15:02:00Z" },
-  { version: "0.2.49", changeNote: "新增 java overlay 的 package / apidoc 条件阶段", created_at: "2026-07-18T11:40:00Z" }
+  { version: "0.2.49", changeNote: "投影面收敛与单 profile 瘦身", created_at: "2026-07-18T11:40:00Z" }
 ].map((entry) => ({
   family_slug: "harness",
   version: entry.version,
@@ -1156,8 +1085,8 @@ export class MockApiClient implements HunterApi {
 
   async listProjectSemanticRules(projectId: string): Promise<SemanticDocument[]> {
     return delay([
-      mockSemanticDoc(projectId, "rule", "harness-general.md", "general rule body", ".claude/rules/harness-general.md", { status: "active" }),
-      mockSemanticDoc(projectId, "rule", "windows-shell.md", "Prefer PowerShell for Chinese paths.", ".claude/rules/windows-shell.md", { status: "active" })
+      mockSemanticDoc(projectId, "rule", "harness-general.md", "general rule body", ".harness/knowledge/rules/harness-general.md", { status: "active" }),
+      mockSemanticDoc(projectId, "rule", "windows-shell.md", "Prefer PowerShell for Chinese paths.", ".harness/knowledge/rules/windows-shell.md", { status: "active" })
     ]);
   }
 
@@ -1335,20 +1264,6 @@ export class MockApiClient implements HunterApi {
       .map((document) => ({ document, project_id: id })));
   }
 
-  async listProjectProposals(projectId: string): Promise<ProposalSummary[]> {
-    return delay(
-      MOCK_PROPOSALS.filter((p) => p.project_id === projectId)
-    );
-  }
-
-  async listAllProposals(): Promise<ProposalSummary[]> {
-    return delay(
-      [...MOCK_PROPOSALS].sort(
-        (a, b) => b.created_at.localeCompare(a.created_at)
-      )
-    );
-  }
-
   async listProjectArtifacts(projectId: string): Promise<ArtifactSummary[]> {
     return delay(
       MOCK_ARTIFACTS
@@ -1394,78 +1309,6 @@ export class MockApiClient implements HunterApi {
       status: "approved",
       artifact_id: "art_mock" + Date.now(),
       received_files: 1,
-    });
-  }
-
-  async getProposal(proposalId: string): Promise<ProposalDetailModel> {
-    void proposalId;
-    return delay({
-      schema_version: 1,
-      proposal_id: "prop_a1b2c3",
-      project_id: "agent-harness",
-      status: "pending_review",
-      created_by: "alice",
-      created_at: "2026-06-20T10:00:00Z",
-      items: [
-        {
-          item_id: "item_001",
-          operation: {
-            operation: "modify",
-            path: "src/agent.ts",
-            file_kind: "user_editable",
-            base_content_sha256: "sha256:old123",
-            content_sha256: "sha256:new456",
-            size_bytes: 4096,
-          },
-        },
-        {
-          item_id: "item_002",
-          operation: {
-            operation: "add",
-            path: "src/tools/skill-loader.ts",
-            file_kind: "user_editable",
-            content_sha256: "sha256:abc789",
-            size_bytes: 1536,
-          },
-        },
-        {
-          item_id: "item_003",
-          operation: {
-            operation: "rename",
-            from_path: "src/old-utils.ts",
-            to_path: "src/utils/helpers.ts",
-            file_kind: "user_editable",
-            base_content_sha256: "sha256:old999",
-            content_sha256: "sha256:old999",
-            size_bytes: 2048,
-          },
-        },
-      ],
-      scan_summary: { redacted: true },
-      review_history: [
-        {
-          review_id: "rev_001",
-          decision: "need_more_evidence",
-          created_at: "2026-06-20T12:00:00Z",
-        },
-      ],
-    });
-  }
-
-  async reviewProposal(
-    proposalId: string,
-    input: ReviewInput
-  ): Promise<ReviewResult> {
-    return delay({
-      review_id: "rev_" + Date.now(),
-      proposal_id: proposalId,
-      decision: input.decision,
-      artifact_id:
-        input.decision === "approve" ? "art_mock" + Date.now() : null,
-      child_proposal_ids:
-        input.decision === "split"
-          ? ["prop_child_1", "prop_child_2"]
-          : [],
     });
   }
 
@@ -1611,64 +1454,9 @@ export class MockApiClient implements HunterApi {
     return this.getSkillDraft(slug, agent);
   }
 
-  // ── Knowledge ingest（候选审核 demo）────────────────────
-  async listKnowledgeEntries(
-    projectId: string,
-    options?: { status?: string; limit?: number }
-  ): Promise<KnowledgeIngestListItem[]> {
-    void projectId;
-    const seed: KnowledgeIngestListItem[] = [
-      {
-        entry_id: "kn_cand_001",
-        status: "candidate",
-        content_sha256: "sha256:" + "a".repeat(64),
-        payload: {
-          title: "决策：事件上报改用 NDJSON 追加写",
-          summary: "为降低锁竞争，events 上报从整文件重写改为 NDJSON 追加写，读端按 cursor 增量消费。"
-        },
-        updated_at: "2026-07-30T09:12:00Z",
-        projected_at: null
-      },
-      {
-        entry_id: "kn_cand_002",
-        status: "candidate",
-        content_sha256: "sha256:" + "b".repeat(64),
-        payload: {
-          title: "风险：技能发布缺少签名校验",
-          summary: "当前发布流程未校验 artifact 签名，存在被篡改风险，建议引入 cosign 或内置校验。"
-        },
-        updated_at: "2026-07-29T15:40:00Z",
-        projected_at: null
-      },
-      {
-        entry_id: "kn_cand_003",
-        status: "candidate",
-        content_sha256: "sha256:" + "c".repeat(64),
-        payload: {
-          title: "实现笔记：工作流草稿三态机",
-          summary: "工作流草稿采用 draft/staged/published 三态，staged 用于发布前 diff 预览。"
-        },
-        updated_at: "2026-07-28T11:05:00Z",
-        projected_at: null
-      }
-    ];
-    const filtered = options?.status === undefined ? seed : seed.filter((item) => item.status === options.status);
-    const limited = options?.limit === undefined ? filtered : filtered.slice(0, options.limit);
-    return delay(clone(limited));
-  }
-
   async getKnowledgeProjectionStatus(projectId: string): Promise<{ pending_count: number; pending_capped: boolean }> {
     void projectId;
     return delay({ pending_count: 3, pending_capped: false });
-  }
-
-  async updateKnowledgeEntryStatus(
-    projectId: string,
-    entryId: string,
-    status: string
-  ): Promise<{ entry_id: string; status: string; updated_at: string }> {
-    void projectId;
-    return delay({ entry_id: entryId, status, updated_at: new Date().toISOString() });
   }
 }
 

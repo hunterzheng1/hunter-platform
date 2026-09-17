@@ -231,9 +231,10 @@ function TokenSection() {
 
 function DefaultAgentSection() {
   const { t } = useI18n();
-  const [agent, setAgent] = useState("claude-code");
+  const [agent, setAgent] = useState("codex");
   useEffect(() => {
-    setAgent(localStorage.getItem("hunter-harness-default-agent") ?? "claude-code");
+    const stored = localStorage.getItem("hunter-harness-default-agent");
+    setAgent(stored === "mcp" || stored === "other" ? stored : "codex");
   }, []);
   return (
     <div>
@@ -247,10 +248,9 @@ function DefaultAgentSection() {
           localStorage.setItem("hunter-harness-default-agent", event.target.value);
         }}
       >
-        <option value="claude-code">Claude Code</option>
-        <option value="codex">{t.settings.codexContract}</option>
-        <option value="generic">{t.settings.genericContract}</option>
+        <option value="codex">Codex</option>
         <option value="mcp">{t.settings.mcpContract}</option>
+        <option value="other">{t.settings.otherAgent}</option>
       </select>
     </div>
   );

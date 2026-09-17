@@ -109,12 +109,8 @@ export function classifyFile(input: string): FilePolicy {
     return USER_MANAGED_BLOCK;
   }
   if (
-    under(path, ".claude/rules/") ||
-    under(path, ".claude/skills/harness-") ||
     under(path, ".agents/skills/harness-") ||
-    under(path, ".cursor/skills/harness-") ||
-    under(path, ".codebuddy/skills/harness-") ||
-    under(path, ".codebuddy/agents/harness-")
+    under(path, ".codebuddy/skills/harness-")
   ) {
     return USER_DIFF;
   }
@@ -142,9 +138,6 @@ export function classifyFile(input: string): FilePolicy {
     return REPORT_CACHE;
   }
   if (under(path, ".harness/knowledge/")) {
-    return USER_DIFF;
-  }
-  if (under(path, ".harness/rules/")) {
     return USER_DIFF;
   }
   if (/^\.harness\/archive\/[^/]+\/reports\/final\/summary-data\.json$/u.test(path)) {
